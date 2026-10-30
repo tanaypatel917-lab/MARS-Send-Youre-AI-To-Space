@@ -422,3 +422,5 @@ export interface ModelRegistry {
     expectedProductionRevision: string,
   ): Promise<void>;
 }
+
+export * from "./models";
