@@ -10,12 +10,16 @@ function asObject(value: unknown): JsonObject {
     : {};
 }
 
-function numericPrice(value: unknown): number | undefined {
+function parsePrice(value: unknown): number | undefined {
   if (typeof value !== "string" && typeof value !== "number") return undefined;
+  if (typeof value === "string" && value.trim() === "") return undefined;
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0
-    ? parsed * 1_000_000
-    : undefined;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function numericPrice(value: unknown): number | undefined {
+  const parsed = parsePrice(value);
+  return parsed === undefined ? undefined : parsed * 1_000_000;
 }
 
 export async function discoverModels(
@@ -49,9 +53,15 @@ export async function discoverModels(
       ? architecture.input_modalities
       : [];
     const pricing = asObject(item.pricing);
+    const promptPrice = parsePrice(pricing.prompt);
+    const completionPrice = parsePrice(pricing.completion);
+    const optionalPriceFields = ["request", "image"].filter((field) =>
+      Object.hasOwn(pricing, field),
+    );
     const free =
-      (pricing.prompt === "0" && pricing.completion === "0") ||
-      item.id.endsWith(":free");
+      promptPrice === 0 &&
+      completionPrice === 0 &&
+      optionalPriceFields.every((field) => parsePrice(pricing[field]) === 0);
     const inputPerMTokUsd = numericPrice(pricing.prompt);
     const outputPerMTokUsd = numericPrice(pricing.completion);
     return [

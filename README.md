@@ -54,14 +54,14 @@ The model-provider package is a library for future execution integration; it doe
 | Provider | Credential environment variable | Free-tier note | Documentation |
 | --- | --- | --- | --- |
 | OpenRouter | `OPENROUTER_API_KEY` | Free model IDs; rate limits and availability may change | [Limits](https://openrouter.ai/docs/api-reference/limits) |
-| Gemini | `GEMINI_API_KEY` | API free tier; limits and availability may change | [OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai) |
-| Groq | `GROQ_API_KEY` | Free plan; rate limits and availability may change | [Rate limits](https://console.groq.com/docs/rate-limits) |
-| GitHub Models | `GITHUB_TOKEN` | Free prototyping tier; check GitHub terms and current limits | [GitHub Models](https://docs.github.com/en/github-models) |
-| NVIDIA | `NVIDIA_API_KEY` | Developer access; check NVIDIA terms and current availability | [Build](https://build.nvidia.com) |
+| Gemini | `GEMINI_API_KEY` | Rate-limited free tier; may be unavailable or change | [OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai) |
+| Groq | `GROQ_API_KEY` | Rate-limited free plan; may be unavailable or change | [Rate limits](https://console.groq.com/docs/rate-limits) |
+| GitHub Models | `GITHUB_TOKEN` | Free prototyping tier; may be rate-limited, unavailable, or change; check terms | [GitHub Models](https://docs.github.com/en/github-models) |
+| NVIDIA | `NVIDIA_API_KEY` | Developer access may be rate-limited, unavailable, or change; check terms | [Build](https://build.nvidia.com) |
 | Cerebras | `CEREBRAS_API_KEY` | Trial credits require a payment method; disabled by default and not free by default | [Rate limits](https://inference-docs.cerebras.ai/support/rate-limits) |
 | Ollama | None | Local inference; no provider API key required | [Ollama](https://ollama.com) |
 
-Use the CLI to configure a provider and model. Store only the environment variable **name** in configuration, never its value:
+Use the CLI to configure a provider and model. Store only the environment variable **name** in configuration, never its value. Custom models are treated as paid by default; use `--free` only after verifying that the model is free:
 
 ```sh
 bun apps/cli/src/main.ts models add-provider \
@@ -73,7 +73,7 @@ bun apps/cli/src/main.ts models list --free
 bun apps/cli/src/main.ts models providers
 ```
 
-The same configuration can be managed in `~/.mars/models.json` (or `$MARS_HOME/models.json`) and overridden per project in `.mars/models.json`:
+The same configuration can be managed in `~/.mars/models.json` (or `$MARS_HOME/models.json`). A project `.mars/models.json` is ignored by default and the CLI prints a warning. Load it only for a trusted checkout with `models --trust-project <subcommand>` or `MARS_TRUST_PROJECT_CONFIG=1`; trusted project files may add providers and models, but may not redefine built-in or user providers or change the user-controlled `policy.allowPaid`. A project model claiming `free: true` on a provider the project does not define is downgraded to paid with a notice. Project providers can declare their own `apiKeyEnv` only when the project file is explicitly trusted.
 
 ```json
 {
@@ -96,7 +96,7 @@ The same configuration can be managed in `~/.mars/models.json` (or `$MARS_HOME/m
         "vision": false,
         "contextWindow": 32768
       },
-      "pricing": { "free": true }
+      "pricing": { "free": false }
     }
   ],
   "routes": { "default": ["openrouter/free", "custom/model-name"] },
@@ -104,7 +104,7 @@ The same configuration can be managed in `~/.mars/models.json` (or `$MARS_HOME/m
 }
 ```
 
-Registry precedence is built-in presets, then user configuration, then project configuration. The router filters by model capabilities, provider availability, and paid-model policy. On retryable provider failures it observes `Retry-After` when available (otherwise a 30-second cooldown) and tries the next eligible route candidate; non-retryable failures stop routing. It never falls back to a paid model under the default policy. `models discover <providerId>` lists provider models, `--save` persists them, and `models test <modelId>` explicitly makes a live test request. No live provider request was executed during development; checks use local stub servers or fixture data.
+The registry layers built-in presets, user configuration, and—only with explicit opt-in—project configuration. The router filters by model capabilities, provider availability, and paid-model policy. On retryable provider failures it observes `Retry-After` when available (otherwise a 30-second cooldown) and tries the next eligible route candidate; non-retryable failures stop routing. It never falls back to a paid model under the default policy. `models discover <providerId>` lists provider models, `--save` persists models marked free only when discovery reports zero pricing, and `models test <modelId>` explicitly makes a live test request. No live provider request was executed during development; checks use local stub servers or fixture data.
 
 ## Ownership boundaries
 

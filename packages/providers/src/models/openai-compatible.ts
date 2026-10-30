@@ -18,6 +18,10 @@ function asObject(value: unknown): JsonObject {
     : {};
 }
 
+function isObject(value: unknown): value is JsonObject {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
@@ -45,6 +49,50 @@ function parseRetryAfter(header: string | null): number | undefined {
   return Number.isNaN(timestamp)
     ? undefined
     : Math.max(0, timestamp - Date.now());
+}
+
+function errorStatus(error: JsonObject): number | undefined {
+  const status = error.status;
+  if (typeof status === "number" && Number.isInteger(status)) return status;
+  if (typeof status === "string" && /^\d{3}$/.test(status))
+    return Number(status);
+  const code = error.code;
+  if (typeof code === "number" && Number.isInteger(code)) return code;
+  if (typeof code === "string") {
+    if (/^\d{3}$/.test(code)) return Number(code);
+    const normalized = code.toLowerCase();
+    if (/rate.?limit|too.?many.?requests|quota/.test(normalized)) return 429;
+    if (/timeout|timed.?out/.test(normalized)) return 408;
+    if (/overload/.test(normalized)) return 529;
+    if (/server|internal|unavailable/.test(normalized)) return 500;
+  }
+  const type = error.type;
+  if (typeof type === "string") {
+    const normalizedType = type.toLowerCase();
+    if (/rate.?limit|too.?many.?requests|quota/.test(normalizedType))
+      return 429;
+    if (/timeout|timed.?out/.test(normalizedType)) return 408;
+    if (/overload/.test(normalizedType)) return 529;
+    if (/server|internal|unavailable/.test(normalizedType)) return 500;
+  }
+  return undefined;
+}
+
+function providerEnvelopeError(
+  providerId: string,
+  error: JsonObject,
+): ProviderError {
+  const status = errorStatus(error);
+  const retryable =
+    status === 408 || status === 429 || (status !== undefined && status >= 500);
+  return new ProviderError(
+    providerId,
+    `Provider returned an error envelope${status ? ` (HTTP ${status})` : ""}.`,
+    {
+      ...(status !== undefined ? { status } : {}),
+      retryable,
+    },
+  );
 }
 
 function parseToolArguments(
@@ -167,16 +215,14 @@ export function createOpenAICompatibleAdapter(
   ): Promise<JsonObject> {
     try {
       return asObject(await response.json());
-    } catch (cause) {
+    } catch {
       if (signal.aborted) {
         throw new ProviderError(provider.id, "Provider request timed out.", {
           retryable: true,
-          cause,
         });
       }
       throw new ProviderError(provider.id, "Provider returned invalid JSON.", {
         retryable: false,
-        cause,
       });
     }
   }
@@ -222,10 +268,25 @@ export function createOpenAICompatibleAdapter(
     try {
       await assertOk(response);
       const payload = await responseJson(response, signal);
-      const choice = asObject(
-        Array.isArray(payload.choices) ? payload.choices[0] : undefined,
-      );
-      const message = asObject(choice.message);
+      if (
+        Object.hasOwn(payload, "error") &&
+        payload.error !== null &&
+        typeof payload.error === "object"
+      ) {
+        throw providerEnvelopeError(provider.id, asObject(payload.error));
+      }
+      const choices: unknown[] = Array.isArray(payload.choices)
+        ? payload.choices
+        : [];
+      const choice = choices[0];
+      const message = isObject(choice) ? choice.message : undefined;
+      if (choices.length === 0 || !isObject(choice) || !isObject(message)) {
+        throw new ProviderError(
+          provider.id,
+          "Provider returned an unexpected response shape.",
+          { retryable: false },
+        );
+      }
       const rawContent = message.content;
       const content =
         typeof rawContent === "string"
@@ -236,7 +297,7 @@ export function createOpenAICompatibleAdapter(
                 .filter((part): part is string => part !== undefined)
                 .join("")
             : "";
-      const rawTools = Array.isArray(message.tool_calls)
+      const rawTools: unknown[] = Array.isArray(message.tool_calls)
         ? message.tool_calls
         : [];
       const toolCalls: ChatToolCall[] = rawTools.map((rawTool, index) => {
@@ -340,25 +401,36 @@ export function createOpenAICompatibleAdapter(
       let content = "";
       let finishReason: string | null = null;
       let usage: ChatResponse["usage"];
+      let receivedDone = false;
+      let emittedContent = false;
       const partialTools = new Map<
         number,
         { id: string; name: string; args: string }
       >();
       try {
         for await (const data of readSseMessages(response.body)) {
-          if (data === "[DONE]") break;
+          if (data === "[DONE]") {
+            receivedDone = true;
+            break;
+          }
           let payload: JsonObject;
           try {
             payload = asObject(JSON.parse(data));
-          } catch (cause) {
+          } catch {
             throw new ProviderError(
               provider.id,
               "Provider returned invalid SSE JSON.",
               {
                 retryable: false,
-                cause,
               },
             );
+          }
+          if (
+            Object.hasOwn(payload, "error") &&
+            payload.error !== null &&
+            typeof payload.error === "object"
+          ) {
+            throw providerEnvelopeError(provider.id, asObject(payload.error));
           }
           const choice = asObject(
             Array.isArray(payload.choices) ? payload.choices[0] : undefined,
@@ -366,6 +438,7 @@ export function createOpenAICompatibleAdapter(
           const delta = asObject(choice.delta);
           if (typeof delta.content === "string") {
             content += delta.content;
+            emittedContent = true;
             yield { type: "text-delta", text: delta.content };
           }
           if (typeof choice.finish_reason === "string")
@@ -389,6 +462,13 @@ export function createOpenAICompatibleAdapter(
             }
           }
         }
+        if (!receivedDone && finishReason === null) {
+          throw new ProviderError(
+            provider.id,
+            "Provider stream ended prematurely.",
+            { retryable: !emittedContent },
+          );
+        }
       } catch (cause) {
         if (cause instanceof ProviderError) throw cause;
         throw new ProviderError(
@@ -396,7 +476,6 @@ export function createOpenAICompatibleAdapter(
           "Provider stream failed or timed out.",
           {
             retryable: true,
-            cause,
           },
         );
       }

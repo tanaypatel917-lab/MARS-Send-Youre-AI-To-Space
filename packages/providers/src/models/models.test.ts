@@ -11,8 +11,10 @@ import { join } from "node:path";
 import {
   type ChatRequest,
   type ModelConfig,
+  ModelConfigSchema,
   type ProviderConfig,
   ProviderConfigSchema,
+  type StreamEvent,
 } from "@mars/contracts";
 import { createAnthropicAdapter } from "./anthropic";
 import { discoverModels } from "./discovery";
@@ -115,6 +117,22 @@ function jsonResponse(
   response.end(JSON.stringify(body));
 }
 
+async function rejectedValue<T>(promise: Promise<T>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected promise to reject.");
+}
+
+function expectSanitizedProviderError(error: unknown): void {
+  expect(error).toBeInstanceOf(ProviderError);
+  const diagnostics = `${String(error)} ${JSON.stringify(error)}`;
+  expect(diagnostics).not.toContain("secret-echo");
+  expect(diagnostics).not.toContain("dummy-secret-123");
+}
+
 test("provider configuration rejects literal API keys with an env-var instruction", () => {
   for (const secretField of ["apiKey", "key"]) {
     const parsed = ProviderConfigSchema.safeParse({
@@ -128,6 +146,17 @@ test("provider configuration rejects literal API keys with an env-var instructio
       expect(parsed.error.issues[0]?.message).toContain("apiKeyEnv");
     }
   }
+});
+
+test("model pricing requires an explicit free attestation", () => {
+  const parsed = ModelConfigSchema.safeParse({
+    id: "custom/model",
+    providerId: "custom",
+    model: "upstream-model",
+    capabilities: { tools: false, vision: false, contextWindow: 8192 },
+    pricing: {},
+  });
+  expect(parsed.success).toBe(false);
 });
 
 test("OpenAI-compatible adapter sends non-stream chat with env-based bearer auth", async () => {
@@ -192,6 +221,55 @@ test("OpenAI-compatible adapter sends non-stream chat with env-based bearer auth
   }
 });
 
+test("OpenAI-compatible 200 error envelopes are mapped without echoing response text", async () => {
+  const adapter = createOpenAICompatibleAdapter(
+    provider("stub", "https://models.example/v1"),
+    {
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "secret-echo dummy-secret-123",
+              code: "rate_limit_exceeded",
+            },
+          }),
+          { status: 200 },
+        ),
+    },
+  );
+  const error = await rejectedValue(
+    adapter.complete(request, model("upstream", "stub")),
+  );
+  expect(error).toMatchObject({ status: 429, retryable: true });
+  expectSanitizedProviderError(error);
+});
+
+test("OpenAI-compatible completion rejects a missing response shape", async () => {
+  const adapter = createOpenAICompatibleAdapter(
+    provider("stub", "https://models.example/v1"),
+    { fetch: async () => new Response("{}", { status: 200 }) },
+  );
+  const error = await rejectedValue(
+    adapter.complete(request, model("upstream", "stub")),
+  );
+  expect(error).toMatchObject({ retryable: false });
+  expect(String(error)).toContain("unexpected response shape");
+});
+
+test("OpenAI-compatible HTTP errors do not include response bodies", async () => {
+  const adapter = createOpenAICompatibleAdapter(
+    provider("stub", "https://models.example/v1"),
+    {
+      fetch: async () => new Response("dummy-secret-123", { status: 500 }),
+    },
+  );
+  const error = await rejectedValue(
+    adapter.complete(request, model("upstream", "stub")),
+  );
+  expect(error).toMatchObject({ status: 500, retryable: true });
+  expectSanitizedProviderError(error);
+});
+
 test("OpenAI-compatible SSE parser assembles split tool-call deltas", async () => {
   const stub = await serve((_incoming, outgoing) => {
     outgoing.writeHead(200, { "content-type": "text/event-stream" });
@@ -225,7 +303,7 @@ test("OpenAI-compatible SSE parser assembles split tool-call deltas", async () =
     const adapter = createOpenAICompatibleAdapter(
       provider("stub", `${stub.baseUrl}/v1`),
     );
-    const events = [];
+    const events: StreamEvent[] = [];
     for await (const event of adapter.stream(
       request,
       model("upstream", "stub"),
@@ -253,6 +331,152 @@ test("OpenAI-compatible SSE parser assembles split tool-call deltas", async () =
     }
   } finally {
     await stub.close();
+  }
+});
+
+test("OpenAI-compatible stream rejects premature EOF after emitted text", async () => {
+  const stub = await serve((_incoming, outgoing) => {
+    outgoing.writeHead(200, { "content-type": "text/event-stream" });
+    outgoing.end('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+  });
+  try {
+    const adapter = createOpenAICompatibleAdapter(
+      provider("stub", `${stub.baseUrl}/v1`),
+    );
+    const events: StreamEvent[] = [];
+    const consume = async () => {
+      for await (const event of adapter.stream(
+        request,
+        model("upstream", "stub"),
+      )) {
+        events.push(event);
+      }
+    };
+    await expect(consume()).rejects.toMatchObject({
+      name: "ProviderError",
+      message: "Provider stream ended prematurely.",
+      retryable: false,
+    });
+    expect(events.some(({ type }) => type === "done")).toBe(false);
+    expect(events).toContainEqual({ type: "text-delta", text: "partial" });
+  } finally {
+    await stub.close();
+  }
+});
+
+test("OpenAI-compatible stream maps in-band rate-limit errors", async () => {
+  const stub = await serve((_incoming, outgoing) => {
+    outgoing.writeHead(200, { "content-type": "text/event-stream" });
+    outgoing.end(
+      'data: {"error":{"code":"rate_limit_exceeded","message":"secret-echo dummy-secret-123"}}\n\n',
+    );
+  });
+  try {
+    const adapter = createOpenAICompatibleAdapter(
+      provider("stub", `${stub.baseUrl}/v1`),
+    );
+    const error = await rejectedValue(
+      (async () => {
+        for await (const event of adapter.stream(
+          request,
+          model("upstream", "stub"),
+        )) {
+          void event;
+        }
+      })(),
+    );
+    expect(error).toMatchObject({ status: 429, retryable: true });
+    expectSanitizedProviderError(error);
+  } finally {
+    await stub.close();
+  }
+});
+
+test("router does not fall back after a truncated stream emitted content", async () => {
+  let secondRequests = 0;
+  const stub = await serve((incoming, outgoing) => {
+    if (incoming.url?.startsWith("/first/")) {
+      outgoing.writeHead(200, { "content-type": "text/event-stream" });
+      outgoing.end('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+      return;
+    }
+    secondRequests += 1;
+    outgoing.writeHead(200, { "content-type": "text/event-stream" });
+    outgoing.end("data: [DONE]\n\n");
+  });
+  const root = await temporaryDirectory();
+  try {
+    const registry = await registryFor(
+      root,
+      [
+        provider("first", `${stub.baseUrl}/first/v1`),
+        provider("second", `${stub.baseUrl}/second/v1`),
+      ],
+      [model("first-model", "first"), model("second-model", "second")],
+      ["first-model", "second-model"],
+    );
+    const events: StreamEvent[] = [];
+    const consume = async () => {
+      for await (const event of new ModelRouter(registry).stream(request)) {
+        events.push(event);
+      }
+    };
+    await expect(consume()).rejects.toMatchObject({
+      name: "ProviderError",
+      message: "Provider stream ended prematurely.",
+      retryable: false,
+    });
+    expect(events.some(({ type }) => type === "done")).toBe(false);
+    expect(secondRequests).toBe(0);
+  } finally {
+    await stub.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("router falls back when a stream ends before emitting content", async () => {
+  let secondRequests = 0;
+  const stub = await serve((incoming, outgoing) => {
+    outgoing.writeHead(200, { "content-type": "text/event-stream" });
+    if (incoming.url?.startsWith("/first/")) {
+      outgoing.end('data: {"choices":[{"delta":{}}]}\n\n');
+      return;
+    }
+    secondRequests += 1;
+    outgoing.end(
+      [
+        'data: {"choices":[{"delta":{"content":"fallback"}}]}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        "data: [DONE]\n\n",
+      ].join(""),
+    );
+  });
+  const root = await temporaryDirectory();
+  try {
+    const registry = await registryFor(
+      root,
+      [
+        provider("first", `${stub.baseUrl}/first/v1`),
+        provider("second", `${stub.baseUrl}/second/v1`),
+      ],
+      [model("first-model", "first"), model("second-model", "second")],
+      ["first-model", "second-model"],
+    );
+    const events: StreamEvent[] = [];
+    for await (const event of new ModelRouter(registry).stream(request)) {
+      events.push(event);
+    }
+    const done = events.find((event) => event.type === "done");
+    expect(secondRequests).toBe(1);
+    expect(events).toContainEqual({ type: "text-delta", text: "fallback" });
+    expect(done?.type).toBe("done");
+    if (done?.type === "done") {
+      expect(done.routing?.selected).toBe("second-model");
+      expect(done.routing?.attempts).toHaveLength(1);
+    }
+  } finally {
+    await stub.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -422,7 +646,218 @@ test("router does not fall back after a non-retryable 400", async () => {
   }
 });
 
-test("registry merges presets, user configuration, and project configuration by id", async () => {
+test("registry ignores project provider redirects unless explicitly trusted", async () => {
+  let stubRequests = 0;
+  const stub = await serve((_incoming, outgoing) => {
+    stubRequests += 1;
+    jsonResponse(outgoing, {
+      choices: [
+        {
+          message: { content: "configured host", tool_calls: [] },
+          finish_reason: "stop",
+        },
+      ],
+    });
+  });
+  const root = await temporaryDirectory();
+  try {
+    const home = join(root, "home");
+    const cwd = join(root, "project");
+    const projectDirectory = join(cwd, ".mars");
+    await mkdir(projectDirectory, { recursive: true });
+    await writeFile(
+      join(projectDirectory, "models.json"),
+      JSON.stringify({
+        version: 1,
+        providers: [
+          provider("openrouter", `${stub.baseUrl}/v1`, {
+            apiKeyEnv: "OPENROUTER_API_KEY",
+          }),
+        ],
+        models: [
+          model("project-redirect", "openrouter", {
+            model: "attacker/model",
+            pricing: { free: false },
+          }),
+        ],
+        routes: { default: ["project-redirect"] },
+        policy: { allowPaid: true },
+      }),
+    );
+    const env = { OPENROUTER_API_KEY: "dummy-secret-123" };
+    const registry = await loadModelRegistry({ cwd, home, env });
+    let requestedUrl = "";
+    let authorization = "";
+    const response = await new ModelRouter(registry, {
+      adapterOptions: {
+        env,
+        fetch: async (input, init) => {
+          requestedUrl = input;
+          authorization = new Headers(init?.headers).get("authorization") ?? "";
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: { content: "configured host", tool_calls: [] },
+                  finish_reason: "stop",
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      },
+    }).complete(request);
+    expect(registry.ignoredProjectConfig).toBe(
+      join(projectDirectory, "models.json"),
+    );
+    expect(requestedUrl).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(authorization).toBe("Bearer dummy-secret-123");
+    expect(stubRequests).toBe(0);
+    expect(response.content).toBe("configured host");
+  } finally {
+    await stub.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trusted project config cannot redefine a built-in provider", async () => {
+  const root = await temporaryDirectory();
+  try {
+    const cwd = join(root, "project");
+    await mkdir(join(cwd, ".mars"), { recursive: true });
+    await writeFile(
+      join(cwd, ".mars", "models.json"),
+      JSON.stringify({
+        version: 1,
+        providers: [provider("openrouter", "https://project.example/v1")],
+        models: [],
+      }),
+    );
+    await expect(
+      loadModelRegistry({ cwd, home: root, trustProjectConfig: true }),
+    ).rejects.toThrow(/provider "openrouter".*field "id"/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trusted project policy cannot enable paid models", async () => {
+  const root = await temporaryDirectory();
+  try {
+    const cwd = join(root, "project");
+    await mkdir(join(cwd, ".mars"), { recursive: true });
+    await writeFile(
+      join(cwd, ".mars", "models.json"),
+      JSON.stringify({
+        version: 1,
+        providers: [],
+        models: [
+          model("project-paid", "openrouter", { pricing: { free: false } }),
+        ],
+        routes: { default: ["project-paid"] },
+        policy: { allowPaid: true },
+      }),
+    );
+    const registry = await loadModelRegistry({
+      cwd,
+      home: root,
+      trustProjectConfig: true,
+    });
+    expect(registry.policy.allowPaid).toBe(false);
+    expect(registry.notices.join("\n")).toContain(
+      "Ignored project policy.allowPaid",
+    );
+    await expect(new ModelRouter(registry).complete(request)).rejects.toThrow(
+      "allowPaid=false",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trusted project models cannot claim free pricing for existing providers", async () => {
+  const root = await temporaryDirectory();
+  try {
+    const cwd = join(root, "project");
+    await mkdir(join(cwd, ".mars"), { recursive: true });
+    await writeFile(
+      join(cwd, ".mars", "models.json"),
+      JSON.stringify({
+        version: 1,
+        providers: [],
+        models: [model("project-free-claim", "openrouter")],
+        routes: { default: ["project-free-claim"] },
+      }),
+    );
+    const registry = await loadModelRegistry({
+      cwd,
+      home: root,
+      trustProjectConfig: true,
+    });
+    expect(registry.getModel("project-free-claim")?.pricing.free).toBe(false);
+    expect(registry.notices.join("\n")).toContain("claimed free pricing");
+    await expect(new ModelRouter(registry).complete(request)).rejects.toThrow(
+      "allowPaid=false",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trusted project can define a provider and model", async () => {
+  let authorization = "";
+  const stub = await serve(async (incoming, outgoing) => {
+    authorization = incoming.headers.authorization ?? "";
+    jsonResponse(outgoing, {
+      choices: [
+        {
+          message: { content: "project model", tool_calls: [] },
+          finish_reason: "stop",
+        },
+      ],
+    });
+  });
+  const root = await temporaryDirectory();
+  try {
+    const cwd = join(root, "project");
+    await mkdir(join(cwd, ".mars"), { recursive: true });
+    await writeFile(
+      join(cwd, ".mars", "models.json"),
+      JSON.stringify({
+        version: 1,
+        providers: [
+          provider("project-provider", `${stub.baseUrl}/v1`, {
+            apiKeyEnv: "PROJECT_API_KEY",
+          }),
+        ],
+        models: [
+          model("project-model", "project-provider", { model: "stub-model" }),
+        ],
+        routes: { default: ["project-model"] },
+      }),
+    );
+    const env = { PROJECT_API_KEY: "dummy-secret-123" };
+    const registry = await loadModelRegistry({
+      cwd,
+      home: root,
+      env,
+      trustProjectConfig: true,
+    });
+    const result = await new ModelRouter(registry, {
+      adapterOptions: { env },
+    }).complete(request);
+    expect(result.content).toBe("project model");
+    expect(authorization).toBe("Bearer dummy-secret-123");
+    expect(registry.getModel("project-model")?.pricing.free).toBe(true);
+    expect(registry.ignoredProjectConfig).toBeUndefined();
+  } finally {
+    await stub.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trusted project merges new config without replacing user provider or paid policy", async () => {
   const root = await temporaryDirectory();
   try {
     const home = join(root, "home");
@@ -456,22 +891,22 @@ test("registry merges presets, user configuration, and project configuration by 
       version: 1,
       providers: [
         {
-          id: "openrouter",
+          id: "project-provider",
           kind: "openai-compatible",
           baseUrl: "https://project.example/v1",
-          apiKeyEnv: "OPENROUTER_API_KEY",
+          apiKeyEnv: "PROJECT_API_KEY",
         },
       ],
       models: [
         {
-          id: "google/gemma-4-31b-it:free",
-          providerId: "openrouter",
+          id: "project/model",
+          providerId: "project-provider",
           model: "project/model",
           capabilities: { tools: true, vision: false, contextWindow: 20_000 },
           pricing: { free: true },
         },
       ],
-      routes: { default: ["google/gemma-4-31b-it:free"] },
+      routes: { default: ["project/model"] },
       policy: { allowPaid: true },
     };
     await writeFile(join(marsHome, "models.json"), JSON.stringify(user));
@@ -480,14 +915,19 @@ test("registry merges presets, user configuration, and project configuration by 
       cwd,
       home,
       env: { OPENROUTER_API_KEY: "test-key" },
+      trustProjectConfig: true,
     });
     expect(registry.getProvider("openrouter")?.baseUrl).toBe(
+      "https://user.example/v1",
+    );
+    expect(registry.getProvider("project-provider")?.baseUrl).toBe(
       "https://project.example/v1",
     );
-    expect(registry.getModel("google/gemma-4-31b-it:free")?.model).toBe(
-      "project/model",
+    expect(registry.getModel("project/model")?.model).toBe("project/model");
+    expect(registry.policy.allowPaid).toBe(false);
+    expect(registry.notices.join("\n")).toContain(
+      "Ignored project policy.allowPaid",
     );
-    expect(registry.policy.allowPaid).toBe(true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -504,6 +944,7 @@ test("Anthropic adapter extracts system prompts and maps tools and tool results"
     for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
     requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     jsonResponse(outgoing, {
+      type: "message",
       model: "claude-test",
       content: [{ type: "text", text: "done" }],
       stop_reason: "end_turn",
@@ -579,6 +1020,146 @@ test("Anthropic adapter extracts system prompts and maps tools and tool results"
   }
 });
 
+test("Anthropic 200 error envelopes are mapped without echoing response text", async () => {
+  const adapter = createAnthropicAdapter(
+    provider("anthropic", "https://models.example", { kind: "anthropic" }),
+    {
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            type: "error",
+            error: {
+              type: "rate_limit_error",
+              message: "secret-echo dummy-secret-123",
+            },
+          }),
+          { status: 200 },
+        ),
+    },
+  );
+  const error = await rejectedValue(
+    adapter.complete(request, model("claude", "anthropic")),
+  );
+  expect(error).toMatchObject({ status: 429, retryable: true });
+  expectSanitizedProviderError(error);
+});
+
+test("Anthropic completion rejects missing content", async () => {
+  const adapter = createAnthropicAdapter(
+    provider("anthropic", "https://models.example", { kind: "anthropic" }),
+    {
+      fetch: async () =>
+        new Response(
+          JSON.stringify({ type: "message", stop_reason: "end_turn" }),
+          { status: 200 },
+        ),
+    },
+  );
+  const error = await rejectedValue(
+    adapter.complete(request, model("claude", "anthropic")),
+  );
+  expect(error).toMatchObject({ retryable: false });
+  expect(String(error)).toContain("unexpected response shape");
+});
+
+test("Anthropic stream maps in-band error events", async () => {
+  const stub = await serve((_incoming, outgoing) => {
+    outgoing.writeHead(200, { "content-type": "text/event-stream" });
+    outgoing.end(
+      'event: error\ndata: {"type":"error","error":{"type":"rate_limit_error","message":"secret-echo dummy-secret-123"}}\n\n',
+    );
+  });
+  try {
+    const adapter = createAnthropicAdapter(provider("anthropic", stub.baseUrl));
+    const error = await rejectedValue(
+      (async () => {
+        for await (const event of adapter.stream(
+          request,
+          model("claude", "anthropic"),
+        )) {
+          void event;
+        }
+      })(),
+    );
+    expect(error).toMatchObject({ status: 429, retryable: true });
+    expectSanitizedProviderError(error);
+  } finally {
+    await stub.close();
+  }
+});
+
+test("Anthropic stream completes at message_stop", async () => {
+  let requestBody: Record<string, unknown> = {};
+  const stub = await serve(async (incoming, outgoing) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+    requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    outgoing.writeHead(200, { "content-type": "text/event-stream" });
+    outgoing.end(
+      [
+        'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-test","usage":{"input_tokens":3}}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ].join(""),
+    );
+  });
+  try {
+    const adapter = createAnthropicAdapter(provider("anthropic", stub.baseUrl));
+    const events: StreamEvent[] = [];
+    for await (const event of adapter.stream(
+      request,
+      model("claude", "anthropic"),
+    )) {
+      events.push(event);
+    }
+    const done = events.find((event) => event.type === "done");
+    expect(requestBody.stream).toBe(true);
+    expect(events).toContainEqual({ type: "text-delta", text: "hello" });
+    expect(done?.type).toBe("done");
+    if (done?.type === "done") {
+      expect(done.response).toMatchObject({
+        content: "hello",
+        finishReason: "end_turn",
+        model: "claude-test",
+        usage: { inputTokens: 3, outputTokens: 2 },
+      });
+    }
+  } finally {
+    await stub.close();
+  }
+});
+
+test("Anthropic stream rejects EOF before message_stop after emitted text", async () => {
+  const stub = await serve((_incoming, outgoing) => {
+    outgoing.writeHead(200, { "content-type": "text/event-stream" });
+    outgoing.end(
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}\n\n',
+    );
+  });
+  try {
+    const adapter = createAnthropicAdapter(provider("anthropic", stub.baseUrl));
+    const events: StreamEvent[] = [];
+    const consume = async () => {
+      for await (const event of adapter.stream(
+        request,
+        model("claude", "anthropic"),
+      )) {
+        events.push(event);
+      }
+    };
+    await expect(consume()).rejects.toMatchObject({
+      name: "ProviderError",
+      message: "Provider stream ended prematurely before message_stop.",
+      retryable: false,
+    });
+    expect(events.some(({ type }) => type === "done")).toBe(false);
+    expect(events).toContainEqual({ type: "text-delta", text: "partial" });
+  } finally {
+    await stub.close();
+  }
+});
+
 test("OpenRouter discovery maps free pricing, tool support, vision, and context length", async () => {
   const config = provider("openrouter", "https://openrouter.ai/api/v1", {
     apiKeyEnv: "OPENROUTER_API_KEY",
@@ -607,15 +1188,53 @@ test("OpenRouter discovery maps free pricing, tool support, vision, and context 
               },
               pricing: { prompt: "0.000001", completion: "0.000002" },
             },
+            { id: "example/unknown:free", context_length: 4096 },
+            {
+              id: "example/small-price",
+              pricing: { prompt: "0.000001", completion: "0" },
+            },
+            {
+              id: "example/request-price",
+              pricing: {
+                prompt: "0",
+                completion: "0",
+                request: "0.000001",
+              },
+            },
+            {
+              id: "example/image-price",
+              pricing: { prompt: "0", completion: "0", image: "0.000001" },
+            },
+            {
+              id: "example/unparseable:free",
+              pricing: { prompt: "unknown", completion: "0" },
+            },
           ],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       ),
   });
-  expect(models[0]).toMatchObject({
+  expect(models.find(({ id }) => id === "example/free")).toMatchObject({
     id: "example/free",
     pricing: { free: true, inputPerMTokUsd: 0, outputPerMTokUsd: 0 },
     capabilities: { tools: true, vision: true, contextWindow: 131_072 },
   });
-  expect(models[1]?.pricing.free).toBe(true);
+  expect(
+    models.find(({ id }) => id === "example/paid:free")?.pricing.free,
+  ).toBe(false);
+  expect(
+    models.find(({ id }) => id === "example/unknown:free")?.pricing.free,
+  ).toBe(false);
+  expect(
+    models.find(({ id }) => id === "example/small-price")?.pricing.free,
+  ).toBe(false);
+  expect(
+    models.find(({ id }) => id === "example/request-price")?.pricing.free,
+  ).toBe(false);
+  expect(
+    models.find(({ id }) => id === "example/image-price")?.pricing.free,
+  ).toBe(false);
+  expect(
+    models.find(({ id }) => id === "example/unparseable:free")?.pricing.free,
+  ).toBe(false);
 });

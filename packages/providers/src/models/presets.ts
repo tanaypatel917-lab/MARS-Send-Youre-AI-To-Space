@@ -15,7 +15,8 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     apiKeyEnv: "GEMINI_API_KEY",
     docsUrl: "https://ai.google.dev/gemini-api/docs/openai",
-    freeTier: "Gemini API free tier; limits and availability may change.",
+    freeTier:
+      "Gemini API free tier; rate-limited, may be unavailable or change.",
   },
   {
     id: "groq",
@@ -23,7 +24,7 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
     baseUrl: "https://api.groq.com/openai/v1",
     apiKeyEnv: "GROQ_API_KEY",
     docsUrl: "https://console.groq.com/docs/rate-limits",
-    freeTier: "Groq free plan; rate limits and availability may change.",
+    freeTier: "Groq free plan; rate-limited, may be unavailable or change.",
   },
   {
     id: "github-models",
@@ -31,7 +32,8 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
     baseUrl: "https://models.github.ai/inference",
     apiKeyEnv: "GITHUB_TOKEN",
     docsUrl: "https://docs.github.com/en/github-models",
-    freeTier: "Free prototyping tier; check GitHub terms and current limits.",
+    freeTier:
+      "Free prototyping tier; may be rate-limited, unavailable, or change; check GitHub terms.",
   },
   {
     id: "nvidia",
@@ -39,7 +41,8 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
     baseUrl: "https://integrate.api.nvidia.com/v1",
     apiKeyEnv: "NVIDIA_API_KEY",
     docsUrl: "https://build.nvidia.com",
-    freeTier: "Developer access; check NVIDIA terms and current availability.",
+    freeTier:
+      "Developer access may be rate-limited, unavailable, or change; check NVIDIA terms.",
   },
   {
     id: "cerebras",

@@ -139,7 +139,6 @@ export class ModelRouter {
         ? error
         : new ProviderError(model.providerId, "Provider request failed.", {
             retryable: false,
-            cause: error,
           });
     attempts.push({
       modelId: model.id,
