@@ -1,0 +1,10 @@
+{
+  "name": "@mars/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mars/contracts": "workspace:*",
+    "@mars/execution": "workspace:*"
+  }
+}

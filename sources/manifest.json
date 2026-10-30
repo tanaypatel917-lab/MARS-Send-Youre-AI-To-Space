@@ -1,0 +1,2177 @@
+{
+  "schema_version": 1,
+  "audited_at": "2026-10-30",
+  "scope": "Source inspection and initial SDK probes. Not an interoperability or performance certification.",
+  "master_specification": {
+    "path": "documentation/MASTER_SPECIFICATION.md",
+    "sha256": "0e535d3d592fbad5cc9af5a4290d4b981e5ad597ffdaacf91cc6c42a5b9f80a9"
+  },
+  "runtime_artifacts": [
+    {
+      "package": "@oh-my-pi/pi-coding-agent",
+      "version": "18.14.0",
+      "integrity": "sha512-5RBnSC8FXMAkzT9/rVdBc1LEcP7qL2HgbDc1JW0XvUZ1XhuH+kdZ3ajDQSR4GN7HfSRBTj7xw8rgaFwQxV3vEg==",
+      "release_source_revision": "31147f9d1a76608549821c3759f8487b4d66c72d",
+      "source_equivalence": "not-attested"
+    },
+    {
+      "package": "@oh-my-pi/pi-natives",
+      "version": "18.14.0",
+      "integrity": "sha512-sHuSIYS39QRXPofNfKGwgYflUtrHgXfS/1dx4o0gGTSutqCX2zOjXvfVRhCTffbzUpg8B4lz0iM13c++Ho7X0w==",
+      "release_source_revision": "31147f9d1a76608549821c3759f8487b4d66c72d",
+      "source_equivalence": "not-attested"
+    }
+  ],
+  "components": [
+    {
+      "id": "omp-execution-sdk",
+      "group": "execution-ide",
+      "repository_url": "https://github.com/can1357/oh-my-pi",
+      "revision": "5d30c790b883ad0ae05dac2a4d2ccc8ecd103611",
+      "version_note": "@oh-my-pi/pi-coding-agent 18.14.0 in source and npm registry. Audited HEAD is NOT v18.14.0 (31147f9d1a76608549821c3759f8487b4d66c72d); package-byte/source provenance is unverified.",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/LICENSE",
+        "additional_notices": [],
+        "notes": [
+          {
+            "path": "packages/coding-agent/LICENSE",
+            "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/LICENSE",
+            "finding": "MIT package license; preserve copyright and permission text."
+          },
+          {
+            "path": "packages/coding-agent/THIRD-PARTY-NOTICES.txt",
+            "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/THIRD-PARTY-NOTICES.txt",
+            "finding": "Keep bundled JS/HTML/font notices; covers Playwright, openai-node, Nerd Fonts and other material."
+          },
+          {
+            "path": "packages/natives/THIRD-PARTY-NOTICES.txt",
+            "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/natives/THIRD-PARTY-NOTICES.txt",
+            "finding": "Separately licensed native/vendor/font/dependency material. Notice inventory includes MIT, Apache-2.0, BSD, ISC, BSL-1.0, CC0-1.0, CC-BY-4.0, CDDL-1.0, MPL-2.0, Unicode-3.0, WTFPL and Zlib. This is NOT a complete distributed-artifact/legal compatibility determination."
+          }
+        ]
+      },
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/AGENTS.md",
+          "purpose": "Applicable repository rules read; Bun-only runtime and structured-output-safe logging."
+        },
+        {
+          "path": "docs/sdk.md",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/docs/sdk.md",
+          "purpose": "Official embed guide; root versus narrower /sdk exports and discovery defaults."
+        },
+        {
+          "path": "packages/coding-agent/src/sdk.ts",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/src/sdk.ts",
+          "purpose": "createAgentSession(options = {}) -> Promise<CreateAgentSessionResult>; returns session, extension/tool loading results and model fallback information."
+        },
+        {
+          "path": "packages/coding-agent/src/index.ts",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/src/index.ts",
+          "purpose": "Root exports include AuthStorage, ModelRegistry, SessionManager and Settings; these are not all exported by /sdk."
+        },
+        {
+          "path": "packages/coding-agent/test/sdk-session-isolation.test.ts",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/test/sdk-session-isolation.test.ts",
+          "purpose": "In-memory auth/session/settings and disabled ambient discovery fixture."
+        },
+        {
+          "path": "packages/coding-agent/package.json",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/package.json",
+          "purpose": "Package version 18.14.0; Bun >=1.4.4; Bun/TS source-oriented SDK exports."
+        },
+        {
+          "path": "packages/natives/package.json",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/natives/package.json",
+          "purpose": "Matching pi-natives version and Bun engine."
+        },
+        {
+          "path": "packages/natives/native/loader-state.js",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/natives/native/loader-state.js",
+          "purpose": "OS/CPU/libc/ISA-aware addon resolution and versioned staging cache."
+        },
+        {
+          "path": "packages/natives/scripts/gen-npm-packages.ts",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/natives/scripts/gen-npm-packages.ts",
+          "purpose": "Six OS/CPU leaf packages; x64 baseline/modern binaries; leaf LICENSE and THIRD-PARTY-NOTICES copied."
+        },
+        {
+          "path": "scripts/bazel-natives.ts",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/scripts/bazel-natives.ts",
+          "purpose": "Source host build uses local Cargo/N-API by default; Bazel is for explicit targets/aggregates or opt-in host backend, not universally required."
+        }
+      ],
+      "runtime_requirements": [
+        "Bun >=1.4.4; Node alone is insufficient (bun:sqlite and Bun-specific APIs).",
+        "Published pi-natives@18.14.0 must install its matching platform optional dependency; do not prune required host optional binaries. Linux x64/arm64, macOS x64/arm64, Windows x64/arm64 leaves exist; installed binary loading is not verified.",
+        "For a source checkout: bun install, then bun run build:native. Local host requires Rust/native system build prerequisites; explicit cross-target builds use Bazel. No source build was attempted."
+      ],
+      "integration_owner": "MARS execution-core adapter",
+      "target_milestone": "M0 source baseline and acceptance gate; M1 implementation only after acceptance",
+      "adaptation_decision": "Preferred sole coding-execution engine, behind a MARS service adapter. Use explicit auth/model/settings/session injection, restrictive tools and disabled discovery. No Cline runtime and no claim of turnkey interoperability.",
+      "dependencies": [
+        "Bun >=1.4.4 and exact pi-natives package/platform binary",
+        "Explicit auth, ModelRegistry, Settings and SessionManager ownership",
+        "MARS event adapter, approval policy, process isolation and cancellation mapping"
+      ],
+      "acceptance_plan": {
+        "status": "PROPOSED, NOT EXECUTED. No model-backed run.",
+        "published_install_boundary": {
+          "workdir": "A new isolated local fixture directory, not either checkout",
+          "command": "bun add --exact @oh-my-pi/pi-coding-agent@18.14.0 @oh-my-pi/pi-natives@18.14.0",
+          "assertions": [
+            "Verify both installed package.json versions and native grep/find loading on target OS/CPU.",
+            "Record registry integrity and lockfile; do not infer this artifact equals audited HEAD."
+          ]
+        },
+        "source_initialization_boundary": {
+          "workdir": "oh-my-pi checkout at the audited revision, after bun install and native build",
+          "command": "bun test packages/coding-agent/test/sdk-session-isolation.test.ts",
+          "assertions": [
+            "Session-owned extension state and settings do not leak between fixtures.",
+            "No provider prompt is needed for session construction."
+          ]
+        },
+        "minimal_noninteractive_example": "import { AuthStorage, ModelRegistry, SessionManager, Settings, createAgentSession } from \"@oh-my-pi/pi-coding-agent\";\nconst authStorage = await AuthStorage.create(\":memory:\");\nconst { session } = await createAgentSession({\n  cwd: process.cwd(), agentDir: process.env.MARS_FIXTURE_AGENT_DIR,\n  authStorage, modelRegistry: new ModelRegistry(authStorage),\n  settings: Settings.isolated(), sessionManager: SessionManager.inMemory(),\n  hasUI: false, disableExtensionDiscovery: true, skills: [], rules: [],\n  contextFiles: [], noContextFiles: true, promptTemplates: [], slashCommands: [],\n  toolNames: [], restrictToolNames: true, enableMCP: false, enableLsp: false,\n  enableIrc: false, skipPythonPreflight: true, cacheWarming: false,\n});\nif (session.getActiveToolNames().length !== 0) throw new Error(\"unexpected executable tools\");\nif (session.sessionFile !== undefined) throw new Error(\"unexpected persistent session\");\nawait session.dispose();\nawait authStorage.close();",
+        "example_invocation": "Save example as smoke.ts in isolated package fixture; set HOME and MARS_FIXTURE_AGENT_DIR to fresh local fixture directories and remove provider environment credentials; run bun smoke.ts. Example is proposed and was not typechecked or executed.",
+        "event_boundary": "Subscribe with session.subscribe and run a deterministic stubbed provider fixture (not paid inference); assert ordered message_start/message_update/message_end, tool lifecycle, terminal/error/cancel handling and unsubscribe isolation before publishing a MARS event projection. Real-provider execution remains a separate credentialed acceptance gate."
+      },
+      "audit_checks": {
+        "actually_executed": [
+          "git ls-remote; sparse/shallow clone; resolved HEAD and fetched v18.14.0 commit; inspected pinned source/instructions.",
+          "Public npm metadata reads confirmed SDK/native package 18.14.0 and Bun requirement; package tarballs not installed.",
+          "Observed Linux x86_64, glibc 2.35, Node v24.22.2, cargo present and bun missing.",
+          "Compared tag/HEAD selected paths: SDK/package metadata unchanged there, but session implementation differs; version strings do not establish source identity.",
+          "Final manifest source/license paths validated with git cat-file -e at declared 40-character commit."
+        ],
+        "inspected_not_executed": [
+          "bun test packages/coding-agent/test/sdk-session-isolation.test.ts",
+          "bun run check; bun run check:ts",
+          "bun run ci:test:smoke (intentionally NOT run; it also starts a tiny-model subprocess, so it is not a no-inference acceptance test)."
+        ]
+      },
+      "risks": [
+        "Default createAgentSession() performs ambient settings/auth/context/extensions/custom commands, MCP and LSP discovery; not an isolated service boundary.",
+        "toolNames alone is not an allowlist: restrictToolNames must be true; enforce separate approvals/OS sandboxing because tool selection is not a security sandbox.",
+        "Optional audio/transformer packages and native worker/addon behavior expand install surface. No binary-load, VS Code-host or model execution was tested.",
+        "Source/native license notices need artifact-specific review before redistribution."
+      ],
+      "integration_status": "initialization-only",
+      "background_references": []
+    },
+    {
+      "id": "omp-session-journal",
+      "group": "execution-ide",
+      "repository_url": "https://github.com/can1357/oh-my-pi",
+      "revision": "5d30c790b883ad0ae05dac2a4d2ccc8ecd103611",
+      "version_note": "18.14.0 source manifest; session format CURRENT_SESSION_VERSION = 3; not a release-tag/source identity claim",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/LICENSE",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "docs/session.md",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/docs/session.md",
+          "purpose": "Session JSONL layout and branching semantics."
+        },
+        {
+          "path": "packages/coding-agent/src/session/session-entries.ts",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/src/session/session-entries.ts",
+          "purpose": "Typed entries, session format version, physical fixed-width title slot."
+        },
+        {
+          "path": "packages/coding-agent/src/session/session-manager.ts",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/src/session/session-manager.ts",
+          "purpose": "create/open/inMemory, appendMessage/appendCustomEntry, ensureOnDisk, branches and rewrites."
+        },
+        {
+          "path": "packages/coding-agent/src/session/session-storage.ts",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/src/session/session-storage.ts",
+          "purpose": "Filesystem write/atomic-rewrite and storage mechanics."
+        },
+        {
+          "path": "packages/coding-agent/src/session/agent-session.ts",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/src/session/agent-session.ts",
+          "purpose": "Event subscription and completed message persistence; streaming deltas are transient."
+        },
+        {
+          "path": "packages/coding-agent/test/session-manager-immediate-persist.test.ts",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/test/session-manager-immediate-persist.test.ts",
+          "purpose": "Immediate completed-entry visibility, including fresh-file materialization behavior."
+        },
+        {
+          "path": "packages/coding-agent/test/session-manager-atomic-rewrite-race.test.ts",
+          "url": "https://github.com/can1357/oh-my-pi/blob/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/test/session-manager-atomic-rewrite-race.test.ts",
+          "purpose": "Concurrent append versus rewrite regression coverage."
+        }
+      ],
+      "runtime_requirements": [
+        "Same Bun/native prerequisites as omp-execution-sdk; persistent storage directory for file-backed sessions.",
+        "In-memory sessions deliberately have no on-disk sessionFile. A newly created file-backed session can defer initial materialization until first assistant/ensureOnDisk; do not equate a generated path with a durable file."
+      ],
+      "integration_owner": "MARS execution persistence and event/index projection",
+      "target_milestone": "M0 source baseline and acceptance gate; M1 implementation only after acceptance",
+      "adaptation_decision": "Keep Oh My Pi as authoritative execution-session owner. Its mutable JSONL is a resumable conversation tree, not the blueprint's immutable ordered event log. MARS needs an explicit append-only event envelope/projection and a rebuildable search/index contract, without introducing a second conversation-state owner.",
+      "dependencies": [
+        "omp-execution-sdk",
+        "Service-owned envelope version, event IDs, source-session/branch correlation and ordering",
+        "Transactional/rebuildable indexes and artifact/blob retention"
+      ],
+      "acceptance_plan": {
+        "status": "PROPOSED, NOT EXECUTED; all fixture messages can be synthetic, with no model call.",
+        "workdir": "oh-my-pi at audited revision after source dependency/native setup",
+        "commands": [
+          "bun test packages/coding-agent/test/session-manager-immediate-persist.test.ts packages/coding-agent/test/session-manager-atomic-rewrite-race.test.ts packages/coding-agent/test/session-storage-streaming.test.ts"
+        ],
+        "journal_boundary": "Create a temporary SessionManager.create(cwd, sessionDir), append synthetic user and completed assistant messages, ensureOnDisk and close; reopen with SessionManager.open(sessionFile) and compare active branch messages and parent IDs. Inspect semantic JSONL records, not physical line zero (a mutable title slot can precede the logical header). Kill a child after append returns and verify completed record recovery, without claiming power-loss safety.",
+        "projection_boundary": "Replay a captured/stubbed message_update/text_delta sequence followed by message_end into the proposed MARS event adapter. Assert only the completed message becomes session history; preserve source event types separately from normalized MARS types. Add custom entries, branch/fork/rewrite, rebuild the derived index and assert deleted/replaced branches are not returned as active context. Replaying the same stable event ID must not duplicate an index entry.",
+        "durability_negative_assertion": "Do not promise streaming recovery or immutable history: no fsync, targeted rewrites, mutable title/leaf state and persistence truncation/externalized blobs require explicit limits."
+      },
+      "audit_checks": {
+        "actually_executed": [
+          "Inspected session docs, entry types, append/materialization/rewrite code and focused persistence tests at pinned HEAD.",
+          "Final manifest source/license paths validated with git cat-file -e at declared 40-character commit."
+        ],
+        "inspected_not_executed": [
+          "Focused command above; no JSONL runtime roundtrip, process-crash, power-loss or index-rebuild execution."
+        ]
+      },
+      "risks": [
+        "Completed messages and tool-start/custom markers are handed to the OS synchronously; no fsync guarantee. Streaming text is intentionally not durable until message_end.",
+        "The source describes an append-only conversation journal but provides targeted rewrites/discard/branch operations; it is not a tamper-evident event journal.",
+        "Some payloads are truncated or externalized into blobs; a naive JSONL-only export is not necessarily complete.",
+        "Cross-project/user isolation, schema migrations, event IDs/order and retention are MARS obligations, not verified upstream guarantees."
+      ],
+      "integration_status": "journal-probe-only",
+      "background_references": []
+    },
+    {
+      "id": "cline-presentation-ide-boundary",
+      "group": "execution-ide",
+      "repository_url": "https://github.com/cline/cline",
+      "revision": "53383d541363f4fc55bc2b054af3181035a8f26a",
+      "version_note": "Source manifests: apps/vscode claude-dev 4.1.26; @cline/ui 0.2.0. Published @cline/ui availability not verified.",
+      "license": {
+        "spdx": "Apache-2.0",
+        "path": "LICENSE",
+        "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/LICENSE",
+        "additional_notices": [],
+        "notes": [
+          {
+            "path": "sdk/packages/ui/RADIX-COLORS-LICENSE",
+            "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/ui/RADIX-COLORS-LICENSE",
+            "finding": "Separate MIT Radix Colors license for copied palette; retain alongside Apache notices. Keep original attribution and mark modified source; preserve any applicable NOTICE material."
+          }
+        ]
+      },
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/AGENTS.md",
+          "purpose": "Root Bun/Node toolchain, SDK dist build and extension checks."
+        },
+        {
+          "path": "sdk/AGENTS.md",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/AGENTS.md",
+          "purpose": "SDK package boundaries and workspace instructions; UI only depends on shared contracts, not core agent runtime."
+        },
+        {
+          "path": "sdk/packages/ui/ADOPTION.md",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/ui/ADOPTION.md",
+          "purpose": "Host retains schemas, sessions, transport, streaming, persistence, approval/follow-up orchestration, checkpoints and forks."
+        },
+        {
+          "path": "sdk/packages/ui/package.json",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/ui/package.json",
+          "purpose": "React/Tailwind peers, exports, typecheck and test scripts."
+        },
+        {
+          "path": "sdk/packages/ui/components/agent-chat/index.tsx",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/ui/components/agent-chat/index.tsx",
+          "purpose": "Reusable Conversation, Message and Reasoning presentation primitives."
+        },
+        {
+          "path": "sdk/packages/ui/tests/agent-chat.test.tsx",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/ui/tests/agent-chat.test.tsx",
+          "purpose": "jsdom fixture tests for actual presentation components."
+        },
+        {
+          "path": "apps/vscode/src/hosts/vscode/VscodeWebviewProvider.ts",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/apps/vscode/src/hosts/vscode/VscodeWebviewProvider.ts",
+          "purpose": "VS Code webview host/CSP/URI bridge; tied to Cline controller."
+        },
+        {
+          "path": "apps/vscode/src/sdk/webview-grpc-bridge.ts",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/apps/vscode/src/sdk/webview-grpc-bridge.ts",
+          "purpose": "Cline CoreSessionEvent -> ClineMessage/protobuf partial/state messages; not an Oh My Pi adapter."
+        },
+        {
+          "path": "apps/vscode/webview-ui/src/components/chat/UserMessage.tsx",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/apps/vscode/webview-ui/src/components/chat/UserMessage.tsx",
+          "purpose": "Reset Chat/Reset Code editing states; imports ExtensionState and generated gRPC services."
+        }
+      ],
+      "runtime_requirements": [
+        "Source monorepo pins Bun 1.4.2 and Node >=22; VS Code extension engine ^1.101.0.",
+        "Shared UI requires React >=18.3.0 <20 and Tailwind v4; optional rendering peers must be supplied when chosen. Follow source package exports/styles.",
+        "Keep the Bun 1.4.2 Cline reference-build environment separate from Oh My Pi >=1.4.4 until a common toolchain is tested. This is an engine-pin discrepancy, not a proven incompatibility."
+      ],
+      "integration_owner": "MARS VS Code extension/webview and presentation adapter",
+      "target_milestone": "M0 source baseline and acceptance gate; M1 implementation only after acceptance",
+      "adaptation_decision": "Prefer @cline/ui presentation primitives/theme or attributed source adaptation. Implement a fresh narrow MARS webview transport and OMP-event projection. Do not copy WebviewProvider/controller or import @cline/core, @cline/agents or provider/session runtimes. Full existing chat UI is not drop-in.",
+      "dependencies": [
+        "MARS event-to-view-model projection",
+        "VS Code host API and new service transport/authentication",
+        "React/Tailwind and selected rendering peers",
+        "Apache attribution and separate Radix MIT text"
+      ],
+      "acceptance_plan": {
+        "status": "PROPOSED, NOT EXECUTED; no UI/browser or extension host was launched.",
+        "setup": "In separate Cline source checkout, follow root bootstrap bun install and bun run build:sdk so workspace dist imports resolve; run focused SDK commands within sdk workspace/packages.",
+        "presentation_boundary": {
+          "workdir": "cline/sdk/packages/ui",
+          "commands": [
+            "bun run typecheck",
+            "bun run test -- tests/agent-chat.test.tsx tests/agent-approval-card.test.tsx tests/agent-changes.test.tsx"
+          ],
+          "assertions": [
+            "Rendered transcript/approval/changes callbacks work using fixture data, without a core runtime instance."
+          ]
+        },
+        "extension_reference_check": {
+          "workdir": "cline/apps/vscode",
+          "command": "bun run check-types",
+          "assertions": [
+            "Proto generation and host/webview typechecks succeed; investigate the observed ineMessage annotation if it fails."
+          ]
+        },
+        "mars_adapter_gate": "Build a no-provider jsdom/webview fixture that replays captured/stubbed OMP events, incrementally updates one assistant bubble, renders tool results and cancellation, and emits a scoped approval once. Test host->webview->host request IDs, disconnect/resume, CSP nonce/URI handling and rejection of stale-session approvals. MARS code is not yet implemented, so this interoperability gate cannot be executed here."
+      },
+      "audit_checks": {
+        "actually_executed": [
+          "Inspected pinned root/SDK instructions, @cline/ui adoption/exports/source/tests, VS Code host and translated-event bridge.",
+          "Final manifest source/license paths validated with git cat-file -e at declared 40-character commit."
+        ],
+        "inspected_not_executed": [
+          "bun run build:sdk",
+          "@cline/ui typecheck and focused tests",
+          "apps/vscode bun run check-types",
+          "VS Code integration/Playwright tests"
+        ]
+      },
+      "risks": [
+        "webview-grpc-bridge.ts annotates pushMessageToWebview(message: ineMessage), but imports ClineMessage; statically observed apparent typo, not a verified typecheck failure.",
+        "Webview state, Cline message semantics and gRPC protobufs are product-specific; reusing full UI pulls orchestration assumptions.",
+        "No packaged @cline/ui publication/install, theme compatibility, extension CSP or transport interoperability has been tested."
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "cline-checkpoint-patterns",
+      "group": "execution-ide",
+      "repository_url": "https://github.com/cline/cline",
+      "revision": "53383d541363f4fc55bc2b054af3181035a8f26a",
+      "version_note": "apps/vscode 4.1.26; @cline/core 0.2.0 source manifests; inspect patterns only, do not adopt runtime",
+      "license": {
+        "spdx": "Apache-2.0",
+        "path": "LICENSE",
+        "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/LICENSE",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "apps/vscode/src/sdk/sdk-checkpoints.ts",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/apps/vscode/src/sdk/sdk-checkpoints.ts",
+          "purpose": "Visible user-run classification and run-count/message mapping."
+        },
+        {
+          "path": "apps/vscode/proto/cline/checkpoints.proto",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/apps/vscode/proto/cline/checkpoints.proto",
+          "purpose": "checkpointRestore(number, restore_type, offset), view changes/count/existence RPCs."
+        },
+        {
+          "path": "apps/vscode/src/core/controller/checkpoints/checkpointRestore.ts",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/apps/vscode/src/core/controller/checkpoints/checkpointRestore.ts",
+          "purpose": "Optional controller SDK delegation; absent handler returns Empty, so transport success alone does not prove restore."
+        },
+        {
+          "path": "sdk/packages/core/src/hooks/checkpoint-hooks.ts",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/core/src/hooks/checkpoint-hooks.ts",
+          "purpose": "beforeModel first-iteration/new-user-run snapshots; private refs in original repository; untracked snapshot construction."
+        },
+        {
+          "path": "sdk/packages/core/src/session/checkpoint-restore.ts",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/core/src/session/checkpoint-restore.ts",
+          "purpose": "Restore planning, message trim, private stash transaction, same-HEAD guard and Git worktree restore."
+        },
+        {
+          "path": "sdk/packages/core/src/session/checkpoint-diff.ts",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/core/src/session/checkpoint-diff.ts",
+          "purpose": "Diff metadata and checkpoint file-change comparison; Git-specific boundary."
+        },
+        {
+          "path": "sdk/packages/core/src/session/checkpoint-restore.test.ts",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/core/src/session/checkpoint-restore.test.ts",
+          "purpose": "Disposable real-Git fixture restoration tests."
+        },
+        {
+          "path": "sdk/packages/core/src/hooks/checkpoint-hooks.test.ts",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/core/src/hooks/checkpoint-hooks.test.ts",
+          "purpose": "Snapshot/run metadata and private-ref lifecycle tests."
+        },
+        {
+          "path": "docs/core-workflows/checkpoints.mdx",
+          "url": "https://github.com/cline/cline/blob/53383d541363f4fc55bc2b054af3181035a8f26a/docs/core-workflows/checkpoints.mdx",
+          "purpose": "Official docs claim per-tool shadow-repository snapshots; this does not match the pinned new hook implementation."
+        }
+      ],
+      "runtime_requirements": [
+        "For upstream pattern tests: Cline source Bun 1.4.2, Node >=22, built workspace packages and Git CLI.",
+        "Current default restore requires a real Git worktree with HEAD; checkpoint metadata contains runCount, ref, timestamp and kind. A MARS non-Git fallback is not supplied by this boundary."
+      ],
+      "integration_owner": "MARS workspace/checkpoint service; IDE only issues scoped commands",
+      "target_milestone": "M0 source baseline and acceptance gate; M1 implementation only after acceptance",
+      "adaptation_decision": "Adapt run-to-checkpoint mapping and explicit chat/files/both UX, not Cline session runtime. Implement restore inside a privileged MARS workspace service with quiescence/confirmation, backup transaction and policy for dirty/untracked/ignored files. Never execute reset directly from webview RPC input.",
+      "dependencies": [
+        "MARS workspace identity/lock and explicit restore authorization",
+        "Git and private-ref retention/garbage-collection rules",
+        "OMP session/branch-to-checkpoint mapping owned by MARS",
+        "Non-Git fallback or clearly disabled file-restore UX"
+      ],
+      "acceptance_plan": {
+        "status": "PROPOSED, NOT EXECUTED; only disposable Git fixtures may run destructive restore operations.",
+        "workdir": "cline/sdk/packages/core after documented dependency/build setup",
+        "commands": [
+          "bun run test:unit -- src/hooks/checkpoint-hooks.test.ts src/session/checkpoint-restore.test.ts"
+        ],
+        "checkpoint_boundary": "Fixture: commit baseline, edit tracked and create untracked files, run real createCheckpointHooks beforeRun/beforeModel with synthetic user messages, mutate again, then restore selected checkpoint. Assert tracked/untracked contents and run/message truncation, preservation of ignored files, cleanup of private transaction refs and rollback after injected failure. No model is needed.",
+        "history_safety_boundary": "Create another real commit after the checkpoint: applyCheckpointToWorktree must refuse without moving HEAD. Run restore on a non-Git directory and assert explicit unsupported result rather than silent success. Test older two-parent snapshots do not delete untracked data.",
+        "mars_rpc_boundary": "Use a fake workspace service with run IDs 1/2 and approval tokens; selecting a visible user message must request the correct checkpoint and restore scope exactly once. Unknown refs, stale run IDs and missing restore handlers must produce errors. Disable file restore when only chat restoration exists; verify file state, not Empty RPC success."
+      },
+      "audit_checks": {
+        "actually_executed": [
+          "Inspected hook scheduling, private refs, Git snapshot transaction, HEAD safety guard, restore effects, RPC delegation and test fixtures.",
+          "Final manifest source/license paths validated with git cat-file -e at declared 40-character commit."
+        ],
+        "inspected_not_executed": [
+          "Focused core checkpoint suites above",
+          "SDK/VS Code checkpoint classification and webview reset tests; no actual stash/reset/restore was performed."
+        ]
+      },
+      "risks": [
+        "Snapshot timing is user-run start in pinned source, not the per-tool shadow-repository behavior advertised by docs.",
+        "Restore uses Git reset --hard, optionally clean -fd, and stash apply. Same-HEAD guard and transaction backup reduce risk but do not prove concurrency, submodule or worktree safety.",
+        "Newer snapshots capture nonignored untracked files; ignored files are excluded. Older/HEAD fallbacks have different capabilities.",
+        "Restore transaction temporarily stashes dirty changes and stores a private ref; failures, races, history switches and workspace locks need service-owned policy."
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "hermes-memory-core",
+      "group": "memory-skills",
+      "repository_url": "https://github.com/NousResearch/hermes-agent",
+      "revision": "7020ea3e96c3fdbc768c5296493e186df46f075b",
+      "version_note": "HEAD of main as of 2026-10-30 (commit date 2026-10-30T10:51:02-07:00); latest tag v2026.9.24 -> f97608f178d1ffeca59860195ab7da295f7c8e5f is older; pyproject version 0.0.0",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/LICENSE",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "tools/memory_tool.py",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/tools/memory_tool.py",
+          "purpose": "memory_tool(action,target,content,old_text,new_text,operations); add/replace/remove/patch + atomic batch against final char budget; write gate/staging; defaults memory_char_limit=2200, user_char_limit=1375 (line 56)"
+        },
+        {
+          "path": "tools/memory_tool_store.py",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/tools/memory_tool_store.py",
+          "purpose": "MemoryStore: MEMORY.md/USER.md, frozen _system_prompt_snapshot, exclusive .lock sidecar file, drift detection, content scanning"
+        },
+        {
+          "path": "tools/session_search_tool.py",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/tools/session_search_tool.py",
+          "purpose": "history recall over Hermes SQLite state DB (hermes_state_fts.py); lineage/compaction aware; tied to Hermes session schema"
+        },
+        {
+          "path": "website/docs/user-guide/features/memory.md",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/website/docs/user-guide/features/memory.md",
+          "purpose": "doc S07 exists at pin; confirms 2,200/1,375 budgets and frozen snapshot"
+        }
+      ],
+      "runtime_requirements": "Python >=3.11,<3.15 (uv.lock only supports python>=3.14; uv sync on 3.12 failed); Unix fcntl or Windows msvcrt file locking; HERMES_HOME dir",
+      "integration_owner": "services/memory (memory write service; sole writer of profile/project memory)",
+      "target_milestone": "Milestone 2 (Memory and research)",
+      "adaptation_decision": "Adapt/port: reuse MemoryStore+memory_tool semantics (bounded files, atomic batch, frozen session snapshot, lock file) behind MARS services/memory as the SINGLE authoritative memory writer; do NOT reuse session_search_tool directly (coupled to hermes_state_* schema) - reimplement recall as a derived SQLite FTS index over the MARS event journal. Add provenance/scope/revision fields Hermes lacks.",
+      "dependencies": [
+        "hermes_constants (get_hermes_home)",
+        "agent memory write gate",
+        "hermes config.yaml reader"
+      ],
+      "acceptance_plan": "Characterization suite ported from tests/tools/test_memory_tool.py + test_memory_patch_action.py run against MARS memory service: (1) add entry in session A, assert not in A's snapshot but present in new session B snapshot; (2) batch whose final total exceeds 2200 chars is rejected with no partial write; (3) 8 concurrent proposal writers via the write service produce serialized revisions with no lost update; (4) delete then export shows tombstone with provenance.",
+      "audit_checks": {
+        "inspected_test_commands": [
+          "scripts/run_tests.sh <paths> (AGENTS.md: never bare pytest)"
+        ],
+        "executed_checks": [
+          "scripts/run_tests.sh (auto-bootstraps Python 3.14 env via scripts/run-in-hermes-env) tests/tools/test_memory_tool.py tests/tools/test_memory_patch_action.py tests/agent/test_memory_provider.py ... -> part of 6 files, 196 passed, 0 failed (66 memory_tool, 19 patch_action, 65 memory_provider)"
+        ],
+        "not_executed": [
+          "session_search_tool tests",
+          "MARS-side acceptance test (platform not implemented)"
+        ]
+      },
+      "risks": [
+        "Python env pinned to 3.14 in uv.lock; bootstrap downloads ffmpeg/node/chromium (~400MB) even for unit tests",
+        "memory_tool imports hermes_constants/config loaders; not a standalone library",
+        "No provenance/revision/supersession fields in entries - must be added",
+        "Frozen snapshot means writes invisible until next session (by design)"
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "hermes-background-review",
+      "group": "memory-skills",
+      "repository_url": "https://github.com/NousResearch/hermes-agent",
+      "revision": "7020ea3e96c3fdbc768c5296493e186df46f075b",
+      "version_note": "main HEAD 2026-10-30",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/LICENSE",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "agent/background_review.py",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/agent/background_review.py",
+          "purpose": "S09 exists (1367 lines): spawn_background_review_thread, build_cache_parity_fork, _review_tool_whitelist (memory, skill_manage), _digest_history(tail=24), cancel_background_review_for_live_turn, build_memory_write_metadata(write_origin)"
+        },
+        {
+          "path": "agent/review_idle_queue.py",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/agent/review_idle_queue.py",
+          "purpose": "Source/API reference"
+        },
+        {
+          "path": "agent/agent_init.py",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/agent/agent_init.py",
+          "purpose": "skip_background_review flag (line 2138/2170) prevents review forks from recursively scheduling reviews"
+        }
+      ],
+      "runtime_requirements": "Python 3.11-3.14; a live AIAgent instance (forks the parent agent with cache-parity kwargs); auxiliary model provider",
+      "integration_owner": "Background scheduler (learning curator role) - single review pipeline shared with OpenClaw scheduler port",
+      "target_milestone": "Milestone 3 (Persistent skill learning)",
+      "adaptation_decision": "Port behavior only (prompt/whitelist/digest/cancellation/no-recursion via skip flag); do not import - it forks Hermes AIAgent, which would create a second live agent loop. Reviewer must emit proposals to memory service and skill service instead of writing directly.",
+      "dependencies": [
+        "agent/memory_manager.py",
+        "tools/skill_manager_tool.py",
+        "auxiliary model routing"
+      ],
+      "acceptance_plan": "Run reviewer against a recorded journal fixture: assert it calls only propose_memory/propose_skill (tool whitelist), sets skip_background_review on its own run so zero nested reviews are enqueued, is cancelled when a live turn starts, and every proposal carries write_origin=background_review provenance.",
+      "audit_checks": {
+        "inspected_test_commands": [
+          "tests/agent/test_background_review*.py (11 files)"
+        ],
+        "executed_checks": [
+          "scripts/run_tests.sh (auto-bootstraps Python 3.14 env via scripts/run-in-hermes-env) tests/agent/test_skip_background_review.py (3 passed) tests/agent/test_background_review_toolset_restriction.py (5 passed)"
+        ],
+        "not_executed": [
+          "other background_review tests",
+          "any model-backed review run"
+        ]
+      },
+      "risks": [
+        "Deep coupling to AIAgent internals and prompt-cache parity",
+        "Directly writes memory/skills in Hermes; MARS must interpose proposal step"
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "hermes-curator",
+      "group": "memory-skills",
+      "repository_url": "https://github.com/NousResearch/hermes-agent",
+      "revision": "7020ea3e96c3fdbc768c5296493e186df46f075b",
+      "version_note": "main HEAD 2026-10-30",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/LICENSE",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "agent/curator.py",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/agent/curator.py",
+          "purpose": "should_run_now (interval_hours default 7d, min_idle_hours 2h), apply_automatic_transitions (active->stale 14d->archived 30d; pinned & cron-referenced skipped), run_curator_review(dry_run), _write_run_report"
+        },
+        {
+          "path": "agent/curator_backup.py",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/agent/curator_backup.py",
+          "purpose": "Source/API reference"
+        },
+        {
+          "path": "tools/skill_usage.py",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/tools/skill_usage.py",
+          "purpose": "view/use/patch usage counters"
+        },
+        {
+          "path": "website/docs/user-guide/features/curator.md",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/website/docs/user-guide/features/curator.md",
+          "purpose": "S10 doc exists; never auto-deletes, archive to .archive/"
+        }
+      ],
+      "runtime_requirements": "Python 3.11-3.14; ~/.hermes/skills tree; optional aux LLM for consolidation pass",
+      "integration_owner": "packages/skills (skill lifecycle owner) consuming curator signals",
+      "target_milestone": "Milestone 3",
+      "adaptation_decision": "Adapt usage signals + deterministic stale/archive transitions as inputs to the MARS skill service (OpenClaw-derived); do not run Hermes curator as a second skill owner. LLM consolidation becomes a proposal, evaluated before acceptance.",
+      "dependencies": ["hermes skills dir layout", "cron job registry"],
+      "acceptance_plan": "Seed skill service with 3 skills (unused 15d, unused 31d, pinned unused 60d) and a cron ref; run transitions with frozen clock; assert stale/archived/untouched respectively, archived one restorable, no file deleted.",
+      "audit_checks": {
+        "inspected_test_commands": [
+          "tests/agent/test_curator*.py (7 files)",
+          "tests/hermes_cli/test_curator_run.py"
+        ],
+        "executed_checks": [
+          "scripts/run_tests.sh (auto-bootstraps Python 3.14 env via scripts/run-in-hermes-env) tests/agent/test_curator.py -> 38 passed"
+        ],
+        "not_executed": ["curator LLM review pass"]
+      },
+      "risks": [
+        "Curator archive semantics overlap OpenClaw unused-archive; must pick one implementation (OpenClaw) to avoid dual owners"
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "hermes-memory-providers",
+      "group": "memory-skills",
+      "repository_url": "https://github.com/NousResearch/hermes-agent",
+      "revision": "7020ea3e96c3fdbc768c5296493e186df46f075b",
+      "version_note": "main HEAD 2026-10-30",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/LICENSE",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "agent/memory_provider.py",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/agent/memory_provider.py",
+          "purpose": "MemoryProvider ABC: abstract name/is_available/initialize/get_tool_schemas; hooks prefetch, sync_turn, on_session_end, on_pre_compress, on_memory_write, on_delegation"
+        },
+        {
+          "path": "website/docs/user-guide/features/memory-providers.md",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/website/docs/user-guide/features/memory-providers.md",
+          "purpose": "S11 exists"
+        }
+      ],
+      "runtime_requirements": "Python; provider SDKs (installed per plugin); external service credentials for cloud providers",
+      "integration_owner": "packages/providers (external-memory adapter) under services/memory",
+      "target_milestone": "Milestone 2 interface; providers later hardening",
+      "adaptation_decision": "Port the ABC shape as a TypeScript/Python transport schema for MARS packages/providers external-memory adapter; one active provider at a time, built-in memory remains authoritative (matches blueprint). Do not vendor Honcho/Hindsight code (outside repo, separate licensing unverified).",
+      "dependencies": ["agent/memory_manager.py"],
+      "acceptance_plan": "Implement a fake in-memory provider against the adapter contract; assert on_memory_write mirror receives every accepted write from the memory service, provider failure (is_available=false) leaves built-in memory writes succeeding, and provider cannot write MEMORY.md directly.",
+      "audit_checks": {
+        "inspected_test_commands": ["tests/agent/test_memory_provider*.py"],
+        "executed_checks": [
+          "scripts/run_tests.sh (auto-bootstraps Python 3.14 env via scripts/run-in-hermes-env) tests/agent/test_memory_provider.py -> 65 passed"
+        ],
+        "not_executed": [
+          "any real external provider (no credentials, out of scope)"
+        ]
+      },
+      "risks": [
+        "Honcho/Hindsight referenced but not in repo; license not verified",
+        "Provider hooks assume Hermes turn lifecycle"
+      ],
+      "integration_status": "not-integrated",
+      "background_references": [
+        {
+          "url": "https://github.com/NousResearch/hermes-agent/tree/7020ea3e96c3fdbc768c5296493e186df46f075b/plugins/memory",
+          "notes": "only byterover and retaindb bundled in-tree; Honcho/Hindsight are NOT in this repo at pin (docs say installed from plugin catalog; Honcho maintained by Plastic Labs)"
+        }
+      ]
+    },
+    {
+      "id": "openclaw-skill-workshop",
+      "group": "memory-skills",
+      "repository_url": "https://github.com/openclaw/openclaw",
+      "revision": "7d9677ce36db4aeea2ce36a3bb78588829e80933",
+      "version_note": "main HEAD 2026-10-30T19:31:55Z; package.json version 2026.10.9; latest tag seen v2026.9.9",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/LICENSE",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "src/skills/workshop/skill-versions.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/skill-versions.ts",
+          "purpose": "listVersions, snapshotSkill, pruneVersions (keeps newest 10)"
+        },
+        {
+          "path": "src/skills/workshop/drafts.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/drafts.ts",
+          "purpose": "save/list/view/discard/applyWorkshopDraft (candidate vs accepted)"
+        },
+        {
+          "path": "src/skills/workshop/review-undo.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/review-undo.ts",
+          "purpose": "undoWorkshopReview(reviewId)"
+        },
+        {
+          "path": "src/skills/workshop/unused-archive.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/unused-archive.ts",
+          "purpose": "archiveUnusedWorkshopSkills"
+        },
+        {
+          "path": "src/skills/workshop/changes.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/changes.ts",
+          "purpose": "recordWorkshopChange/listWorkshopChanges change log"
+        },
+        {
+          "path": "src/skills/workshop/library.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/library.ts",
+          "purpose": "Source/API reference"
+        },
+        {
+          "path": "docs/tools/skill-workshop.md",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/docs/tools/skill-workshop.md",
+          "purpose": "S12 source doc exists"
+        }
+      ],
+      "runtime_requirements": "Node >=24.16.0 <25 || >=26.1.0; pnpm 12.15.0 (packageManager); TypeScript monorepo",
+      "integration_owner": "packages/skills (skill service; sole writer of skill files and version manifest)",
+      "target_milestone": "Milestone 3",
+      "adaptation_decision": "Adapt (TypeScript-to-TypeScript port) into packages/skills as the SINGLE skill lifecycle owner: versions, drafts, change log, undo, archive/restore. Add MARS evaluation gate between draft and accepted, plus Hermes usage signals. Do not depend on OpenClaw runtime/authority guards wholesale; port guard semantics (fail-closed) with tests.",
+      "dependencies": [
+        "src/skills/lifecycle, src/skills/security",
+        "OpenClaw config"
+      ],
+      "acceptance_plan": "vitest against packages/skills: propose draft -> not loadable by runtime; accept after passing check -> runtime loads exact revision id; patch then undo restores byte-identical prior version; 11 patches keep newest 10 versions; tampered saved version refuses restore; archive then restore round-trips.",
+      "audit_checks": {
+        "inspected_test_commands": ["pnpm exec vitest run <file>"],
+        "executed_checks": [
+          "pnpm install --frozen-lockfile --ignore-scripts (ok, 9.4s)",
+          "pnpm exec vitest run src/skills/workshop/experience-review-scheduler.test.ts src/skills/workshop/drafts.test.ts src/skills/workshop/library.test.ts -> 3 files, 34 passed"
+        ],
+        "not_executed": [
+          "changes.kernel/skill-diet/skill-lint tests",
+          "full repo test suite"
+        ]
+      },
+      "risks": [
+        "Workshop code imports OpenClaw authority/sandbox/runtime guards and plugin config; extraction cost unknown",
+        "Skill directory layout conventions differ from Hermes SKILL.md hub layout",
+        "--ignore-scripts install may skip native builds needed elsewhere"
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "openclaw-self-learning-scheduler",
+      "group": "memory-skills",
+      "repository_url": "https://github.com/openclaw/openclaw",
+      "revision": "7d9677ce36db4aeea2ce36a3bb78588829e80933",
+      "version_note": "main HEAD 2026-10-30",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/LICENSE",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "src/skills/workshop/experience-review-scheduler.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/experience-review-scheduler.ts",
+          "purpose": "createSkillExperienceReviewScheduler: queues one review per (agent,session) after 10 iterations since last review/own edit; waits for quiet period; single reviewInFlight; rate-limit backoff"
+        },
+        {
+          "path": "src/skills/workshop/experience-review.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/experience-review.ts",
+          "purpose": "Source/API reference"
+        },
+        {
+          "path": "src/skills/workshop/experience-review-prompt.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/experience-review-prompt.ts",
+          "purpose": "Source/API reference"
+        },
+        {
+          "path": "docs/tools/self-learning.md",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/docs/tools/self-learning.md",
+          "purpose": "S13 exists; reviewer sees excerpt only, cannot browse files"
+        }
+      ],
+      "runtime_requirements": "Node 24.16+/26.1+, pnpm 12.15",
+      "integration_owner": "Background scheduler service (TypeScript)",
+      "target_milestone": "Milestone 3",
+      "adaptation_decision": "Port scheduler (counter + idle debounce + single-flight + backoff) as the ONE MARS background review scheduler; plug Hermes-derived review prompt/whitelist into its runReview dependency; reviewer outputs proposals only.",
+      "dependencies": ["openclaw-skill-workshop"],
+      "acceptance_plan": "Fake-timer vitest: 10 iterations -> exactly one review queued after idle window; review's own skill edit resets counter and does not enqueue a review (no recursion); two sessions -> reviews serialized (never 2 in flight); live activity defers review.",
+      "audit_checks": {
+        "inspected_test_commands": [
+          "pnpm exec vitest run src/skills/workshop/experience-review*.test.ts"
+        ],
+        "executed_checks": [
+          "experience-review-scheduler.test.ts (in the 34 passed run)",
+          "experience-review.test.ts (in 4 files / 51 passed run)"
+        ],
+        "not_executed": ["model-backed review"]
+      },
+      "risks": [
+        "In-process timers; MARS needs persistence across restarts (scheduler state is in-memory Maps)",
+        "Overlap with Hermes background_review must be resolved to one pipeline"
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "openclaw-memory-retrieval-consolidation",
+      "group": "memory-skills",
+      "repository_url": "https://github.com/openclaw/openclaw",
+      "revision": "7d9677ce36db4aeea2ce36a3bb78588829e80933",
+      "version_note": "main HEAD 2026-10-30",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/LICENSE",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment. Original license-path annotation: LICENSE (root; extensions/memory-core has no separate LICENSE)"
+      },
+      "sources": [
+        {
+          "path": "extensions/memory-core/src/memory/hybrid.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/extensions/memory-core/src/memory/hybrid.ts",
+          "purpose": "mergeHybridResults, selectHybridSearchResults"
+        },
+        {
+          "path": "extensions/memory-core/src/memory/mmr.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/extensions/memory-core/src/memory/mmr.ts",
+          "purpose": "applyMMRToHybridResults(items, lambda)"
+        },
+        {
+          "path": "extensions/memory-core/src/memory/temporal-decay.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/extensions/memory-core/src/memory/temporal-decay.ts",
+          "purpose": "applyTemporalDecayToHybridResults"
+        },
+        {
+          "path": "extensions/memory-core/src/dreaming-consolidation.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/extensions/memory-core/src/dreaming-consolidation.ts",
+          "purpose": "background consolidation ('dreaming')"
+        },
+        {
+          "path": "docs/concepts/memory.md",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/docs/concepts/memory.md",
+          "purpose": "S14 exists"
+        },
+        {
+          "path": "docs/concepts/memory-builtin.md",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/docs/concepts/memory-builtin.md",
+          "purpose": "S15 exists: FTS5 BM25 + vector + hybrid, recency/importance, MMR default"
+        }
+      ],
+      "runtime_requirements": "Node 24.16+; SQLite FTS5 (optional sqlite-vec) or PostgreSQL; embedding provider for vector search",
+      "integration_owner": "services/memory (retrieval); consolidation proposals via memory write service",
+      "target_milestone": "Milestone 2 retrieval; Milestone 3 consolidation",
+      "adaptation_decision": "Port hybrid merge/MMR/temporal-decay as pure ranking functions into services/memory retrieval over the derived index (explicit relevance/recency/importance/diversity settings). Dreaming consolidation adapted to emit PROPOSED durable facts to the memory write service - it must not write MEMORY files directly (OpenClaw memory-core writes workspace Markdown itself; that conflicts with single-writer rule).",
+      "dependencies": ["memory-host-sdk (src/memory-host-sdk)", "SQLite FTS5"],
+      "acceptance_plan": "Golden-ranking test: fixture corpus of 20 notes with known timestamps/duplicates; assert hybrid+MMR top-5 matches expected ids and contains no near-duplicate pair; consolidation run over 3 daily observations yields proposals only (memory file hash unchanged until accept).",
+      "audit_checks": {
+        "inspected_test_commands": [
+          "pnpm exec vitest run extensions/memory-core/src/memory/*.test.ts"
+        ],
+        "executed_checks": [
+          "vitest hybrid.test.ts mmr.test.ts temporal-decay.test.ts + experience-review.test.ts -> 4 files, 51 passed"
+        ],
+        "not_executed": [
+          "dreaming-consolidation tests",
+          "vector search with real embeddings"
+        ]
+      },
+      "risks": [
+        "memory-core is a plugin with its own write ownership of workspace Markdown - must be split",
+        "Embedding provider choice/cost unresolved"
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "openclaw-gateway",
+      "group": "memory-skills",
+      "repository_url": "https://github.com/openclaw/openclaw",
+      "revision": "7d9677ce36db4aeea2ce36a3bb78588829e80933",
+      "version_note": "main HEAD 2026-10-30",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/LICENSE",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment. Original license-path annotation: LICENSE; packages/gateway-protocol/LICENSE and packages/gateway-client/LICENSE (both MIT)"
+      },
+      "sources": [
+        {
+          "path": "src/gateway/server.ts",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/gateway/server.ts",
+          "purpose": "Source/API reference"
+        },
+        {
+          "path": "docs/concepts/architecture.md",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/docs/concepts/architecture.md",
+          "purpose": "S32 exists"
+        },
+        {
+          "path": "docs/gateway/protocol.md",
+          "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/docs/gateway/protocol.md",
+          "purpose": "Source/API reference"
+        }
+      ],
+      "runtime_requirements": "Node 24.16+; long-lived process; WebSocket on default port 18789; channel SDKs (Baileys, grammY, etc.)",
+      "integration_owner": "Platform API (task/session owner) with channel adapters",
+      "target_milestone": "Product hardening (full product)",
+      "adaptation_decision": "Reference patterns only (connection lifecycle, versioned JSON frames, presence, shutdown budget); build thin channel adapters into MARS platform API. Do not run OpenClaw gateway as an independent session owner. gateway-protocol package may be reused as schema reference if extraction is clean.",
+      "dependencies": ["packages/gateway-protocol"],
+      "acceptance_plan": "Start MARS API + one WebSocket channel adapter; from adapter start a task, inspect, steer, cancel; assert same task id/session visible in CLI and IDE client and no separate agent history created per channel.",
+      "audit_checks": {
+        "inspected_test_commands": ["src/gateway/*.test.ts (many)"],
+        "executed_checks": [],
+        "not_executed": ["all gateway tests (not run in this audit)"]
+      },
+      "risks": [
+        "Gateway owns sessions/approvals/secrets in OpenClaw - large surface; only patterns transferable",
+        "Not executed"
+      ],
+      "integration_status": "not-integrated",
+      "background_references": [
+        {
+          "url": "https://github.com/openclaw/openclaw/tree/7d9677ce36db4aeea2ce36a3bb78588829e80933/packages/gateway-protocol",
+          "notes": "versioned frames {type:'event',event,payload,seq,stateVersion}"
+        },
+        {
+          "url": "https://github.com/openclaw/openclaw/tree/7d9677ce36db4aeea2ce36a3bb78588829e80933/packages/gateway-client",
+          "notes": "Source/API reference"
+        }
+      ]
+    },
+    {
+      "id": "harbor",
+      "group": "evaluation",
+      "repository_url": "https://github.com/harbor-framework/harbor",
+      "revision": "c23909f47508af47a70321eb22c2b40aa190ca5d",
+      "version_note": "pyproject version 0.25.0; audited HEAD is NOT the v0.25.0 tag commit (tag v0.25.0 -> fb8162a2209bb2af33f9377ac9f131561ceb51fa)",
+      "license": {
+        "spdx": "Apache-2.0",
+        "path": "LICENSE",
+        "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/LICENSE",
+        "additional_notices": [
+          {
+            "path": "packages/rewardkit/LICENSE",
+            "spdx": "Apache-2.0",
+            "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/packages/rewardkit/LICENSE"
+          },
+          {
+            "path": "adapters/dacode/template/tests/evaluators/LICENSE",
+            "spdx": "MIT (third-party DA-Code evaluators; retain notice)",
+            "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/adapters/dacode/template/tests/evaluators/LICENSE"
+          },
+          {
+            "path": "adapters/osworld/src/osworld/task-template/tests/evaluators/upstream/LICENSE",
+            "spdx": "Apache-2.0 (third-party OSWorld evaluators; retain notice)",
+            "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/adapters/osworld/src/osworld/task-template/tests/evaluators/upstream/LICENSE"
+          }
+        ],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "src/harbor/agents/base.py",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/agents/base.py",
+          "purpose": "BaseAgent: name(), version(), async setup(environment), async run(instruction, environment, context: AgentContext), import_path(); resolve_model_connection_config/for_execution"
+        },
+        {
+          "path": "src/harbor/agents/factory.py",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/agents/factory.py",
+          "purpose": "custom agent resolution from --agent/-a 'module:Class' via import_path/import_class"
+        },
+        {
+          "path": "src/harbor/agents/installed/mini_swe_agent.py",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/agents/installed/mini_swe_agent.py",
+          "purpose": "built-in installed adapter: uv tool install mini-swe-agent==<version> (py3.12), runs `mini-swe-agent --yolo --model --task --output`, converts traj to ATIF v1.7 trajectory.json; capabilities base_url/reasoning_effort/atif/mcp_servers"
+        },
+        {
+          "path": "docs-mintlify/agents/custom-agents.mdx",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/docs-mintlify/agents/custom-agents.mdx",
+          "purpose": "BaseAgent (loop outside env) vs BaseInstalledAgent (install()/configure()/run() inside env); --ak skip_install=true"
+        },
+        {
+          "path": "src/harbor/verifier/verifier.py",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/verifier/verifier.py",
+          "purpose": "removes stale reward files, uploads tests, runs /tests/test.sh, parses /logs/verifier/reward.txt|reward.json (finite numeric only)"
+        },
+        {
+          "path": "src/harbor/models/verifier/result.py",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/models/verifier/result.py",
+          "purpose": "VerifierResult.rewards: dict[str, float|int] | None"
+        },
+        {
+          "path": "src/harbor/models/task/verifier_mode.py",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/models/task/verifier_mode.py",
+          "purpose": "VerifierEnvironmentMode shared|separate"
+        },
+        {
+          "path": "src/harbor/trial/single_step.py",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/trial/single_step.py",
+          "purpose": "agent run -> artifact collection -> stop agent env (separate mode) -> verifier"
+        },
+        {
+          "path": "src/harbor/trial/trial.py",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/trial/trial.py",
+          "purpose": "separate verifier environment creation"
+        },
+        {
+          "path": "examples/agents/marker_agent.py",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/examples/agents/marker_agent.py",
+          "purpose": "deterministic no-LLM BaseAgent reference"
+        },
+        {
+          "path": "examples/tasks/hello-world/task.toml",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/examples/tasks/hello-world/task.toml",
+          "purpose": "deterministic task used for E2E"
+        },
+        {
+          "path": "examples/tasks/separate-verifier-environment/task.toml",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/examples/tasks/separate-verifier-environment/task.toml",
+          "purpose": "environment_mode=separate, artifacts=['/tmp/configured-artifact.txt'], network_mode=no-network; verifier checks /tmp/agent-only.txt does not leak"
+        },
+        {
+          "path": "examples/tasks/secure-python-worker/task.toml",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/examples/tasks/secure-python-worker/task.toml",
+          "purpose": "RewardKit unprivileged worker: candidate cannot read /tests or write /logs/verifier (configuration source; runtime security still requires integration verification)"
+        },
+        {
+          "path": "docs-mintlify/tasks/network-policies.mdx",
+          "url": "https://github.com/harbor-framework/harbor/blob/c23909f47508af47a70321eb22c2b40aa190ca5d/docs-mintlify/tasks/network-policies.mdx",
+          "purpose": "provider support matrix for no-network/allowlist"
+        }
+      ],
+      "runtime_requirements": "Python >=3.12 (host was 3.10.12; uv provisioned 3.12/3.13 venv), uv, Docker with compose for local tasks; network_mode no-network/allowlist on Docker needs Linux nftables kernel support for Harbor's egress-control sidecar.",
+      "integration_owner": "MARS evaluation group (eval harness owner)",
+      "target_milestone": "M0 pin/manifest; M4 baseline/candidate comparison",
+      "adaptation_decision": "Use as-is (pinned) as the evaluation harness. MARS execution core integrates as a custom BaseAgent (loop outside env) referenced by import path; do not fork. Final-eval tasks MUST use environment_mode=separate (or RewardKit secure worker) so private tests/answers never enter the candidate environment. Wrap `harbor run` results by reading result.json stats (n_errored_trials, reward_stats), never CLI exit code.",
+      "dependencies": [
+        "Docker + compose",
+        "uv",
+        "Python 3.12+",
+        "LiteLLM-style model connection config for LLM agents (not exercised)"
+      ],
+      "acceptance_plan": [
+        "A1 adapter: `PYTHONPATH=<mars_pkg_root> uv run harbor run -p examples/tasks/hello-world -a mars.harbor_agent:MarsAgent --jobs-dir jobs/a1` with a stub no-LLM MarsAgent; assert result.json stats.n_errored_trials==0 and reward_stats has 1.0 and agent/ marker artifact exists. Control: `-a nop` must yield reward 0.0 (discrimination).",
+        "A2 verifier isolation: on a Linux host/provider supporting no-network (or a Daytona/Modal env), run examples/tasks/separate-verifier-environment with -a oracle (expect reward 1) and -a nop (expect 0); then a malicious MarsAgent stub that writes /logs/verifier/reward.txt=1, writes /tmp/agent-only.txt and tries to read /tests: assert reward 0, leak check fails closed, /tests unreadable.",
+        "A3 parse robustness: unit test feeding reward.txt with '', 'nan', 'inf', '1e999', 'abc' and reward.json non-numeric values; assert trial errors rather than scoring."
+      ],
+      "audit_checks": {
+        "inspected_not_executed": [
+          "uv run pytest tests/unit/",
+          "uv run ruff check src/",
+          "uv run ty check"
+        ],
+        "executed": [
+          {
+            "cmd": "uv sync --all-extras --dev && uv run pytest tests/unit/agents/installed/test_mini_swe_agent.py tests/unit/agents/installed/test_mini_swe_native_model_names.py tests/unit/test_trial_verifier_separate.py tests/unit/test_verifier_build_inputs.py tests/unit/test_trial_verifier_artifact_transfer.py -q",
+            "result": "exit 0; 138 passed, 45 warnings"
+          },
+          {
+            "cmd": "uv run harbor run -p examples/tasks/hello-world -a oracle|nop|examples.agents.marker_agent:MarkerAgent (first attempt)",
+            "result": "BLOCKED: Docker Hub HTTP 429 on ubuntu:24.04; CLI exit 0 but n_errored=1, no reward (jobs/*/2026-10-30__19-42-*/result.json)"
+          },
+          {
+            "cmd": "docker pull mirror.gcr.io/library/ubuntu:24.04 && docker tag ... ubuntu:24.04; PYTHONPATH=~/audit/harbor uv run harbor run -p examples/tasks/hello-world -a {oracle,nop,examples.agents.marker_agent:MarkerAgent}",
+            "result": "exit 0; each 1 completed / 0 errored trial; rewards oracle=1.0, nop=0.0, MarkerAgent=1.0; MARKER_AGENT_RAN.txt present (jobs2/*/result.json). Verifier discriminates on this deterministic task; no LLM involved."
+          },
+          {
+            "cmd": "uv run harbor run -p examples/tasks/separate-verifier-environment -a oracle|nop",
+            "result": "FAILED exit 1: ValueError network_mode='no-network' is not supported by EnvironmentType.DOCKER (egress-control kernel support not detected on this VM). Separate-verifier isolation E2E NOT verified."
+          }
+        ]
+      },
+      "risks": [
+        "HEAD is untagged dev commit past v0.25.0 \u2014 choose tag pin or this SHA explicitly in manifest",
+        "CLI exit 0 on errored trials can hide failures",
+        "separate-verifier no-network tasks cannot run on this VM's Docker; requires nftables-capable host or cloud provider",
+        "custom agent module must be importable (PYTHONPATH) from Harbor process",
+        "MIT/Apache third-party evaluator subtrees need NOTICE retention if vendored",
+        "base images pulled from Docker Hub are rate-limited"
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "mini-swe-agent",
+      "group": "evaluation",
+      "repository_url": "https://github.com/SWE-agent/mini-swe-agent",
+      "revision": "04d809ceab9df28f9adaed044884180159172930",
+      "version_note": "v2.4.6 (HEAD == tag; __version__ 2.4.6)",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE.md",
+        "url": "https://github.com/SWE-agent/mini-swe-agent/blob/04d809ceab9df28f9adaed044884180159172930/LICENSE.md",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "src/minisweagent/agents/default.py",
+          "url": "https://github.com/SWE-agent/mini-swe-agent/blob/04d809ceab9df28f9adaed044884180159172930/src/minisweagent/agents/default.py",
+          "purpose": "DefaultAgent/AgentConfig: step_limit, cost_limit, run() -> {exit_status, submission}; serialize() trajectory_format 'mini-swe-agent-1.1'"
+        },
+        {
+          "path": "src/minisweagent/run/mini.py",
+          "url": "https://github.com/SWE-agent/mini-swe-agent/blob/04d809ceab9df28f9adaed044884180159172930/src/minisweagent/run/mini.py",
+          "purpose": "CLI: --model, --task, --cost-limit, --config, --output, --yolo, --exit-immediately"
+        },
+        {
+          "path": "src/minisweagent/environments/docker.py",
+          "url": "https://github.com/SWE-agent/mini-swe-agent/blob/04d809ceab9df28f9adaed044884180159172930/src/minisweagent/environments/docker.py",
+          "purpose": "DockerEnvironment image/cwd/timeout/run_args"
+        },
+        {
+          "path": "docs/usage/output_files.md",
+          "url": "https://github.com/SWE-agent/mini-swe-agent/blob/04d809ceab9df28f9adaed044884180159172930/docs/usage/output_files.md",
+          "purpose": ".traj.json schema: messages (OpenAI-style + extra), info/config"
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/SWE-agent/mini-swe-agent/blob/04d809ceab9df28f9adaed044884180159172930/pyproject.toml",
+          "purpose": "entry points mini, mini-swe-agent, mini-extra, mini-e"
+        },
+        {
+          "path": "AGENTS.md",
+          "url": "https://github.com/SWE-agent/mini-swe-agent/blob/04d809ceab9df28f9adaed044884180159172930/AGENTS.md",
+          "purpose": "repo instructions: pytest, style"
+        }
+      ],
+      "runtime_requirements": "Python >=3.10 (Harbor's installer uses 3.12); LiteLLM-compatible model credentials for real runs; Docker/podman/singularity/bubblewrap/local/Modal environments.",
+      "integration_owner": "MARS evaluation group (baseline owner)",
+      "target_milestone": "M4",
+      "adaptation_decision": "Use unmodified as independent baseline. Primary path: Harbor's built-in installed adapter (`-a mini-swe-agent --ak version=2.4.6`) so baseline and MARS candidate share task, environment, verifier and resource limits. Pin version explicitly (adapter installs latest when version omitted). Standalone CLI path only for cross-checks, with differences recorded.",
+      "dependencies": ["litellm", "Harbor installed-agent adapter", "Docker"],
+      "acceptance_plan": [
+        "B1 (cheap, requires approved model key): `uv run harbor run -p <fixed 5-task slice> -a mini-swe-agent -m <pinned model> --ak version=2.4.6 --ak cost_limit=<cap> --jobs-dir jobs/b1` and same slice with -a mars.harbor_agent:MarsAgent; assert identical task SHAs/verifier, per-trial reward, cost_usd and token counts recorded, trajectory.json validates as ATIF v1.7, and --n-attempts fixed.",
+        "B2 (no LLM): unit test that Harbor mini_swe_agent adapter renders install command with ==2.4.6 and converts a fixture .traj.json into ATIF (existing tests/unit/agents/installed/test_mini_swe_agent.py covers this)."
+      ],
+      "audit_checks": {
+        "inspected_not_executed": [
+          "uv run pytest (full suite incl. docker/benchmark tests)"
+        ],
+        "executed": [
+          {
+            "cmd": "uv venv -p 3.12 && uv pip install -e '.[dev]' && MSWEA_SILENT_STARTUP=1 uv run pytest tests/agents tests/run -q -x -p no:cacheprovider (docker/container/external-benchmark selectors deselected)",
+            "result": "exit 0; 302 passed, 16 deselected"
+          },
+          {
+            "cmd": "uv run mini --help; uv run mini-extra --help",
+            "result": "both exit 0"
+          }
+        ],
+        "not_executed": "No model run, no Docker-environment run, no Harbor+mini-swe-agent installed run (would require model credentials/inference)."
+      },
+      "risks": [
+        "unpinned version in Harbor adapter defaults to latest",
+        "--yolo disables confirmations; must run only inside sandbox",
+        "cost_limit semantics depend on LiteLLM pricing tables",
+        "baseline/candidate env drift if standalone CLI used instead of Harbor adapter"
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "dspy",
+      "group": "evaluation",
+      "repository_url": "https://github.com/stanfordnlp/dspy",
+      "revision": "25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007",
+      "version_note": "3.4.1 (HEAD == tag 3.4.1)",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/stanfordnlp/dspy/blob/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007/LICENSE",
+        "additional_notices": [
+          {
+            "path": "dspy/clients/model_metadata/LICENSE",
+            "spdx": "MIT for non-restricted content; derived LiteLLM model metadata with provenance.json \u2014 verify upstream LiteLLM license terms before redistribution",
+            "url": "https://github.com/stanfordnlp/dspy/blob/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007/dspy/clients/model_metadata/LICENSE"
+          }
+        ],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "dspy/teleprompt/gepa/gepa.py",
+          "url": "https://github.com/stanfordnlp/dspy/blob/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007/dspy/teleprompt/gepa/gepa.py",
+          "purpose": "GEPAFeedbackMetric(gold, pred, trace, pred_name, pred_trace) -> float|ScoreWithFeedback; GEPA(...).compile(student, trainset, valset=None): trainset for reflection, valset for Pareto/selection; warns trainset reused if valset omitted"
+        },
+        {
+          "path": "dspy/teleprompt/gepa/gepa_utils.py",
+          "url": "https://github.com/stanfordnlp/dspy/blob/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007/dspy/teleprompt/gepa/gepa_utils.py",
+          "purpose": "DspyAdapter bridging DSPy programs to GEPAAdapter"
+        },
+        {
+          "path": "docs/docs/getting-started/gepa-optimization.md",
+          "url": "https://github.com/stanfordnlp/dspy/blob/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007/docs/docs/getting-started/gepa-optimization.md",
+          "purpose": "recommends separate final test set untouched by reflection/selection"
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/stanfordnlp/dspy/blob/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007/pyproject.toml",
+          "purpose": "version 3.4.1; gepa[dspy]==0.1.4 pin"
+        }
+      ],
+      "runtime_requirements": "Python >=3.10,<3.16; depends on gepa[dspy]==0.1.4 (python<3.15), litellm; LM credentials for real optimization.",
+      "integration_owner": "MARS evaluation group (prompt-optimization owner)",
+      "target_milestone": "M4",
+      "adaptation_decision": "Use as-is for optimizing explicit prompt targets of DSPy modules. MARS must always pass an explicit valset and keep final test set outside compile(); no fork.",
+      "dependencies": ["gepa 0.1.4", "litellm"],
+      "acceptance_plan": [
+        "C1 (no LLM): with dspy.utils.DummyLM, compile a 1-predictor program via dspy.GEPA(metric=..., max_metric_calls=20, reflection_lm=DummyLM) on disjoint train/val ids; instrument metric to log example ids and assert no final-test id is ever seen; then score baseline and optimized program on final test outside the optimizer and record both.",
+        "C2: assert compile() without valset emits the reuse warning and that MARS wrapper refuses to proceed."
+      ],
+      "audit_checks": {
+        "inspected_not_executed": ["full uv run pytest suite"],
+        "executed": [
+          {
+            "cmd": "uv sync --extra dev && uv run pytest tests/teleprompt/test_gepa.py tests/teleprompt/test_gepa_instruction_proposer.py tests/teleprompt/test_gepa_builtin_instruction_proposer.py -q",
+            "result": "exit 0; 97 passed; import check dspy 3.4.1 / gepa 0.1.4"
+          }
+        ],
+        "not_executed": "No real-LM optimization run."
+      },
+      "risks": [
+        "exact-pin gepa==0.1.4 conflicts if MARS pins GEPA HEAD",
+        "valset optional -> silent overfit risk",
+        "model metadata licensing provenance"
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "gepa",
+      "group": "evaluation",
+      "repository_url": "https://github.com/gepa-ai/gepa",
+      "revision": "02ea4152ff6e512484cb5298046bfe967aea4735",
+      "version_note": "latest tag v0.1.4 -> 8b0ce6cd99a234f6b74daf37558a2ac0ce18f975; audited HEAD is NOT the tag commit. DSPy 3.4.1 pins 0.1.4, so the runtime-relevant pin is the tag commit (source audited at HEAD; diff vs tag not reviewed).",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/gepa-ai/gepa/blob/02ea4152ff6e512484cb5298046bfe967aea4735/LICENSE",
+        "additional_notices": [
+          {
+            "path": "examples/blackbox/evalset/LICENSE",
+            "spdx": "MIT (third-party example data; separate copyright holder)",
+            "url": "https://github.com/gepa-ai/gepa/blob/02ea4152ff6e512484cb5298046bfe967aea4735/examples/blackbox/evalset/LICENSE"
+          }
+        ],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "src/gepa/api.py",
+          "url": "https://github.com/gepa-ai/gepa/blob/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/api.py",
+          "purpose": "optimize(seed_candidate, trainset, valset=None, adapter, task_lm, reflection_lm, candidate_selection_strategy, max_metric_calls, max_reflection_cost, run_dir, seed, cache_evaluation, raise_on_exception, acceptance_criterion, ...); distinct valset uses separate cache namespace"
+        },
+        {
+          "path": "src/gepa/core/adapter.py",
+          "url": "https://github.com/gepa-ai/gepa/blob/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/core/adapter.py",
+          "purpose": "GEPAAdapter.evaluate(batch, candidate, capture_traces) -> EvaluationBatch(outputs, scores, trajectories) one per example, higher-better, per-example failures -> fallback score, exceptions only systemic; make_reflective_dataset; optional propose_new_texts/get/set_adapter_state; minibatch sum, valset mean"
+        },
+        {
+          "path": "src/gepa/core/result.py",
+          "url": "https://github.com/gepa-ai/gepa/blob/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/core/result.py",
+          "purpose": "GEPAResult: candidates, parents (lineage), val_aggregate_scores, val_subscores, outputs, total_metric_calls, run_dir, seed"
+        },
+        {
+          "path": "src/gepa/optimize_anything.py",
+          "url": "https://github.com/gepa-ai/gepa/blob/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/optimize_anything.py",
+          "purpose": "test_set evaluated post-optimization outside budget"
+        },
+        {
+          "path": "src/gepa/oa/task.py",
+          "url": "https://github.com/gepa-ai/gepa/blob/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/oa/task.py",
+          "purpose": "Task.test_set kept outside evaluation server"
+        },
+        {
+          "path": "src/gepa/adapters/dspy_adapter/dspy_adapter.py",
+          "url": "https://github.com/gepa-ai/gepa/blob/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/adapters/dspy_adapter/dspy_adapter.py",
+          "purpose": "DSPy adapter"
+        },
+        {
+          "path": "src/gepa/adapters/terminal_bench_adapter/terminal_bench_adapter.py",
+          "url": "https://github.com/gepa-ai/gepa/blob/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/adapters/terminal_bench_adapter/terminal_bench_adapter.py",
+          "purpose": "Terminal-Bench adapter (closest analog; no Harbor adapter exists)"
+        },
+        {
+          "path": "AGENTS.md",
+          "url": "https://github.com/gepa-ai/gepa/blob/02ea4152ff6e512484cb5298046bfe967aea4735/AGENTS.md",
+          "purpose": "uv run pytest / ruff / pyright"
+        }
+      ],
+      "runtime_requirements": "Python >=3.10,<3.15; no core deps; optional extras (full: litellm etc.; dspy).",
+      "integration_owner": "MARS evaluation group (prompt-optimization owner)",
+      "target_milestone": "M4 (adapter design spec in M0 manifest)",
+      "adaptation_decision": "Adapt (new code, no fork): write a MARS HarborGEPAAdapter implementing GEPAAdapter.evaluate by launching Harbor jobs on train/val task ids with candidate prompt text injected into MarsAgent, mapping VerifierResult.rewards['reward'] -> score and ATIF trajectory -> reflective dataset. Missing capability: no upstream Harbor GEPA adapter.",
+      "dependencies": [
+        "Harbor (scoring source)",
+        "DSPy (optional)",
+        "litellm (optional extras)"
+      ],
+      "acceptance_plan": [
+        "D1 (no LLM): implement a fake GEPAAdapter returning deterministic scores and run gepa.optimize(seed_candidate={'system':'x'}, trainset=T, valset=V, adapter=fake, reflection_lm=lambda p:'y', max_metric_calls=30, run_dir=tmp, seed=0); assert every evaluated example id is in T\u222aV, none in final set F; assert len(outputs)==len(scores)==len(batch); rerun with same seed reproduces val_aggregate_scores; resume from run_dir works.",
+        "D2 (Harbor-backed, needs model budget approval): HarborGEPAAdapter over 3 train + 3 val Harbor tasks, max_metric_calls small; final 5-task held-out slice scored after optimize() for seed and best candidate with recorded cost."
+      ],
+      "audit_checks": {
+        "inspected_not_executed": [
+          "uv run pytest",
+          "uv run ruff check src/",
+          "uv run ruff format src/",
+          "uv run pyright src/"
+        ],
+        "executed": [
+          {
+            "cmd": "uv sync --extra dev && uv run pytest tests/test_data_loader.py tests/test_evaluation_cache.py tests/test_dspy_compatibility.py tests/test_incremental_eval_policy.py -q",
+            "result": "exit 0; 18 passed, 1 skipped (dspy compat skipped via importorskip in this env)"
+          }
+        ],
+        "not_executed": "No optimize() run with real or fake adapter."
+      },
+      "risks": [
+        "HEAD vs 0.1.4 tag divergence",
+        "holdout isolation for gepa.optimize is caller responsibility (only optimize_anything has test_set)",
+        "Harbor-backed evaluate is slow/expensive; per-example container failures must map to fallback 0.0 not exceptions",
+        "reward scale must be higher-is-better and consistent"
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "aider-repomap",
+      "group": "workspace-tools",
+      "repository_url": "https://github.com/Aider-AI/aider",
+      "revision": "5dc9490bb35f9729ef2c95d00a19ccd30c26339c",
+      "version_note": "0.86.3.dev fallback in aider/__init__.py; no exact HEAD tag observed",
+      "license": {
+        "spdx": "Apache-2.0",
+        "path": "LICENSE.txt",
+        "url": "https://github.com/Aider-AI/aider/blob/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/LICENSE.txt",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "aider/repomap.py",
+          "url": "https://github.com/Aider-AI/aider/blob/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/aider/repomap.py",
+          "purpose": "RepoMap(...).get_repo_map(chat_files, other_files, mentioned_fnames=None, mentioned_idents=None, force_refresh=False); get_tags; get_ranked_tags; get_ranked_tags_map. Tree-sitter definitions/references feed weighted NetworkX PageRank and rendered snippets."
+        },
+        {
+          "path": "aider/special.py",
+          "url": "https://github.com/Aider-AI/aider/blob/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/aider/special.py",
+          "purpose": "filter_important_files; extra important-file ranking, not an agent runtime."
+        },
+        {
+          "path": "aider/queries/tree-sitter-language-pack/python-tags.scm",
+          "url": "https://github.com/Aider-AI/aider/blob/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/aider/queries/tree-sitter-language-pack/python-tags.scm",
+          "purpose": "Bundled Python symbol query; retain package query resources instead of copying repomap.py alone."
+        },
+        {
+          "path": "aider/website/docs/repomap.md",
+          "url": "https://github.com/Aider-AI/aider/blob/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/aider/website/docs/repomap.md",
+          "purpose": "Official repository-map explanation."
+        },
+        {
+          "path": "requirements/python-compat.in",
+          "url": "https://github.com/Aider-AI/aider/blob/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/requirements/python-compat.in",
+          "purpose": "Explicit SciPy/NumPy interpreter-conditioned dependency bounds."
+        },
+        {
+          "path": "tests/basic/test_repomap.py",
+          "url": "https://github.com/Aider-AI/aider/blob/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/tests/basic/test_repomap.py",
+          "purpose": "Existing map/cache/refresh/language regression tests."
+        }
+      ],
+      "runtime_requirements": "Python >=3.10,<3.15. RepoMap needs readable file paths, an IO.read_text/output adapter, main_model.token_count, Tree-sitter grammar/query resources, diskcache, NetworkX/SciPy/NumPy, Pygments, grep-ast, rich/tqdm/packaging. Model generation is not required by the map path.",
+      "integration_owner": "Proposed MARS context-selection adapter owner; MARS core owns task/context decisions, worker owns rebuildable parse/map cache. No human owner assigned by specification.",
+      "target_milestone": "Milestone 0 source/contract baseline; Milestone 2 Aider context delivery.",
+      "adaptation_decision": "Conditional ADAPT: narrow, separately locked Python context worker, not Aider's coder/CLI loop. MARS supplies filtered file inventory and tokenizer; store revision/content-digest-keyed map state outside source worktrees or in per-task scratch. Add path/symlink and secret/binary/large-file filtering, dirty-buffer materialization, exact final tokenizer check and strict cap. Retain upstream Apache attribution, license and modification notices if copying; no root NOTICE file was present in inspected tree.",
+      "dependencies": [
+        "requirements.txt: diskcache==5.6.3, grep-ast==0.9.0, networkx==3.4.2, tree-sitter-language-pack==0.13.0; Python>=3.10 selects tree-sitter==0.25.2.",
+        "Python>=3.11: numpy>=2.3,<2.5; scipy>=1.16.1,<1.18. Python3.10: numpy<2, scipy<1.16.",
+        "Full requirements: pydantic==2.12.5, litellm==1.82.3, pillow==12.1.1. These conflict with selected Browser Use/OpenHands constraints."
+      ],
+      "acceptance_plan": {
+        "status": "Proposed, NOT executed",
+        "prerequisites": "Pinned checkout plus its dedicated development environment; do not install all three projects into one venv.",
+        "upstream_regression_command": "pytest tests/basic/test_repomap.py",
+        "model_free_api_smoke_command": "python - <<'PY'\nfrom pathlib import Path\nfrom tempfile import TemporaryDirectory\nfrom types import SimpleNamespace\nfrom aider.repomap import RepoMap\nclass IO:\n    def read_text(self, name): return Path(name).read_text(encoding=\"utf-8\")\n    def tool_output(self, *args, **kwargs): pass\n    tool_warning = tool_output\n    tool_error = tool_output\nwith TemporaryDirectory() as d:\n    p = Path(d)\n    lib = p / \"lib.py\"\n    use = p / \"use.py\"\n    lib.write_text(\"def ranked_symbol(x):\\n    return x + 1\\n\")\n    use.write_text(\"from lib import ranked_symbol\\ndef caller():\\n    return ranked_symbol(1)\\n\")\n    rm = RepoMap(root=d, io=IO(), main_model=SimpleNamespace(token_count=len), map_tokens=1024, refresh=\"always\")\n    result = rm.get_repo_map([str(use)], [str(lib)], mentioned_idents={\"ranked_symbol\"}, force_refresh=True)\n    assert result and \"ranked_symbol\" in result, repr(result)\n    print(result)\nPY",
+        "pass_criteria": "Smoke returns ranked_symbol from the non-chat library. Adapter gate: run twice, then edit a symbol while restoring mtime; change git revision and unsaved-buffer content independently. All changes must invalidate cache. A symlink outside root and a secret fixture must never appear; exact target-model token count must stay <= requested cap. These adapter checks require future MARS code; they are not supplied by upstream tests."
+      },
+      "audit_checks": {
+        "instructions_read": ["CONTRIBUTING.md"],
+        "inspected_test_commands": [
+          "pytest (CONTRIBUTING.md)",
+          "pytest tests/basic/test_repomap.py (path-scoped audit recipe; file inspected)"
+        ],
+        "actually_executed": [
+          "git ls-remote HEAD; shallow filtered checkout of exact SHA",
+          "git rev-parse HEAD; git show/source inspection; git ls-tree license/path checks",
+          "Final Python static validation: full SHA matched checkout; all 7 selected source/license paths exist; pinned URLs match; proposed smoke parses with ast.parse; tracked source tree clean. No import or runtime execution."
+        ],
+        "not_executed": [
+          "Package install/import, upstream pytest, model-free smoke, lint/typecheck, MARS adapter tests or inference."
+        ]
+      },
+      "risks": [
+        "Tags cache compares filename+mtime; map cache keys file-name sets/budget and sometimes mentions, not file content or revision. force_refresh bypasses map cache but does not itself bypass unchanged-mtime tag cache.",
+        "get_ranked_tags_map_uncached accepts 15% token error; token_count samples long strings. No-chat expansion can increase map budget, and map is not an exact token cap.",
+        "Library reads disk rather than unsaved IDE buffers. Cache files write inside root by default; read-only source files do not imply side-effect-free operation.",
+        "Full installation includes unrelated LLM/telemetry/audio/image dependencies. Source dependency pins are not a minimal independently packaged map library.",
+        "Root Apache license verified, but redistributed grammar/runtime dependency licenses were not audited; do not claim a single-license composed bundle."
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "browser-use",
+      "group": "workspace-tools",
+      "repository_url": "https://github.com/browser-use/browser-use",
+      "revision": "b49a68e4060acb226da8f784194fef301c53a6d7",
+      "version_note": "0.13.14 from pyproject.toml",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/browser-use/browser-use/blob/b49a68e4060acb226da8f784194fef301c53a6d7/LICENSE",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "browser_use/browser/session.py",
+          "url": "https://github.com/browser-use/browser-use/blob/b49a68e4060acb226da8f784194fef301c53a6d7/browser_use/browser/session.py",
+          "purpose": "BrowserSession.start(), get_browser_state_summary(include_screenshot=True,cached=False), navigate_to(), kill(), stop(). kill closes owned browser; stop intentionally retains a keep-alive browser and is not equivalent cleanup."
+        },
+        {
+          "path": "browser_use/browser/profile.py",
+          "url": "https://github.com/browser-use/browser-use/blob/b49a68e4060acb226da8f784194fef301c53a6d7/browser_use/browser/profile.py",
+          "purpose": "BrowserProfile policy: allowed/prohibited domains, block_ip_addresses, chromium_sandbox, disable_security, user_data_dir, downloads_path, enable_default_extensions."
+        },
+        {
+          "path": "browser_use/tools/service.py",
+          "url": "https://github.com/browser-use/browser-use/blob/b49a68e4060acb226da8f784194fef301c53a6d7/browser_use/tools/service.py",
+          "purpose": "Tools.act(..., action_timeout=...) -> ActionResult; navigate/click/input/screenshot and other actions. Default timeout 180s, overridable by BROWSER_USE_ACTION_TIMEOUT_S."
+        },
+        {
+          "path": "browser_use/tools/registry/service.py",
+          "url": "https://github.com/browser-use/browser-use/blob/b49a68e4060acb226da8f784194fef301c53a6d7/browser_use/tools/registry/service.py",
+          "purpose": "Registry.create_action_model and execute_action; register/exclude actions. Domain metadata filters generated schema, not an authorization check inside execute_action."
+        },
+        {
+          "path": "browser_use/browser/watchdogs/security_watchdog.py",
+          "url": "https://github.com/browser-use/browser-use/blob/b49a68e4060acb226da8f784194fef301c53a6d7/browser_use/browser/watchdogs/security_watchdog.py",
+          "purpose": "SecurityWatchdog navigation/redirect/new-tab URL policy; literal IP classification, data/blob bypass."
+        },
+        {
+          "path": "browser_use/config.py",
+          "url": "https://github.com/browser-use/browser-use/blob/b49a68e4060acb226da8f784194fef301c53a6d7/browser_use/config.py",
+          "purpose": "ANONYMIZED_TELEMETRY defaults true; BROWSER_USE_CLOUD_SYNC defaults to telemetry setting; cloud hints default true."
+        },
+        {
+          "path": "tests/ci/security/test_domain_filtering.py",
+          "url": "https://github.com/browser-use/browser-use/blob/b49a68e4060acb226da8f784194fef301c53a6d7/tests/ci/security/test_domain_filtering.py",
+          "purpose": "Local/structured policy regression coverage, not proof of complete egress isolation."
+        },
+        {
+          "path": "tests/ci/test_action_timeout.py",
+          "url": "https://github.com/browser-use/browser-use/blob/b49a68e4060acb226da8f784194fef301c53a6d7/tests/ci/test_action_timeout.py",
+          "purpose": "Per-action timeout regression uses a deliberately stubbed hanging registry executor."
+        },
+        {
+          "path": ".github/workflows/test.yaml",
+          "url": "https://github.com/browser-use/browser-use/blob/b49a68e4060acb226da8f784194fef301c53a6d7/.github/workflows/test.yaml",
+          "purpose": "Actual CI setup: uv sync --dev --all-extras --refresh-package browser-use-core; uvx playwright install chromium --with-deps --no-shell."
+        }
+      ],
+      "runtime_requirements": "Python >=3.11,<4.0; local Chromium and OS browser dependencies or explicit CDP browser. Async Python event-bus/CDP lifecycle. BrowserSession+Tools can be used without an LLM; Agent and extract actions have separate model requirements.",
+      "integration_owner": "Proposed MARS browser-service adapter owner; core owns action authorization/cancellation, worker owns browser/CDP/profile lifecycle and evidence. No human owner assigned.",
+      "target_milestone": "Milestone 0 source/contract baseline; Milestone 2 browser worker delivery.",
+      "adaptation_decision": "Conditional ADAPT as bounded browser worker under MARS core; do not start browser_use.agent.service.Agent as a competing agent loop. Separate process/profile/download area per task, positive executable action allowlist, total wall-clock/step/artifact budget, explicit sensitive-data and upload/download authorization. Disable telemetry/cloud sync/hints and default extensions for local audit mode. Enforce all-request egress/metadata/private-network policy outside library, and kill owned browsers on cancellation. Return normalized actions, observations, screenshots/DOM and artifact references to core. Retain MIT notice.",
+      "dependencies": [
+        "pyproject.toml: pydantic==2.13.5, mcp==2.1.1, cdp-use==1.4.5, bubus==1.5.6, browser-use-sdk>=3.10.0,<4, browser-harness==0.1.13.",
+        "Native browser-use-core belongs to optional extras; browser binaries, default extension downloads and OS packages require independent pin/license review.",
+        "Selected Browser Use version's MCP major differs from OpenHands uv.lock's mcp==1.28.1. OpenHands server already brings browser-use==0.11.9 via openhands-tools: keep that server environment independently locked."
+      ],
+      "acceptance_plan": {
+        "status": "Proposed, NOT executed",
+        "prerequisites": "Pinned dedicated uv environment plus local Chromium; loopback HTTP fixture explicitly allowed only for this test. Chromium sandbox must be usable; no provider API credentials or model runs required.",
+        "upstream_regression_command": "uv run pytest -vxs tests/ci/security/test_domain_filtering.py tests/ci/security/test_ip_blocking.py tests/ci/security/test_upload_file_containment.py tests/ci/security/test_sensitive_data.py tests/ci/test_action_timeout.py",
+        "model_free_api_smoke_command": "ANONYMIZED_TELEMETRY=false BROWSER_USE_CLOUD_SYNC=false BROWSER_USE_CLOUD_HINTS=false uv run python - <<'PY'\nimport asyncio, tempfile, threading\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\nfrom browser_use import BrowserSession\nfrom browser_use.tools.service import Tools\nclass Handler(BaseHTTPRequestHandler):\n    def do_GET(self):\n        self.send_response(200)\n        self.send_header(\"Content-Type\", \"text/html\")\n        self.end_headers()\n        self.wfile.write(b\"<html><title>fixture</title><body><button>fixture button</button></body></html>\")\n    def log_message(self, *args): pass\nserver = ThreadingHTTPServer((\"127.0.0.1\", 0), Handler)\nthreading.Thread(target=server.serve_forever, daemon=True).start()\nasync def main():\n    with tempfile.TemporaryDirectory() as profile:\n        browser = BrowserSession(is_local=True, use_cloud=False, headless=True, chromium_sandbox=True, enable_default_extensions=False, user_data_dir=profile, allowed_domains=[\"http://127.0.0.1\"], prohibited_domains=[\"denied.invalid\"], block_ip_addresses=False)\n        await browser.start()\n        try:\n            tools = Tools()\n            Action = tools.registry.create_action_model(include_actions=[\"navigate\"])\n            action = Action(navigate={\"url\": f\"http://127.0.0.1:{server.server_port}\"})\n            result = await tools.act(action, browser_session=browser, action_timeout=15)\n            assert not result.error, result.error\n            state = await browser.get_browser_state_summary(include_screenshot=True, cached=False)\n            assert state.screenshot and \"127.0.0.1\" in state.url\n            blocked = await tools.act(Action(navigate={\"url\": \"http://denied.invalid\"}), browser_session=browser, action_timeout=5)\n            assert blocked.error, \"navigation policy did not reject\"\n        finally:\n            await browser.kill()\ntry: asyncio.run(main())\nfinally: server.shutdown(); server.server_close()\nPY",
+        "pass_criteria": "Local navigation yields screenshot/state and denied.invalid action returns an error without remote access. Future adapter gate: separate profiles must not share cookie/localStorage; redirect/new-tab and forbidden subresource/metadata destinations must produce zero forbidden fixture requests under external egress enforcement; unapproved upload/download paths/actions rejected; cancel hung page and prove browser process/profile cleanup within deadline. Upstream domain tests alone do not establish these guarantees."
+      },
+      "audit_checks": {
+        "instructions_read": ["AGENTS.md", "CLAUDE.md"],
+        "inspected_test_commands": [
+          "uv run pytest -vxs tests/ci (AGENTS.md)",
+          "bin/test.sh invokes uv run pytest --numprocesses auto tests/ci",
+          "CI .github/workflows/test.yaml setup and per-file pytest commands",
+          "uv run pyright; uv run ruff; pre-commit instructions (not run)"
+        ],
+        "actually_executed": [
+          "git ls-remote HEAD; shallow filtered checkout of exact SHA",
+          "git rev-parse HEAD; git show/source inspection; path/license checks",
+          "Final Python static validation: full SHA matched checkout; all 10 selected source/license paths exist; pinned URLs match; proposed smoke parses with ast.parse; tracked source tree clean. No import or runtime execution."
+        ],
+        "not_executed": [
+          "uv sync, Chromium installation/launch, security tests, smoke, lint/typecheck, LLM or cloud calls."
+        ]
+      },
+      "risks": [
+        "Navigation policy allows all URLs if both allow/prohibit lists unset; data: and blob: are allowed. Some redirect checks occur after completion; this is not a DNS-aware/all-request firewall or OS filesystem sandbox.",
+        "block_ip_addresses defaults false; literal-host checks do not prove DNS resolution/rebinding protection. Browser sandbox and application URL policy are distinct controls.",
+        "Domain action schema filtering does not itself prevent manually constructed disallowed actions. MARS must authorize at invocation and apply positive allowlists.",
+        "Default extensions can fetch external artifacts; telemetry/cloud settings default on. Do not forward user profiles, CDP URLs, secrets or cloud API keys into untrusted tasks.",
+        "MIT verified for repository only. Direct browser-harness/browser-use-sdk and optional browser-use-core licenses were not verified; native core is not needed by selected tool-only path but CI all-extras includes it.",
+        "Screenshot/DOM observations may contain untrusted instructions or secrets; treat as evidence, not authority. 180-second per-action timeout is not a complete task budget."
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "openhands-workspace",
+      "group": "workspace-tools",
+      "repository_url": "https://github.com/OpenHands/software-agent-sdk",
+      "revision": "c048a1eb82353b0586f3ce600708394a68ebb246",
+      "version_note": "1.59.0 from SDK/workspace/agent-server manifests",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/OpenHands/software-agent-sdk/blob/c048a1eb82353b0586f3ce600708394a68ebb246/LICENSE",
+        "additional_notices": [],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "openhands-sdk/openhands/sdk/workspace/remote/base.py",
+          "url": "https://github.com/OpenHands/software-agent-sdk/blob/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-sdk/openhands/sdk/workspace/remote/base.py",
+          "purpose": "RemoteWorkspace(host, api_key, working_dir, runtime_conversation_id=...), execute_command, file_upload, file_download; owns transport, not OS isolation."
+        },
+        {
+          "path": "openhands-sdk/openhands/sdk/workspace/remote/remote_workspace_mixin.py",
+          "url": "https://github.com/OpenHands/software-agent-sdk/blob/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-sdk/openhands/sdk/workspace/remote/remote_workspace_mixin.py",
+          "purpose": "X-Session-API-Key; /api or /api/conversations/{runtime_conversation_id}. POST /bash/start_bash_command, GET /bash/bash_events/search, POST /bash/bash_commands/{id}/stop; /file/upload and /file/download."
+        },
+        {
+          "path": "openhands-workspace/openhands/workspace/remote_api/workspace.py",
+          "url": "https://github.com/OpenHands/software-agent-sdk/blob/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-workspace/openhands/workspace/remote_api/workspace.py",
+          "purpose": "APIRemoteWorkspace provisions an external Runtime API; service implementation and runtime_class behavior are not established by the client."
+        },
+        {
+          "path": "openhands-workspace/openhands/workspace/docker/workspace.py",
+          "url": "https://github.com/OpenHands/software-agent-sdk/blob/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-workspace/openhands/workspace/docker/workspace.py",
+          "purpose": "DockerWorkspace local provider: host-loopback published ports, server binds 0.0.0.0 inside; arbitrary volumes/network and optional GPU. Not equivalent to per-conversation hardened registry."
+        },
+        {
+          "path": "openhands-sdk/openhands/sdk/workspace/local.py",
+          "url": "https://github.com/OpenHands/software-agent-sdk/blob/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-sdk/openhands/sdk/workspace/local.py",
+          "purpose": "LocalWorkspace executes on host; unsafe as the untrusted execution isolation boundary."
+        },
+        {
+          "path": "openhands-agent-server/openhands/agent_server/docker_runtime/registry.py",
+          "url": "https://github.com/OpenHands/software-agent-sdk/blob/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-agent-server/openhands/agent_server/docker_runtime/registry.py",
+          "purpose": "Distinct DockerConversationRegistry: per-conversation containers/credentials, --user host uid:gid, --cap-drop ALL, no-new-privileges, core=0, loopback ports and configured CPU/memory/PID limits. Adds host-gateway and writable workspace/persistence mounts; not a network-deny policy."
+        },
+        {
+          "path": "openhands-agent-server/openhands/agent_server/dependencies.py",
+          "url": "https://github.com/OpenHands/software-agent-sdk/blob/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-agent-server/openhands/agent_server/dependencies.py",
+          "purpose": "Authentication disabled when session_api_keys empty. Workspace-only routes additionally accept oh_workspace_session_key cookie; generic API uses header."
+        },
+        {
+          "path": "openhands-agent-server/openhands/agent_server/file_router.py",
+          "url": "https://github.com/OpenHands/software-agent-sdk/blob/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-agent-server/openhands/agent_server/file_router.py",
+          "purpose": "Upload/download check absolute paths, not confinement under working_dir. Server/container permissions and MARS path policy are the boundary."
+        },
+        {
+          "path": "openhands-agent-server/openhands/agent_server/config.py",
+          "url": "https://github.com/OpenHands/software-agent-sdk/blob/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-agent-server/openhands/agent_server/config.py",
+          "purpose": "conversation_runtime defaults local; Docker runtime is opt-in; default per-conversation resources 4g/2 CPU/512 PIDs. Configures keys, workspace/persistence and optional selectable runtime."
+        },
+        {
+          "path": "openhands-agent-server/openhands/agent_server/__main__.py",
+          "url": "https://github.com/OpenHands/software-agent-sdk/blob/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-agent-server/openhands/agent_server/__main__.py",
+          "purpose": "Bind defaults loopback without key, all interfaces with configured key; explicitly requested wildcard without authentication only warns."
+        },
+        {
+          "path": "tests/sdk/workspace/remote/test_runtime_scope.py",
+          "url": "https://github.com/OpenHands/software-agent-sdk/blob/c048a1eb82353b0586f3ce600708394a68ebb246/tests/sdk/workspace/remote/test_runtime_scope.py",
+          "purpose": "Scoped/unscoped command/file/git/lifecycle transport expectations."
+        },
+        {
+          "path": "uv.lock",
+          "url": "https://github.com/OpenHands/software-agent-sdk/blob/c048a1eb82353b0586f3ce600708394a68ebb246/uv.lock",
+          "purpose": "Compatible upstream environment: browser-use 0.11.9, mcp 1.28.1, fastmcp 3.2.0, litellm 1.105.1, pydantic 2.13.5."
+        }
+      ],
+      "runtime_requirements": "SDK/workspace/server Python >=3.12; repository tooling targets Python3.13. RemoteWorkspace client needs httpx/Pydantic/SDK dependencies. Actual shell service needs bash/tmux/libtmux; Docker provider needs Docker daemon and compatible pinned agent-server image. Third-party runtime service is required for APIRemoteWorkspace; no model invocation is needed for command/file probes.",
+      "integration_owner": "Proposed MARS execution-provider owner; core owns task/checkpoint/history and approvals, provider owns sandbox lifecycle/transport/cleanup. No human owner assigned.",
+      "target_milestone": "Milestone 0 source/contract baseline; Milestone 5 remote execution provider (not a prerequisite for Milestone1 local coding workbench).",
+      "adaptation_decision": "Conditional ADAPT only workspace transport/lifecycle behind MARS execution-provider contract. Start with core's local isolation, add remote provider at Milestone5. Explicitly choose an isolation deployment; reject LocalWorkspace for untrusted tasks. Use per-task credentials, TLS/access controls, image digest, resource/egress/mount/secret policy and workspace path authorization. Do not create OpenHands autonomous agent loop or a second authoritative task/history store. Disable duplicate browser tools and model services when using dedicated MARS browser worker. Retain MIT notice.",
+      "dependencies": [
+        "openhands-sdk manifest: pydantic>=2.13.5, httpx>=0.28.1,<0.29.0, fastmcp>=3.1.1,<4, litellm>=1.104.3,<1.106.0, pillow>=12.2.0; repository constraints pin litellm==1.105.1 and pillow>=12.3.0.",
+        "openhands-agent-server pulls openhands-tools and openhands-workspace; openhands-tools requires browser-use>=0.8.0. The reviewed uv.lock pins browser-use==0.11.9, not audited standalone 0.13.14.",
+        "APIRemoteWorkspace lifecycle depends on external runtime API/provider and chosen runtime_class/resource_factor; provider's isolation implementation was not in assigned source scope.",
+        "Digest-pinned images, TLS/API keys, tmux/bash, sandbox policy, artifact streaming limits and explicit process cancellation are deployment dependencies."
+      ],
+      "acceptance_plan": {
+        "status": "Proposed, NOT executed",
+        "prerequisites": "Dedicated Python>=3.12 uv environment using upstream lock; disposable isolated server/image pinned to reviewed source. MARS_TEST_WORKSPACE_URL and MARS_TEST_WORKSPACE_KEY are future test inputs, not required for this public audit. Never point probe at a host/local workspace with sensitive files.",
+        "upstream_regression_command": "uv run pytest tests/sdk/workspace/remote/test_runtime_scope.py tests/workspace/test_docker_workspace.py tests/agent_server/test_api_authentication.py tests/agent_server/test_runtime_router.py tests/agent_server/docker_runtime/test_provisioning.py tests/agent_server/docker_runtime/test_registry.py",
+        "model_free_api_smoke_command": "uv run python - <<'PY'\nimport os\nfrom tempfile import TemporaryDirectory\nfrom pathlib import Path\nfrom openhands.sdk.workspace import RemoteWorkspace\n# Operator must supply an already-isolated, disposable workspace service.\nwith RemoteWorkspace(host=os.environ[\"MARS_TEST_WORKSPACE_URL\"], api_key=os.environ[\"MARS_TEST_WORKSPACE_KEY\"], working_dir=\"/workspace\") as ws:\n    result = ws.execute_command(\"printf audit-ok\", timeout=5)\n    assert result.exit_code == 0 and result.stdout == \"audit-ok\", result\n    assert ws.file_upload(b\"audit-bytes\", \"/workspace/audit-probe.bin\").success\n    with TemporaryDirectory() as d:\n        out = Path(d) / \"probe.bin\"\n        assert ws.file_download(\"/workspace/audit-probe.bin\", out).success\n        assert out.read_bytes() == b\"audit-bytes\"\n    assert ws.execute_command(\"rm -f /workspace/audit-probe.bin\", timeout=5).exit_code == 0\nPY",
+        "pass_criteria": "Command stdout/exit status and byte-exact upload/download succeed against real isolated server; absent/wrong API key fails on protected endpoints. Future provider gate: two sandboxes cannot read each other's sentinel files or host sentinel; deny traversal/symlink/outside-root paths and forbidden egress; inspect container uid/caps/mounts/limits; timeout/cancel a child process and prove no child continues. Execute via same MARS contract as local provider and preserve evidence. Mocked Docker tests cannot prove isolation; default pytest excludes docker_live."
+      },
+      "audit_checks": {
+        "instructions_read": [
+          "AGENTS.md",
+          "openhands-sdk/openhands/sdk/AGENTS.md",
+          "openhands-workspace/openhands/workspace/AGENTS.md",
+          "openhands-agent-server/AGENTS.md"
+        ],
+        "inspected_test_commands": [
+          "uv run pytest tests/sdk; uv run pytest tests/workspace; uv run pytest tests/agent_server",
+          "make build (uv sync --dev and pre-commit); make lint/format; Pyright/pre-commit guidance",
+          "pyproject.toml defaults exclude stress, acp_live and docker_live; live Docker tests require explicit -m docker_live and real runtime"
+        ],
+        "actually_executed": [
+          "git ls-remote HEAD; shallow filtered checkout of exact SHA",
+          "git rev-parse HEAD; git show/source inspection; source/license/path checks",
+          "Final Python static validation: full SHA matched checkout; all 13 selected source/license paths exist; pinned URLs match; proposed smoke parses with ast.parse; tracked source tree clean. No import or runtime execution."
+        ],
+        "not_executed": [
+          "SDK dependency installation/import, pytest, Docker/image build or runtime, live isolation/auth tests, lint/typecheck, MARS adapter or model runs."
+        ]
+      },
+      "risks": [
+        "RemoteWorkspace is an HTTP transport, not an isolation primitive; same host/file API may execute directly on server. Working_dir is not a file access jail; conversation-scoped URL is not a tenant authorization proof.",
+        "Empty session_api_keys allows protected operations without auth. Explicit wildcard bind without key is permitted with warning; configure auth and TLS rather than relying on default bind behavior.",
+        "Command timeout generator returns timeout_occurred and exit_code=-1; bounded polling alone does not prove process termination. Separate stop/cleanup API path must be exercised.",
+        "Simple DockerWorkspace allows arbitrary mounts/networks/GPU and lacks the stronger per-conversation registry defaults. Registry has stronger resource/capability settings but still host-gateway access, writable mounts, shared kernel and operator Docker privileges.",
+        "Docker runtime can own additional persistent conversation state. MARS must not silently acquire a competing authority; choose transport-only deployment or explicitly map disposable runtime metadata under core-owned identity.",
+        "Additional license files clients/typescript/LICENSE and tests/fixtures/plugins/agent_plugins/agent-plugins-example/LICENSE both inspected as MIT. Container image OS packages/CLI/browser components and other dependencies were not license-cleared by root MIT."
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "dgm",
+      "group": "training-evolution",
+      "repository_url": "https://github.com/jennyzzt/dgm",
+      "revision": "a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2",
+      "version_note": "none (no tags; main HEAD, commit 2025-08-13 'Update coding_agent_polyglot.py')",
+      "license": {
+        "spdx": "Apache-2.0",
+        "path": "LICENSE",
+        "url": "https://github.com/jennyzzt/dgm/blob/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/LICENSE",
+        "additional_notices": [
+          "Evaluation harness code in swe_bench/ and polyglot/ is stated (README Acknowledgement) to be based on SWE-bench and Aider polyglot-benchmark; no separate LICENSE files inside those dirs at this pin -> attribution to SWE-bench (MIT per upstream) must be retained; verify upstream notice before copying.",
+          "Runtime clone of princeton-nlp/SWE-bench at a 32-char (non-40) commit prefix dc4c087c2b9e4cefebf2e3d201d27e36 (README) - not a full pin.",
+          "polyglot/prepare_polyglot_dataset.py clones https://github.com/Aider-AI/polyglot-benchmark unpinned; observed HEAD 7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f; no top-level LICENSE, 49 per-exercise/track LICENSE files; README: content (c) Exercism under Exercism track licenses.",
+          "Dataset princeton-nlp/SWE-bench_Verified (HF sha c104f840cc67f8b6eec6f759ebc8b2693d585d4a): HF API exposes NO license tag/cardData license -> data license unresolved.",
+          "Foundation-model calls go to hosted APIs (Anthropic/OpenAI/Bedrock/Vertex/DeepSeek, llm.py); provider terms apply, not code license."
+        ],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "DGM_outer.py",
+          "url": "https://github.com/jennyzzt/dgm/blob/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/DGM_outer.py",
+          "purpose": "Archive concepts to re-implement: initialize_run (archive=['initial'], resume from dgm_metadata.jsonl), choose_selfimproves (methods random/score_prop/score_child_prop/best; parent score from metadata.json overall_performance.accuracy_score, children_count penalty), update_archive (keep_all | keep_better with noise_leeway), get_full_eval_threshold (2nd-best archive score), per-generation jsonl record {generation, selfimprove_entries, children, children_compiled, archive}."
+        },
+        {
+          "path": "self_improve_step.py",
+          "url": "https://github.com/jennyzzt/dgm/blob/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/self_improve_step.py",
+          "purpose": "Child lifecycle: diagnose_problem -> run coding agent in container from parent_commit patch chain -> run_harness_swe/run_harness_polyglot staged eval (small subset, then medium if >= test_more_threshold 0.4, full if > threshold) -> metadata.json {run_id, parent_commit, overall_performance,...}."
+        },
+        {
+          "path": "utils/evo_utils.py",
+          "url": "https://github.com/jennyzzt/dgm/blob/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/utils/evo_utils.py",
+          "purpose": "get_model_patch_paths (lineage = ordered list of ancestor model_patch.diff files), is_compiled_self_improve (eligibility filter)."
+        },
+        {
+          "path": "utils/git_utils.py",
+          "url": "https://github.com/jennyzzt/dgm/blob/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/utils/git_utils.py",
+          "purpose": "apply_patch / diff_versus_commit / reset_to_commit - patch-based candidate materialization."
+        },
+        {
+          "path": "tools/bash.py",
+          "url": "https://github.com/jennyzzt/dgm/blob/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/tools/bash.py",
+          "purpose": "Reference tool impl (tested)."
+        },
+        {
+          "path": "tools/edit.py",
+          "url": "https://github.com/jennyzzt/dgm/blob/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/tools/edit.py",
+          "purpose": "Reference tool impl (tested)."
+        }
+      ],
+      "runtime_requirements": "Python 3.10 (Dockerfile python:3.10-slim); requirements.txt (anthropic, openai, boto3, datasets, docker, GitPython, swebench editable install); Docker daemon (one container per self-improve child, utils/docker_utils.py build_dgm_container); OPENAI_API_KEY/ANTHROPIC_API_KEY; executes untrusted model-generated code (README Safety warning). No GPU needed for the outer loop; cost = hosted LLM tokens + SWE-bench/polyglot docker evals (1.5h per child timeout).",
+      "integration_owner": "packages/experiments (archive, lineage, promotion policy) with evaluations/ supplying scores",
+      "target_milestone": "5 (Remote execution and harness evolution)",
+      "adaptation_decision": "ADAPT CONCEPTS, DO NOT VENDOR RUNTIME. Re-implement in packages/experiments: candidate agent-manifest archive with lineage (parent id + ordered patch chain + eval record), parent selection (score_child_prop), staged evaluation thresholds, keep_all research archive separated from the production champion (blueprint 11). DGM code is research-grade, SWE-bench/polyglot specific, hard-wired to its own coding_agent.py and hosted LLM list; candidates must be MARS harness manifests evaluated through MARS's Harbor/eval contract inside isolated workspaces. Cite DGM paper (arXiv 2505.22954) and keep Apache-2.0 NOTICE/attribution if any code is copied.",
+      "dependencies": [
+        "MARS evaluation harness + task packs (Harbor adapter)",
+        "isolated workspace provider (M5)",
+        "hosted or local model provider",
+        "Docker or OpenHands remote workspace"
+      ],
+      "acceptance_plan": "pytest packages/experiments/tests/test_archive.py: seed archive with 'initial' + 3 synthetic child manifests (fixed scores 0.2/0.5/0.5, children_count 0/2/0); assert (a) score_child_prop selection with seed=0 is deterministic and never selects ineligible (uncompiled) candidates; (b) keep_better with noise_leeway=0.1 admits only children >= initial-0.1; (c) materializing child C replays the exact ancestor patch chain onto a clean checkout and its manifest hash matches the stored one (lineage+rollback); (d) promotion to champion is refused unless regression/cost/reproducibility gates pass even when research score is highest. Parity check: port DGM_outer.choose_selfimproves into the test as an oracle and assert identical parent distribution over 10k draws (chi-square p>0.01).",
+      "audit_checks": {
+        "inspected_test_commands": [
+          "pytest (pytest.ini; tests/test_bash_tool.py, tests/test_edit_tool.py only - no tests for archive/selection/self_improve)",
+          "python DGM_outer.py (README; needs API keys + docker + SWE-bench)"
+        ],
+        "executed_checks": [
+          "~/audit/venvs/dgm (py3.10.12) pip install -r requirements.txt: exit 0",
+          "python -m pytest tests -q: 22 passed in 6.18s, exit 0",
+          "python DGM_outer.py --help: exit 1, ModuleNotFoundError: No module named 'swebench' (top-level import chain self_improve_step -> swe_bench harness; even --help needs the SWE-bench editable install)",
+          "python DGM_outer.py --choose_selfimproves_method best --help: exit 1 same import error (argparse not reached)"
+        ],
+        "not_executed": [
+          "Any real DGM generation (requires hosted LLM keys, docker, SWE-bench; out of scope/expensive)"
+        ]
+      },
+      "risks": [
+        "Source bug: DGM_outer.py argparse choices=['random','score_prop','score_child_prop' 'best'] - missing comma concatenates to 'score_child_propbest', so '--choose_selfimproves_method best' is unreachable via CLI (found by inspection; CLI path not reached at runtime due to swebench import).",
+        "future.result(timeout=1.5h) is called inside as_completed() so the timeout never fires for a hung child; MARS must enforce per-candidate wall-clock limits in the job runner.",
+        "Untrusted self-modifying code execution; container isolation in DGM is a plain docker container with repo copied in - MARS must use its own sandbox/OpenHands workspace policy.",
+        "Unpinned dataset/benchmark fetches (SWE-bench 32-char prefix, polyglot-benchmark HEAD, HF dataset without revision) break reproducibility.",
+        "No upstream tags/releases; repo appears inactive since 2025-08."
+      ],
+      "integration_status": "not-integrated",
+      "background_references": []
+    },
+    {
+      "id": "trl",
+      "group": "training-evolution",
+      "repository_url": "https://github.com/huggingface/trl",
+      "revision": "44809ba3f3a136f3d62859ee981fee2506bce5c9",
+      "version_note": "v1.17.1 (annotated tag object eee64790d58f2d560cc7219c7e6d9e8b8922c83b -> commit above; VERSION file = 1.17.1)",
+      "license": {
+        "spdx": "Apache-2.0",
+        "path": "LICENSE",
+        "url": "https://github.com/huggingface/trl/blob/44809ba3f3a136f3d62859ee981fee2506bce5c9/LICENSE",
+        "additional_notices": [
+          "trl/chat_templates/*.jinja reproduce model vendors' chat templates (Cohere, Gemma, Llama 3.x, Qwen, Mistral, Nemotron, Phi, DeepSeek...) plus *_training.jinja variants with {% generation %} markers; templates originate in model repos under the respective model licenses - treat as model-license-governed if copied out of TRL.",
+          "Optional extras pull separately licensed deps (deepspeed, bitsandbytes, liger-kernel, vllm, harbor)."
+        ],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "trl/trainer/sft_trainer.py",
+          "url": "https://github.com/huggingface/trl/blob/44809ba3f3a136f3d62859ee981fee2506bce5c9/trl/trainer/sft_trainer.py",
+          "purpose": "SFTTrainer(model: str|PreTrainedModel|PeftModel, args: SFTConfig, train_dataset, eval_dataset, processing_class, quantization_config: BitsAndBytesConfig|None, peft_config: PeftConfig|None, formatting_func, ...) (L628-649); dataset types: 'messages' (conversational LM), 'text', or 'prompt'+'completion' (collator L355-466); peft_config must be a peft.PeftConfig (L809-818)."
+        },
+        {
+          "path": "trl/trainer/sft_config.py",
+          "url": "https://github.com/huggingface/trl/blob/44809ba3f3a136f3d62859ee981fee2506bce5c9/trl/trainer/sft_config.py",
+          "purpose": "SFTConfig fields used by MARS manifest: model_init_kwargs, chat_template_path, dataset_text_field, max_length, truncation_mode, packing/packing_strategy, padding_free, completion_only_loss, assistant_only_loss, loss_type, seed, bf16/use_cpu (inherited TrainingArguments)."
+        },
+        {
+          "path": "trl/chat_templates/README.md",
+          "url": "https://github.com/huggingface/trl/blob/44809ba3f3a136f3d62859ee981fee2506bce5c9/trl/chat_templates/README.md",
+          "purpose": "Training chat templates with {% generation %} for assistant_only_loss; record which template was used in the manifest."
+        },
+        {
+          "path": "tests/test_sft_trainer.py",
+          "url": "https://github.com/huggingface/trl/blob/44809ba3f3a136f3d62859ee981fee2506bce5c9/tests/test_sft_trainer.py",
+          "purpose": "Upstream PEFT/SFT regression tests."
+        }
+      ],
+      "runtime_requirements": "Python >=3.11; torch>=2.6.0, transformers>=4.56.2, accelerate>=1.11.0, datasets>=4.7.0 (pyproject.toml); extras peft>=0.17.0, quantization bitsandbytes>=0.45.2, vllm>=0.22.0,<0.33.0. Real SFT/QLoRA needs a CUDA GPU sized to model+seq-len; this VM has 8 vCPU, 31 GiB RAM, no NVIDIA GPU (nvidia-smi absent). SFTConfig defaults to bf16 and raises on CPU unless use_cpu=True (observed).",
+      "integration_owner": "services/training (dataset builder + SFT job runner)",
+      "target_milestone": "6 (SFT specialist pilot)",
+      "adaptation_decision": "REUSE AS PINNED LIBRARY (pip trl==1.17.1, no fork). services/training wraps SFTTrainer in a separate Python job process that consumes a versioned training manifest (dataset snapshot hash, split assignment, model+tokenizer revision, chat template path/hash, SFTConfig dump, LoraConfig dump, seeds, package freeze, hardware). Use prompt-completion or messages datasets; prefer completion_only_loss/assistant_only_loss explicitly set in manifest. Follow TRL AGENTS.md only if contributing upstream (not planned).",
+      "dependencies": [
+        "peft 0.21.2",
+        "torch/transformers/accelerate/datasets pinned lock",
+        "CUDA GPU (not available on this VM)",
+        "selected base model with training-permitting license (NOT yet selected)",
+        "reviewed dataset snapshot (M6)"
+      ],
+      "acceptance_plan": "CPU interface gate (CI, no GPU): run training job with manifest {model: trl-internal-testing/tiny-Qwen2ForCausalLM-2.5@ce8d0bf270b28c8fab026ced69fe8aa14b0f0eda, 8 prompt-completion rows, max_steps=2, use_cpu=True, bf16=False, LoraConfig(r=8, alpha=16, target_modules='all-linear')}; assert exit 0, adapter_config.json + adapter_model.safetensors exist, manifest records sha256 of adapter, PeftModel.from_pretrained reloads, and job writes base revision into manifest (PEFT leaves revision=None). Label output 'interface smoke - not a trained model'. GPU gate (M6): same job on the selected base model with QLoRA (BitsAndBytesConfig 4-bit nf4) on reviewed data, then held-out agent-level eval vs base.",
+      "audit_checks": {
+        "inspected_test_commands": [
+          "pytest tests/test_sft_trainer.py (upstream)",
+          "make test / make precommit (Makefile, not run)"
+        ],
+        "executed_checks": [
+          "venv ~/audit/venvs/sft py3.12.16; torch 2.15.0+cpu, transformers 5.22.1, accelerate 1.15.0, datasets 5.1.0, trl 1.17.1 & peft 0.21.2 editable from pinned checkouts (freeze in logs/sft_freeze.txt)",
+          "pytest tests/test_sft_trainer.py -k 'peft and not vllm': 15 passed, 7 skipped, 147 deselected, 110s, exit 0",
+          "~/audit/smoke_sft.py first run: exit 1 ValueError 'Your setup doesn't support bf16/gpu. You need to assign use_cpu...' (SFTConfig default on CPU)",
+          "~/audit/smoke_sft.py with use_cpu=True,bf16=False: exit 0, 2 steps on tiny random model, trainable 2,816/2,437,832 params, saved adapter_config.json+adapter_model.safetensors (sha256 c2cfe7f96bc5d264a404e22017201829f1b2bd89f2a241a7e2a148238cd4619c), PeftModel reload logits (1,3,152064). Interface evidence only - loss 11.92 on random tiny model, not a specialist."
+        ],
+        "not_executed": [
+          "Any GPU / QLoRA / bitsandbytes run",
+          "assistant_only_loss with a real training chat template",
+          "TRL vLLM-colocated paths"
+        ]
+      },
+      "risks": [
+        "transformers 5.x resolved by default (5.22.1) - pin transformers in the training lockfile; TRL lower bound 4.56.2 spans a major version.",
+        "Editable install shadowed by a same-named ./trl namespace dir when cwd is the parent dir (needed python -P) - run jobs from a neutral cwd.",
+        "Unversioned docs URL in blueprint S26 drifts; use /v1.17.1/.",
+        "Chat template mismatch between training (TRL template) and serving (vLLM tokenizer template) can silently change behavior - manifest must hash both."
+      ],
+      "integration_status": "not-integrated",
+      "background_references": [
+        {
+          "url": "https://huggingface.co/docs/trl/v1.17.1/en/sft_trainer",
+          "notes": "Hosted documentation, not an immutable source pin. Versioned SFT docs (HTTP 200 observed); blueprint S26 points to unversioned /en/ which drifts."
+        }
+      ]
+    },
+    {
+      "id": "peft",
+      "group": "training-evolution",
+      "repository_url": "https://github.com/huggingface/peft",
+      "revision": "eaa35c777c7ba554a2a3639ac9c79bb690f39a57",
+      "version_note": "v0.21.2 (annotated tag 86b6cbda4c125337bdc0cc7fc3f2fe09c17238e1 -> commit above; src/peft/__init__.py __version__='0.21.2')",
+      "license": {
+        "spdx": "Apache-2.0",
+        "path": "LICENSE",
+        "url": "https://github.com/huggingface/peft/blob/eaa35c777c7ba554a2a3639ac9c79bb690f39a57/LICENSE",
+        "additional_notices": [
+          "bitsandbytes (QLoRA) and other quantization backends are separate packages with their own licenses."
+        ],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "src/peft/tuners/lora/config.py",
+          "url": "https://github.com/huggingface/peft/blob/eaa35c777c7ba554a2a3639ac9c79bb690f39a57/src/peft/tuners/lora/config.py",
+          "purpose": "LoraConfig: r, lora_alpha, lora_dropout, target_modules ('all-linear' supported), exclude_modules, bias, use_rslora, use_dora, modules_to_save, init_lora_weights, layers_to_transform, rank_pattern/alpha_pattern."
+        },
+        {
+          "path": "src/peft/config.py",
+          "url": "https://github.com/huggingface/peft/blob/eaa35c777c7ba554a2a3639ac9c79bb690f39a57/src/peft/config.py",
+          "purpose": "PeftConfig.base_model_name_or_path and revision fields (L365-368) - lineage fields; revision observed None after TRL save."
+        },
+        {
+          "path": "src/peft/utils/other.py",
+          "url": "https://github.com/huggingface/peft/blob/eaa35c777c7ba554a2a3639ac9c79bb690f39a57/src/peft/utils/other.py",
+          "purpose": "prepare_model_for_kbit_training (L158) for QLoRA."
+        },
+        {
+          "path": "src/peft/utils/constants.py",
+          "url": "https://github.com/huggingface/peft/blob/eaa35c777c7ba554a2a3639ac9c79bb690f39a57/src/peft/utils/constants.py",
+          "purpose": "Artifact names: adapter_model.safetensors, adapter_config.json (L400-401) - registry/packaging contract."
+        },
+        {
+          "path": "tests/test_config.py",
+          "url": "https://github.com/huggingface/peft/blob/eaa35c777c7ba554a2a3639ac9c79bb690f39a57/tests/test_config.py",
+          "purpose": "Config round-trip tests."
+        }
+      ],
+      "runtime_requirements": "Python >=3.10; torch>=1.13.0, transformers (unbounded), accelerate>=0.21.0, safetensors, huggingface_hub>=0.25.0 (setup.py). QLoRA requires bitsandbytes + CUDA GPU.",
+      "integration_owner": "services/training (adapter config + packaging) and packages/providers model registry (compatibility metadata)",
+      "target_milestone": "6 (SFT pilot); compatibility policy enforced in 7",
+      "adaptation_decision": "REUSE AS PINNED LIBRARY (peft==0.21.2). MARS adapter-config policy for servable adapters: plain LoRA only (use_dora=False, bias='none', lora_bias=False, modules_to_save=None, init_lora_weights in {True,'gaussian',...}, no aLoRA/QALoRA/BD-LoRA/layer_replication) because vLLM PEFTHelper rejects the rest; registry writes base model id+revision itself. Upstream contribution not planned (peft AGENTS.md requires maintainer-approved issue + human accountability).",
+      "dependencies": [
+        "torch/transformers lock shared with TRL",
+        "bitsandbytes + CUDA for QLoRA"
+      ],
+      "acceptance_plan": "pytest services/training/tests/test_adapter_policy.py: build LoraConfig variants {plain, use_dora=True, bias='all', modules_to_save=['lm_head'], init_lora_weights='pissa'}; save via PeftModel on the tiny test model; assert MARS policy validator accepts only 'plain' and that its rejection reasons match vLLM v0.32.0 PEFTHelper._validate_features/validate_legal messages (run vLLM's validator in the serving env in M7); assert packaged artifact contains adapter_config.json, adapter_model.safetensors, base model id+40-char revision, tokenizer/chat-template hash, model card, eval report, dataset lineage.",
+      "audit_checks": {
+        "inspected_test_commands": [
+          "pytest tests/test_config.py",
+          "make style / make test (Makefile)"
+        ],
+        "executed_checks": [
+          "pytest tests/test_config.py -q -x: first run 1 passed 1 failed (missing scikit-learn); after installing scikit-learn: 1282 passed, 12 skipped, exit 0",
+          "Adapter save/reload via TRL smoke (see trl component): exit 0"
+        ],
+        "not_executed": [
+          "prepare_model_for_kbit_training / bitsandbytes 4-bit (needs GPU)"
+        ]
+      },
+      "risks": [
+        "Test extras incomplete: test_config needs scikit-learn not pulled by our install.",
+        "transformers unbounded in setup.py - lock it.",
+        "Adapter revision field not populated automatically -> wrong-base detection must not rely on it."
+      ],
+      "integration_status": "not-integrated",
+      "background_references": [
+        {
+          "url": "https://huggingface.co/docs/peft/v0.21.0/en/developer_guides/quantization",
+          "notes": "Hosted documentation, not an immutable source pin. Quantization guide; /v0.21.2/ docs path returns 404, /v0.21.0/ and /main/ return 200 (observed)."
+        }
+      ]
+    },
+    {
+      "id": "agent-lightning",
+      "group": "training-evolution",
+      "repository_url": "https://github.com/microsoft/agent-lightning",
+      "revision": "d381995396274039f2bb1cbe5ff42ac8067f4e47",
+      "version_note": "v1.0.2 (annotated tag ec89537a3b1ac861de3a1112717c46c86f91ea6c -> commit above; pyproject version 1.0.2). v1.0 is a full refactor; pre-1.0 APIs (LitAgent/Trainer/LightningStore) live on branch v0.x and are NOT present at this pin.",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/microsoft/agent-lightning/blob/d381995396274039f2bb1cbe5ff42ac8067f4e47/LICENSE",
+        "additional_notices": [
+          "examples/llm-in-sandbox/vendor/llm-in-sandbox/LICENSE is Apache-2.0 (vendored third-party code) - do not copy without its notice.",
+          "Training backend verl (separate package, pinned <0.9.0, >=0.7.1) and vllm/flash-attn installed by scripts/setup_verl.sh are separate licenses.",
+          "Example datasets (e.g., openai/gsm8k: HF license tag mit, sha 740312add88f781978c0658806c59bc2815b9866) carry their own terms; SWE-smith/SWE-bench example data license not verified."
+        ],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "agentlightning/server/routes/proxy.py",
+          "url": "https://github.com/microsoft/agent-lightning/blob/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/server/routes/proxy.py",
+          "purpose": "Request-capture gateway: POST /proxy/rollout/{rollout_id}/attempt/{attempt_id}/mode/{train|val}/openai/v1/{chat/completions|completions}; forwards to registered model server and records events."
+        },
+        {
+          "path": "agentlightning/server/proxy.py",
+          "url": "https://github.com/microsoft/agent-lightning/blob/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/server/proxy.py",
+          "purpose": "ProxyRouter.prepare_body injects return_token_ids=True (+logprobs) so captured data has token IDs (L69-81)."
+        },
+        {
+          "path": "agentlightning/server/routes/rollouts.py",
+          "url": "https://github.com/microsoft/agent-lightning/blob/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/server/routes/rollouts.py",
+          "purpose": "Rollout controller API: POST/GET /rollouts, GET /rollouts/terminal, GET/DELETE /rollouts/{id}."
+        },
+        {
+          "path": "agentlightning/server/routes/events.py",
+          "url": "https://github.com/microsoft/agent-lightning/blob/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/server/routes/events.py",
+          "purpose": "POST /rollouts/{rid}/attempt/{aid}/events (e.g. reward), GET /rollouts/{rid}/events."
+        },
+        {
+          "path": "agentlightning/server/routes/models.py",
+          "url": "https://github.com/microsoft/agent-lightning/blob/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/server/routes/models.py",
+          "purpose": "POST/DELETE /models - register serving endpoints/versions."
+        },
+        {
+          "path": "agentlightning/schemas.py",
+          "url": "https://github.com/microsoft/agent-lightning/blob/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/schemas.py",
+          "purpose": "Event{event_type,rollout_id,attempt_id,timestamp,data}, ModelRequestData{model,model_version,request,response,usage,...}, RewardData{value,message,source,reason}, RolloutCreate{input,is_train,config,metadata}, RolloutConfig(local/k8s, timeout_seconds=3600)."
+        },
+        {
+          "path": "agentlightning/server/store.py",
+          "url": "https://github.com/microsoft/agent-lightning/blob/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/server/store.py",
+          "purpose": "IN-MEMORY module-level dicts (_rollouts, _events, _models) - no persistence."
+        },
+        {
+          "path": "agentlightning/controller/local_reconciler.py",
+          "url": "https://github.com/microsoft/agent-lightning/blob/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/controller/local_reconciler.py",
+          "purpose": "Local rollout runner (agent_class/env_map)."
+        },
+        {
+          "path": "agentlightning/verl/entrypoint.py",
+          "url": "https://github.com/microsoft/agent-lightning/blob/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/verl/entrypoint.py",
+          "purpose": "Trainer integration with verl (TaskRunner, imports pinned to verl<0.9)."
+        },
+        {
+          "path": "agentlightning/verl/vllm_compat.py",
+          "url": "https://github.com/microsoft/agent-lightning/blob/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/verl/vllm_compat.py",
+          "purpose": "verl<->vLLM shims."
+        },
+        {
+          "path": "agentlightning/client.py",
+          "url": "https://github.com/microsoft/agent-lightning/blob/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/client.py",
+          "purpose": "AgentLightningSync/AsyncClient (httpx with retry)."
+        }
+      ],
+      "runtime_requirements": "Python >=3.12; base deps fastapi, uvicorn, pydantic>=2.10, httpx, hydra-core==1.3.2, omegaconf==2.3.0, structlog, kr8s (pyproject). Training: CUDA 12.9 or 13.0 + verl 0.7.1 (vllm 0.12.0) or verl 0.8.0 (docs/00-installation.md says vllm 0.20.2; scripts/setup_verl.sh actually installs vllm 0.22.0 - mismatch) + flash-attn 2.8.3 built from source (10-30 min). README: Calc-X example 'requiring only one GPU'; coding examples need multi-GPU. Kubernetes optional (controller k8s reconciler).",
+      "integration_owner": "services/training (RL backend adapter) with evaluations/ owning reward verifiers",
+      "target_milestone": "8 (Reward-based training)",
+      "adaptation_decision": "REUSE AS SEPARATE PINNED SERVICE, LATER (M8). Run agl-server/gateway as an out-of-process training backend; MARS points the RL-task agent's OpenAI base_url at the gateway rollout URL so the real harness runs unchanged; MARS mirrors Event/Reward records into its experience store (AGL store is in-memory) with agent manifest, tools, environment and reward ids. Do not import AGL into the live execution core. LoRA-RL: no 'lora' reference exists in agentlightning/ or its verl config at this pin - LoRA/QLoRA RL compatibility is UNVERIFIED and must be proven against verl's own config before relying on it.",
+      "dependencies": [
+        "CUDA 12.9/13.0 GPU host",
+        "verl 0.7.1|0.8.0 + flash-attn",
+        "reliable independently computable reward (blueprint 10)",
+        "working SFT/eval pipeline first (M6/M7)",
+        "optional Kubernetes"
+      ],
+      "acceptance_plan": "M0/CI (CPU, no model): start agl-server with a stub OpenAI-compatible upstream (FastAPI returning fixed chat completion + token_ids); POST /models registering it, POST /rollouts {input:{task:'2+2'}, is_train:true}; send one chat completion through /proxy/rollout/{rid}/attempt/{aid}/mode/train/openai/v1/chat/completions; POST a reward event {value:1.0, source:'agent'}; assert GET /rollouts/{rid}/events returns model_request with return_token_ids injected in the upstream request and the reward; assert MARS mirror persisted both with agent manifest id. M8 (GPU): Calc-X or GSM8K example at pinned verl 0.8.0 on 1 GPU, bounded steps, held-out eval separated from harness changes.",
+      "audit_checks": {
+        "inspected_test_commands": [
+          "pytest tests (pyproject testpaths)",
+          "tests/verl/* require verl+torch",
+          "tests/examples/* require swe-smith images"
+        ],
+        "executed_checks": [
+          "venv py3.12.16, pip install -e '.[dev]': exit 0",
+          "pytest tests/server tests/test_client.py tests/test_package.py tests/controller/test_local_reconciler.py -q: 63 passed, 1 warning, exit 0",
+          "pytest tests/verl -q: exit 2, 2 collection errors ModuleNotFoundError: numpy (verl GPU stack not installed), 2 skipped"
+        ],
+        "not_executed": [
+          "setup_verl.sh / any rollout or training",
+          "k8s controller",
+          "the gateway acceptance test above (proposed, not yet written)"
+        ]
+      },
+      "risks": [
+        "vLLM version split: AGL training pins vllm 0.12.0/0.22.0 via verl, MARS serving targets 0.32.0 -> separate environments; adapters/weights produced by RL must be re-validated on the serving vLLM.",
+        "Docs vs script vLLM version mismatch (0.20.2 vs 0.22.0) for verl 0.8.0.",
+        "In-memory store loses rollouts on restart - auditability requires MARS-side persistence.",
+        "v1.0 refactor (2026-08) is young; API churn likely; v0.x docs/blogs (LitAgent, Tinker) do not apply.",
+        "RL compute: multi-GPU for non-toy tasks; no GPU here."
+      ],
+      "integration_status": "not-integrated",
+      "background_references": [
+        {
+          "url": "https://microsoft.github.io/agent-lightning/stable/",
+          "notes": "Hosted documentation, not an immutable source pin. HTTP 200; 'stable' is unversioned - use repo docs/ at the pin."
+        }
+      ]
+    },
+    {
+      "id": "vllm",
+      "group": "training-evolution",
+      "repository_url": "https://github.com/vllm-project/vllm",
+      "revision": "5df63a7203cdb9328d824a27b682e77c7b9928be",
+      "version_note": "v0.32.0 (lightweight tag; newest non-rc at audit time; v0.33.0rc2 exists). Chosen also because TRL 1.17.1 vllm extra is >=0.22.0,<0.33.0.",
+      "license": {
+        "spdx": "Apache-2.0",
+        "path": "LICENSE",
+        "url": "https://github.com/vllm-project/vllm/blob/5df63a7203cdb9328d824a27b682e77c7b9928be/LICENSE",
+        "additional_notices": [
+          "vllm/third_party/flash_linear_attention/LICENSE: MIT (Copyright 2023-2025 Songlin Yang, Yu Zhang) - only separately licensed file found via git ls-tree at the pin.",
+          "Binary deps (torch 2.13.0, flashinfer-python 0.7.0.post1, tilelang, PyNvVideoCodec etc. in requirements/cuda.txt) carry own licenses.",
+          "Served model weights governed by model licenses, not vLLM."
+        ],
+        "notes": "Preserve upstream notices. No source copied in this increment."
+      },
+      "sources": [
+        {
+          "path": "docs/features/lora.md",
+          "url": "https://github.com/vllm-project/vllm/blob/5df63a7203cdb9328d824a27b682e77c7b9928be/docs/features/lora.md",
+          "purpose": "--enable-lora, --lora-modules JSON form {name,path,base_model_name}, --max-loras, --max-lora-rank, --max-cpu-loras, /v1/load_lora_adapter, /v1/unload_lora_adapter, load_inplace, LoRAResolver plugins, lineage in /v1/models (parent)."
+        },
+        {
+          "path": "vllm/lora/request.py",
+          "url": "https://github.com/vllm-project/vllm/blob/5df63a7203cdb9328d824a27b682e77c7b9928be/vllm/lora/request.py",
+          "purpose": "LoRARequest(lora_name, lora_int_id>=1, lora_path, base_model_name=None, load_inplace=False, is_3d_lora_weight=False)."
+        },
+        {
+          "path": "vllm/lora/peft_helper.py",
+          "url": "https://github.com/vllm-project/vllm/blob/5df63a7203cdb9328d824a27b682e77c7b9928be/vllm/lora/peft_helper.py",
+          "purpose": "PEFTHelper.from_local_dir reads adapter_config.json; requires r, lora_alpha, target_modules; _validate_features rejects DoRA, lora_bias, non-classifier modules_to_save, PiSSA/OLoRA/CorDA/LoftQ inits, aLoRA, layer_replication, BD-LoRA, QALoRA; validate_legal rejects rank > max_lora_rank and bias != 'none'."
+        },
+        {
+          "path": "vllm/entrypoints/openai/models/serving.py",
+          "url": "https://github.com/vllm-project/vllm/blob/5df63a7203cdb9328d824a27b682e77c7b9928be/vllm/entrypoints/openai/models/serving.py",
+          "purpose": "load_lora_adapter (L167-215): base_model_name only attached if it equals a served base model name; otherwise silently dropped - NO check of adapter_config.base_model_name_or_path vs served model."
+        },
+        {
+          "path": "vllm/entrypoints/serve/lora/api_router.py",
+          "url": "https://github.com/vllm-project/vllm/blob/5df63a7203cdb9328d824a27b682e77c7b9928be/vllm/entrypoints/serve/lora/api_router.py",
+          "purpose": "Dynamic LoRA routes attached only when VLLM_ALLOW_RUNTIME_LORA_UPDATING."
+        },
+        {
+          "path": "vllm/lora/resolver.py",
+          "url": "https://github.com/vllm-project/vllm/blob/5df63a7203cdb9328d824a27b682e77c7b9928be/vllm/lora/resolver.py",
+          "purpose": "LoRAResolver.resolve_lora(base_model_name, lora_name) plugin interface."
+        },
+        {
+          "path": "vllm/plugins/lora_resolvers/filesystem_resolver.py",
+          "url": "https://github.com/vllm-project/vllm/blob/5df63a7203cdb9328d824a27b682e77c7b9928be/vllm/plugins/lora_resolvers/filesystem_resolver.py",
+          "purpose": "Built-in local-dir resolver (hf_hub_resolver documented as insecure for prod)."
+        },
+        {
+          "path": "tests/lora/test_peft_helper.py",
+          "url": "https://github.com/vllm-project/vllm/blob/5df63a7203cdb9328d824a27b682e77c7b9928be/tests/lora/test_peft_helper.py",
+          "purpose": "Upstream validator tests to mirror."
+        }
+      ],
+      "runtime_requirements": "Python >=3.11,<3.15; CUDA build pins torch==2.13.0 (requirements/cuda.txt); CPU build exists (requirements/cpu.txt torch 2.13.0+cpu; docs/getting_started/installation/cpu.md; vllm/lora/punica_wrapper/punica_cpu.py present) but CPU LoRA serving was not executed. Repo AGENTS.md mandates uv + .venv for dev. Runtime LoRA load/unload requires VLLM_ALLOW_RUNTIME_LORA_UPDATING=True (vllm/envs.py default False; router logs 'ONLY be used for local development').",
+      "integration_owner": "packages/providers (inference adapter) + model registry/router",
+      "target_milestone": "7 (Specialist serving and routing)",
+      "adaptation_decision": "REUSE AS PINNED EXTERNAL SERVER (OpenAI-compatible), no fork. packages/providers vLLM adapter: start with --enable-lora --max-lora-rank <registry max> and either static --lora-modules JSON with base_model_name, or dynamic load gated by MARS registry. MARS MUST implement wrong-base rejection itself (compare registry base model id+revision and adapter_config.base_model_name_or_path to the served model) because vLLM v0.32.0 does not reject on base mismatch; shape-incompatible adapters may still fail at add_lora, but that is not a lineage guarantee. Keep runtime-updating disabled in non-dev profiles. Verify tool-calling parser and tokenizer chat template per actual model.",
+      "dependencies": [
+        "CUDA GPU host",
+        "selected base model + license",
+        "accepted adapters from M6 registry",
+        "tool-call parser for chosen model"
+      ],
+      "acceptance_plan": "GPU host: serve <selected base>@<rev> with vllm==0.32.0 --enable-lora --max-lora-rank 16 and VLLM_ALLOW_RUNTIME_LORA_UPDATING=True in a dev profile; (1) register adapter A trained on that base via MARS registry -> POST /v1/load_lora_adapter succeeds, /v1/models lists A with parent=base, chat completion with model=A returns 200 and differs from base on a fixed probe set; (2) adapter B with adapter_config.base_model_name_or_path of a different model -> MARS registry rejects BEFORE calling vLLM (and test records what vLLM itself does when called directly); (3) adapters with use_dora=True and r=32 -> vLLM returns error containing 'vLLM does not yet support DoRA' / 'greater than max_lora_rank'; (4) unload + rollback to base served. CPU pre-gate (optional, unverified feasibility): same flow on vLLM CPU build with the tiny Qwen2 adapter from the TRL smoke.",
+      "audit_checks": {
+        "inspected_test_commands": [
+          "pytest tests/lora/test_peft_helper.py tests/lora/test_resolver.py tests/lora/test_add_lora.py (GPU)",
+          "AGENTS.md: uv venv --python 3.12; VLLM_USE_PRECOMPILED=1 uv pip install -e . --torch-backend=auto; uv pip install -r requirements/test/cuda.in"
+        ],
+        "executed_checks": [
+          "git ls-remote / sparse blob-less checkout at 5df63a72...; git ls-tree license scan",
+          "docs URL HTTP checks (v0.32.0 lora docs 200)"
+        ],
+        "not_executed": [
+          "No vLLM install, server start, LoRA load, or inference (no GPU on VM; CPU build install/LoRA not attempted)",
+          "Static compatibility of the TRL smoke adapter_config with PEFTHelper is by source reading only (fields r/lora_alpha/target_modules present, bias none, modules_to_save None, use_dora False)"
+        ]
+      },
+      "risks": [
+        "No built-in wrong-base rejection (source-confirmed) - security/correctness gap MARS must close.",
+        "Runtime LoRA updating is flagged dev-only upstream.",
+        "TRL vllm extra caps <0.33.0 while vLLM 0.33 is in rc; keep training and serving envs separate.",
+        "torch pin 2.13.0 conflicts with SFT env torch 2.15.0 -> separate venvs/containers.",
+        "GPU required for realistic serving; latency contention with training workers (blueprint)."
+      ],
+      "integration_status": "not-integrated",
+      "background_references": [
+        {
+          "url": "https://docs.vllm.ai/en/v0.32.0/features/lora/",
+          "notes": "Hosted documentation, not an immutable source pin. Versioned docs HTTP 200 (blueprint S31 uses /latest/)."
+        }
+      ]
+    }
+  ],
+  "group_findings": [
+    {
+      "group": "execution-ide",
+      "findings": "READ-ONLY SOURCE AUDIT COMPLETE; M0 runtime acceptance NOT established. Prefer Oh My Pi as the single execution/session owner and Cline only as an attributed presentation/checkpoint-pattern reference. The native Bun engine cannot be assumed to run inside Node/VS Code extension host: use a dedicated local service/process and explicit transport. OMP session JSONL is mutable conversation state, not an immutable streaming event ledger; add a versioned MARS event envelope and replayable index with source/branch correlation, without creating competing conversation owners. Cline shared UI explicitly leaves runtime semantics to the host; its existing gRPC bridge is Cline-specific. Checkpoint RPC success can be a no-op, so validate file effects. Cline official checkpoint docs lag the audited user-run/private-ref implementation. No MARS code, repository, PR, issue, external-service write, model inference or training was performed.",
+      "blockers": "Bun is absent in this VM. No dependency install/native dlopen, minimal createAgentSession run, persistence roundtrip, upstream test/typecheck/build, browser/VS Code run or interoperability/model execution was performed. Proposed commands/examples are not execution evidence., Oh My Pi audited HEAD 5d30c790b883ad0ae05dac2a4d2ccc8ecd103611 has version 18.14.0 but differs from v18.14.0 (31147f9d1a76608549821c3759f8487b4d66c72d). Public npm metadata confirms availability/version, not artifact bytes or HEAD provenance. Pin a source commit+lockfile or audit the exact release/package integrity before implementation., Bun pins differ (OMP >=1.4.4 versus Cline 1.4.2); keep isolated reference environments until a common version is tested. This is not a proven runtime incompatibility., Immutable event-envelope/index-rebuild, OMP-to-IDE transport, scoped approvals, and safe checkpoint/non-Git behavior are unimplemented MARS acceptance gates, not missing upstream API names to invent., OMP native and JS notice bundles include separately licensed material, including CDDL/MPL/CC-BY terms; complete distribution-specific license review and attribution retention are still required. Cline Radix palette has separate MIT terms., Cline pinned bridge contains apparent ineMessage type typo; no typecheck ran, so upstream build health is unverified."
+    },
+    {
+      "group": "memory-skills",
+      "findings": "All referenced sources exist at pins (Hermes 7020ea3e..., OpenClaw 7d9677ce...): S07-S11 Hermes docs in website/docs/user-guide/features/*.md, S08 tools/memory_tool.py, S09 agent/background_review.py; S12-S15, S32 OpenClaw docs in docs/tools|concepts. Both MIT. Ownership: MARS services/memory is the ONE memory writer (Hermes MemoryStore semantics ported; OpenClaw memory-core dreaming and Hermes background_review/providers only submit proposals). MARS packages/skills is the ONE skill lifecycle owner (OpenClaw Workshop versions/drafts/undo/archive ported; Hermes curator contributes usage signals + stale/archive policy only). One background scheduler: OpenClaw experience-review-scheduler mechanics + Hermes review prompt/whitelist + skip_background_review no-recursion rule. Executed: Hermes 6 test files/196 passed; OpenClaw workshop 3 files/34 passed, memory-core hybrid/mmr/temporal-decay + experience-review 4 files/51 passed. No interoperability between Hermes and OpenClaw or with MARS was executed. Hermes session_search is coupled to its own SQLite state schema - recall index must be rebuilt over MARS journal. Honcho/Hindsight are not in hermes-agent at pin. Hermes only has untagged main newer than tag v2026.9.24; OpenClaw package version 2026.10.9 is untagged at pin.",
+      "blockers": "Hermes uv.lock supports only Python >=3.14; uv sync on 3.12 failed; tests ran only via scripts/run_tests.sh bootstrap (downloads ffmpeg/node/chromium), OpenClaw gateway tests and dreaming-consolidation tests not executed, Honcho/Hindsight provider code not in hermes-agent; licenses unverified, Pins are untagged main HEADs; no release tag at audited commits, Separately licensed portions exist outside selected modules (Hermes optional-skills/*, plugins/security-guidance NOTICE; OpenClaw skills/skill-creator/license.txt, THIRD_PARTY_NOTICES Pi/pi-mono MIT) - not reviewed in detail"
+    },
+    {
+      "group": "evaluation",
+      "findings": "Pins: Harbor c23909f47508af47a70321eb22c2b40aa190ca5d (0.25.0+, not tag), mini-swe-agent 04d809ceab9df28f9adaed044884180159172930 (v2.4.6), DSPy 25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007 (3.4.1), GEPA 02ea4152ff6e512484cb5298046bfe967aea4735 (HEAD; DSPy requires 0.1.4 = 8b0ce6cd99a234f6b74daf37558a2ac0ce18f975). (1) Adapter: MARS plugs into Harbor as a BaseAgent subclass referenced by 'module:Class'; verified E2E with Harbor's no-LLM MarkerAgent on hello-world (reward 1.0, marker artifact present) after PYTHONPATH fix and mirror.gcr.io image retag; oracle=1.0, nop=0.0 show verifier discrimination on this deterministic task only. (2) Baseline: Harbor ships an installed mini-swe-agent adapter (ATIF v1.7 conversion, version pin via --ak version); use it so baseline and candidate share env/verifier; no model run executed. (3) Scoring: Harbor reward = finite numeric from /logs/verifier/reward.txt|json -> VerifierResult.rewards dict; GEPA needs per-example float higher-is-better with fallback 0.0 on per-example failure \u2014 direct mapping, but harbor CLI exit code is 0 even when trials error, so wrappers must read result.json n_errored_trials. (4) Holdout: DSPy GEPA.compile and gepa.optimize take train+val only; final test isolation is caller-enforced (optimize_anything has a test_set evaluated post-budget). Harbor separate-verifier mode / RewardKit secure worker keep private tests out of candidate env, but separate-verifier E2E could not run here. (5) Missing capability: no Harbor<->GEPA adapter upstream; MARS must write HarborGEPAAdapter (closest reference: gepa terminal_bench_adapter). Unit evidence: Harbor 138 passed, mini-swe-agent 302 passed/16 deselected, DSPy GEPA 97 passed, GEPA 18 passed/1 skipped. No interoperability between GEPA/DSPy and Harbor, and no LLM run, was executed.",
+      "blockers": "Harbor separate-verifier isolation E2E not verified: examples/tasks/separate-verifier-environment fails on this VM's Docker with ValueError network_mode='no-network' not supported (egress-control nftables kernel support not detected). Needs nftables-capable Linux host or a cloud provider (e.g. Daytona/Modal)., Docker Hub rate limit (HTTP 429) on ubuntu:24.04 blocked first Harbor E2E attempts; workaround used: docker pull mirror.gcr.io/library/ubuntu:24.04 && docker tag as ubuntu:24.04. Reproducible E2E needs a registry mirror or authenticated pulls., No upstream Harbor GEPA adapter; HarborGEPAAdapter must be implemented by MARS (M4)., No model/LLM runs executed (mini-swe-agent baseline, GEPA/DSPy optimization) by scope; baseline/candidate comparison and prompt-improvement claims remain unverified., Version skew: GEPA audited at HEAD while DSPy 3.4.1 hard-pins gepa==0.1.4; Harbor audited HEAD is past v0.25.0 tag. Manifest must choose one pin per component., harbor run returns exit 0 when trials error (observed); CI gates must parse result.json."
+    },
+    {
+      "group": "workspace-tools",
+      "findings": "Source-compatible candidates, not verified interoperability. Recommend three separately locked Python workers with typed RPC/artifact references and one MARS core owning task/session/history/policy. Direct one-venv installation is blocked by Aider pydantic==2.12.5 versus Browser Use==2.13.5 and OpenHands>=2.13.5, and Aider litellm==1.82.3 versus OpenHands>=1.104.3,<1.106.0; image pins also differ. OpenHands lock deliberately uses Browser Use0.11.9/MCP1.28.1, not selected Browser Use0.13.14/MCP2.1.1; do not upgrade it implicitly. Aider supplies ranking, not cache correctness/strict token caps; Browser Use supplies actions/navigation checks, not complete egress isolation; OpenHands supplies transport and optional container implementations, not a universal sandbox guarantee. Source/contract audit completed read-only; upstream runtime tests, base MARS runtime, adapters, isolation and model execution are not verified.",
+      "blockers": "Integration blocker: reviewed full dependency sets cannot share one Python environment unchanged (explicit Pydantic/LiteLLM/Pillow conflicts). Separate locks/processes recommended; no resolver or combined install was run., Readiness gate: no upstream pytest, browser/CDP, Docker workspace, MARS interoperability, base-runtime or model run executed. VM PATH has Python3.10.12 and no uv, pytest or Python3.11/3.12/3.13; Docker CLI exists but daemon/image readiness was not tested. This does not block the requested source audit, but runtime compatibility remains unproven., Security gate: exact MARS action/egress/path/credential/cancellation policies and provider deployment are not implemented or tested. Upstream default local workspace, empty API keys, navigation policy and absolute paths must not be accepted as isolation proof., License/package gate: root Apache-2.0/MIT files verified; licenses of transitive grammars/browser binaries/extensions, direct Browser Use harness/SDK, optional native core and OpenHands image contents remain unverified. Preserve notices and inventory selected distributed artifacts before shipping., Ownership gate: integration_owner entries are proposed subsystem roles; specification does not identify accountable humans., No upstream repository/source availability blocker. Some initially guessed workflow/test paths were absent and replaced with verified paths; final validation passed for all 30 selected source/license paths, pinned URLs, probe syntax and clean tracked trees."
+    },
+    {
+      "group": "training-evolution",
+      "findings": "Pins (git ls-remote, peeled to commits, 2026-10-30): dgm a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2 (main, no tags); trl v1.17.1 44809ba3f3a136f3d62859ee981fee2506bce5c9; peft v0.21.2 eaa35c777c7ba554a2a3639ac9c79bb690f39a57; agent-lightning v1.0.2 d381995396274039f2bb1cbe5ff42ac8067f4e47; vllm v0.32.0 5df63a7203cdb9328d824a27b682e77c7b9928be.",
+      "blockers": "No NVIDIA GPU on this VM (nvidia-smi absent; 8 vCPU, 31 GiB RAM): no QLoRA/bitsandbytes, vLLM serving, LoRA hot-load, or Agent Lightning/verl rollout+training could be executed; all GPU-path acceptance tests are proposed only., Base model for specialists not selected -> model weight license/terms for training and serving cannot be verified (blueprint 15 requires weights whose terms permit training)., Dataset licenses unresolved: princeton-nlp/SWE-bench_Verified has no license on its HF card/API; Aider polyglot-benchmark has no top-level license (per-exercise Exercism LICENSE files); MARS training data must come from reviewed, permitted sources., vLLM v0.32.0 does not reject adapters whose base_model_name_or_path differs from the served model (serving.py silently drops non-matching base_model_name); Milestone 7's 'wrong-base adapters are rejected' must be implemented in the MARS registry., Agent Lightning v1.0.2 has no LoRA references in agentlightning/ or its verl config; LoRA/QLoRA RL interoperability unverified. Its gateway store is in-memory only., DGM CLI cannot start (even --help) without the SWE-bench editable install; '--choose_selfimproves_method best' is unreachable due to missing comma in argparse choices; external benchmark fetches are unpinned., Version split: AGL/verl pins vllm 0.12.0 or 0.22.0 (docs say 0.20.2 for verl 0.8.0, script installs 0.22.0); serving pin vLLM 0.32.0 uses torch 2.13.0 vs SFT env torch 2.15.0 -> at least three isolated environments required., GitHub REST API rate-limited unauthenticated during audit; license/tree scans were done via git (ls-remote, blob-less clones) instead - no data gap resulted."
+    }
+  ]
+}

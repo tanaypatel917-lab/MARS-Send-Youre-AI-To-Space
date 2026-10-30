@@ -1,0 +1,103 @@
+MARS Milestone 0 actual local verification
+Started: 2026-10-30T19:56:59.201892+00:00
+Platform: Linux-6.8.0-1061-aws-x86_64-with-glibc2.35
+Working directory: /home/ubuntu/mars-clean-verification-4jiw9pwe
+Fresh source copy; no preexisting node_modules; no dependency lifecycle scripts enabled.
+
+$ bun --version
+1.4.4
+exit_status=0
+
+$ node --version
+v24.22.2
+exit_status=0
+
+$ bun install --frozen-lockfile --ignore-scripts
+bun install v1.4.4 (38afee6c8)
+
++ @biomejs/biome@2.3.3
++ @types/bun@1.4.4
++ typescript@5.9.3
++ zod@3.25.76
+
+116 packages installed [87.00ms]
+
+Blocked 2 postinstalls. Run `bun pm untrusted` for details.
+exit_status=0
+
+$ bun run check
+$ bun run lint && bun run typecheck && bun run audit:sources && bun run test && bun run smoke:execution
+$ biome check .
+Checked 16 files in 9ms. No fixes applied.
+$ tsc --noEmit
+$ bun scripts/check-sources.ts
+Validated 24 source entries, pinned URLs, master-spec hash and runtime artifact pins (offline).
+$ bun test apps packages scripts
+bun test v1.4.4 (38afee6c8)
+
+scripts/check-sources.test.ts:
+(pass) source manifest validation > validates the complete manifest and installed artifact/lock pins [4.26ms]
+(pass) source manifest validation > rejects floating revisions and mutable source references [3.40ms]
+(pass) source manifest validation > rejects duplicate IDs, missing components, and conflicting repository pins [3.29ms]
+(pass) source manifest validation > does not accept missing license or acceptance evidence fields [4.20ms]
+
+apps/cli/src/cli.test.ts:
+(pass) CLI doctor reports actual initialization and explicit limitations [1582.86ms]
+(pass) CLI rejects unknown commands with a usage error [1005.63ms]
+
+packages/contracts/src/contracts.test.ts:
+(pass) versioned transport contracts > round-trips a scoped event with provenance and immutable payload [0.57ms]
+(pass) versioned transport contracts > rejects future schema versions, missing ownership, and unbounded payloads [0.29ms]
+(pass) versioned transport contracts > requires valid artifact hashes, sizes, and budget bounds [0.19ms]
+(pass) versioned transport contracts > requires checkable task criteria and a nonnegative revision [0.17ms]
+(pass) versioned transport contracts > does not treat unavailable cost as zero [0.10ms]
+(pass) versioned transport contracts > permits resume but does not silently reopen terminal tasks [0.06ms]
+
+packages/execution/src/execution.test.ts:
+(pass) initializes the actual SDK and native addon without tools or model calls [477.93ms]
+(pass) the upstream journal persists a custom entry and can reopen it [7.49ms]
+
+ 14 pass
+ 0 fail
+ 43 expect() calls
+Ran 14 tests across 4 files. [4.12s]
+$ bun apps/cli/src/main.ts smoke
+{
+  "runtime": "oh-my-pi",
+  "package_version": "18.14.0",
+  "session_initialized": true,
+  "executable_tools": [],
+  "persistent_session": false,
+  "native_search_matches": 1,
+  "model_requests": 0
+}
+exit_status=0
+
+$ bun run doctor
+$ bun apps/cli/src/main.ts doctor
+{
+  "product": "MARS - Send You're AI To Space",
+  "milestone": "0: source and integration baseline",
+  "runtime": {
+    "bun": "1.4.4",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "execution": {
+    "runtime": "oh-my-pi",
+    "package_version": "18.14.0",
+    "session_initialized": true,
+    "executable_tools": [],
+    "persistent_session": false,
+    "native_search_matches": 1,
+    "model_requests": 0
+  },
+  "limitations": [
+    "Initialization probe only; no agent task or model request was run.",
+    "IDE, durable task API, checkpoints, memory, learning, and training are not implemented.",
+    "Python services must use separate versioned environments."
+  ]
+}
+exit_status=0
+
+All checks above passed. No model task, evaluation comparison, or training was run.

@@ -1,0 +1,11 @@
+node_modules/
+.mars/
+.env
+.env.*
+!.env.example
+coverage/
+dist/
+*.log
+.venv/
+__pycache__/
+/install-bun.sh
