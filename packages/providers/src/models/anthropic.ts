@@ -309,6 +309,24 @@ export function createAnthropicAdapter(
           { retryable: false },
         );
       }
+      if (
+        contentBlocks.length > 0 &&
+        !contentBlocks.some((rawBlock) => {
+          const block = asObject(rawBlock);
+          return (
+            (block.type === "text" && typeof block.text === "string") ||
+            (block.type === "tool_use" &&
+              typeof block.name === "string" &&
+              typeof block.id === "string")
+          );
+        })
+      ) {
+        throw new ProviderError(
+          provider.id,
+          "Provider returned an unexpected response shape.",
+          { retryable: false },
+        );
+      }
       const content: string[] = [];
       const toolCalls: ChatToolCall[] = [];
       for (const rawBlock of contentBlocks) {

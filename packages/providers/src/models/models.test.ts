@@ -256,6 +256,102 @@ test("OpenAI-compatible completion rejects a missing response shape", async () =
   expect(String(error)).toContain("unexpected response shape");
 });
 
+test("OpenAI-compatible completion accepts only valid content and tool-call shapes", async () => {
+  const completeWith = (payload: unknown) =>
+    createOpenAICompatibleAdapter(
+      provider("stub", "https://models.example/v1"),
+      {
+        fetch: async () =>
+          new Response(JSON.stringify(payload), { status: 200 }),
+      },
+    ).complete(request, model("upstream", "stub"));
+  const invalidChoices = [
+    [{ message: {}, finish_reason: "stop" }],
+    [{ message: { content: 42 }, finish_reason: "stop" }],
+    [{ message: { content: null }, finish_reason: "stop" }],
+    [
+      {
+        message: {
+          content: null,
+          tool_calls: [
+            {
+              id: "call1",
+              type: "function",
+              function: { arguments: "{}" },
+            },
+          ],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+  ];
+  for (const choices of invalidChoices) {
+    const error = await rejectedValue(completeWith({ choices }));
+    expect(error).toMatchObject({ retryable: false });
+    expect(String(error)).toContain("unexpected response shape");
+  }
+
+  const emptyContent = await completeWith({
+    choices: [{ message: { content: "" }, finish_reason: "stop" }],
+  });
+  expect(emptyContent.content).toBe("");
+  expect(emptyContent.finishReason).toBe("stop");
+
+  const toolCall = await completeWith({
+    choices: [
+      {
+        message: {
+          content: null,
+          tool_calls: [
+            {
+              id: "call1",
+              type: "function",
+              function: { name: "weather", arguments: '{"city":"Paris"}' },
+            },
+          ],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+  });
+  expect(toolCall.toolCalls).toEqual([
+    {
+      id: "call1",
+      name: "weather",
+      arguments: { city: "Paris" },
+    },
+  ]);
+
+  const refusal = await completeWith({
+    choices: [
+      {
+        message: {
+          content: null,
+          refusal: "I cannot help with that request.",
+        },
+        finish_reason: "stop",
+      },
+    ],
+  });
+  expect(refusal.content).toBe("I cannot help with that request.");
+  expect(refusal.finishReason).toBe("stop");
+
+  const textParts = await completeWith({
+    choices: [
+      {
+        message: {
+          content: [
+            { type: "text", text: "Hello " },
+            { type: "text", text: "world" },
+          ],
+        },
+        finish_reason: "stop",
+      },
+    ],
+  });
+  expect(textParts.content).toBe("Hello world");
+});
+
 test("OpenAI-compatible HTTP errors do not include response bodies", async () => {
   const adapter = createOpenAICompatibleAdapter(
     provider("stub", "https://models.example/v1"),
@@ -1062,6 +1158,37 @@ test("Anthropic completion rejects missing content", async () => {
   expect(String(error)).toContain("unexpected response shape");
 });
 
+test("Anthropic completion rejects unrecognized blocks but accepts empty content", async () => {
+  const responses = [
+    {
+      type: "message",
+      content: [{ type: "unknown" }],
+      stop_reason: "end_turn",
+    },
+    { type: "message", content: [], stop_reason: "end_turn" },
+  ];
+  let responseIndex = 0;
+  const adapter = createAnthropicAdapter(
+    provider("anthropic", "https://models.example", { kind: "anthropic" }),
+    {
+      fetch: async () =>
+        new Response(JSON.stringify(responses[responseIndex++]), {
+          status: 200,
+        }),
+    },
+  );
+  const error = await rejectedValue(
+    adapter.complete(request, model("claude", "anthropic")),
+  );
+  expect(error).toMatchObject({ retryable: false });
+  expect(String(error)).toContain("unexpected response shape");
+  const response = await adapter.complete(
+    request,
+    model("claude", "anthropic"),
+  );
+  expect(response.content).toBe("");
+});
+
 test("Anthropic stream maps in-band error events", async () => {
   const stub = await serve((_incoming, outgoing) => {
     outgoing.writeHead(200, { "content-type": "text/event-stream" });
@@ -1209,6 +1336,37 @@ test("OpenRouter discovery maps free pricing, tool support, vision, and context 
               id: "example/unparseable:free",
               pricing: { prompt: "unknown", completion: "0" },
             },
+            {
+              id: "example/extra-paid-dimensions",
+              pricing: {
+                prompt: "0",
+                completion: "0",
+                internal_reasoning: "0.0001",
+                web_search: "0.01",
+              },
+            },
+            {
+              id: "example/unparseable-cache",
+              pricing: {
+                prompt: "0",
+                completion: "0",
+                input_cache_read: "abc",
+              },
+            },
+            {
+              id: "example/negative-audio",
+              pricing: { prompt: "0", completion: "0", audio: "-1" },
+            },
+            {
+              id: "example/zero-extra-dimensions",
+              pricing: {
+                prompt: "0",
+                completion: "0",
+                web_search: "0",
+                input_cache_read: "0",
+              },
+            },
+            { id: "example/missing-prompt", pricing: { completion: "0" } },
           ],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -1236,5 +1394,22 @@ test("OpenRouter discovery maps free pricing, tool support, vision, and context 
   ).toBe(false);
   expect(
     models.find(({ id }) => id === "example/unparseable:free")?.pricing.free,
+  ).toBe(false);
+  expect(
+    models.find(({ id }) => id === "example/extra-paid-dimensions")?.pricing
+      .free,
+  ).toBe(false);
+  expect(
+    models.find(({ id }) => id === "example/unparseable-cache")?.pricing.free,
+  ).toBe(false);
+  expect(
+    models.find(({ id }) => id === "example/negative-audio")?.pricing.free,
+  ).toBe(false);
+  expect(
+    models.find(({ id }) => id === "example/zero-extra-dimensions")?.pricing
+      .free,
+  ).toBe(true);
+  expect(
+    models.find(({ id }) => id === "example/missing-prompt")?.pricing.free,
   ).toBe(false);
 });
