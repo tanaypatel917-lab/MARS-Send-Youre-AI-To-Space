@@ -17,6 +17,7 @@
       "dependencies": {
         "@mars/contracts": "workspace:*",
         "@mars/execution": "workspace:*",
+        "@mars/providers": "workspace:*",
       },
     },
     "packages/contracts": {
@@ -32,6 +33,13 @@
       "dependencies": {
         "@oh-my-pi/pi-coding-agent": "18.14.0",
         "@oh-my-pi/pi-natives": "18.14.0",
+      },
+    },
+    "packages/providers": {
+      "name": "@mars/providers",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
       },
     },
   },
@@ -129,6 +137,8 @@
     "@mars/contracts": ["@mars/contracts@workspace:packages/contracts"],
 
     "@mars/execution": ["@mars/execution@workspace:packages/execution"],
+
+    "@mars/providers": ["@mars/providers@workspace:packages/providers"],
 
     "@oh-my-pi/omp-stats": ["@oh-my-pi/omp-stats@18.14.0", "", { "dependencies": { "@oh-my-pi/pi-ai": "18.14.0", "@oh-my-pi/pi-catalog": "18.14.0", "@oh-my-pi/pi-utils": "18.14.0", "lucide-react": "^1.24.0", "react": "19.2.7", "react-dom": "19.2.7" }, "bin": { "omp-stats": "src/index.ts" } }, "sha512-RetKUWmyFCqpuAbQmTObgHSNXCmtkZTQFiJm47+q437FJP7bdzZQJL912Lexh5rpLErpXzCTw/kNMsPs/ns4kw=="],
 

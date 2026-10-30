@@ -45,7 +45,66 @@ Lifecycle scripts stay disabled: optional `onnxruntime-node` and `protobufjs` po
 | `bun run audit:sources:remote` | Fetch immutable source/license files and emit content hashes; network required |
 | `bun run format` | Apply Biome formatting and import organization |
 
-No application build is needed yet: Bun executes TypeScript directly. There are no existing database migrations, production data, or schema-upgrade guarantees at version 0.0.1.
+A small Bun build emits the CLI and provider library bundles with `bun run build`; the execution package still runs TypeScript directly. There are no existing database migrations, production data, or schema-upgrade guarantees at version 0.0.1.
+
+## Models
+
+The model-provider package is a library for future execution integration; it does not create a second session or tool loop. Oh My Pi remains the sole live execution/session owner. The default route is `openrouter/free`, `google/gemma-4-31b-it:free`, `nvidia/nemotron-3.5-super-vl:free`, then `poolside/laguna-s-2.1:free`. These are configured presets, not live-verified availability claims. Free tiers are rate-limited, may be unavailable or change, and are not guaranteed or an entitlement. The default policy is `allowPaid: false`: paid models are skipped, with no paid fallback unless the user explicitly enables that policy.
+
+| Provider | Credential environment variable | Free-tier note | Documentation |
+| --- | --- | --- | --- |
+| OpenRouter | `OPENROUTER_API_KEY` | Free model IDs; rate limits and availability may change | [Limits](https://openrouter.ai/docs/api-reference/limits) |
+| Gemini | `GEMINI_API_KEY` | API free tier; limits and availability may change | [OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai) |
+| Groq | `GROQ_API_KEY` | Free plan; rate limits and availability may change | [Rate limits](https://console.groq.com/docs/rate-limits) |
+| GitHub Models | `GITHUB_TOKEN` | Free prototyping tier; check GitHub terms and current limits | [GitHub Models](https://docs.github.com/en/github-models) |
+| NVIDIA | `NVIDIA_API_KEY` | Developer access; check NVIDIA terms and current availability | [Build](https://build.nvidia.com) |
+| Cerebras | `CEREBRAS_API_KEY` | Trial credits require a payment method; disabled by default and not free by default | [Rate limits](https://inference-docs.cerebras.ai/support/rate-limits) |
+| Ollama | None | Local inference; no provider API key required | [Ollama](https://ollama.com) |
+
+Use the CLI to configure a provider and model. Store only the environment variable **name** in configuration, never its value:
+
+```sh
+bun apps/cli/src/main.ts models add-provider \
+  --id custom --base-url https://models.example/v1 --api-key-env CUSTOM_API_KEY
+bun apps/cli/src/main.ts models add \
+  --provider custom --model vendor/model-name --id custom/model-name \
+  --tools --context 32768
+bun apps/cli/src/main.ts models list --free
+bun apps/cli/src/main.ts models providers
+```
+
+The same configuration can be managed in `~/.mars/models.json` (or `$MARS_HOME/models.json`) and overridden per project in `.mars/models.json`:
+
+```json
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "custom",
+      "kind": "openai-compatible",
+      "baseUrl": "https://models.example/v1",
+      "apiKeyEnv": "CUSTOM_API_KEY"
+    }
+  ],
+  "models": [
+    {
+      "id": "custom/model-name",
+      "providerId": "custom",
+      "model": "vendor/model-name",
+      "capabilities": {
+        "tools": true,
+        "vision": false,
+        "contextWindow": 32768
+      },
+      "pricing": { "free": true }
+    }
+  ],
+  "routes": { "default": ["openrouter/free", "custom/model-name"] },
+  "policy": { "allowPaid": false }
+}
+```
+
+Registry precedence is built-in presets, then user configuration, then project configuration. The router filters by model capabilities, provider availability, and paid-model policy. On retryable provider failures it observes `Retry-After` when available (otherwise a 30-second cooldown) and tries the next eligible route candidate; non-retryable failures stop routing. It never falls back to a paid model under the default policy. `models discover <providerId>` lists provider models, `--save` persists them, and `models test <modelId>` explicitly makes a live test request. No live provider request was executed during development; checks use local stub servers or fixture data.
 
 ## Ownership boundaries
 

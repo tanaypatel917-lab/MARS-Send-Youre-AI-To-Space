@@ -20,7 +20,8 @@
     "audit:sources:remote": "bun scripts/check-remote-sources.ts",
     "doctor": "bun apps/cli/src/main.ts doctor",
     "smoke:execution": "bun apps/cli/src/main.ts smoke",
-    "check": "bun run lint && bun run typecheck && bun run audit:sources && bun run test && bun run smoke:execution"
+    "build": "bun build apps/cli/src/main.ts packages/providers/src/index.ts --target=bun --packages=external --outdir dist",
+    "check": "bun run lint && bun run typecheck && bun run audit:sources && bun run test && bun run smoke:execution && bun run build"
   },
   "devDependencies": {
     "@biomejs/biome": "2.3.3",
