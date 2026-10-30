@@ -52,16 +52,19 @@ export async function discoverModels(
     const inputModalities = Array.isArray(architecture.input_modalities)
       ? architecture.input_modalities
       : [];
-    const pricing = asObject(item.pricing);
+    const rawPricing = item.pricing;
+    const pricing = asObject(rawPricing);
     const promptPrice = parsePrice(pricing.prompt);
     const completionPrice = parsePrice(pricing.completion);
-    const optionalPriceFields = ["request", "image"].filter((field) =>
-      Object.hasOwn(pricing, field),
-    );
     const free =
+      rawPricing !== null &&
+      typeof rawPricing === "object" &&
+      !Array.isArray(rawPricing) &&
+      Object.hasOwn(pricing, "prompt") &&
+      Object.hasOwn(pricing, "completion") &&
       promptPrice === 0 &&
       completionPrice === 0 &&
-      optionalPriceFields.every((field) => parsePrice(pricing[field]) === 0);
+      Object.keys(pricing).every((field) => parsePrice(pricing[field]) === 0);
     const inputPerMTokUsd = numericPrice(pricing.prompt);
     const outputPerMTokUsd = numericPrice(pricing.completion);
     return [

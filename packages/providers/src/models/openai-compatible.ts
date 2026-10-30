@@ -287,38 +287,73 @@ export function createOpenAICompatibleAdapter(
           { retryable: false },
         );
       }
+      const throwUnexpectedShape = (): never => {
+        throw new ProviderError(
+          provider.id,
+          "Provider returned an unexpected response shape.",
+          { retryable: false },
+        );
+      };
       const rawContent = message.content;
-      const content =
-        typeof rawContent === "string"
-          ? rawContent
-          : Array.isArray(rawContent)
-            ? rawContent
-                .map((part) => stringValue(asObject(part).text))
-                .filter((part): part is string => part !== undefined)
-                .join("")
-            : "";
-      const rawTools: unknown[] = Array.isArray(message.tool_calls)
-        ? message.tool_calls
-        : [];
-      const toolCalls: ChatToolCall[] = rawTools.map((rawTool, index) => {
-        const tool = asObject(rawTool);
-        const fn = asObject(tool.function);
-        const name = stringValue(fn.name);
-        if (!name) {
-          throw new ProviderError(
-            provider.id,
-            "Provider returned a tool call without a name.",
-            {
-              retryable: false,
-            },
-          );
+      const hasContent = Object.hasOwn(message, "content");
+      const rawTools = message.tool_calls;
+      if (Object.hasOwn(message, "tool_calls") && !Array.isArray(rawTools)) {
+        throwUnexpectedShape();
+      }
+      const toolCalls: ChatToolCall[] = (
+        Array.isArray(rawTools) ? rawTools : []
+      ).map((rawTool) => {
+        if (
+          !isObject(rawTool) ||
+          rawTool.type !== "function" ||
+          typeof rawTool.id !== "string" ||
+          rawTool.id.length === 0 ||
+          !isObject(rawTool.function) ||
+          typeof rawTool.function.name !== "string" ||
+          rawTool.function.name.length === 0 ||
+          typeof rawTool.function.arguments !== "string"
+        ) {
+          throwUnexpectedShape();
         }
+        const args = (() => {
+          try {
+            return parseToolArguments(rawTool.function.arguments, provider.id);
+          } catch {
+            return throwUnexpectedShape();
+          }
+        })();
         return {
-          id: stringValue(tool.id) ?? `tool-${index}`,
-          name,
-          arguments: parseToolArguments(fn.arguments, provider.id),
+          id: rawTool.id,
+          name: rawTool.function.name,
+          arguments: args,
         };
       });
+      let content = "";
+      let validContent = false;
+      if (typeof message.refusal === "string" && message.refusal.length > 0) {
+        content = message.refusal;
+        validContent = true;
+      } else if (typeof rawContent === "string") {
+        content = rawContent;
+        validContent = true;
+      } else if (
+        Array.isArray(rawContent) &&
+        rawContent.length > 0 &&
+        rawContent.every(
+          (part) =>
+            isObject(part) &&
+            part.type === "text" &&
+            typeof part.text === "string",
+        )
+      ) {
+        content = rawContent
+          .map((part) => (part as JsonObject).text as string)
+          .join("");
+        validContent = true;
+      } else if ((rawContent === null || !hasContent) && toolCalls.length > 0) {
+        validContent = true;
+      }
+      if (!validContent) throwUnexpectedShape();
       const usage = usageFrom(payload.usage);
       return {
         content,
