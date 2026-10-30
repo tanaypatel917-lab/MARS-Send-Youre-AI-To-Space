@@ -1,0 +1,40 @@
+# Pinned source register
+
+This is an audit baseline, not a list of implemented integrations. Runtime artifact pins and source audit commits are distinct. Full per-module sources, acceptance plans, runtime requirements, notices and observed checks live in [`sources/manifest.json`](../sources/manifest.json).
+
+| Component | Audit revision | License | Owner |
+| --- | --- | --- | --- |
+| omp-execution-sdk | [5d30c790b883](https://github.com/can1357/oh-my-pi/tree/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611) | MIT | MARS execution-core adapter |
+| omp-session-journal | [5d30c790b883](https://github.com/can1357/oh-my-pi/tree/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611) | MIT | MARS execution persistence and event/index projection |
+| cline-presentation-ide-boundary | [53383d541363](https://github.com/cline/cline/tree/53383d541363f4fc55bc2b054af3181035a8f26a) | Apache-2.0 | MARS VS Code extension/webview and presentation adapter |
+| cline-checkpoint-patterns | [53383d541363](https://github.com/cline/cline/tree/53383d541363f4fc55bc2b054af3181035a8f26a) | Apache-2.0 | MARS workspace/checkpoint service; IDE only issues scoped commands |
+| hermes-memory-core | [7020ea3e96c3](https://github.com/NousResearch/hermes-agent/tree/7020ea3e96c3fdbc768c5296493e186df46f075b) | MIT | services/memory (memory write service; sole writer of profile/project memory) |
+| hermes-background-review | [7020ea3e96c3](https://github.com/NousResearch/hermes-agent/tree/7020ea3e96c3fdbc768c5296493e186df46f075b) | MIT | Background scheduler (learning curator role) - single review pipeline shared with OpenClaw scheduler port |
+| hermes-curator | [7020ea3e96c3](https://github.com/NousResearch/hermes-agent/tree/7020ea3e96c3fdbc768c5296493e186df46f075b) | MIT | packages/skills (skill lifecycle owner) consuming curator signals |
+| hermes-memory-providers | [7020ea3e96c3](https://github.com/NousResearch/hermes-agent/tree/7020ea3e96c3fdbc768c5296493e186df46f075b) | MIT | packages/providers (external-memory adapter) under services/memory |
+| openclaw-skill-workshop | [7d9677ce36db](https://github.com/openclaw/openclaw/tree/7d9677ce36db4aeea2ce36a3bb78588829e80933) | MIT | packages/skills (skill service; sole writer of skill files and version manifest) |
+| openclaw-self-learning-scheduler | [7d9677ce36db](https://github.com/openclaw/openclaw/tree/7d9677ce36db4aeea2ce36a3bb78588829e80933) | MIT | Background scheduler service (TypeScript) |
+| openclaw-memory-retrieval-consolidation | [7d9677ce36db](https://github.com/openclaw/openclaw/tree/7d9677ce36db4aeea2ce36a3bb78588829e80933) | MIT | services/memory (retrieval); consolidation proposals via memory write service |
+| openclaw-gateway | [7d9677ce36db](https://github.com/openclaw/openclaw/tree/7d9677ce36db4aeea2ce36a3bb78588829e80933) | MIT | Platform API (task/session owner) with channel adapters |
+| harbor | [c23909f47508](https://github.com/harbor-framework/harbor/tree/c23909f47508af47a70321eb22c2b40aa190ca5d) | Apache-2.0 | MARS evaluation group (eval harness owner) |
+| mini-swe-agent | [04d809ceab9d](https://github.com/SWE-agent/mini-swe-agent/tree/04d809ceab9df28f9adaed044884180159172930) | MIT | MARS evaluation group (baseline owner) |
+| dspy | [25162c4fc05c](https://github.com/stanfordnlp/dspy/tree/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007) | MIT | MARS evaluation group (prompt-optimization owner) |
+| gepa | [02ea4152ff6e](https://github.com/gepa-ai/gepa/tree/02ea4152ff6e512484cb5298046bfe967aea4735) | MIT | MARS evaluation group (prompt-optimization owner) |
+| aider-repomap | [5dc9490bb35f](https://github.com/Aider-AI/aider/tree/5dc9490bb35f9729ef2c95d00a19ccd30c26339c) | Apache-2.0 | Proposed MARS context-selection adapter owner; MARS core owns task/context decisions, worker owns rebuildable parse/map cache. No human owner assigned by specification. |
+| browser-use | [b49a68e4060a](https://github.com/browser-use/browser-use/tree/b49a68e4060acb226da8f784194fef301c53a6d7) | MIT | Proposed MARS browser-service adapter owner; core owns action authorization/cancellation, worker owns browser/CDP/profile lifecycle and evidence. No human owner assigned. |
+| openhands-workspace | [c048a1eb8235](https://github.com/OpenHands/software-agent-sdk/tree/c048a1eb82353b0586f3ce600708394a68ebb246) | MIT | Proposed MARS execution-provider owner; core owns task/checkpoint/history and approvals, provider owns sandbox lifecycle/transport/cleanup. No human owner assigned. |
+| dgm | [a565fd2d1dca](https://github.com/jennyzzt/dgm/tree/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2) | Apache-2.0 | packages/experiments (archive, lineage, promotion policy) with evaluations/ supplying scores |
+| trl | [44809ba3f3a1](https://github.com/huggingface/trl/tree/44809ba3f3a136f3d62859ee981fee2506bce5c9) | Apache-2.0 | services/training (dataset builder + SFT job runner) |
+| peft | [eaa35c777c7b](https://github.com/huggingface/peft/tree/eaa35c777c7ba554a2a3639ac9c79bb690f39a57) | Apache-2.0 | services/training (adapter config + packaging) and packages/providers model registry (compatibility metadata) |
+| agent-lightning | [d38199539627](https://github.com/microsoft/agent-lightning/tree/d381995396274039f2bb1cbe5ff42ac8067f4e47) | MIT | services/training (RL backend adapter) with evaluations/ owning reward verifiers |
+| vllm | [5df63a7203cd](https://github.com/vllm-project/vllm/tree/5df63a7203cdb9328d824a27b682e77c7b9928be) | Apache-2.0 | packages/providers (inference adapter) + model registry/router |
+
+## Interpretation
+
+`audit_checks` and `acceptance_plan` are historical source-audit observations/plans. A proposed acceptance plan is not a passed test. Current MARS checks are recorded separately in the milestone report. A test performed in an upstream audit fixture is not a test of this integrated platform.
+
+The master specification remains unchanged, with its original 32 planning references. The manifest replaces mutable implementation references with commit-specific license and module URLs. Papers and explanatory articles in the specification are background references, not executable dependencies.
+
+Oh My Pi is the only installed component from this audit, using two exact artifacts and locked transitive dependencies. No Python worker is installed into this Bun workspace. In particular, DSPy and GEPA HEAD pins describe separate audited components, **not a compatible combined installation**: DSPy pins GEPA 0.1.4, whereas the audited GEPA HEAD differs. Resolve a common revision or use a separately versioned direct GEPA worker before Milestone 4.
+
+No upstream source is vendored or modified. Do not copy Cline UI, DGM benchmark data, model weights, or datasets without preserving their specific notices and completing the corresponding license review. Bundled native/npm notices remain part of their installed artifacts; inspect `LICENSE` and `THIRD-PARTY-NOTICES.txt` in the installed packages before redistribution.

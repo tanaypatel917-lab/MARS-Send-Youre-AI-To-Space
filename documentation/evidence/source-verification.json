@@ -1,0 +1,714 @@
+{
+  "checked_at": "2026-10-30T19:56:18.372Z",
+  "verified": [
+    {
+      "url": "https://raw.githubusercontent.com/Aider-AI/aider/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/aider/queries/tree-sitter-language-pack/python-tags.scm",
+      "sha256": "2830ab33b89a5305d9fe16f6c151eb136fc4542abf012a37f8199bcec2ed164d"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/Aider-AI/aider/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/aider/repomap.py",
+      "sha256": "a5d4befe70445114b9f62da47b0eeb2a5384f9e84a0c083c77a4b339caf61ecd"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/Aider-AI/aider/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/aider/special.py",
+      "sha256": "3a1b0159633e0d6c2359b8ba904ec4a91e028947f227aa89b8281c9b2c194807"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/Aider-AI/aider/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/aider/website/docs/repomap.md",
+      "sha256": "ac41c8843d66c04bb5951155015118ef702f107417be62f280cb8955baf1eec8"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/Aider-AI/aider/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/LICENSE.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/Aider-AI/aider/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/requirements/python-compat.in",
+      "sha256": "bd8f578056785f0005e7c95c7a83fad2429d23a8ac3c19c3d58f089e6bdfb95f"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/Aider-AI/aider/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/tests/basic/test_repomap.py",
+      "sha256": "4155b4f18992f463e633381e0629306d0fecc3e58d57d2923f4df00a6cf3cd62"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/browser-use/browser-use/b49a68e4060acb226da8f784194fef301c53a6d7/.github/workflows/test.yaml",
+      "sha256": "8464f7b1607a871ba28da730767f4b37298770504a7b69da0a59424de6d14626"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/browser-use/browser-use/b49a68e4060acb226da8f784194fef301c53a6d7/browser_use/browser/profile.py",
+      "sha256": "5b42a8285bab5116c08ec61cad643ed71b546cc9c82cfd77a7d7929330b40a47"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/browser-use/browser-use/b49a68e4060acb226da8f784194fef301c53a6d7/browser_use/browser/session.py",
+      "sha256": "524ec4547e5f9d81dac9ac3d7dcb705e5c6e9aec1255f6316d29cdaa1b19e822"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/browser-use/browser-use/b49a68e4060acb226da8f784194fef301c53a6d7/browser_use/browser/watchdogs/security_watchdog.py",
+      "sha256": "7d4aba8c663602f2fa506befe7a7b63a8074452e83c6706929b531953665f6ac"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/browser-use/browser-use/b49a68e4060acb226da8f784194fef301c53a6d7/browser_use/config.py",
+      "sha256": "9dd77f61b748864c969b0760f731380dcf18c057a2b9b6a0c11a246c5a598a2d"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/browser-use/browser-use/b49a68e4060acb226da8f784194fef301c53a6d7/browser_use/tools/registry/service.py",
+      "sha256": "3517c114d622a415c9da48ede49b5b625c97a1169161478541c68a05b8ae495e"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/browser-use/browser-use/b49a68e4060acb226da8f784194fef301c53a6d7/browser_use/tools/service.py",
+      "sha256": "25746ddfe719c0a800b2b4fcc399aea4fc8be20c48b04ab4118841fd5419eb73"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/browser-use/browser-use/b49a68e4060acb226da8f784194fef301c53a6d7/LICENSE",
+      "sha256": "135c57671b0ee957669b05a0ca00cc06f645496d351e2e732832c6e276da9a5e"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/browser-use/browser-use/b49a68e4060acb226da8f784194fef301c53a6d7/tests/ci/security/test_domain_filtering.py",
+      "sha256": "027a493bd355747f514515346e6f509b641e2e4b44923b5ba82ba5fac582a8cd"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/browser-use/browser-use/b49a68e4060acb226da8f784194fef301c53a6d7/tests/ci/test_action_timeout.py",
+      "sha256": "19df8b10155cf216112bdd46f160c0d6f94a501ab3f61fba5c0bfb96602c0c11"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/AGENTS.md",
+      "sha256": "1fe8cd3b2ecbbf8a5de363f5b6473e3cedb1caad2a714ff22835c45afc1bb83c"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/docs/sdk.md",
+      "sha256": "5ef6a40989b599d92494f4d3e9bc3f1a0101aa35b3c93d4c1d59ce318c7dd2ca"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/docs/session.md",
+      "sha256": "972ea821272477a807535c610a92fb6569bf38306ae6283ecc4eaa9a0281859a"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/LICENSE",
+      "sha256": "16c45f9d667442781f03fa198914cc39abcaa48ec5ed8f644643e554ca2fbf63"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/package.json",
+      "sha256": "326fcf94b8c509dcec597edf7c6a15712cf92cd4edffe4b57cf6d22a4c31cf10"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/src/index.ts",
+      "sha256": "12ad735d8978479589d467dfbeb79184409bf2e0b2bd075bda374d1757c7de3f"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/src/sdk.ts",
+      "sha256": "708b2bc5e8b8ac4a9913745a840557f6af248539188059ae6f6516611dc66ce9"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/src/session/agent-session.ts",
+      "sha256": "148c7c08a2d78bd3bb1946fd6d5bc1258149faecc7b0f9eed09fe7eceb8269a4"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/src/session/session-entries.ts",
+      "sha256": "c68ccbcbc956f033bba1626c36a80fe772e7f6fda8f4f95266eb2ac75eaa3c5a"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/src/session/session-manager.ts",
+      "sha256": "03af003b44f238f0c37e59dedd2177bf131a28bd2f36f5bfb68722a627824158"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/src/session/session-storage.ts",
+      "sha256": "ea80ccf8e3112140867a9aba0186d4213e26b291c3acc4f6cb514c9924dc51f0"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/test/sdk-session-isolation.test.ts",
+      "sha256": "4b6bcb275e2dcbd71125964c76f11af6f979dd1e44e332b286e4251a8d0e2de7"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/test/session-manager-atomic-rewrite-race.test.ts",
+      "sha256": "d21baffcd098ca2c3627518e62df81cc270f35fcd84c3414c8cc3c96bae72009"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/coding-agent/test/session-manager-immediate-persist.test.ts",
+      "sha256": "bffe6bd24761cd65aca4f783f3a6ad4e786301b4c9ed400b8d7d42d9cefe65b4"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/natives/native/loader-state.js",
+      "sha256": "a93e489ab8a7a0c26ff88c80f5cd07a04c7295dd9f714aaf2f0fa00583a354e0"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/natives/package.json",
+      "sha256": "444cf6f5765cf8ff78cd24fda27053e7b4c83667ad6f06751617bbf81db78b8a"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/packages/natives/scripts/gen-npm-packages.ts",
+      "sha256": "ab01011197448ea54d1a8b2a00f33d19f329b2a80eb009b3c5d44c603c6141f3"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/can1357/oh-my-pi/5d30c790b883ad0ae05dac2a4d2ccc8ecd103611/scripts/bazel-natives.ts",
+      "sha256": "fb253d73dbe6e9c1f44e57341fec8ee738238f146cacdb254185d32f71cdc99d"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/AGENTS.md",
+      "sha256": "7f6daa4f58c28d4df1698522af27ceb09cc1c5f76ffad2ea25032b9689667fe1"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/apps/vscode/proto/cline/checkpoints.proto",
+      "sha256": "18c86062282ac19a8effa5bc43a081c89b706b72c7c2201500f5fabfbdd504b7"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/apps/vscode/src/core/controller/checkpoints/checkpointRestore.ts",
+      "sha256": "9c801a9c3112ddc6fdb6750f486f925b08d42579fde676c7a8a4397692d8988e"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/apps/vscode/src/hosts/vscode/VscodeWebviewProvider.ts",
+      "sha256": "5e4e0141810002367af0e67f2e5b097a8eec869a312fb4fc27ec9d587b22c767"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/apps/vscode/src/sdk/sdk-checkpoints.ts",
+      "sha256": "c20612664e89a650fc3afb11c98cea0b67736e13e120a00dda999d2a07f560ef"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/apps/vscode/src/sdk/webview-grpc-bridge.ts",
+      "sha256": "ed07fbcf4cf32ecc854c4fcb1193a7ced0eb9f29f93b873f208f1515161abe1d"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/apps/vscode/webview-ui/src/components/chat/UserMessage.tsx",
+      "sha256": "8ac2180a9edda80984fb13cfeac1f0474f0ccd786c8d8a152339dfdd46cd06ab"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/docs/core-workflows/checkpoints.mdx",
+      "sha256": "a7da9a10d10456f40460a1f7d038b4fe2e223a7448bf5e45e8f791807c6cb4f6"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/LICENSE",
+      "sha256": "f704446a5f1271608805598b557e4288cf8580477ea038c9c3d8b361f693f6b8"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/AGENTS.md",
+      "sha256": "bfda51f547fb6905cd3a5c54031ceccfca9a81f3f98e911e921a52331b6bf67d"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/core/src/hooks/checkpoint-hooks.test.ts",
+      "sha256": "3a87877ff285068a9fac14c7ec60370cabcae2081b32c121be9595aedf1fe6ec"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/core/src/hooks/checkpoint-hooks.ts",
+      "sha256": "909dedc080c7ae85639449e595bca9c79f0c530f7dfb1a945806b063ebd51339"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/core/src/session/checkpoint-diff.ts",
+      "sha256": "b3a50ddf98ac4447b7b582ae33e715a769d9de513eb06577731bab094ca0d400"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/core/src/session/checkpoint-restore.test.ts",
+      "sha256": "e57ed1499bf07ead035491b4c307b62949197dedf4b589d92e11462380b3f58b"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/core/src/session/checkpoint-restore.ts",
+      "sha256": "a1aa2fa03033b464380c068924056c647325ed6753134bd57a56348a5a9dfe03"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/ui/ADOPTION.md",
+      "sha256": "5f1a98ad8b99349cbcbf43858d0210e3200d69dfe0ce902a107d670bf94a1c59"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/ui/components/agent-chat/index.tsx",
+      "sha256": "7e6171994c42684f1d5741406de37ab4e853147428d0e51da38534dde9067b38"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/ui/package.json",
+      "sha256": "8dd650f75d54ffc1bda094d11501d83639524f315172d6d7c4699272ce19fe90"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cline/cline/53383d541363f4fc55bc2b054af3181035a8f26a/sdk/packages/ui/tests/agent-chat.test.tsx",
+      "sha256": "fa237f17ea7e8838d91cb04f0f7da7f7a72c2471f502724d407d2ee7672aeef3"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/gepa-ai/gepa/02ea4152ff6e512484cb5298046bfe967aea4735/AGENTS.md",
+      "sha256": "84777c6f7920db4bd5cb8560f793557a5454c6afa01119ec6cf9655872725a4a"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/gepa-ai/gepa/02ea4152ff6e512484cb5298046bfe967aea4735/LICENSE",
+      "sha256": "10c47467a961feb40adf3294fe27dd9cba79d4d1b7cf27173b1c34586d4126c3"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/gepa-ai/gepa/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/adapters/dspy_adapter/dspy_adapter.py",
+      "sha256": "020b1452ff51dc3f1a8630bbe114049550607dc2b5d8fafcb22ab974e003e75f"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/gepa-ai/gepa/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/adapters/terminal_bench_adapter/terminal_bench_adapter.py",
+      "sha256": "7d87934f5ffca6740a630ea981158db2407c5f5f2ce68cdb3806aab70c9a72d8"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/gepa-ai/gepa/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/api.py",
+      "sha256": "c492cdf56f03946df62de3d09b8a0a27cd05684597b066e4b2bc874dcdeca607"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/gepa-ai/gepa/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/core/adapter.py",
+      "sha256": "ba79fb40682f7372f386f0d39358fa4866c3d06978d4a658fcbc711617e80694"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/gepa-ai/gepa/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/core/result.py",
+      "sha256": "256eaa7cedbb4fe601d1e09eb278f82432e7b61956462f0d9279dd5ed22f5543"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/gepa-ai/gepa/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/oa/task.py",
+      "sha256": "b3472800fb73c5d3d9fa7eee74ccbd820f7aa621efc58dae8bb5e60b3795eb33"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/gepa-ai/gepa/02ea4152ff6e512484cb5298046bfe967aea4735/src/gepa/optimize_anything.py",
+      "sha256": "f037d782534c2fcc05085d7f1b34a44c3641505c9534bbfeae6674077bb7b103"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/docs-mintlify/agents/custom-agents.mdx",
+      "sha256": "a63ce27cdb4da1a8813a043777fedc6eaca1873ba8fd226008d48eb0303e46c3"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/docs-mintlify/tasks/network-policies.mdx",
+      "sha256": "fc332cfb83da786863f6fa062d3689edd95149612ca273dd52f55698bcf20de8"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/examples/agents/marker_agent.py",
+      "sha256": "0f67cf45c6d2ee18839aafefb080a523582f75c6afdd8a6916c7244ea3eccc01"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/examples/tasks/hello-world/task.toml",
+      "sha256": "8df59d13077f5da3cb525722fe81f9b90fa177c26fdcbb54e3e7049bc610896e"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/examples/tasks/secure-python-worker/task.toml",
+      "sha256": "e4edd71492b0ff6dba051ed4d278112c9114f00abb9fae65efbfddc332eaee13"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/examples/tasks/separate-verifier-environment/task.toml",
+      "sha256": "07e8923c9e7c7509a6963c37dc16701f4270966fc9fc9c88a92074b76f8614f2"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/agents/base.py",
+      "sha256": "39362c4d34d96cb1cc5dd8a07d9ea59f83c4fa49421f72a88ecc452def68ed2a"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/agents/factory.py",
+      "sha256": "a4e7ad4af669217440b9006abb5adafe4c20fab6384c36e0e32ac213043a683e"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/agents/installed/mini_swe_agent.py",
+      "sha256": "5a7b4b6116d9b62d1324e7b39e2a42c8828a4da5be589ca1ff1195ef2e9dd82c"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/models/task/verifier_mode.py",
+      "sha256": "9117b1ad53a7091d7c327361db50c57bdf062d602134f11d2747967728a48ad2"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/models/verifier/result.py",
+      "sha256": "4ce7378d3782f9f11082db66341e55058919145955b17745167e987d6bad93df"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/trial/single_step.py",
+      "sha256": "ea318d64387014169a54b73f6aa7aa588c7095256d02a3cb518f2d4d8fa9e73e"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/trial/trial.py",
+      "sha256": "d6ab11b45f5d90d5cb898c5eaf1fb5aec113860c041f35034109ad464939ca96"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/harbor-framework/harbor/c23909f47508af47a70321eb22c2b40aa190ca5d/src/harbor/verifier/verifier.py",
+      "sha256": "fc5d9fc6d27ac6eca57a3504f6853e094b0c50f4d965708e72d9c237ad30da34"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/huggingface/peft/eaa35c777c7ba554a2a3639ac9c79bb690f39a57/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/huggingface/peft/eaa35c777c7ba554a2a3639ac9c79bb690f39a57/src/peft/config.py",
+      "sha256": "db319d65d0239f3a113dfe36a83604e00d0d2cc5cddb19ab8a7b989e4742d32c"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/huggingface/peft/eaa35c777c7ba554a2a3639ac9c79bb690f39a57/src/peft/tuners/lora/config.py",
+      "sha256": "49042be0a174d515e4459dbb4a084cf934635e47dc29597d70769d0499cae650"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/huggingface/peft/eaa35c777c7ba554a2a3639ac9c79bb690f39a57/src/peft/utils/constants.py",
+      "sha256": "b840578c9626740ad01e84c31f713f85aecc0c696bdde29e4e3891f23db1e9f5"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/huggingface/peft/eaa35c777c7ba554a2a3639ac9c79bb690f39a57/src/peft/utils/other.py",
+      "sha256": "6b87957915ba399bfb6bbd57b9404aa12f0e9f4e27b19ef1b6c68ac052148f9b"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/huggingface/peft/eaa35c777c7ba554a2a3639ac9c79bb690f39a57/tests/test_config.py",
+      "sha256": "5ccf012e6b0b374a521febf51ba7135ea8a99d704bd1080586f4836f0be2d670"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/huggingface/trl/44809ba3f3a136f3d62859ee981fee2506bce5c9/LICENSE",
+      "sha256": "1bf614b1fdc40fbd344aa58d00d17d5fd0d252ea333a05be018a38959c8b2998"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/huggingface/trl/44809ba3f3a136f3d62859ee981fee2506bce5c9/tests/test_sft_trainer.py",
+      "sha256": "e14221ce4114b9dcc14172f9bfea0ad0beb433f18828084a924f5a735af90565"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/huggingface/trl/44809ba3f3a136f3d62859ee981fee2506bce5c9/trl/chat_templates/README.md",
+      "sha256": "e8520650a7b62789b78911b39ed9370c1adbe75d335a63b87d5d99052c7fe84a"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/huggingface/trl/44809ba3f3a136f3d62859ee981fee2506bce5c9/trl/trainer/sft_config.py",
+      "sha256": "4a18512fbdc83c9d16be09ee68529cd4cc07e4243c9ad733686fd3cb70984d6b"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/huggingface/trl/44809ba3f3a136f3d62859ee981fee2506bce5c9/trl/trainer/sft_trainer.py",
+      "sha256": "ab992191b84cdc47e14c0b6baf4e6be724240da4b4d98f26341cdaba072e8e92"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/jennyzzt/dgm/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/DGM_outer.py",
+      "sha256": "239bc76f0e1b78210b8f7b3757b1082f6ca07db3537d6af50a45bf97709795ed"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/jennyzzt/dgm/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/LICENSE",
+      "sha256": "84b7504ce8dda1f37f592cdf67ad21371864583720d79ea289b0b0c75bfcdb17"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/jennyzzt/dgm/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/self_improve_step.py",
+      "sha256": "6f2ec364b11e7f6d35391ea66896fa2394cbca3bc59d68cf7352c2a77aa8cca7"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/jennyzzt/dgm/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/tools/bash.py",
+      "sha256": "a11e7b40fe61b3105b88c4370bda1947a4f0f9cef0231a5f279ae917e0f21b02"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/jennyzzt/dgm/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/tools/edit.py",
+      "sha256": "b53f7ae71c5bcda3de994f32a8553bead0f3fe46b250130adfd47ed40a2dec94"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/jennyzzt/dgm/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/utils/evo_utils.py",
+      "sha256": "0eb779270390f39aa0c4ff045ec9b6c3049736c6a008ae3d2e7a2df7ef253570"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/jennyzzt/dgm/a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2/utils/git_utils.py",
+      "sha256": "b6d1a051ca7e663f221d5bc1c9154f33f380a80371ded6c8abfdbf23102004ea"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/agent-lightning/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/client.py",
+      "sha256": "14401f958daf2b02fe2d973e5782461f4278fb27d95424ae8e4097c8698ebe0b"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/agent-lightning/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/controller/local_reconciler.py",
+      "sha256": "c49f21804830b8cc37374bf26a849f062dd346820d98e757d3914c92da50685d"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/agent-lightning/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/schemas.py",
+      "sha256": "9b9eb7fa884c6b20f41b7fbea8caa7494aa07f6314be93919ac544dae20ec0a3"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/agent-lightning/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/server/proxy.py",
+      "sha256": "f1bb24c25631b0535c3cf3ec2b554af9cce8f7452a8d9f9aeafb36b2962364d0"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/agent-lightning/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/server/routes/events.py",
+      "sha256": "ccb3468795dec309b6e3507f5d5652c37479680217a666224619cd7b342b16b5"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/agent-lightning/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/server/routes/models.py",
+      "sha256": "1594fc528d57c83cf8274d303f995db038e27468251657bdbef2fa32a6df0cd8"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/agent-lightning/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/server/routes/proxy.py",
+      "sha256": "41892d89e1da4ff8af9cf3bc05505b26a4073a395a0b67c2fa65bc024701831f"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/agent-lightning/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/server/routes/rollouts.py",
+      "sha256": "0a4e4b48e9e9a73f21c68a141dc1a1183e95155996e73d56741034fc650f31b2"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/agent-lightning/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/server/store.py",
+      "sha256": "685c500977a9dfbea2fc1836139a73fd2752082739008ecda8842871ccc44efd"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/agent-lightning/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/verl/entrypoint.py",
+      "sha256": "d86c1ac16bb20447ccfcbcd4b427a614131448c1932abdd946b8d83fb6bfc041"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/agent-lightning/d381995396274039f2bb1cbe5ff42ac8067f4e47/agentlightning/verl/vllm_compat.py",
+      "sha256": "90f737d69dd16773a4979d2ba389e08cef48e908aa321d0e1cdbdccc3d7514c2"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/agent-lightning/d381995396274039f2bb1cbe5ff42ac8067f4e47/LICENSE",
+      "sha256": "8f71659370c5268d9a1dc962a46232540e8fca63462586d8efaa95aab492a208"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/agent/agent_init.py",
+      "sha256": "6a1a4b4cc8304950578a4e04127440e279cc0c94c88d8ea019b72c7ec0625db0"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/agent/background_review.py",
+      "sha256": "befe068ba8283ee2c480b9b3b28a47913fea62bef92408c7aeed211bf4cc71bd"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/agent/curator_backup.py",
+      "sha256": "41a63a699d9c525dc42a5199107b3bac53fff7cddb41f8dbb95e6d8eebccc362"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/agent/curator.py",
+      "sha256": "728fa3951767f3ce6fb619c36e9e57d4afb691b92e5d2704242d5bca1b5f3e39"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/agent/memory_provider.py",
+      "sha256": "ac81dcf489c698891f0edebfe26845a75c50d2bde77ec3be8d7938a85c79f1fc"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/agent/review_idle_queue.py",
+      "sha256": "d2a62f333ee5e69ec17b50bdd3f66f11ba61a12ba7ba8e1e0a562866450ea32b"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/LICENSE",
+      "sha256": "821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/tools/memory_tool_store.py",
+      "sha256": "0f665c95fcf44e3115c7a625622885e20254418b414a92a1f8570d1300e9fc31"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/tools/memory_tool.py",
+      "sha256": "00c86420cb4d824dbfe2806b1f748a1fc182b8c11ea2f902e8b77d3d035624dd"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/tools/session_search_tool.py",
+      "sha256": "db33ec08257da698a1bd23347a1df4e29648ab72ebe525221cadd6a0d892d4b2"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/tools/skill_usage.py",
+      "sha256": "cd713eaffdd2d8762c8cd4347ac41af7968e7cffc3f7d42bc17f1ba2ab715f4d"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/website/docs/user-guide/features/curator.md",
+      "sha256": "8ab82579d40e14b9fe3a471f5a6aaef46ae3299f29bd3cb843a1a2cea71a37fc"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/website/docs/user-guide/features/memory-providers.md",
+      "sha256": "07090e2c3427ccc4598cd0cf1d9132833d63d86bbfc0d2409673ef3b65702568"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/7020ea3e96c3fdbc768c5296493e186df46f075b/website/docs/user-guide/features/memory.md",
+      "sha256": "979cb02df938e3bcb003195e465487aa0cdf5a3e8690ac86eb1ccd96cd69fdd4"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/docs/concepts/architecture.md",
+      "sha256": "974378bf14d9aef9d9a336282def036a19853200222237360317ec57aa1afd38"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/docs/concepts/memory-builtin.md",
+      "sha256": "f9bf0e97f7c60bbb78eb96559732191dbbe86a153ff6f03a702e835bf84af3d0"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/docs/concepts/memory.md",
+      "sha256": "e817abe0707d21c64d7b0532cc24ed92fbd5a54908a194a5b810b094815e480d"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/docs/gateway/protocol.md",
+      "sha256": "05eb28fcf01ce304b1ac159a6f491b009c1ffcffb148ff2a0b2c62bc4b55cb13"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/docs/tools/self-learning.md",
+      "sha256": "e7003368f19d75890f83ce33a7677ca24d8ac34fb302e8f58c855cb11adfaa4c"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/docs/tools/skill-workshop.md",
+      "sha256": "12f8d10c7b50676e6fab4e21da03c5951d7b45d47cbf65236b68c925e24d1e25"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/extensions/memory-core/src/dreaming-consolidation.ts",
+      "sha256": "0f08e1b93e0973400117fc55689a076c1f3ae43ab13fccf81b5d9d6f27d643ca"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/extensions/memory-core/src/memory/hybrid.ts",
+      "sha256": "675951d9f73b55f66b1623735b2f13b98e87e18462b4250f897c08dbc4acb4e7"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/extensions/memory-core/src/memory/mmr.ts",
+      "sha256": "070c83d54e91928b17cf4322f256c917ef47011afc24a5eb7fae7a3844aa8d89"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/extensions/memory-core/src/memory/temporal-decay.ts",
+      "sha256": "30fe8e6c16ab6bbb5efd01130865468dfdb062995c3123839af3624df4fb579f"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/LICENSE",
+      "sha256": "9efd316ecf1c4c60f6fd5d26433142fff2b6794d7d328e9bc6179b29bf9c82a4"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/gateway/server.ts",
+      "sha256": "c3f0c04f6ecf7f3196b04af07b5e9d5e4152e7c0fb49a9bc53fec63435d81984"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/changes.ts",
+      "sha256": "660d159a9115b3ebd82bfa0961db87bbb103a82b5418c61756618c86836af75c"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/drafts.ts",
+      "sha256": "bd6002b7a647b7f7613d9079637c6a7e44f8da98756748dce4c914c8f8a32308"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/experience-review-prompt.ts",
+      "sha256": "c65a3af217e10f1cb7d13e11388af7d708b9cc32723c5ff19a25278c6f376a85"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/experience-review-scheduler.ts",
+      "sha256": "4c092dca2d7c72e7921fdb44195fdab300f2427dbfb2c70ad0b96af14565bb0d"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/experience-review.ts",
+      "sha256": "e060e9fb351ee6ba605a02b5e4b1dd5a13abf75c9d0c52fab6dc713a5555da09"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/library.ts",
+      "sha256": "255b314c38b8e6d859497918747ebd4a4418a72cdc846515aafebd5316c684ec"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/review-undo.ts",
+      "sha256": "d04a435217e1e8201a7ace17c570365aed0b27e371be900e553243ce1e54a086"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/skill-versions.ts",
+      "sha256": "91363cd762a0ca3f10553bac03e712e6122d5f389a7da559edd84e37f98ad32b"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/openclaw/openclaw/7d9677ce36db4aeea2ce36a3bb78588829e80933/src/skills/workshop/unused-archive.ts",
+      "sha256": "f335d62f1611b4aa09b989a619538d2f202bbe6f978495969bd4799674d73c03"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/c048a1eb82353b0586f3ce600708394a68ebb246/LICENSE",
+      "sha256": "14a9b631c658eee682c6c2973525fbdf808c3457176bc47513052c559cc5ce86"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-agent-server/openhands/agent_server/__main__.py",
+      "sha256": "1663cb43390f410721857939349b9f9ef58c3ac467a46a0ae4caffb9ee597120"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-agent-server/openhands/agent_server/config.py",
+      "sha256": "0b064821b213e6da12a0e8e81bb7bee614bd072b960ccd9c5c377b3d6249caaf"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-agent-server/openhands/agent_server/dependencies.py",
+      "sha256": "4917046724e65b0633cd0916db3b43179d6b1f66c001d04f8f68d79e1aa2a59c"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-agent-server/openhands/agent_server/docker_runtime/registry.py",
+      "sha256": "fdf0577e17ee95eb5ed06ed9436512832ed0613b0f3e67b299421b62a89f64a3"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-agent-server/openhands/agent_server/file_router.py",
+      "sha256": "995aabc0ed3cfe89c027aaca9f3552ac02fe2d3cc613eb69869e14223db3a63b"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-sdk/openhands/sdk/workspace/local.py",
+      "sha256": "c6c63ee9b2c6b3d59db6877b3202afc84742b19563b16d8d25b4405b92a58cb2"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-sdk/openhands/sdk/workspace/remote/base.py",
+      "sha256": "ebaf51b9dd52023189112ac7746201de006743db88ad32c1444f3091680e0f99"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-sdk/openhands/sdk/workspace/remote/remote_workspace_mixin.py",
+      "sha256": "0e55f7ab273c4a52df2d7ce17fcec39d88481a521f14f17daaf21a30df1ada8c"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-workspace/openhands/workspace/docker/workspace.py",
+      "sha256": "8cacdc46b43f846f4f4acafdf3950f02feb764000e96a9cd380ee40c3524da4a"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/c048a1eb82353b0586f3ce600708394a68ebb246/openhands-workspace/openhands/workspace/remote_api/workspace.py",
+      "sha256": "0ae43df1181ff7fad036a44b0fe6d4a51ccef52241c55cbbcef7e4585398a7d0"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/c048a1eb82353b0586f3ce600708394a68ebb246/tests/sdk/workspace/remote/test_runtime_scope.py",
+      "sha256": "0315e971ced5c3ba98efabe8de51e60e8f3e9950ac72f8cebdb7811243797c10"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/c048a1eb82353b0586f3ce600708394a68ebb246/uv.lock",
+      "sha256": "87ff323da08fe4dc21def00bc9ddeb7a04cd6003ef3d43c985f50445acab2ac3"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/stanfordnlp/dspy/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007/docs/docs/getting-started/gepa-optimization.md",
+      "sha256": "cbdd2f0de3350374a263a149354f935ef23745b0e577c58974b213dcf1ffb7b8"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/stanfordnlp/dspy/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007/dspy/teleprompt/gepa/gepa_utils.py",
+      "sha256": "64eb7e35f588218779de1dc5f60fa668826d1f17a9af6e39fdb3d913edd65ca2"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/stanfordnlp/dspy/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007/dspy/teleprompt/gepa/gepa.py",
+      "sha256": "52af685c894ea7070816abc2769fef2568f5f61a430b83d7b6be850142c68867"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/stanfordnlp/dspy/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007/LICENSE",
+      "sha256": "fc84421fcf968a696680dacf66ad53db769f699f557690127c5ccb3f6358cfdb"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/stanfordnlp/dspy/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007/pyproject.toml",
+      "sha256": "f597e75ad1093c741fdf08eb30bca92f8a803c629f09a0942dcc8004819cc3b2"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/SWE-agent/mini-swe-agent/04d809ceab9df28f9adaed044884180159172930/AGENTS.md",
+      "sha256": "5cd7ba3e1eaa9193dec6acbab6b74722805ae2c02b54f8902df91710ee6db678"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/SWE-agent/mini-swe-agent/04d809ceab9df28f9adaed044884180159172930/docs/usage/output_files.md",
+      "sha256": "05cb2cec2f92bf61c933a5cff2e17a8ae2010d23720f41e60fd630543aee24e7"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/SWE-agent/mini-swe-agent/04d809ceab9df28f9adaed044884180159172930/LICENSE.md",
+      "sha256": "0f796e58f91d1c07bb2c1b1d0f8bf3a83017c3a5dec1bdc6fae733b2cd2e875b"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/SWE-agent/mini-swe-agent/04d809ceab9df28f9adaed044884180159172930/pyproject.toml",
+      "sha256": "c176ff37a89ee88a2ea2ce746b9b7e723ea3175e53be5336ab99f5aba0d59ddf"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/SWE-agent/mini-swe-agent/04d809ceab9df28f9adaed044884180159172930/src/minisweagent/agents/default.py",
+      "sha256": "e8ef8aa365942d739c2ec5cb0879f60f377d2dc2de8ec670aaedf3bafb45a4c2"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/SWE-agent/mini-swe-agent/04d809ceab9df28f9adaed044884180159172930/src/minisweagent/environments/docker.py",
+      "sha256": "21d389122b008e7b743d1e640207fda0b08d9010cf6323ddd02f0742b33b96a6"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/SWE-agent/mini-swe-agent/04d809ceab9df28f9adaed044884180159172930/src/minisweagent/run/mini.py",
+      "sha256": "ae9c82013afbc8e0320dc1e55600eed9d9ee6dec5acbc59763ff984a0594f9a9"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/vllm-project/vllm/5df63a7203cdb9328d824a27b682e77c7b9928be/docs/features/lora.md",
+      "sha256": "f952e08c3246259ffcd221287053970a29151a050a0097a80a2b429d405aaef3"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/vllm-project/vllm/5df63a7203cdb9328d824a27b682e77c7b9928be/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/vllm-project/vllm/5df63a7203cdb9328d824a27b682e77c7b9928be/tests/lora/test_peft_helper.py",
+      "sha256": "23945f8f8836541cb7c129a4762fafb3cf4edae84cbce678cbf38a354a82c00f"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/vllm-project/vllm/5df63a7203cdb9328d824a27b682e77c7b9928be/vllm/entrypoints/openai/models/serving.py",
+      "sha256": "39ecebf92abec7931b4c953e0d9743320dbd93532a8e3488307398c29dba2553"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/vllm-project/vllm/5df63a7203cdb9328d824a27b682e77c7b9928be/vllm/entrypoints/serve/lora/api_router.py",
+      "sha256": "16866a5db7ff1cd21965a854241939a7e488234e60fb11c26e406de6dc4df0eb"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/vllm-project/vllm/5df63a7203cdb9328d824a27b682e77c7b9928be/vllm/lora/peft_helper.py",
+      "sha256": "328e555cab308d328309a4a394ef46873161146f7b3a190eded0b91a5c8ce7c3"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/vllm-project/vllm/5df63a7203cdb9328d824a27b682e77c7b9928be/vllm/lora/request.py",
+      "sha256": "d66435c6431c9ee7d3b4abee6ca2828302678a2feca5c377f6408ad5781bc642"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/vllm-project/vllm/5df63a7203cdb9328d824a27b682e77c7b9928be/vllm/lora/resolver.py",
+      "sha256": "ed57a012465fd64a3a189dbc0fd7bcf1b78821ae494b989ada54dcf39e157aff"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/vllm-project/vllm/5df63a7203cdb9328d824a27b682e77c7b9928be/vllm/plugins/lora_resolvers/filesystem_resolver.py",
+      "sha256": "1f0d7182683e0ac73a9dac44492da36e2ec4d2671169611e975fb4925f7db88c"
+    }
+  ],
+  "failures": []
+}
