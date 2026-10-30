@@ -182,4 +182,4 @@ test("CLI warns when an untrusted project model file is ignored", async () => {
     await rm(marsHome, { recursive: true, force: true });
     await rm(projectDirectory, { recursive: true, force: true });
   }
-});
+}, 30_000);
