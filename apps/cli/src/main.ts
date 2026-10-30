@@ -15,17 +15,33 @@ function requiredString(value: unknown, name: string): string {
 }
 
 async function runModels(args: string[]): Promise<void> {
-  const subcommand = args[0];
+  const trustProjectConfig =
+    args.includes("--trust-project") ||
+    process.env.MARS_TRUST_PROJECT_CONFIG === "1";
+  const commandArgs = args.filter((arg) => arg !== "--trust-project");
+  const subcommand = commandArgs[0];
   if (!subcommand || subcommand === "help" || subcommand === "--help") {
     console.log(
-      "Usage: mars models <list|providers|add-provider|add|discover|test> [options]",
+      [
+        "Usage: mars models [--trust-project] <list|providers|add-provider|add|discover|test> [options]",
+        "  add --provider ID --model ID [--id ID] [--tools] [--vision] [--context N] [--free]",
+        "  Project configuration is ignored unless --trust-project is set (or MARS_TRUST_PROJECT_CONFIG=1).",
+      ].join("\n"),
     );
     return;
   }
-  const registry = await loadModelRegistry();
+  const registry = await loadModelRegistry({ trustProjectConfig });
+  if (registry.ignoredProjectConfig) {
+    console.error(
+      `Ignoring untrusted project model config at ${registry.ignoredProjectConfig}; pass --trust-project or set MARS_TRUST_PROJECT_CONFIG=1 to load it.`,
+    );
+  }
+  for (const notice of registry.notices) {
+    console.error(`Notice: ${notice}`);
+  }
   if (subcommand === "list") {
     const { values } = parseArgs({
-      args: args.slice(1),
+      args: commandArgs.slice(1),
       options: {
         free: { type: "boolean" },
         available: { type: "boolean" },
@@ -60,7 +76,7 @@ async function runModels(args: string[]): Promise<void> {
   }
   if (subcommand === "add-provider") {
     const { values } = parseArgs({
-      args: args.slice(1),
+      args: commandArgs.slice(1),
       options: {
         id: { type: "string" },
         "base-url": { type: "string" },
@@ -98,7 +114,7 @@ async function runModels(args: string[]): Promise<void> {
   }
   if (subcommand === "add") {
     const { values } = parseArgs({
-      args: args.slice(1),
+      args: commandArgs.slice(1),
       options: {
         provider: { type: "string" },
         model: { type: "string" },
@@ -106,7 +122,7 @@ async function runModels(args: string[]): Promise<void> {
         tools: { type: "boolean" },
         vision: { type: "boolean" },
         context: { type: "string" },
-        paid: { type: "boolean" },
+        free: { type: "boolean" },
         force: { type: "boolean" },
       },
       strict: true,
@@ -131,7 +147,7 @@ async function runModels(args: string[]): Promise<void> {
         vision: values.vision === true,
         contextWindow,
       },
-      pricing: { free: values.paid !== true },
+      pricing: { free: values.free === true },
     };
     await registry.addModel(model, { force: values.force === true });
     console.log(
@@ -141,7 +157,7 @@ async function runModels(args: string[]): Promise<void> {
   }
   if (subcommand === "discover") {
     const { values, positionals } = parseArgs({
-      args: args.slice(1),
+      args: commandArgs.slice(1),
       options: { save: { type: "boolean" } },
       strict: true,
       allowPositionals: true,
@@ -171,7 +187,7 @@ async function runModels(args: string[]): Promise<void> {
   }
   if (subcommand === "test") {
     const { values, positionals } = parseArgs({
-      args: args.slice(1),
+      args: commandArgs.slice(1),
       options: { prompt: { type: "string" } },
       strict: true,
       allowPositionals: true,
@@ -223,7 +239,7 @@ try {
   } else if (command === "models") {
     await runModels(process.argv.slice(3));
   } else {
-    console.error("Usage: bun apps/cli/src/main.ts <doctor|smoke>");
+    console.error("Usage: bun apps/cli/src/main.ts <doctor|smoke|models>");
     process.exitCode = 2;
   }
 } catch (error) {

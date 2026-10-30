@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  readFile,
+  rename,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { ModelConfig, ModelsFile, ProviderConfig } from "@mars/contracts";
@@ -14,10 +21,22 @@ export interface LoadModelRegistryOptions {
   cwd?: string;
   home?: string;
   env?: Record<string, string | undefined>;
+  trustProjectConfig?: boolean;
 }
 
 export interface AddConfigOptions {
   force?: boolean;
+}
+
+interface ParsedModelFile {
+  config: ModelsFile;
+  explicitAllowPaid: boolean;
+}
+
+interface MergedModelFiles {
+  config: ModelsFile;
+  notices: string[];
+  ignoredProjectConfig: string | undefined;
 }
 
 function mergeById<T extends { id: string }>(...groups: T[][]): T[] {
@@ -28,7 +47,9 @@ function mergeById<T extends { id: string }>(...groups: T[][]): T[] {
   return [...result.values()];
 }
 
-async function readModelsFile(path: string): Promise<ModelsFile | undefined> {
+async function readModelsFile(
+  path: string,
+): Promise<ParsedModelFile | undefined> {
   let source: string;
   try {
     source = await readFile(path, "utf8");
@@ -44,12 +65,43 @@ async function readModelsFile(path: string): Promise<ModelsFile | undefined> {
     throw error;
   }
   try {
-    return ModelsFileSchema.parse(JSON.parse(source));
+    const raw: unknown = JSON.parse(source);
+    const rawObject =
+      raw !== null && typeof raw === "object" && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>)
+        : {};
+    const rawPolicy =
+      rawObject.policy !== null &&
+      typeof rawObject.policy === "object" &&
+      !Array.isArray(rawObject.policy)
+        ? (rawObject.policy as Record<string, unknown>)
+        : {};
+    return {
+      config: ModelsFileSchema.parse(raw),
+      explicitAllowPaid: Object.hasOwn(rawPolicy, "allowPaid"),
+    };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`Invalid model configuration at ${path}: ${detail}`, {
       cause: error,
     });
+  }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch (error) {
+    if (
+      error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return false;
+    }
+    throw error;
   }
 }
 
@@ -72,52 +124,98 @@ async function writeModelsFile(path: string, file: ModelsFile): Promise<void> {
 async function readMergedFiles(
   userFilePath: string,
   projectFilePath: string,
-): Promise<ModelsFile> {
+  trustProjectConfig: boolean,
+): Promise<MergedModelFiles> {
   const userFile = await readModelsFile(userFilePath);
-  const projectFile = await readModelsFile(projectFilePath);
+  const ignoredProjectConfig =
+    !trustProjectConfig && (await fileExists(projectFilePath))
+      ? projectFilePath
+      : undefined;
+  const projectFile = trustProjectConfig
+    ? await readModelsFile(projectFilePath)
+    : undefined;
+  const notices: string[] = [];
+  const baseProviders = [
+    ...BUILTIN_PROVIDERS,
+    ...(userFile?.config.providers ?? []),
+  ];
+  const baseProviderIds = new Set(baseProviders.map(({ id }) => id));
+  const projectProviders = projectFile?.config.providers ?? [];
+  for (const provider of projectProviders) {
+    if (baseProviderIds.has(provider.id)) {
+      throw new Error(
+        `Invalid project model configuration at ${projectFilePath}: provider "${provider.id}" cannot redefine an existing provider (field "id").`,
+      );
+    }
+  }
+  const projectProviderIds = new Set(projectProviders.map(({ id }) => id));
+  if (projectFile?.explicitAllowPaid) {
+    notices.push(
+      `Ignored project policy.allowPaid in ${projectFilePath}; paid-model policy is controlled by user configuration.`,
+    );
+  }
+  const projectModels = (projectFile?.config.models ?? []).map((model) => {
+    if (model.pricing.free && !projectProviderIds.has(model.providerId)) {
+      notices.push(
+        `Project model "${model.id}" claimed free pricing for provider "${model.providerId}", which the project does not define; treating it as paid.`,
+      );
+      return { ...model, pricing: { ...model.pricing, free: false } };
+    }
+    return model;
+  });
   const providers = mergeById(
     BUILTIN_PROVIDERS,
-    userFile?.providers ?? [],
-    projectFile?.providers ?? [],
+    userFile?.config.providers ?? [],
+    projectProviders,
   );
   const models = mergeById(
     BUILTIN_MODELS,
-    userFile?.models ?? [],
-    projectFile?.models ?? [],
+    userFile?.config.models ?? [],
+    projectModels,
   );
   const routes = {
     ...BUILTIN_ROUTES,
-    ...userFile?.routes,
-    ...projectFile?.routes,
+    ...userFile?.config.routes,
+    ...projectFile?.config.routes,
   };
-  return ModelsFileSchema.parse({
-    version: 1,
-    providers,
-    models,
-    routes,
-    policy: {
-      allowPaid:
-        projectFile?.policy.allowPaid ?? userFile?.policy.allowPaid ?? false,
-    },
-  });
+  return {
+    config: ModelsFileSchema.parse({
+      version: 1,
+      providers,
+      models,
+      routes,
+      policy: {
+        allowPaid: userFile?.config.policy.allowPaid ?? false,
+      },
+    }),
+    notices,
+    ignoredProjectConfig,
+  };
 }
 
 export class ModelProviderRegistry {
   readonly userFilePath: string;
   readonly projectFilePath: string;
+  readonly ignoredProjectConfig: string | undefined;
+  readonly notices: string[];
   private readonly env: Record<string, string | undefined>;
+  private readonly trustProjectConfig: boolean;
   private file: ModelsFile;
 
   constructor(
     userFilePath: string,
     projectFilePath: string,
-    file: ModelsFile,
+    merged: MergedModelFiles,
     env: Record<string, string | undefined>,
+    trustProjectConfig: boolean,
   ) {
     this.userFilePath = userFilePath;
     this.projectFilePath = projectFilePath;
-    this.file = file;
+    this.file = merged.config;
+    this.ignoredProjectConfig = merged.ignoredProjectConfig;
+    this.notices = merged.notices;
     this.env = env;
+    this.trustProjectConfig = trustProjectConfig;
   }
 
   get providers(): ProviderConfig[] {
@@ -174,7 +272,7 @@ export class ModelProviderRegistry {
         `Provider "${provider.id}" already exists; use --force to replace it.`,
       );
     }
-    const current = (await readModelsFile(this.userFilePath)) ?? {
+    const current = (await readModelsFile(this.userFilePath))?.config ?? {
       version: 1 as const,
       providers: [],
       models: [],
@@ -186,7 +284,13 @@ export class ModelProviderRegistry {
       providers: mergeById(current.providers, [provider]),
     });
     await writeModelsFile(this.userFilePath, next);
-    this.file = await readMergedFiles(this.userFilePath, this.projectFilePath);
+    const merged = await readMergedFiles(
+      this.userFilePath,
+      this.projectFilePath,
+      this.trustProjectConfig,
+    );
+    this.file = merged.config;
+    this.notices.splice(0, this.notices.length, ...merged.notices);
   }
 
   async addModel(
@@ -202,7 +306,7 @@ export class ModelProviderRegistry {
         `Model "${model.id}" already exists; use --force to replace it.`,
       );
     }
-    const current = (await readModelsFile(this.userFilePath)) ?? {
+    const current = (await readModelsFile(this.userFilePath))?.config ?? {
       version: 1 as const,
       providers: [],
       models: [],
@@ -214,7 +318,13 @@ export class ModelProviderRegistry {
       models: mergeById(current.models, [model]),
     });
     await writeModelsFile(this.userFilePath, next);
-    this.file = await readMergedFiles(this.userFilePath, this.projectFilePath);
+    const merged = await readMergedFiles(
+      this.userFilePath,
+      this.projectFilePath,
+      this.trustProjectConfig,
+    );
+    this.file = merged.config;
+    this.notices.splice(0, this.notices.length, ...merged.notices);
   }
 }
 
@@ -232,6 +342,18 @@ export async function loadModelRegistry(
     : join(home, ".mars");
   const userFilePath = join(userDirectory, "models.json");
   const projectFilePath = resolve(cwd, ".mars", "models.json");
-  const file = await readMergedFiles(userFilePath, projectFilePath);
-  return new ModelProviderRegistry(userFilePath, projectFilePath, file, env);
+  const trustProjectConfig =
+    options.trustProjectConfig ?? env.MARS_TRUST_PROJECT_CONFIG === "1";
+  const merged = await readMergedFiles(
+    userFilePath,
+    projectFilePath,
+    trustProjectConfig,
+  );
+  return new ModelProviderRegistry(
+    userFilePath,
+    projectFilePath,
+    merged,
+    env,
+    trustProjectConfig,
+  );
 }
