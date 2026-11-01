@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createCollaboration } from "@mars/collaboration";
 import {
   createRepositoryMapProvider,
   type RepositoryMapProvider,
@@ -28,6 +29,7 @@ import {
   makeBaseline,
   makeSpecialistFixture,
 } from "../../specialists/tests/helpers";
+import type { WorkbenchCollaboration } from "./collaboration-context";
 import { createWorkbenchHost, type WorkspaceHost } from "./host";
 import type { WorkbenchMemory } from "./memory-context";
 import type { WorkbenchSpecialists } from "./specialist-routing";
@@ -183,6 +185,7 @@ async function fixture() {
     memory?: WorkbenchMemory,
     repositoryMap?: Pick<RepositoryMapProvider, "map">,
     specialists?: WorkbenchSpecialists,
+    collaboration?: WorkbenchCollaboration,
   ) =>
     createWorkbenchHost({
       scope,
@@ -195,6 +198,7 @@ async function fixture() {
       ...(memory ? { memory } : {}),
       ...(repositoryMap ? { repositoryMap } : {}),
       ...(specialists ? { specialists } : {}),
+      ...(collaboration ? { collaboration } : {}),
       async runtimeFactory(options) {
         const outcome = deferred<RuntimeOutcome>();
         const disposed = deferred<void>();
@@ -1459,4 +1463,64 @@ test("routing aliases free-form task ids and sizes context like the model bridge
   session.finish("completed");
   await session.disposed;
   await api.close();
+});
+
+test("launches open a task-scoped room and bind coordinator tools host-side", async () => {
+  const f = await fixture();
+  const collaboration = await createCollaboration({
+    rootDir: join(f.root, "collaboration"),
+    hostPrivateRoots: [join(f.root, "private")],
+  });
+  const api = await f.makeHost(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    collaboration,
+  );
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  const launch = JSON.parse(
+    await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+  );
+  const room = await collaboration.host.inspectRoom(
+    context(),
+    launch.collaboration.room_id,
+  );
+  expect(room.status).toBe("open");
+  expect(room.task_id).toBe("task");
+  expect(launch.collaboration.budget).toEqual(room.coordinator_runtime_budget);
+  expect(session.options.task.budget).toEqual(room.coordinator_runtime_budget);
+  const tools = required(session.options.collaboration);
+  expect(JSON.parse(await tools.members())).toEqual([]);
+  expect(await tools.inbox()).toBe("No new messages.");
+  await expect(
+    tools.send({ recipients: ["nobody"], kind: "request", body: "hi" }),
+  ).rejects.toThrow();
+  expect(launch.collaboration.capability.token).not.toContain("nobody");
+  session.finish("paused");
+  await session.disposed;
+  expect(
+    (await collaboration.host.inspectRoom(context(), room.room_id)).status,
+  ).toBe("open");
+  await api.resume(
+    context(),
+    "task",
+    (await api.inspect(context(), "task")).revision,
+  );
+  const resumed = required(f.sessions[1]);
+  expect(resumed.options.task.budget).toEqual(room.coordinator_runtime_budget);
+  expect(resumed.options.collaboration).toBeDefined();
+  resumed.finish("completed");
+  await resumed.disposed;
+  expect(
+    (await collaboration.host.inspectRoom(context(), room.room_id)).status,
+  ).toBe("closed");
+  await api.close();
+  await collaboration.close();
 });

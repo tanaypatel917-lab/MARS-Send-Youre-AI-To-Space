@@ -30,6 +30,12 @@ import type { ModelProviderRegistry } from "@mars/providers";
 import type { DurableTaskStore } from "@mars/tasks";
 import { z } from "zod";
 import {
+  collaborationTools,
+  type FrozenCollaboration,
+  FrozenCollaborationSchema,
+  type WorkbenchCollaboration,
+} from "./collaboration-context";
+import {
   FrozenMemorySchema,
   freezeMemory,
   recallHistory,
@@ -72,6 +78,7 @@ const launchSchema = z
     memory: FrozenMemorySchema.optional(),
     repository_map: FrozenRepositoryMapSchema.optional(),
     routing: FrozenRoutingSchema.optional(),
+    collaboration: FrozenCollaborationSchema.optional(),
   })
   .strict();
 type Launch = z.infer<typeof launchSchema>;
@@ -93,6 +100,7 @@ export interface WorkbenchHostOptions {
   memory?: WorkbenchMemory;
   repositoryMap?: Pick<RepositoryMapProvider, "map">;
   specialists?: WorkbenchSpecialists;
+  collaboration?: WorkbenchCollaboration;
   hostPrivateRoots?: string[];
   runtimeFactory?: (options: RuntimeSessionOptions) => Promise<RuntimeSession>;
 }
@@ -435,7 +443,19 @@ export async function createWorkbenchHost(
     instruction: string,
     steeringEventIds: string[] = [],
     remainingSteering = false,
+    collaboration?: FrozenCollaboration,
   ) => {
+    const closeRoom = (mode: "drain" | "cancel") =>
+      collaboration && options.collaboration
+        ? options.collaboration.host
+            .closeRoom(
+              internalContext(options.scope),
+              collaboration.room_id,
+              mode,
+            )
+            .then(() => undefined)
+            .catch(() => undefined)
+        : Promise.resolve();
     active.set(task.task_id, runtime);
     const job = (async () => {
       try {
@@ -476,11 +496,12 @@ export async function createWorkbenchHost(
         );
         current = await options.store.inspect(context, task.task_id);
         if (current.status !== "running") return;
+        const status =
+          outcome.status === "completed" && remainingSteering
+            ? "paused"
+            : outcome.status;
         await options.store.update(context, task.task_id, current.revision, {
-          status:
-            outcome.status === "completed" && remainingSteering
-              ? "paused"
-              : outcome.status,
+          status,
           artifacts: [
             ...new Map(
               [...current.artifacts, ...collected, artifact].map((ref) => [
@@ -490,7 +511,10 @@ export async function createWorkbenchHost(
             ).values(),
           ],
         });
+        if (status !== "paused")
+          await closeRoom(status === "cancelled" ? "cancel" : "drain");
       } catch {
+        await closeRoom("cancel");
         const context = internalContext(options.scope);
         const current = await options.store
           .inspect(context, task.task_id)
@@ -512,6 +536,18 @@ export async function createWorkbenchHost(
     jobs.set(task.task_id, job);
   };
 
+  const runtimeTask = (task: Task, frozen?: FrozenCollaboration): Task =>
+    frozen ? { ...task, budget: frozen.budget } : task;
+  const roomToolsFor = (frozen: FrozenCollaboration) =>
+    options.collaboration
+      ? {
+          collaboration: collaborationTools(
+            options.collaboration.agents,
+            () => internalContext(options.scope),
+            frozen,
+          ),
+        }
+      : {};
   const toolsFor = (
     task: Task,
     workspace: WorkspaceRef,
@@ -639,6 +675,7 @@ export async function createWorkbenchHost(
         budget: task.budget,
         approvals: params.approvals,
         recall: Boolean(options.memory),
+        collaboration: Boolean(options.collaboration),
         instruction: baseInstruction,
       });
       let memory: z.infer<typeof FrozenMemorySchema> | undefined;
@@ -669,6 +706,33 @@ export async function createWorkbenchHost(
             : {}),
         },
       );
+      let collaboration: FrozenCollaboration | undefined;
+      if (options.collaboration) {
+        try {
+          const opened = await options.collaboration.host.openRoom(context, {
+            task: running,
+            idempotency_key: running.task_id,
+            authority: {
+              approvals: params.approvals,
+              allow_delegation: false,
+              paid_consent: false,
+            },
+            model_id: model.id,
+          });
+          collaboration = {
+            room_id: opened.room.room_id,
+            capability: opened.coordinator,
+            budget: opened.room.coordinator_runtime_budget,
+          };
+        } catch {
+          await options.store
+            .update(context, task.task_id, running.revision, {
+              status: "failed",
+            })
+            .catch(() => undefined);
+          throw new WorkbenchError("unavailable");
+        }
+      }
       let runtime: RuntimeSession | undefined;
       const initialObservations: RuntimeObservation[] = [];
       let bound = false;
@@ -720,13 +784,14 @@ export async function createWorkbenchHost(
         await mkdir(stateDir, { mode: 0o700 });
         const cwd = await options.workspace.cwd(context, workspace);
         runtime = await runtimeFactory({
-          task: running,
+          task: runtimeTask(running, collaboration),
           cwd,
           stateDir,
           registry: options.registry,
           modelId: model.id,
           approvals: params.approvals,
           tools: toolsFor(running, workspace, params.approvals),
+          ...(collaboration ? roomToolsFor(collaboration) : {}),
           ...(params.approvals.read ? historyFor(context) : {}),
           onEvent: async (event) => {
             if (!bound) {
@@ -750,6 +815,7 @@ export async function createWorkbenchHost(
           ...(memory ? { memory } : {}),
           ...(repositoryMap ? { repository_map: repositoryMap } : {}),
           ...(routing ? { routing } : {}),
+          ...(collaboration ? { collaboration } : {}),
         });
         await options.store.bindUpstreamSession(
           internalContext(options.scope),
@@ -765,7 +831,7 @@ export async function createWorkbenchHost(
         for (const observation of initialObservations)
           await persistObservation(observation);
         bound = true;
-        run(running, workspace, runtime, instruction);
+        run(running, workspace, runtime, instruction, [], false, collaboration);
         return running;
       } catch (error) {
         await runtime?.dispose().catch(() => undefined);
@@ -823,7 +889,7 @@ export async function createWorkbenchHost(
       let runtime: RuntimeSession | undefined;
       try {
         runtime = await runtimeFactory({
-          task: running,
+          task: runtimeTask(running, launch.collaboration),
           cwd,
           stateDir: taskState(task),
           sessionFile: binding.session_file,
@@ -831,6 +897,7 @@ export async function createWorkbenchHost(
           modelId: launch.model_id,
           approvals: launch.approvals,
           tools: toolsFor(running, workspace, launch.approvals),
+          ...(launch.collaboration ? roomToolsFor(launch.collaboration) : {}),
           ...(launch.approvals.read ? historyFor(context) : {}),
           onEvent: observe(taskId),
         });
@@ -848,6 +915,7 @@ export async function createWorkbenchHost(
           instruction,
           steeringEventIds,
           steeringEventIds.length < queued.length,
+          launch.collaboration,
         );
         return running;
       } catch (error) {
