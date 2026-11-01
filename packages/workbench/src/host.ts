@@ -47,6 +47,7 @@ import {
 import type { ModelProviderRegistry } from "@mars/providers";
 import type { DurableTaskStore } from "@mars/tasks";
 import { z } from "zod";
+import { chooseChildModel, isReviewerRole } from "./child-model";
 import {
   collaborationTools,
   type FrozenCollaboration,
@@ -578,6 +579,67 @@ export async function createWorkbenchHost(
     return recorded;
   };
   const childRouting = new Map<string, FrozenRouting>();
+  // Models already used inside a task (coordinator and children) so a
+  // reviewer child can be routed to a different one; per child, whether its
+  // review was independent, mirrored into the child.result event.
+  // The history is durable (private per-task record) and selection is
+  // serialized per task, so it survives pauses and host restarts and two
+  // children routed concurrently can never both claim the same model.
+  const TaskModelsSchema = z
+    .object({
+      models: z.array(z.string().min(1)),
+      verdicts: z.record(z.string(), z.boolean()),
+    })
+    .strict();
+  type TaskModels = z.infer<typeof TaskModelsSchema>;
+  const taskModels = new Map<string, TaskModels>();
+  const taskModelLocks = new Map<string, Promise<unknown>>();
+  const taskModelsPath = (taskId: string) =>
+    join(
+      options.stateRoot,
+      "children",
+      "models",
+      childWorkspaceTaskId(taskId) + ".json",
+    );
+  const loadTaskModels = async (taskId: string): Promise<TaskModels> => {
+    const known = taskModels.get(taskId);
+    if (known) return known;
+    const parsed = await readFile(taskModelsPath(taskId), "utf8")
+      .then((text) => TaskModelsSchema.safeParse(JSON.parse(text)))
+      .catch(() => null);
+    const record = parsed?.success ? parsed.data : { models: [], verdicts: {} };
+    taskModels.set(taskId, record);
+    return record;
+  };
+  const saveTaskModels = async (taskId: string, record: TaskModels) => {
+    taskModels.set(taskId, record);
+    const path = taskModelsPath(taskId);
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    const temporary = path + "." + randomUUID() + ".tmp";
+    await writeFile(temporary, JSON.stringify(record), { mode: 0o600 });
+    await rename(temporary, path);
+  };
+  const forgetTaskModels = async (taskId: string) => {
+    taskModels.delete(taskId);
+    await rm(taskModelsPath(taskId), { force: true }).catch(() => undefined);
+  };
+  const withTaskModelLock = async <T>(
+    taskId: string,
+    work: () => Promise<T>,
+  ): Promise<T> => {
+    const previous = taskModelLocks.get(taskId) ?? Promise.resolve();
+    const run = previous.then(work, work);
+    const settled = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    taskModelLocks.set(taskId, settled);
+    try {
+      return await run;
+    } finally {
+      if (taskModelLocks.get(taskId) === settled) taskModelLocks.delete(taskId);
+    }
+  };
   /** Routing decisions survive a host restart in a private per-child record. */
   const childRoutingPath = (childTaskId: string) =>
     join(
@@ -697,6 +759,8 @@ export async function createWorkbenchHost(
               status: child.state,
               model_id: launch?.model_id ?? null,
               routing: await recallChildRouting(childTaskId),
+              reviewer_independent:
+                (await loadTaskModels(taskId)).verdicts[childTaskId] ?? null,
             },
             usage: delta,
           });
@@ -707,7 +771,21 @@ export async function createWorkbenchHost(
         }
         cursor = page.next_cursor;
       } while (cursor);
-      if (settled && !liveRooms.has(taskId)) sweepRooms.delete(taskId);
+      if (settled && !liveRooms.has(taskId)) {
+        sweepRooms.delete(taskId);
+        // A paused task keeps its model history for later reviewers; only a
+        // terminal task with every child settled releases it.
+        const status = await options.store
+          .inspect(context, taskId)
+          .then((task) => task.status)
+          .catch(() => null);
+        if (
+          status === "completed" ||
+          status === "failed" ||
+          status === "cancelled"
+        )
+          await forgetTaskModels(taskId);
+      }
     };
     const queued = (childSweeps.get(taskId) ?? Promise.resolve()).then(
       run,
@@ -1145,52 +1223,56 @@ export async function createWorkbenchHost(
       // would otherwise hand children a model they are not allowed to use.
       // With a specialist registry the child is routed like a launch, and a
       // verified specialist is pinned only when it is free and tool-capable.
-      modelPolicy: async (request) => {
-        const fallback = () =>
-          selectExecutionModel(options.registry, undefined, true);
-        if (!options.specialists)
-          return { model_id: fallback().id, reason: "workbench free default" };
-        let routing: FrozenRouting;
-        try {
-          routing = await routeLaunch(
-            internalContext(options.scope),
-            { task_id: request.child_task_id, budget: request.budget },
-            true,
-            { ...options.specialists, paid_consent: false },
-            initialRequestAllowance({
-              approvals: request.approvals,
-              recall: false,
-              // Children get only workspace tools from the child adapter.
-              collaboration: false,
-              instruction: request.instruction,
-            }) + MIN_INITIAL_OUTPUT_RESERVE,
+      modelPolicy: (request) =>
+        withTaskModelLock(request.task_id, async () => {
+          const reviewer = isReviewerRole(request.role_label);
+          const history = await loadTaskModels(request.task_id);
+          const excluded = new Set(history.models);
+          if (request.parent_model_id) excluded.add(request.parent_model_id);
+          let routing: FrozenRouting | null = null;
+          if (options.specialists) {
+            try {
+              routing = await routeLaunch(
+                internalContext(options.scope),
+                { task_id: request.child_task_id, budget: request.budget },
+                true,
+                { ...options.specialists, paid_consent: false },
+                initialRequestAllowance({
+                  approvals: request.approvals,
+                  recall: false,
+                  // Children get only workspace tools from the child adapter.
+                  collaboration: false,
+                  instruction: request.instruction,
+                }) + MIN_INITIAL_OUTPUT_RESERVE,
+                reviewer ? "reviewer" : "worker",
+              );
+              await rememberChildRouting(request.child_task_id, routing).catch(
+                () => undefined,
+              );
+            } catch {
+              routing = null;
+            }
+          }
+          const choice = chooseChildModel(
+            options.registry,
+            routing,
+            excluded,
+            reviewer,
           );
-        } catch {
-          return {
-            model_id: fallback().id,
-            reason: "workbench free default (routing unavailable)",
-          };
-        }
-        await rememberChildRouting(request.child_task_id, routing).catch(
-          () => undefined,
-        );
-        const specialist = routing.model_id
-          ? options.registry.getModel(routing.model_id)
-          : undefined;
-        if (
-          specialist &&
-          specialist.pricing.free === true &&
-          specialist.capabilities.tools
-        )
-          return {
-            model_id: specialist.id,
-            reason: `specialist ${routing.decision_id}`,
-          };
-        return {
-          model_id: fallback().id,
-          reason: `workbench free default (${routing.outcome})`,
-        };
-      },
+          await saveTaskModels(request.task_id, {
+            models: history.models.includes(choice.model_id)
+              ? history.models
+              : [...history.models, choice.model_id],
+            verdicts:
+              choice.independent === null
+                ? history.verdicts
+                : {
+                    ...history.verdicts,
+                    [request.child_task_id]: choice.independent,
+                  },
+          }).catch(() => undefined);
+          return { model_id: choice.model_id, reason: choice.reason };
+        }),
     });
     await runner.recover();
     const tick = () => void runner?.tick().catch(() => undefined);
