@@ -1,5 +1,36 @@
 # Local coding workbench
 
+## Saved context and journal recall
+
+The local service owns one `@mars/memory` store under its private state directory.
+It does not add a model loop, transcript writer, or third-party integration.
+With read approval, new sessions receive a bounded, scope-checked snapshot of
+saved facts, labeled as untrusted evidence. Whole entries are omitted rather than
+truncating the user's request, exceeding the runtime instruction limit, or
+consuming the serialized-request room the model bridge reserves against the
+selected model's context window and the task token budget (system prompt,
+declared tools, instruction, slack and a minimum output reserve). The
+exact scope, revision, frozen text and digest are saved privately with the launch;
+resume retains the original Oh My Pi conversation, not a fresh memory snapshot.
+
+After a runtime outcome, the host projects records supplied by the authoritative
+Oh My Pi SessionManager into the derived journal index. The memory adapter never
+receives a journal path. The read-only `mars_history` tool returns up to five
+bounded excerpts with session/entry citations from the authenticated scope; each
+excerpt is positioned around the earliest matched query term and reports
+whether text was cut before or after it.
+Results are live keyword matches, not semantic search or verified facts. Without
+read approval, neither saved facts nor the history tool are provided. Projection
+failures produce a sanitized task event without changing a completed coding
+outcome into failure.
+
+This does not expose memory mutation, profile deletion, dataset registration or
+automatic fact acceptance to models or RPC clients. Those still require separate
+host-side provenance and approval controls. Stores in different workbench state
+directories do not share recall. Deleting memory does not rewrite existing Oh My
+Pi journals, frozen launch context, or already-running model context. Format-1
+memory stores are rejected without modification; no automatic migration exists.
+
 The development service composes the durable task store, concrete isolated workspace provider, existing model registry and Oh My Pi host adapter behind authenticated loopback RPC. Oh My Pi owns the only model/tool/session loop and original conversation journal. The task store owns lifecycle state, events and immutable artifacts. The provider owns the private filesystem copy, diffs and transactional checkpoints.
 
 ## Start and connect

@@ -15,6 +15,7 @@ import {
   EXECUTION_PACKAGE_VERSION,
   MAX_RUNTIME_INSTRUCTION_LENGTH,
   openRuntimeSession,
+  optionalInstructionCapacity,
   type RuntimeObservation,
   type RuntimeOutcome,
   type RuntimeSession,
@@ -25,6 +26,14 @@ import {
 import type { ModelProviderRegistry } from "@mars/providers";
 import type { DurableTaskStore } from "@mars/tasks";
 import { z } from "zod";
+import {
+  FrozenMemorySchema,
+  freezeMemory,
+  recallHistory,
+  validateFrozenMemory,
+  type WorkbenchMemory,
+  withFrozenMemory,
+} from "./memory-context";
 import {
   type Approvals,
   ApprovalsSchema,
@@ -43,6 +52,7 @@ const launchSchema = z
     approvals: ApprovalsSchema,
     workspace: WorkspaceRefSchema,
     cwd: z.string().min(1).refine(isAbsolute),
+    memory: FrozenMemorySchema.optional(),
   })
   .strict();
 type Launch = z.infer<typeof launchSchema>;
@@ -61,6 +71,8 @@ export interface WorkbenchHostOptions {
   workspace: WorkspaceHost;
   registry: ModelProviderRegistry;
   canExecute: boolean;
+  memory?: WorkbenchMemory;
+  hostPrivateRoots?: string[];
   runtimeFactory?: (options: RuntimeSessionOptions) => Promise<RuntimeSession>;
 }
 
@@ -123,6 +135,12 @@ export async function createWorkbenchHost(
       throw new WorkbenchError("forbidden");
   };
   const runtimeFactory = options.runtimeFactory ?? openRuntimeSession;
+  const historyFor = (context: RequestContext) => {
+    const memory = options.memory;
+    return memory
+      ? { recall: (query: string) => recallHistory(memory, context, query) }
+      : {};
+  };
   const selectModel = (approvals: Approvals, modelId?: string) => {
     try {
       return selectExecutionModel(
@@ -146,9 +164,18 @@ export async function createWorkbenchHost(
     );
     try {
       const info = await file.stat();
-      if (!info.isFile() || (info.mode & 0o077) !== 0 || info.size > 16_384)
+      if (!info.isFile() || (info.mode & 0o077) !== 0 || info.size > 128 * 1024)
         throw new WorkbenchError("internal_error");
       const value = launchSchema.parse(JSON.parse(await file.readFile("utf8")));
+      if (value.memory) {
+        validateFrozenMemory(value.memory);
+        if (
+          value.memory.scope.owner_id !== task.scope.owner_id ||
+          value.memory.scope.project_id !== task.scope.project_id ||
+          value.memory.scope.workspace_id !== task.scope.workspace_id
+        )
+          throw new WorkbenchError("internal_error");
+      }
       if (
         value.task_id !== task.task_id ||
         value.scope.owner_id !== task.scope.owner_id ||
@@ -184,7 +211,7 @@ export async function createWorkbenchHost(
     context: RequestContext,
     taskId: string,
   ): Promise<string[]> => {
-    const patterns = new Set([root]);
+    const patterns = new Set([root, ...(options.hostPrivateRoots ?? [])]);
     const task = await options.store.inspect(context, taskId);
     const binding = await options.store.upstreamSession(context, taskId);
     if (binding) {
@@ -378,6 +405,25 @@ export async function createWorkbenchHost(
     const job = (async () => {
       try {
         const outcome = await runtime.run(instruction);
+        if (options.memory) {
+          const context = internalContext(options.scope);
+          try {
+            const journal = runtime.journalSnapshot();
+            if (journal.session_id !== runtime.sessionId)
+              throw new Error("Invalid runtime journal binding.");
+            await options.memory.indexJournal(context, journal);
+          } catch {
+            await options.store
+              .appendEvent(context, task.task_id, {
+                event_type: "tool.completed",
+                producer: "@mars/workbench",
+                run_id: runtime.sessionId,
+                versions: [{ component: "@mars/workbench", revision: "0.0.1" }],
+                payload: { operation: "memory.index", status: "unavailable" },
+              })
+              .catch(() => undefined);
+          }
+        }
         await publishResult(
           task,
           runtime,
@@ -528,10 +574,31 @@ export async function createWorkbenchHost(
         throw new WorkbenchError("conflict");
       if (params.approvals.execute && !options.canExecute)
         throw new WorkbenchError("forbidden");
-      const instruction = `${task.request}\n\nAcceptance criteria:\n${task.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
-      if (instruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH)
+      const baseInstruction = `${task.request}\n\nAcceptance criteria:\n${task.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
+      if (baseInstruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH)
         throw new WorkbenchError("too_large");
       const model = selectModel(params.approvals, params.model_id);
+      const capacity = optionalInstructionCapacity({
+        model,
+        budget: task.budget,
+        approvals: params.approvals,
+        recall: Boolean(options.memory),
+        instruction: baseInstruction,
+      });
+      let memory: z.infer<typeof FrozenMemorySchema> | undefined;
+      if (options.memory && params.approvals.read) {
+        try {
+          memory = freezeMemory(
+            context,
+            await options.memory.snapshot(context),
+            baseInstruction,
+            capacity,
+          );
+        } catch {
+          throw new WorkbenchError("unavailable");
+        }
+      }
+      const instruction = withFrozenMemory(baseInstruction, memory);
       const running = await options.store.update(
         context,
         task.task_id,
@@ -558,6 +625,7 @@ export async function createWorkbenchHost(
           modelId: model.id,
           approvals: params.approvals,
           tools: toolsFor(running, workspace, params.approvals),
+          ...(params.approvals.read ? historyFor(context) : {}),
           onEvent: async (event) => {
             if (!bound) {
               if (initialObservations.length >= 1000)
@@ -577,6 +645,7 @@ export async function createWorkbenchHost(
           model_id: runtime.modelId,
           approvals: params.approvals,
           workspace: WorkspaceRefSchema.parse(workspace),
+          ...(memory ? { memory } : {}),
         });
         await options.store.bindUpstreamSession(
           internalContext(options.scope),
@@ -658,6 +727,7 @@ export async function createWorkbenchHost(
           modelId: launch.model_id,
           approvals: launch.approvals,
           tools: toolsFor(running, workspace, launch.approvals),
+          ...(launch.approvals.read ? historyFor(context) : {}),
           onEvent: observe(taskId),
         });
         if (closing) throw new WorkbenchError("unavailable");

@@ -131,6 +131,7 @@
       "dependencies": {
         "@mars/contracts": "workspace:*",
         "@mars/execution": "workspace:*",
+        "@mars/memory": "workspace:*",
         "@mars/providers": "workspace:*",
         "@mars/tasks": "workspace:*",
         "@mars/workspaces": "workspace:*",

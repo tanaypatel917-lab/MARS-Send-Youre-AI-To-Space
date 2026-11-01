@@ -1,18 +1,21 @@
 import { afterEach, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RequestContext, Task, WorkspaceRef } from "@mars/contracts";
 import {
   MAX_RUNTIME_INSTRUCTION_LENGTH,
+  optionalInstructionCapacity,
   type RuntimeOutcome,
   type RuntimeSessionOptions,
 } from "@mars/execution";
+import { createMemoryStore } from "@mars/memory";
 import type { ModelProviderRegistry } from "@mars/providers";
 import { loadModelRegistry } from "@mars/providers";
 import { createTaskStore } from "@mars/tasks";
 import { createWorkbenchHost, type WorkspaceHost } from "./host";
+import type { WorkbenchMemory } from "./memory-context";
 
 const scope = {
   owner_id: "owner",
@@ -33,7 +36,7 @@ const task = (taskId = "task"): Task => ({
   request: "Write a fixture",
   acceptance_criteria: ["Source checkout remains unchanged"],
   budget: {
-    max_tokens: 1000,
+    max_tokens: 64_000,
     max_usd: 0,
     max_duration_ms: 1000,
     max_depth: 1,
@@ -160,7 +163,10 @@ async function fixture() {
     home: root,
     env: { FIXTURE_KEY: "dummy-not-live" },
   });
-  const makeHost = (modelRegistry: ModelProviderRegistry = registry) =>
+  const makeHost = (
+    modelRegistry: ModelProviderRegistry = registry,
+    memory?: WorkbenchMemory,
+  ) =>
     createWorkbenchHost({
       scope,
       workspaceLabel: "fixture",
@@ -169,6 +175,7 @@ async function fixture() {
       workspace,
       registry: modelRegistry,
       canExecute: false,
+      ...(memory ? { memory } : {}),
       async runtimeFactory(options) {
         const outcome = deferred<RuntimeOutcome>();
         const disposed = deferred<void>();
@@ -199,6 +206,7 @@ async function fixture() {
         });
         return {
           sessionId: "upstream",
+          journalSnapshot: () => ({ session_id: "upstream", entries: [] }),
           modelId: options.modelId ?? "fixture/free",
           journalPath:
             options.sessionFile ?? join(options.stateDir, "session.jsonl"),
@@ -266,6 +274,215 @@ test("host persists launch metadata, runs only through the runtime and publishes
     (await api.artifact(context(), "task", required(completed.artifacts[0])))
       .data_base64,
   ).toBe(Buffer.from("fixture result").toString("base64"));
+});
+
+test("memory is frozen privately once; resume does not replace it with later facts", async () => {
+  const f = await fixture();
+  const memory = createMemoryStore({ rootDir: join(f.root, "memory") });
+  cleanup.push(() => memory.close());
+  await memory.batch(context(), 0, [
+    {
+      operation: "add",
+      entry: {
+        entry_id: "fact",
+        scope,
+        target: "project",
+        fact: "original verifier",
+        revision: 0,
+        source_event_ids: [],
+        observed_at: "2026-01-01T00:00:00Z",
+        verified_at: null,
+        supersedes: null,
+        deleted: false,
+      },
+    },
+  ]);
+  const api = await f.makeHost(undefined, memory);
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  const first = required(f.sessions[0]);
+  expect(first.instructions[0]).toContain("original verifier");
+  const file = join(first.options.stateDir, "launch.json");
+  const frozen = JSON.parse(await readFile(file, "utf8")).memory;
+  expect(frozen.scope).toEqual(scope);
+  expect(frozen.revision).toBe(1);
+  first.finish("paused");
+  await first.disposed;
+  await memory.batch(context(), 1, [
+    {
+      operation: "patch",
+      entry_id: "fact",
+      fact: "later replacement",
+      source_event_ids: [],
+    },
+  ]);
+  const paused = await api.inspect(context(), "task");
+  await api.resume(context(), "task", paused.revision);
+  expect(JSON.parse(await readFile(file, "utf8")).memory).toEqual(frozen);
+  expect(required(f.sessions[1]).instructions[0]).not.toContain(
+    "later replacement",
+  );
+  required(f.sessions[1]).finish("completed");
+  await required(f.sessions[1]).disposed;
+  await api.close();
+});
+
+test("saved facts are omitted rather than exhausting a small model context", async () => {
+  const f = await fixture();
+  await writeFile(
+    join(f.root, ".mars", "models.json"),
+    JSON.stringify({
+      version: 1,
+      providers: [
+        {
+          id: "fixture",
+          kind: "openai-compatible",
+          baseUrl: "https://fixture.invalid/v1",
+          apiKeyEnv: "FIXTURE_KEY",
+        },
+      ],
+      models: [
+        {
+          id: "fixture/small",
+          providerId: "fixture",
+          model: "fixture",
+          capabilities: { tools: true, vision: false, contextWindow: 8192 },
+          pricing: { free: true },
+        },
+      ],
+      routes: { default: ["fixture/small"] },
+    }),
+  );
+  const small = await loadModelRegistry({
+    cwd: f.root,
+    home: f.root,
+    env: { FIXTURE_KEY: "dummy-not-live" },
+  });
+  const memory = createMemoryStore({ rootDir: join(f.root, "memory") });
+  cleanup.push(() => memory.close());
+  await memory.batch(context(), 0, [
+    {
+      operation: "add",
+      entry: {
+        entry_id: "fact",
+        scope,
+        target: "project",
+        fact: `verifier note ${"m".repeat(1500)}`,
+        revision: 0,
+        source_event_ids: [],
+        observed_at: "2026-01-01T00:00:00Z",
+        verified_at: null,
+        supersedes: null,
+        deleted: false,
+      },
+    },
+  ]);
+  const api = await f.makeHost(small, memory);
+  const input = task();
+  input.request = "r".repeat(4000);
+  await api.create(context(), input);
+  const running = await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  expect(running.status).toBe("running");
+  const session = required(f.sessions[0]);
+  const instruction = required(session.instructions[0]);
+  expect(instruction).not.toContain("verifier note");
+  const capacity = optionalInstructionCapacity({
+    model: required(small.getModel("fixture/small")),
+    budget: input.budget,
+    approvals: { read: true, write: false, execute: false },
+    recall: true,
+    instruction,
+  });
+  expect(capacity).toBeGreaterThan(0);
+  expect(capacity).toBeLessThan(1700);
+  const launch = JSON.parse(
+    await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+  );
+  expect(launch.memory.text).toBe("");
+  expect(launch.memory.omitted_entries).toBe(1);
+  session.finish("completed");
+  await session.disposed;
+  await api.close();
+});
+
+test("read denial disables saved context and recall; index failure is a sanitized non-fatal projection event", async () => {
+  const f = await fixture();
+  const memory: WorkbenchMemory = {
+    snapshot: async () => {
+      throw new Error("Must not retrieve without approval");
+    },
+    searchHistory: async () => {
+      throw new Error("Must not recall without approval");
+    },
+    indexJournal: async () => {
+      throw new Error("PRIVATE_HOST_MARKER");
+    },
+  };
+  const api = await f.makeHost(undefined, memory);
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: false, write: false, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  expect(session.options.recall).toBeUndefined();
+  expect(session.instructions[0]).not.toContain("Saved context");
+  session.finish("completed");
+  await session.disposed;
+  expect((await api.inspect(context(), "task")).status).toBe("completed");
+  const payloads: string[] = [];
+  for await (const event of f.store.events(context(), "task"))
+    payloads.push(
+      new TextDecoder().decode(
+        await f.store.artifacts.get(context(), event.payload),
+      ),
+    );
+  expect(payloads.join("\n")).toContain('"operation":"memory.index"');
+  expect(payloads.join("\n")).not.toContain("PRIVATE_HOST_MARKER");
+  await api.close();
+});
+
+test("an unavailable memory diagnostic sink cannot fail successful execution", async () => {
+  const f = await fixture();
+  const append = f.store.appendEvent.bind(f.store);
+  f.store.appendEvent = async (...args) => {
+    const payload = args[2].payload;
+    if (
+      payload !== null &&
+      typeof payload === "object" &&
+      "operation" in payload &&
+      payload.operation === "memory.index"
+    )
+      throw new Error("Diagnostic unavailable");
+    return append(...args);
+  };
+  const api = await f.makeHost(undefined, {
+    snapshot: async () => ({ revision: 0, entries: [] }),
+    searchHistory: async () => [],
+    indexJournal: async () => {
+      throw new Error("Projection unavailable");
+    },
+  });
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: false, write: false, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  session.finish("completed");
+  await session.disposed;
+  expect((await api.inspect(context(), "task")).status).toBe("completed");
+  await api.close();
 });
 
 test("missing-model setup fails before reserving a task, so it can start after configuration is fixed", async () => {
