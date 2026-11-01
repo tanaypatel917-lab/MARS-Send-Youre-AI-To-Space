@@ -2,7 +2,7 @@
 
 `@mars/vscode-client` is a native VS Code sidebar for MARS tasks. It is a **client only**: it creates, starts, steers, cancels and resumes tasks through the MARS task API, shows events, usage, diffs and artifacts, and creates/restores checkpoints. Oh My Pi (behind the MARS server) remains the only session/tool/model execution owner. The extension never calls models, runs shell commands, writes workspace files or keeps its own task history; all task truth and revisions come from the server.
 
-> Status: the MARS task server is not built yet. Until the parent integration lands, the workbench shows a disconnected state; nothing here is evidence of a working backend.
+> Status: the [local task service](../../documentation/LOCAL_WORKBENCH.md) connects this client to durable tasks, private workspaces and Oh My Pi. HTTP/SDK integration tests use injected model responses; a real VS Code window and live model remain unverified.
 
 ## Setup
 

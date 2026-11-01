@@ -131,13 +131,17 @@ async function fixture() {
     journal: string;
     resumed: string | undefined;
   }[] = [];
-  async function start(fetch: NonNullable<RuntimeSessionOptions["fetch"]>) {
+  async function start(
+    fetch: NonNullable<RuntimeSessionOptions["fetch"]>,
+    image?: string,
+  ) {
     const service = await createWorkbenchService({
       sourceRoot: source,
       stateRoot: root,
       scope,
       registry,
       port: 0,
+      ...(image ? { image } : {}),
       runtimeFactory: async (options) => {
         const session = await openRuntimeSession({ ...options, fetch });
         launches.push({
@@ -357,3 +361,84 @@ test("service refuses overlapping state/source roots and never advertises unsand
   ).rejects.toMatchObject({ code: "forbidden" });
   expect((await client.inspect(created.task_id)).status).toBe("pending");
 });
+
+test.skipIf(process.env.MARS_WORKSPACES_DOCKER_TEST !== "1")(
+  "HTTP + actual Oh My Pi runs an approved verification command in real Docker (injected model)",
+  async () => {
+    const f = await fixture();
+    let requests = 0;
+    let verified = false;
+    const image =
+      process.env.MARS_WORKSPACES_TEST_IMAGE ??
+      "mirror.gcr.io/library/busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec";
+    const { client } = await f.start(async (_url, init) => {
+      requests++;
+      if (requests < 3)
+        return sse(
+          {
+            tool_calls: [
+              {
+                index: 0,
+                id: `call-${requests}`,
+                type: "function",
+                function:
+                  requests === 1
+                    ? {
+                        name: "mars_write",
+                        arguments: JSON.stringify({
+                          path: "greet.txt",
+                          content: "Hello",
+                        }),
+                      }
+                    : {
+                        name: "mars_execute",
+                        arguments: JSON.stringify({
+                          argv: [
+                            "sh",
+                            "-c",
+                            'test "$(cat greet.txt)" = Hello && test "$(id -u)" != 0 && printf \'verified-within-container\\n\'',
+                          ],
+                        }),
+                      },
+              },
+            ],
+          },
+          "tool_calls",
+        );
+      const request = JSON.parse(String(init?.body)) as {
+        messages: { role: string; content: string }[];
+      };
+      const result = JSON.parse(
+        request.messages.findLast((message) => message.role === "tool")
+          ?.content ?? "{}",
+      );
+      expect(result.exit_code).toBe(0);
+      expect(result.stdout).toBe("verified-within-container\n");
+      expect(result.stderr).toBe("");
+      verified = true;
+      return sse({
+        content: "Created and verified greet.txt within the approved sandbox.",
+      });
+    }, image);
+    expect((await client.describe()).capabilities.execute).toBe(true);
+    const created = await client.create(task());
+    await client.start(created.task_id, {
+      expectedRevision: created.revision,
+      approvals: { read: true, write: true, execute: true },
+    });
+    await eventually(
+      () => client.inspect(created.task_id),
+      (current) => current.status === "completed",
+    );
+    expect(verified).toBe(true);
+    expect(requests).toBe(3);
+    expect(
+      await readFile(join(f.launches[0]?.cwd ?? "", "greet.txt"), "utf8"),
+    ).toBe("Hello");
+    expect(await readFile(join(f.source, "baseline.txt"), "utf8")).toBe(
+      "untouched\n",
+    );
+    expect(await Bun.file(join(f.source, "greet.txt")).exists()).toBe(false);
+  },
+  30000,
+);

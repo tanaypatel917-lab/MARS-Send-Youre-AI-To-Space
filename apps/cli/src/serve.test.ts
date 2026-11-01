@@ -75,6 +75,9 @@ test("mars serve starts without model credentials, keeps its token private and c
     child.kill("SIGTERM");
     expect(await child.exited).toBe(143);
     expect(await new Response(child.stderr).text()).toBe("");
+    expect(
+      await Bun.file(join(state, "workspaces", "provider.lock")).exists(),
+    ).toBe(false);
   } finally {
     if (timeout) clearTimeout(timeout);
     child.kill("SIGKILL");
