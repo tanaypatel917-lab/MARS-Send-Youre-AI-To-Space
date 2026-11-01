@@ -1,0 +1,48 @@
+# MARS Workbench (VS Code client)
+
+`@mars/vscode-client` is a native VS Code sidebar for MARS tasks. It is a **client only**: it creates, starts, steers, cancels and resumes tasks through the MARS task API, shows events, usage, diffs and artifacts, and creates/restores checkpoints. Oh My Pi (behind the MARS server) remains the only session/tool/model execution owner. The extension never calls models, runs shell commands, writes workspace files or keeps its own task history; all task truth and revisions come from the server.
+
+> Status: the MARS task server is not built yet. Until the parent integration lands, the workbench shows a disconnected state; nothing here is evidence of a working backend.
+
+## Setup
+
+```bash
+export PATH="$HOME/.bun/bin:$PATH"
+bun install --frozen-lockfile --ignore-scripts   # from the repository root
+cd apps/vscode
+bun run build        # dist/extension.js (Node CJS) + dist/webview.js (browser IIFE)
+bun run typecheck
+bun run test
+bun run smoke        # builds, then loads dist/extension.js in plain Node with a stub vscode module
+```
+
+Run it in VS Code: open `apps/vscode` and launch an Extension Development Host (`code --extensionDevelopmentPath=$PWD`), then open the **MARS** activity-bar view.
+
+1. Start a MARS server (default `http://127.0.0.1:7331`).
+2. Run **MARS: Set Server Token** — the token is entered in a password box and stored only in VS Code SecretStorage (`mars.serverToken`). It never reaches the webview, logs or settings.
+3. Run **MARS: Connect**.
+
+## Settings
+
+| Setting | Default | Notes |
+| --- | --- | --- |
+| `mars.serverUrl` | `http://127.0.0.1:7331` | Loopback only by default. No credentials, query or fragment. |
+| `mars.allowNonLoopbackServer` | `false` | Required for non-loopback servers, which must also use HTTPS and are confirmed once per origin per session. |
+| `mars.modelId` | empty | Optional model id sent with `tasks.start`; empty uses the server's free-cloud default. Paid models are governed only by server policy. |
+| `mars.requestTimeoutMs` | `15000` | Per-request timeout. |
+
+Commands: `mars.connect`, `mars.setToken`, `mars.clearToken`, `mars.newTask`, `mars.refresh`, `mars.cancelTask`.
+
+## Protocol
+
+`POST {serverUrl}/v1/rpc` with `Authorization: Bearer <token>`, body `{method, context, params}`, response `{result}` or `{error:{code,message}}`. `workbench.describe` is sent with `params:{}` and no context; every other call carries `{schema_version:1, scope:<server scope>, request_id:<fresh uuid>}`. Methods: `tasks.create|list|inspect|start|resume|steer|cancel|events|artifact|diff|checkpoint|restore` (see `src/client.ts`). All responses are validated with `@mars/contracts` schemas plus `src/protocol.ts`; anything unexpected is an error. Error codes `conflict`/`revision_conflict` (or HTTP 409) are treated as revision conflicts and trigger a reload of server state.
+
+## Safety model
+
+- Webview: strict CSP (`default-src 'none'`, nonce script, no connect/frame/form), no command URIs, no forms, DOM built with `textContent` only. Messages from the webview are validated with a strict schema (`src/messages.ts`).
+- Start, resume, cancel and restore require native modal confirmation; restore shows the exact workspace and checkpoint ids and revisions. Execute approval defaults to off and is disabled when the server does not offer execution.
+- Native diffs open only for server paths that pass `checkRelativePath` and resolve (following symlinks) inside the single open workspace folder named by `workbench.describe.workspaceLabel`; otherwise a read-only patch is shown, and unsafe paths are refused.
+- Artifacts are verified against their `ArtifactRef` (SHA-256, byte length, media type) before display.
+- Event polling uses one reader per selected task, advances `after_event_id`, backs off exponentially (bounded) and is disposed on task switch and view close.
+
+UX patterns (task list, timeline, per-file diff, checkpoint restore) are adapted from Cline as a reference only; no Cline code or assets are included.
