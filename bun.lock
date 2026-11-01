@@ -67,6 +67,15 @@
         "@mars/contracts": "workspace:*",
       },
     },
+    "packages/research": {
+      "name": "@mars/research",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "@mars/tasks": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
     "packages/tasks": {
       "name": "@mars/tasks",
       "version": "0.0.1",
@@ -194,6 +203,8 @@
     "@mars/integration-trust": ["@mars/integration-trust@workspace:packages/integration-trust"],
 
     "@mars/providers": ["@mars/providers@workspace:packages/providers"],
+
+    "@mars/research": ["@mars/research@workspace:packages/research"],
 
     "@mars/tasks": ["@mars/tasks@workspace:packages/tasks"],
 
