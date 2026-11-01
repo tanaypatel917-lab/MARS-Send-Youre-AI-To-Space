@@ -67,6 +67,17 @@
         "@mars/contracts": "workspace:*",
       },
     },
+    "packages/specialists": {
+      "name": "@mars/specialists",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
+      },
+      "devDependencies": {
+        "@mars/providers": "workspace:*",
+      },
+    },
     "packages/tasks": {
       "name": "@mars/tasks",
       "version": "0.0.1",
@@ -194,6 +205,8 @@
     "@mars/integration-trust": ["@mars/integration-trust@workspace:packages/integration-trust"],
 
     "@mars/providers": ["@mars/providers@workspace:packages/providers"],
+
+    "@mars/specialists": ["@mars/specialists@workspace:packages/specialists"],
 
     "@mars/tasks": ["@mars/tasks@workspace:packages/tasks"],
 
