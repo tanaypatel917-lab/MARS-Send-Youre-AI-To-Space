@@ -18,8 +18,8 @@ bun run smoke        # builds, then loads dist/extension.js in plain Node with a
 
 Run it in VS Code: open `apps/vscode` and launch an Extension Development Host (`code --extensionDevelopmentPath=$PWD`), then open the **MARS** activity-bar view.
 
-1. Start a MARS server (default `http://127.0.0.1:7331`).
-2. Run **MARS: Set Server Token** — the token is entered in a password box and stored only in VS Code SecretStorage (`mars.serverToken`). It never reaches the webview, logs or settings.
+1. Start a local server with `mars serve`. It never prints the token; it writes a mode-0600 `connection.json` (`{schema_version:1, url, token, scope:{owner_id, project_id}}`).
+2. Run **MARS: Import local connection file** and pick that file. The file must be ≤16 KiB with exactly those keys, a `[A-Za-z0-9_-]{32,256}` token, and a root `http://` loopback URL (no path, credentials, query or fragment); on POSIX it must not be group/other accessible. The token goes only to VS Code SecretStorage (`mars.serverToken`) and the URL only to the **user** (global) `mars.serverUrl`; replacing an existing URL or token asks first. Alternatively run **MARS: Set Server Token** to paste a token into a password box. Tokens never reach the webview, logs, errors or settings.
 3. Run **MARS: Connect**.
 
 ## Settings
@@ -31,7 +31,7 @@ Run it in VS Code: open `apps/vscode` and launch an Extension Development Host (
 | `mars.modelId` | empty | Optional model id sent with `tasks.start`; empty uses the server's free-cloud default. Paid models are governed only by server policy. |
 | `mars.requestTimeoutMs` | `15000` | Per-request timeout. |
 
-Commands: `mars.connect`, `mars.setToken`, `mars.clearToken`, `mars.newTask`, `mars.refresh`, `mars.cancelTask`.
+Commands: `mars.connect`, `mars.importConnection`, `mars.setToken`, `mars.clearToken`, `mars.newTask`, `mars.refresh`, `mars.cancelTask`.
 
 ## Protocol
 
