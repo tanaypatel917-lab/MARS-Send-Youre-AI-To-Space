@@ -1,0 +1,12 @@
+{
+  "name": "@mars/research",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@mars/contracts": "workspace:*",
+    "@mars/tasks": "workspace:*",
+    "zod": "3.25.76"
+  }
+}
