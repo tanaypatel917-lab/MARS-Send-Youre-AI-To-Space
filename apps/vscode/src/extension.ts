@@ -3,6 +3,7 @@ import { readFile, realpath } from "node:fs/promises";
 import { basename } from "node:path";
 import * as vscode from "vscode";
 import { MarsClient, type VerifiedArtifact } from "./client";
+import { importConnection, readConnectionFile } from "./connectionFile";
 import {
   type ConnectResult,
   WorkbenchController,
@@ -152,7 +153,8 @@ class WorkbenchViewProvider
       return {
         ok: false,
         status: "no-token",
-        message: "Set a MARS server token to connect.",
+        message:
+          "Import a local connection file or set a MARS server token to connect.",
       };
     const transport = new HttpRpcTransport({
       rpcUrl: endpoint.rpcUrl,
@@ -225,11 +227,56 @@ class WorkbenchViewProvider
   }
 }
 
+async function importLocalConnection(
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  const outcome = await importConnection({
+    pickFile: async () => {
+      const picked = await vscode.window.showOpenDialog({
+        title: "Import MARS connection file",
+        openLabel: "Import",
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: { "MARS connection": ["json"] },
+      });
+      const uri = picked?.[0];
+      return uri?.scheme === "file" ? uri.fsPath : undefined;
+    },
+    readFile: (fsPath) => readConnectionFile(fsPath),
+    globalServerUrl: () =>
+      vscode.workspace.getConfiguration("mars").inspect<string>("serverUrl")
+        ?.globalValue,
+    getToken: () => Promise.resolve(context.secrets.get(TOKEN_KEY)),
+    storeToken: (token) =>
+      Promise.resolve(context.secrets.store(TOKEN_KEY, token)),
+    deleteToken: () => Promise.resolve(context.secrets.delete(TOKEN_KEY)),
+    storeGlobalServerUrl: (url) =>
+      Promise.resolve(
+        vscode.workspace
+          .getConfiguration("mars")
+          .update("serverUrl", url, vscode.ConfigurationTarget.Global),
+      ),
+    confirm: async (message, detail, action) =>
+      (await vscode.window.showWarningMessage(
+        message,
+        { modal: true, detail },
+        action,
+      )) === action,
+  });
+  if (outcome.status === "imported")
+    void vscode.window.showInformationMessage(
+      `MARS connection imported for ${outcome.url} (project ${outcome.scope.project_id}).`,
+    );
+  else if (outcome.status !== "cancelled")
+    void vscode.window.showErrorMessage(outcome.reason);
+}
+
 async function promptForToken(context: vscode.ExtensionContext): Promise<void> {
   const token = await vscode.window.showInputBox({
     title: "MARS server token",
     prompt:
-      "Paste the bearer token printed by your MARS task server. It is stored in VS Code Secret Storage.",
+      "Paste your MARS server bearer token, or cancel and run 'MARS: Import local connection file' for a local `mars serve`. It is stored only in VS Code Secret Storage.",
     password: true,
     ignoreFocusOut: true,
     validateInput: (value) =>
@@ -255,6 +302,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("mars.setToken", async () => {
       await promptForToken(context);
     }),
+    vscode.commands.registerCommand("mars.importConnection", () =>
+      importLocalConnection(context),
+    ),
     vscode.commands.registerCommand("mars.clearToken", async () => {
       await context.secrets.delete(TOKEN_KEY);
     }),
