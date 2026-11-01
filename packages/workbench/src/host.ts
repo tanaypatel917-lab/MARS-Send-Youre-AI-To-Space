@@ -76,6 +76,11 @@ import {
   validateFrozenRepositoryMap,
   withFrozenRepositoryMap,
 } from "./repository-context";
+import {
+  researchTools,
+  staleTaskResearch,
+  type WorkbenchResearch,
+} from "./research-context";
 import { WorkbenchError, type WorkbenchOperations } from "./server";
 import {
   type FrozenRouting,
@@ -90,6 +95,7 @@ const launchSchema = z
     task_id: z.string().min(1),
     scope: ScopeSchema,
     model_id: z.string().min(1),
+    deadline: z.number().int().positive().optional(),
     approvals: ApprovalsSchema,
     workspace: WorkspaceRefSchema,
     cwd: z.string().min(1).refine(isAbsolute),
@@ -126,6 +132,7 @@ export interface WorkbenchHostOptions {
   repositoryMap?: Pick<RepositoryMapProvider, "map">;
   specialists?: WorkbenchSpecialists;
   collaboration?: WorkbenchCollaboration;
+  research?: WorkbenchResearch;
   hostPrivateRoots?: string[];
   runtimeFactory?: (options: RuntimeSessionOptions) => Promise<RuntimeSession>;
 }
@@ -240,7 +247,38 @@ export async function createWorkbenchHost(
   // Room tools are always declared for a collaboration session, so the model
   // must support tools even when no file approval is granted.
   const toolsRequired = (approvals: Approvals, collaboration: boolean) =>
-    collaboration || Object.values(approvals).some(Boolean);
+    collaboration ||
+    Boolean(options.research) ||
+    Object.values(approvals).some(Boolean);
+  // Research tools are host-bound: requests carry the task's current durable
+  // revision and budget, and findings return as rendered untrusted text.
+  const researchFor = (taskId: string, deadline: () => number) => {
+    const research = options.research;
+    if (!research) return {};
+    const context = () => internalContext(options.scope);
+    return {
+      research: researchTools(
+        research,
+        context,
+        () => options.store.inspect(context(), taskId),
+        deadline,
+      ),
+    };
+  };
+  const staleResearch = async (taskId: string) => {
+    if (!options.research) return;
+    await staleTaskResearch(
+      options.research,
+      internalContext(options.scope),
+      taskId,
+    ).catch(() => undefined);
+  };
+  const reconcileResearch = async (taskId: string) => {
+    if (!options.research) return;
+    await options.research
+      .reconcileTask(internalContext(options.scope), taskId)
+      .catch(() => undefined);
+  };
   const selectModel = (modelId: string | undefined, needsTools: boolean) => {
     try {
       return selectExecutionModel(options.registry, modelId, needsTools);
@@ -850,6 +888,7 @@ export async function createWorkbenchHost(
         });
         if (status !== "paused")
           await closeRoom(status === "cancelled" ? "cancel" : "drain");
+        await reconcileResearch(task.task_id);
       } catch {
         await closeRoom("cancel");
         const context = internalContext(options.scope);
@@ -862,6 +901,7 @@ export async function createWorkbenchHost(
               status: "failed",
             })
             .catch(() => undefined);
+        await reconcileResearch(task.task_id);
       } finally {
         await runtime.dispose().catch(() => undefined);
         if (active.get(task.task_id) === runtime) {
@@ -1219,6 +1259,7 @@ export async function createWorkbenchHost(
               recall: Boolean(options.memory),
               collaboration: Boolean(options.collaboration),
               delegation: Boolean(delegation),
+              research: Boolean(options.research),
               instruction: baseInstruction,
             }) + MIN_INITIAL_OUTPUT_RESERVE,
           );
@@ -1237,6 +1278,7 @@ export async function createWorkbenchHost(
         recall: Boolean(options.memory),
         collaboration: Boolean(options.collaboration),
         delegation: Boolean(delegation),
+        research: Boolean(options.research),
         instruction: baseInstruction,
       });
       let memory: z.infer<typeof FrozenMemorySchema> | undefined;
@@ -1267,6 +1309,9 @@ export async function createWorkbenchHost(
             : {}),
         },
       );
+      // Research deadlines follow the runtime ledger, whose clock starts when
+      // the session opens, not when the task was marked running.
+      let launchDeadline = Date.now() + running.budget.max_duration_ms;
       let collaboration: FrozenCollaboration | undefined;
       if (options.collaboration) {
         try {
@@ -1308,6 +1353,7 @@ export async function createWorkbenchHost(
               status: "failed",
             })
             .catch(() => undefined);
+          await reconcileResearch(task.task_id);
           throw new WorkbenchError("unavailable");
         }
       }
@@ -1383,6 +1429,7 @@ export async function createWorkbenchHost(
               )
             : {}),
           ...(params.approvals.read ? historyFor(context) : {}),
+          ...researchFor(task.task_id, () => launchDeadline),
           onEvent: async (event) => {
             if (!bound) {
               if (initialObservations.length >= 1000)
@@ -1393,6 +1440,7 @@ export async function createWorkbenchHost(
             await persistObservation(event);
           },
         });
+        launchDeadline = Date.now() + running.budget.max_duration_ms;
         if (closing) throw new WorkbenchError("unavailable");
         await writeLaunch(task, {
           schema_version: 1,
@@ -1400,6 +1448,7 @@ export async function createWorkbenchHost(
           scope: task.scope,
           cwd,
           model_id: runtime.modelId,
+          deadline: launchDeadline,
           approvals: params.approvals,
           workspace: WorkspaceRefSchema.parse(workspace),
           ...(memory ? { memory } : {}),
@@ -1439,6 +1488,7 @@ export async function createWorkbenchHost(
               { status: "failed" },
             )
             .catch(() => undefined);
+        await reconcileResearch(task.task_id);
         throw error;
       }
     },
@@ -1506,6 +1556,10 @@ export async function createWorkbenchHost(
               )
             : {}),
           ...(launch.approvals.read ? historyFor(context) : {}),
+          ...researchFor(
+            task.task_id,
+            () => launch.deadline ?? Date.now() + task.budget.max_duration_ms,
+          ),
           onEvent: observe(taskId),
         });
         if (closing) throw new WorkbenchError("unavailable");
@@ -1546,6 +1600,8 @@ export async function createWorkbenchHost(
         throw new WorkbenchError("conflict");
       await options.store.steer(context, taskId, instruction);
       await reviseRecordedRoom(await options.store.inspect(context, taskId));
+      await staleResearch(taskId);
+      await reconcileResearch(taskId);
       if (task.status === "running") await runtime?.steer(instruction);
     },
     async cancel(context, taskId) {
@@ -1556,6 +1612,7 @@ export async function createWorkbenchHost(
       await options.store.cancel(context, taskId);
       await active.get(taskId)?.cancel();
       await closeRecordedRoom(task, "cancel");
+      await reconcileResearch(taskId);
     },
     async events(context, taskId, cursor) {
       checkContext(context);
