@@ -16,6 +16,7 @@ import {
   openRuntimeSession,
   type RuntimeSessionOptions,
 } from "@mars/execution";
+import { createMemoryStore } from "@mars/memory";
 import { loadModelRegistry } from "@mars/providers";
 import { MarsClient } from "../../../apps/vscode/src/client";
 import { HttpRpcTransport } from "../../../apps/vscode/src/rpc";
@@ -211,6 +212,112 @@ test("HTTP reports actionable model setup errors and the same pending task start
   expect(completed.status).toBe("completed");
   expect(requests).toBe(1);
   expect(f.launches).toHaveLength(1);
+});
+
+test("actual SDK projects its own journal and recalls bounded scoped history after service restart", async () => {
+  const f = await fixture();
+  const context = {
+    schema_version: 1 as const,
+    scope,
+    request_id: randomUUID(),
+  };
+  let memory = createMemoryStore({
+    rootDir: join(f.root, "memory"),
+    hostPrivateRoots: [f.root, f.source],
+  });
+  await memory.batch(context, 0, [
+    {
+      operation: "add",
+      entry: {
+        entry_id: "verified-fact",
+        scope,
+        target: "project",
+        fact: "Use ExistingVerifier for checks.",
+        revision: 0,
+        source_event_ids: [],
+        observed_at: "2026-01-01T00:00:00Z",
+        verified_at: null,
+        supersedes: null,
+        deleted: false,
+      },
+    },
+  ]);
+  await memory.close();
+  const requests: Record<string, unknown>[] = [];
+  const fetch = async (_url: string, init?: RequestInit) => {
+    requests.push(JSON.parse(String(init?.body)));
+    if (requests.length === 1)
+      return sse({ content: "RecallMarker records the verifier outcome." });
+    if (requests.length === 2)
+      return sse(
+        {
+          tool_calls: [
+            {
+              index: 0,
+              id: "history-call",
+              type: "function",
+              function: {
+                name: "mars_history",
+                arguments: JSON.stringify({ query: "RecallMarker" }),
+              },
+            },
+          ],
+        },
+        "tool_calls",
+      );
+    return sse({ content: "Used the earlier verified journal reference." });
+  };
+  let { client, service } = await f.start(fetch);
+  const first = await client.create(task());
+  await client.start(first.task_id, {
+    expectedRevision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  await eventually(
+    () => client.inspect(first.task_id),
+    (t) => t.status === "completed",
+  );
+  expect(JSON.stringify(requests[0])).toContain("ExistingVerifier");
+  expect(JSON.stringify(requests[0])).toContain("mars_history");
+  await service.close();
+  memory = createMemoryStore({
+    rootDir: join(f.root, "memory"),
+    hostPrivateRoots: [f.root, f.source],
+  });
+  const hits = await memory.searchHistory(context, "RecallMarker");
+  expect(hits).toHaveLength(1);
+  expect(hits[0]?.source.session_id).toBeDefined();
+  expect(JSON.stringify(hits)).not.toContain(f.source);
+  expect(
+    await memory.searchHistory(
+      { ...context, scope: { ...scope, project_id: "foreign" } },
+      "RecallMarker",
+    ),
+  ).toEqual([]);
+  expect(
+    await memory.searchHistory(
+      { ...context, scope: { ...scope, owner_id: "foreign" } },
+      "RecallMarker",
+    ),
+  ).toEqual([]);
+  await memory.close();
+  ({ client, service } = await f.start(fetch));
+  const second = await client.create(task());
+  await client.start(second.task_id, {
+    expectedRevision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  await eventually(
+    () => client.inspect(second.task_id),
+    (t) => t.status === "completed",
+  );
+  expect(requests).toHaveLength(3);
+  expect(JSON.stringify(requests[2])).toContain("RecallMarker");
+  expect(JSON.stringify(requests[2])).toContain("untrusted_evidence");
+  expect(await readFile(join(f.source, "baseline.txt"), "utf8")).toBe(
+    "untouched\n",
+  );
+  await service.close();
 });
 
 test("HTTP oversized startup returns too_large without a runtime or revision change, including after restart", async () => {

@@ -259,6 +259,24 @@ test("actual Oh My Pi owns a two-turn write-tool session through the existing pr
     expect(outcome.usage.reserved_tokens).toBeGreaterThan(0);
     expect(outcome.usage.input_tokens).toBe(100);
     const journal = await readFile(session.journalPath, "utf8");
+    const frozenJournal = session.journalSnapshot();
+    expect(frozenJournal.session_id).toBe(session.sessionId);
+    const identities = (records: unknown[]) =>
+      records.map((record) => {
+        const entry = record as { type: string; id?: string };
+        return { type: entry.type, id: entry.id };
+      });
+    expect(identities(frozenJournal.entries)).toEqual(
+      identities(
+        journal
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+          .filter((entry) => entry.type !== "title"),
+      ),
+    );
+    frozenJournal.entries.length = 0;
+    expect(session.journalSnapshot().entries.length).toBeGreaterThan(0);
     expect(journal).toContain("mars.binding");
     expect(journal).toContain("mars.budget");
     expect(journal).toContain("call_write");

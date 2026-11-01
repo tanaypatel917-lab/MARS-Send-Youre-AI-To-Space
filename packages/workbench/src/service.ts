@@ -10,6 +10,7 @@ import {
   sep,
 } from "node:path";
 import { type Scope, ScopeSchema } from "@mars/contracts";
+import { createMemoryStore, type DurableMemoryStore } from "@mars/memory";
 import { loadModelRegistry, type ModelProviderRegistry } from "@mars/providers";
 import { createTaskStore } from "@mars/tasks";
 import {
@@ -68,6 +69,13 @@ export async function createWorkbenchService(
   const info = await stat(root);
   if (!info.isDirectory() || (info.mode & 0o077) !== 0)
     throw new WorkbenchError("forbidden");
+  const memoryRoot = await canonicalPath(join(root, "memory"));
+  if (memoryRoot !== join(root, "memory"))
+    throw new WorkbenchError("forbidden");
+  await mkdir(memoryRoot, { recursive: true, mode: 0o700 });
+  const memoryInfo = await stat(memoryRoot);
+  if (!memoryInfo.isDirectory() || (memoryInfo.mode & 0o077) !== 0)
+    throw new WorkbenchError("forbidden");
   const hostRoot = join(root, "sessions");
   await mkdir(hostRoot, { recursive: true, mode: 0o700 });
   const registry =
@@ -79,14 +87,19 @@ export async function createWorkbenchService(
   const store = await createTaskStore({
     rootDir: join(root, "tasks"),
     workspaceRoots: [source],
-    hostPrivateRoots: [root],
+    hostPrivateRoots: [root, memoryRoot],
   });
   let workspace:
     | Awaited<ReturnType<typeof createLocalWorkspaceProvider>>
     | undefined;
   let host: Awaited<ReturnType<typeof createWorkbenchHost>> | undefined;
+  let memory: DurableMemoryStore | undefined;
   let server: ReturnType<typeof serveWorkbench> | undefined;
   try {
+    memory = createMemoryStore({
+      rootDir: memoryRoot,
+      hostPrivateRoots: [source, root, memoryRoot],
+    });
     const sandbox = options.image
       ? createDockerSandbox({ image: options.image })
       : undefined;
@@ -109,6 +122,8 @@ export async function createWorkbenchService(
       store,
       registry,
       canExecute: Boolean(sandbox),
+      memory,
+      hostPrivateRoots: [memoryRoot],
       workspace: {
         prepare: provider.prepare.bind(provider),
         read: provider.read.bind(provider),
@@ -155,6 +170,7 @@ export async function createWorkbenchService(
     }
     const runningHost = host;
     const runningServer = server;
+    const runningMemory = memory;
     let closing: Promise<void> | undefined;
     return {
       url,
@@ -164,6 +180,7 @@ export async function createWorkbenchService(
           const outcomes = [
             await Promise.allSettled([runningServer.stop(true)]),
             await Promise.allSettled([runningHost.close()]),
+            await Promise.allSettled([runningMemory.close()]),
             await Promise.allSettled([provider.close()]),
             await Promise.allSettled([store.close()]),
           ].flat();
@@ -177,6 +194,7 @@ export async function createWorkbenchService(
     await server?.stop(true).catch(() => undefined);
     if (host) await host.close().catch(() => undefined);
     if (workspace) await workspace.close().catch(() => undefined);
+    if (memory) await memory.close().catch(() => undefined);
     await store.close();
     throw error;
   }
