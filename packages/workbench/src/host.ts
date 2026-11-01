@@ -16,6 +16,7 @@ import {
   EXECUTION_PACKAGE_VERSION,
   MAX_RUNTIME_INSTRUCTION_LENGTH,
   openRuntimeSession,
+  optionalInstructionCapacity,
   type RuntimeObservation,
   type RuntimeOutcome,
   type RuntimeSession,
@@ -601,6 +602,13 @@ export async function createWorkbenchHost(
       if (baseInstruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH)
         throw new WorkbenchError("too_large");
       const model = selectModel(params.approvals, params.model_id);
+      const capacity = optionalInstructionCapacity({
+        model,
+        budget: task.budget,
+        approvals: params.approvals,
+        recall: Boolean(options.memory),
+        instruction: baseInstruction,
+      });
       let memory: z.infer<typeof FrozenMemorySchema> | undefined;
       if (options.memory && params.approvals.read) {
         try {
@@ -608,6 +616,7 @@ export async function createWorkbenchHost(
             context,
             await options.memory.snapshot(context),
             baseInstruction,
+            capacity,
           );
         } catch {
           throw new WorkbenchError("unavailable");

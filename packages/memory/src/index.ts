@@ -212,23 +212,27 @@ const streamKey = (entry: MemoryEntry): string =>
           ],
     ),
   );
+const STOP_WORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "is",
+  "of",
+  "to",
+  "and",
+  "or",
+  "in",
+  "for",
+]);
+
+/** Lower-cased query tokens that search/searchHistory actually require, stop words removed. */
+export const searchTerms = (query: string): string[] =>
+  (query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []).filter(
+    (t) => !STOP_WORDS.has(t),
+  );
+
 const tokens = (query: string): string =>
-  (query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])
-    .filter(
-      (t) =>
-        !new Set([
-          "a",
-          "an",
-          "the",
-          "is",
-          "of",
-          "to",
-          "and",
-          "or",
-          "in",
-          "for",
-        ]).has(t),
-    )
+  searchTerms(query)
     .map((t) => `"${t}"`)
     .join(" AND ");
 
