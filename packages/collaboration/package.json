@@ -1,0 +1,19 @@
+{
+  "name": "@mars/collaboration",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "test": "bun test src",
+    "typecheck": "tsc --noEmit -p ../../tsconfig.json",
+    "build": "bun build src/index.ts --target=bun --packages=external --outdir ../../dist/collaboration"
+  },
+  "dependencies": {
+    "@mars/contracts": "workspace:*",
+    "@mars/execution": "workspace:*",
+    "@mars/providers": "workspace:*",
+    "@oh-my-pi/pi-coding-agent": "18.14.0",
+    "zod": "3.25.76"
+  }
+}
