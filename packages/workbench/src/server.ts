@@ -44,6 +44,7 @@ export interface WorkbenchOperations {
     instruction: string,
   ): Promise<void>;
   cancel(context: RequestContext, taskId: string): Promise<void>;
+  /** Earliest events after cursor, in order; callers resume from the last returned id. */
   events(
     context: RequestContext,
     taskId: string,
@@ -110,6 +111,7 @@ export class WorkbenchError extends Error {
 
 const MAX_REQUEST_BYTES = 512 * 1024;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_EVENT_PAGE_EVENTS = 1000;
 const headers = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
@@ -118,6 +120,25 @@ const headers = {
 const taskList = z.array(TaskSchema).max(10_000);
 const eventList = z.array(EventEnvelopeSchema).max(10_000);
 const digest = (value: string) => createHash("sha256").update(value).digest();
+
+function eventPage(events: EventEnvelope[]): EventEnvelope[] {
+  if (!Array.isArray(events)) throw new WorkbenchError("internal_error");
+  const page: EventEnvelope[] = [];
+  let bytes = Buffer.byteLength('{"result":[]}');
+  for (const value of events) {
+    if (page.length >= MAX_EVENT_PAGE_EVENTS) break;
+    const event = EventEnvelopeSchema.parse(value);
+    const size =
+      Buffer.byteLength(JSON.stringify(event)) + (page.length ? 1 : 0);
+    if (bytes + size > MAX_RESPONSE_BYTES) {
+      if (page.length === 0) throw new WorkbenchError("too_large");
+      break;
+    }
+    page.push(event);
+    bytes += size;
+  }
+  return page;
+}
 
 function sameScope(a: Scope, b: Scope): boolean {
   return (
@@ -194,7 +215,7 @@ async function dispatch(
       await api.cancel(context, request.params.task_id);
       return null;
     case "tasks.events":
-      return eventList.parse(
+      return eventPage(
         await api.events(
           context,
           request.params.task_id,

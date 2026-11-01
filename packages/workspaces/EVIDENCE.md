@@ -1,8 +1,9 @@
 # Verification evidence
 
-Final verification was run after merging the latest `origin/main`. The test
-image was already available locally; no test pulled an image or contacted a
-model/provider.
+Follow-up verification covers the recovery-isolation, Docker cleanup,
+case-insensitive filtering, and text-patch changes on the feature branch after
+merging the latest `origin/main`. The test image was already available locally;
+no test pulled an image or contacted a model/provider.
 
 ## Install and lockfile
 
@@ -41,7 +42,7 @@ Command: `bun test packages/workspaces`
 
 ### Stub runner — not isolation evidence
 
-17 stub-runner tests passed, 0 failed.
+21 stub-runner tests passed, 0 failed.
 
 ### Real container
 
@@ -49,24 +50,38 @@ Five `[real container]` tests ran (none skipped) and passed, covering the
 non-root/read-only/no-network boundary, writable workspace bind mount and pids
 limit, timeout cleanup, stop cancellation, and bounded output.
 
-Package suite total: **22 passed, 0 failed, 158 expectations across 2 files**.
+One path-filter unit test also passed. Package suite total: **27 passed,
+0 failed, 220 expectations across 2 files**.
 
-Fail-closed coverage includes missing-tree operations (`discover`, `inspect`,
-`prepare`, and `workspacePath`) and corrupt metadata. Reopening with malformed
-restore-journal metadata permits provider creation but workspace operations
-reject with `IntegrityError("workspace state lost")` without mutating the tree.
+Recovery coverage includes a missing-tree workspace isolated from a healthy
+workspace, rollback of a healthy workspace's restore journal, recovery of its
+interrupted execution, staging/trash cleanup, corrupt metadata isolation,
+fail-closed `prepare()` / `discover()`, and cleanup of an empty prepare
+leftover. Text-only patch validity was verified by applying concatenated
+`diff()` output with `git apply -p1 --whitespace=nowarn` outside a repository;
+the test checks content, executable bits, additions, and deletions. The patch
+case includes newline additions/removals and a file without a trailing newline.
 
-The required second run, `bun test packages/workspaces/tests/docker.test.ts`,
-also ran all five real-container tests: **5 passed, 0 failed, 17 expectations
-across 1 file**.
+The second run, `bun test packages/workspaces/tests/docker.test.ts`, also ran
+all five real-container tests: **5 passed, 0 failed, 17 expectations across
+1 file**.
 
 ## Repository checks
 
 ```text
-bun run lint
+bunx biome check packages/workspaces
+Checked 14 files in 28ms. No fixes applied.
 ```
 
-Completed with **53 warnings and no errors**.
+It reported **0 warnings and 0 errors**.
+
+```text
+bun run lint
+$ biome check .
+Checked 90 files in 76ms. No fixes applied.
+```
+
+Completed with **0 warnings and 0 errors**.
 
 ```text
 bun run typecheck
@@ -75,15 +90,15 @@ $ tsc --noEmit
 
 Passed.
 
-The final `bun run check` completed its lint, typecheck, offline source audit,
-full test suite, smoke, and build steps:
+The final `bun run check` completed lint, typecheck, offline source audit, the
+full test suite, smoke, and build:
 
 ```text
 Validated 25 source entries, pinned URLs, master-spec hash and runtime artifact pins (offline).
-250 pass
+255 pass
 0 fail
-1069 expect() calls
-Ran 250 tests across 18 files.
+1131 expect() calls
+Ran 255 tests across 18 files.
 "model_requests": 0
 Bundled 21 modules
 ```
@@ -97,10 +112,56 @@ sha256sum documentation/MASTER_SPECIFICATION.md
 
 ## Container cleanup
 
-After tests and checks, `docker ps -a` showed only the header:
+After the final suite, `docker ps -a` showed only the header:
 
 ```text
 CONTAINER ID   IMAGE     COMMAND   CREATED   STATUS    PORTS     NAMES
 ```
 
 No `mars-ws` containers remained.
+
+## Restore rollback retention follow-up
+
+The follow-up adds a shared digest-verified rollback path for both in-process
+restore failure and startup recovery. Failure-injection coverage confirms that
+failed rollback keeps its journal and backup; failed digest validation also
+retains the aside tree. Selective cleanup removes only resolved workspace
+entries and true orphans, while healthy workspaces continue to recover.
+
+```text
+bun test packages/workspaces
+32 pass
+0 fail
+248 expect() calls
+Ran 32 tests across 2 files.
+```
+
+Five real-container tests ran and passed; the other 27 tests used stub or
+non-container fixtures. The focused startup, in-process, and tampered-backup
+failure-injection tests also passed: 3 pass, 0 fail, 22 expectations.
+
+```text
+bunx biome check packages/workspaces
+Checked 14 files in 29ms. No fixes applied.
+
+bun run lint
+Checked 90 files. No fixes applied.
+
+bun run typecheck
+tsc --noEmit
+```
+
+The final `bun run check` completed:
+
+```text
+Validated 25 source entries, pinned URLs, master-spec hash and runtime artifact pins (offline).
+260 pass
+0 fail
+1159 expect() calls
+Ran 260 tests across 18 files.
+"model_requests": 0
+Bundled 21 modules
+```
+
+The master specification SHA-256 remained
+`0e535d3d592fbad5cc9af5a4290d4b981e5ad597ffdaacf91cc6c42a5b9f80a`.

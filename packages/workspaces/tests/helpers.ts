@@ -52,7 +52,7 @@ export interface TestFixture {
 
 export type StubAction = (
   request: SandboxRunRequest,
-) => Promise<Partial<SandboxRunResult> | void>;
+) => Promise<Partial<SandboxRunResult> | undefined>;
 
 export function createStubRunner(
   action: StubAction = async () => undefined,
@@ -101,11 +101,16 @@ export async function makeFixture(
     new Uint8Array([0, 1, 255, 3]),
   );
   await writeFile(join(sourceRoot, ".env"), "DUMMY=not-a-secret\n");
+  await writeFile(join(sourceRoot, ".ENV"), "DUMMY=not-a-secret\n");
+  await writeFile(join(sourceRoot, ".ENV.EXAMPLE"), "DUMMY=example\n");
+  await writeFile(join(sourceRoot, "ID_RSA"), "dummy private key\n");
   await mkdir(join(sourceRoot, ".ssh"), { recursive: true });
   await writeFile(
     join(sourceRoot, ".ssh", "id_ed25519"),
     "dummy private key\n",
   );
+  await mkdir(join(sourceRoot, ".SSH"), { recursive: true });
+  await writeFile(join(sourceRoot, ".SSH", "ID_RSA"), "dummy private key\n");
   await mkdir(join(sourceRoot, ".config", "gcloud"), { recursive: true });
   await writeFile(
     join(sourceRoot, ".config", "gcloud", "credentials.json"),
@@ -118,6 +123,11 @@ export async function makeFixture(
   );
   await mkdir(join(sourceRoot, "nested", ".git"), { recursive: true });
   await writeFile(join(sourceRoot, "nested", ".git", "config"), "ignored\n");
+  await mkdir(join(sourceRoot, "Node_Modules", "dep"), { recursive: true });
+  await writeFile(
+    join(sourceRoot, "Node_Modules", "dep", "index.js"),
+    "ignored\n",
+  );
   const sibling = join(base, "sibling");
   await mkdir(sibling);
   await writeFile(join(sibling, "neighbor.txt"), "outside\n");
@@ -146,10 +156,12 @@ export async function makeFixture(
         "add",
         "-A",
       ],
-      { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+      { stdin: "ignore", stdout: "ignore", stderr: "pipe" },
     );
-    if ((await commit.exited) !== 0)
-      throw new Error("git add failed for fixture");
+    if ((await commit.exited) !== 0) {
+      const stderr = await new Response(commit.stderr).text();
+      throw new Error(`git add failed for fixture: ${stderr}`);
+    }
     const gitCommit = await Bun.spawn(
       [
         "git",
@@ -264,6 +276,12 @@ export async function hashDirectory(root: string): Promise<string> {
   };
   await walk(root, "");
   return hash.digest("hex");
+}
+
+export function first<T>(values: readonly T[]): T {
+  const value = values[0];
+  if (value === undefined) throw new Error("Expected at least one value");
+  return value;
 }
 
 export async function artifactText(

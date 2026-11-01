@@ -8,6 +8,8 @@ Only `POST /v1/rpc` with `Content-Type: application/json` and `Authorization: Be
 
 The frozen VS Code wire methods are:
 
+`tasks.events` returns the earliest ordered prefix after `after_event_id`, capped at 1,000 events and the 4 MiB serialized response limit (including UTF-8 metadata and the result envelope). Continue from the last returned `event_id` until an empty batch. Injected operations must preserve ordering and should page their storage reads too; the transport also bounds callbacks that return an entire backlog. An individual oversized event fails with 413, never silently skipped. Other oversized results still fail with 413.
+
 ```text
 workbench.describe
 tasks.create / tasks.list / tasks.inspect

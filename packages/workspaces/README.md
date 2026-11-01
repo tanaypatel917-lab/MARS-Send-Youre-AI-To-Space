@@ -58,6 +58,12 @@ provider.close(): Promise<void>;
 
 `workspacePath()` is a **host-only integration seam**. It validates workspace ownership and returns the real path to the private workspace tree, suitable for passing as `cwd` to the execution runtime's `openRuntimeSession`. Never send this path over RPC or expose it to a model. It is not the source tree or provider metadata.
 
+The lookup is serialized with workspace operations and fails with
+`IntegrityError` while restore recovery is pending.
+
+On normal Docker CLI exit, the runner also waits for bounded daemon-side
+container removal; `--rm` cleanup is asynchronous.
+
 `rootDir` and `sourceRoot` must be absolute, non-overlapping real paths. The provider makes `rootDir` private, leaves `sourceRoot` untouched, and uses the default provider id `mars-local-workspace` unless `providerId` is supplied.
 
 Commands are argv arrays; shell interpretation only occurs when an explicitly approved command launches a shell. `approveCommand` is mandatory for execution. A missing approver rejects every command with `CommandNotApprovedError`. A missing sandbox or failed sandbox verification rejects execution with `SandboxUnavailableError`; commands are never run on the host as a fallback.
@@ -91,8 +97,30 @@ The same path filter is used when preparing, reading, writing, checkpointing, di
 - Secret files: `.env` and `.env.*` other than `.env.example`, `.env.sample`, and `.env.template`; `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`, `*.jks`; `id_rsa*`, `id_dsa*`, `id_ecdsa*`, and `id_ed25519*`; `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, and `.htpasswd`.
 - Secret directories: `.ssh`, `.aws`, `.gnupg`, `.docker`, `.kube`, `.azure`, and `.config/gcloud`.
 - `extraIgnores` can add exact segment names or simple `*` segment globs; it cannot remove built-in ignores.
+- Built-in ignores, secret names, private-key prefixes, and allowed `.env` examples are matched case-insensitively.
 - Symlinks and special files are not copied. Source secrets and symlinks are reported by `skipped()`; ignored directories are not individually reported.
 - Relative paths must not be absolute, empty, contain backslashes, control characters, empty segments, `.` or `..`; path byte length and depth are bounded. Host operations reject symlink components and use `O_NOFOLLOW` for final file reads.
+- Text diff patches are suitable for `git apply`; binary file differences are marker-only (`Binary files ... differ`) and cannot reproduce binary content.
+
+## Recovery and lost state
+
+Startup recovery handles each workspace independently, rolling back restore
+journals and reconciling interrupted executions for healthy workspaces even
+when another workspace is lost. A recorded workspace with missing or unsafe
+tree state, invalid journal state, or unreadable metadata fails with
+`IntegrityError("workspace state lost")` for that workspace; other workspace
+IDs remain usable. Readable-but-lost workspaces block `prepare()` and
+`discover()` only for their own owner/project/task. If metadata is unreadable
+and ownership cannot be established, `prepare()` and `discover()` fail closed
+globally until the metadata is repaired. Empty metadata directories without a
+workspace record or tree are treated as uncommitted prepare leftovers and
+removed during recovery.
+
+Restore rollback verifies the previous tree digest before clearing its journal.
+If rollback fails, the journal, backup, and staging/aside data are retained for
+recovery or forensic inspection; healthy workspaces remain usable. Recovery
+cleanup deletes only safely named entries belonging to resolved workspaces or
+true orphans. Retained entries are deliberately not treated as a startup error.
 
 ## Threat model
 

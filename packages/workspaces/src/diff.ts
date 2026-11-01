@@ -1,13 +1,16 @@
 import { compareStrings, type TreeFile } from "./tree";
 import type { WorkspaceDiff, WorkspaceDiffFile } from "./types";
 
-interface Edit {
-  kind: "equal" | "delete" | "insert";
-  oldLine?: string;
-  newLine?: string;
-  oldIndex: number;
-  newIndex: number;
-}
+type Edit =
+  | {
+      kind: "equal";
+      oldLine: string;
+      newLine: string;
+      oldIndex: number;
+      newIndex: number;
+    }
+  | { kind: "delete"; oldLine: string; oldIndex: number; newIndex: number }
+  | { kind: "insert"; newLine: string; oldIndex: number; newIndex: number };
 
 interface TextLine {
   value: string;
@@ -51,14 +54,20 @@ function makePatch(
   newFile: TreeFile | undefined,
 ): string {
   const out = [`diff --git a/${path} b/${path}\n`];
-  if (status === "added")
-    out.push(`new file mode ${modeText(newFile!.mode)}\n`);
-  else if (status === "deleted")
-    out.push(`deleted file mode ${modeText(oldFile!.mode)}\n`);
-  else if (oldFile!.mode !== newFile!.mode) {
-    out.push(
-      `old mode ${modeText(oldFile!.mode)}\nnew mode ${modeText(newFile!.mode)}\n`,
-    );
+  if (status === "added") {
+    if (!newFile) throw new Error("Added diff entry has no current file");
+    out.push(`new file mode ${modeText(newFile.mode)}\n`);
+  } else if (status === "deleted") {
+    if (!oldFile) throw new Error("Deleted diff entry has no previous file");
+    out.push(`deleted file mode ${modeText(oldFile.mode)}\n`);
+  } else {
+    if (!oldFile || !newFile)
+      throw new Error("Modified diff entry is missing a file version");
+    if (oldFile.mode !== newFile.mode) {
+      out.push(
+        `old mode ${modeText(oldFile.mode)}\nnew mode ${modeText(newFile.mode)}\n`,
+      );
+    }
   }
   const oldData = oldFile?.data ?? new Uint8Array();
   const newData = newFile?.data ?? new Uint8Array();
@@ -113,44 +122,71 @@ function lcsEdits(oldLines: TextLine[], newLines: TextLine[]): Edit[] {
   const table = Array.from({ length: rows }, () => new Uint32Array(cols));
   for (let i = oldLines.length - 1; i >= 0; i -= 1) {
     for (let j = newLines.length - 1; j >= 0; j -= 1) {
-      table[i]![j] = sameLine(oldLines[i]!, newLines[j]!)
-        ? table[i + 1]![j + 1]! + 1
-        : Math.max(table[i + 1]![j]!, table[i]![j + 1]!);
+      const oldLine = oldLines[i];
+      const newLine = newLines[j];
+      const currentRow = table[i];
+      const nextRow = table[i + 1];
+      if (!oldLine || !newLine || !currentRow || !nextRow)
+        throw new Error("Diff line index is out of bounds");
+      const diagonal = nextRow[j + 1];
+      const nextOld = nextRow[j];
+      const nextNew = currentRow[j + 1];
+      if (
+        diagonal === undefined ||
+        nextOld === undefined ||
+        nextNew === undefined
+      ) {
+        throw new Error("Diff score index is out of bounds");
+      }
+      currentRow[j] = sameLine(oldLine, newLine)
+        ? diagonal + 1
+        : Math.max(nextOld, nextNew);
     }
   }
   const edits: Edit[] = [];
   let i = 0;
   let j = 0;
   while (i < oldLines.length || j < newLines.length) {
-    if (
-      i < oldLines.length &&
-      j < newLines.length &&
-      sameLine(oldLines[i]!, newLines[j]!)
-    ) {
-      edits.push({
-        kind: "equal",
-        oldLine: renderLine(oldLines[i]!),
-        newLine: renderLine(newLines[j]!),
-        oldIndex: i,
-        newIndex: j,
-      });
-      i += 1;
-      j += 1;
-    } else if (
-      i < oldLines.length &&
-      (j >= newLines.length || table[i + 1]![j]! >= table[i]![j + 1]!)
-    ) {
+    const oldLine = oldLines[i];
+    const newLine = newLines[j];
+    if (i < oldLines.length && j < newLines.length) {
+      if (!oldLine || !newLine)
+        throw new Error("Diff line index is out of bounds");
+      if (sameLine(oldLine, newLine)) {
+        edits.push({
+          kind: "equal",
+          oldLine: renderLine(oldLine),
+          newLine: renderLine(newLine),
+          oldIndex: i,
+          newIndex: j,
+        });
+        i += 1;
+        j += 1;
+        continue;
+      }
+    }
+    const currentRow = table[i];
+    const nextRow = table[i + 1];
+    const nextOldScore = nextRow?.[j];
+    const nextNewScore = currentRow?.[j + 1];
+    const deleteBeforeInsert =
+      nextOldScore !== undefined &&
+      nextNewScore !== undefined &&
+      nextOldScore >= nextNewScore;
+    if (i < oldLines.length && (j >= newLines.length || deleteBeforeInsert)) {
+      if (!oldLine) throw new Error("Diff old line is missing");
       edits.push({
         kind: "delete",
-        oldLine: renderLine(oldLines[i]!),
+        oldLine: renderLine(oldLine),
         oldIndex: i,
         newIndex: j,
       });
       i += 1;
     } else {
+      if (!newLine) throw new Error("Diff new line is missing");
       edits.push({
         kind: "insert",
-        newLine: renderLine(newLines[j]!),
+        newLine: renderLine(newLine),
         oldIndex: i,
         newIndex: j,
       });
@@ -209,22 +245,12 @@ function renderHunks(edits: Edit[]): string {
       `@@ -${rangeStart(oldStart, oldCount)},${oldCount} +${rangeStart(newStart, newCount)},${newCount} @@\n`,
     );
     for (const edit of section) {
-      const line =
-        edit.kind === "equal"
-          ? edit.oldLine!
-          : edit.kind === "delete"
-            ? edit.oldLine!
-            : edit.newLine!;
-      output.push(
-        `${edit.kind === "equal" ? " " : edit.kind === "delete" ? "-" : "+"}${line}`,
-      );
+      const line = edit.kind === "insert" ? edit.newLine : edit.oldLine;
+      const patchLine = `${edit.kind === "equal" ? " " : edit.kind === "delete" ? "-" : "+"}${line}`;
+      output.push(patchLine.endsWith("\n") ? patchLine : `${patchLine}\n`);
       const lacksNewline =
-        (edit.kind !== "insert" &&
-          edit.oldLine !== undefined &&
-          !edit.oldLine.endsWith("\n")) ||
-        (edit.kind !== "delete" &&
-          edit.newLine !== undefined &&
-          !edit.newLine.endsWith("\n"));
+        (edit.kind !== "insert" && !edit.oldLine.endsWith("\n")) ||
+        (edit.kind !== "delete" && !edit.newLine.endsWith("\n"));
       if (lacksNewline) output.push("\\ No newline at end of file\n");
     }
   }

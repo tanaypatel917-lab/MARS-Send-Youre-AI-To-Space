@@ -46,7 +46,6 @@ import { resolveSafePath, validateRelativePath } from "./paths";
 import {
   acquireProviderLock,
   type CheckpointRecord,
-  fileExists,
   listMetas,
   loadMeta,
   metaPath,
@@ -68,7 +67,6 @@ import {
   type WorkspaceLimits,
 } from "./tree";
 import type {
-  LocalExecutionResult,
   LocalWorkspaceProvider,
   LocalWorkspaceProviderOptions,
   SandboxRunResult,
@@ -113,8 +111,27 @@ interface ActiveRun {
   resolveDone: () => void;
 }
 
+interface RecoveryState {
+  lostWorkspaces: Set<string>;
+  unreadableWorkspaces: Set<string>;
+}
+
 function createMutex(): Mutex {
   return { tail: Promise.resolve() };
+}
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve() {
+      if (!resolvePromise) throw new Error("Deferred promise is not ready");
+      resolvePromise();
+    },
+  };
 }
 
 async function withMutex<T>(
@@ -122,15 +139,13 @@ async function withMutex<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   const previous = mutex.tail;
-  let release!: () => void;
-  mutex.tail = new Promise<void>((resolvePromise) => {
-    release = resolvePromise;
-  });
+  const release = createDeferred();
+  mutex.tail = release.promise;
   await previous;
   try {
     return await operation();
   } finally {
-    release();
+    release.resolve();
   }
 }
 
@@ -188,7 +203,7 @@ export async function createLocalWorkspaceProvider(
     );
   }
   const releaseLock = await acquireProviderLock(rootDir);
-  let startupStateError: IntegrityError | undefined;
+  let recoveryState: RecoveryState;
   try {
     for (const directory of ["meta", "workspaces", "staging", "trash"]) {
       await ensureDirectory(join(rootDir, directory));
@@ -198,29 +213,29 @@ export async function createLocalWorkspaceProvider(
         "mars.root": sha256(rootDir).slice(0, 16),
       });
     }
-    await recoverProviderState(rootDir, limits, extraIgnores);
+    recoveryState = await recoverProviderState(
+      rootDir,
+      limits,
+      extraIgnores,
+      options.testHooks,
+    );
   } catch (error) {
-    if (
-      error instanceof IntegrityError &&
-      error.message.includes("workspace state lost")
-    ) {
-      startupStateError = error;
-    } else {
-      await releaseLock();
-      throw error;
-    }
+    await releaseLock();
+    throw error;
   }
 
+  const { lostWorkspaces, unreadableWorkspaces } = recoveryState;
   const locks = new Map<string, Mutex>();
   const prepareMutex = createMutex();
   const activeRuns = new Map<string, ActiveRun>();
   const now = options.now ?? (() => new Date());
-  const ensureProviderState = (): void => {
-    if (startupStateError) {
-      throw new IntegrityError("workspace state lost", {
-        cause: startupStateError,
-      });
-    }
+  const assertWorkspaceNotLost = (workspaceId: string): void => {
+    if (lostWorkspaces.has(workspaceId))
+      throw new IntegrityError("workspace state lost");
+  };
+  const assertNoUnreadableMetadata = (): void => {
+    if (unreadableWorkspaces.size > 0)
+      throw new IntegrityError("workspace state lost");
   };
   const lockFor = (workspaceId: string): Mutex => {
     let lock = locks.get(workspaceId);
@@ -259,7 +274,6 @@ export async function createLocalWorkspaceProvider(
   ): Promise<WorkspaceMeta> => {
     if (closed)
       throw new SandboxUnavailableError("Workspace provider is closed");
-    ensureProviderState();
     verifyContext(context);
     const workspaceId =
       typeof workspace === "string" ? workspace : workspace?.workspace_id;
@@ -287,8 +301,8 @@ export async function createLocalWorkspaceProvider(
     ) {
       throw new WorkspaceNotFoundError();
     }
-    if (allowRestoreJournal) ensureProviderState();
-    else await assertWorkspaceAvailable(meta);
+    assertWorkspaceNotLost(workspaceId);
+    if (!allowRestoreJournal) await assertWorkspaceAvailable(meta);
     return meta;
   };
   const currentRef = (meta: WorkspaceMeta): WorkspaceRef => ({
@@ -301,7 +315,7 @@ export async function createLocalWorkspaceProvider(
   const assertWorkspaceAvailable = async (
     meta: WorkspaceMeta,
   ): Promise<string> => {
-    ensureProviderState();
+    assertWorkspaceNotLost(meta.workspace_id);
     if (meta.restore_journal) {
       throw new IntegrityError(
         "workspace state lost: restore recovery required",
@@ -312,7 +326,7 @@ export async function createLocalWorkspaceProvider(
   const reloadWorkspaceMeta = async (
     workspaceId: string,
   ): Promise<WorkspaceMeta> => {
-    ensureProviderState();
+    assertWorkspaceNotLost(workspaceId);
     try {
       return await loadMeta(rootDir, workspaceId);
     } catch (error) {
@@ -544,26 +558,6 @@ export async function createLocalWorkspaceProvider(
     await options.testHooks?.restorePhase?.(phase);
   };
 
-  const rollbackRestore = async (meta: WorkspaceMeta): Promise<void> => {
-    const journal = meta.restore_journal;
-    if (!journal) return;
-    const workspace = treeDir(meta);
-    const stage = join(rootDir, "staging", journal.staging);
-    const backup = join(rootDir, "trash", journal.backup);
-    if (await fileExists(backup)) {
-      await rm(workspace, { recursive: true, force: true });
-      await mkdir(dirname(workspace), { recursive: true, mode: 0o700 });
-      await rename(backup, workspace);
-    }
-    await rm(stage, { recursive: true, force: true });
-    await rm(backup, { recursive: true, force: true });
-    meta.counter = journal.previous.counter;
-    meta.revision = journal.previous.revision;
-    meta.tree_digest = journal.previous.tree_digest;
-    delete meta.restore_journal;
-    await saveMeta(rootDir, meta);
-  };
-
   const makeCheckpointForPublic = async (
     context: RequestContext,
     workspace: WorkspaceRef,
@@ -591,7 +585,7 @@ export async function createLocalWorkspaceProvider(
         assertTaskId(taskId);
         if (closed)
           throw new SandboxUnavailableError("Workspace provider is closed");
-        ensureProviderState();
+        assertNoUnreadableMetadata();
         const existing = (await listMetas(rootDir)).find(
           (meta) =>
             meta.owner_id === context.scope.owner_id &&
@@ -855,11 +849,12 @@ export async function createLocalWorkspaceProvider(
         const runId = randomUUID().replaceAll("-", "");
         const startedAt = now().toISOString();
         const controller = new AbortController();
-        let resolveDone!: () => void;
-        const done = new Promise<void>((resolvePromise) => {
-          resolveDone = resolvePromise;
-        });
-        const active: ActiveRun = { controller, done, resolveDone };
+        const completion = createDeferred();
+        const active: ActiveRun = {
+          controller,
+          done: completion.promise,
+          resolveDone: completion.resolve,
+        };
         activeRuns.set(current.workspace_id, active);
         const externalSignal = executeOptions?.signal;
         const abortExternal = (): void =>
@@ -1015,7 +1010,13 @@ export async function createLocalWorkspaceProvider(
         } catch (error) {
           if ((error as Error)?.name !== "SimulatedCrash") {
             const latest = await loadMeta(rootDir, current.workspace_id);
-            await rollbackRestore(latest);
+            await rollbackRestoreJournal(
+              rootDir,
+              latest,
+              limits,
+              extraIgnores,
+              options.testHooks,
+            );
           }
           throw error;
         }
@@ -1060,7 +1061,10 @@ export async function createLocalWorkspaceProvider(
             ),
           ),
         ];
-        assertArtifactBytes(new TextEncoder().encode(patch), result[0]!);
+        const patchArtifact = result[0];
+        if (!patchArtifact)
+          throw new IntegrityError("Workspace patch artifact is missing");
+        assertArtifactBytes(new TextEncoder().encode(patch), patchArtifact);
         const currentFiles = new Map(
           snapshot.files.map((file) => [file.path, file]),
         );
@@ -1086,7 +1090,7 @@ export async function createLocalWorkspaceProvider(
         throw new SandboxUnavailableError("Workspace provider is closed");
       verifyContext(context);
       assertTaskId(taskId);
-      ensureProviderState();
+      assertNoUnreadableMetadata();
       const meta = (await listMetas(rootDir)).find(
         (candidate) =>
           candidate.owner_id === context.scope.owner_id &&
@@ -1193,7 +1197,7 @@ async function realDirectory(path: string, label: string): Promise<string> {
   let real: string;
   try {
     real = await realpath(path);
-  } catch (error) {
+  } catch {
     throw new WorkspacePolicyError(
       `${label} must resolve to an existing directory`,
     );
@@ -1291,65 +1295,276 @@ async function recoverProviderState(
   rootDir: string,
   limits: WorkspaceLimits,
   extraIgnores: readonly string[],
-): Promise<void> {
-  const metas = await listMetas(rootDir);
-  for (const meta of metas) {
-    if (meta.restore_journal) {
-      const workspace = workspacePath(rootDir, meta.workspace_id);
-      const journal = meta.restore_journal;
-      const backup = join(rootDir, "trash", journal.backup);
-      const staging = join(rootDir, "staging", journal.staging);
-      if (await fileExists(backup)) {
-        await rm(workspace, { recursive: true, force: true });
-        await mkdir(dirname(workspace), { recursive: true, mode: 0o700 });
-        await rename(backup, workspace);
+  hooks: LocalWorkspaceProviderOptions["testHooks"],
+): Promise<RecoveryState> {
+  const lostWorkspaces = new Set<string>();
+  const unreadableWorkspaces = new Set<string>();
+  const metadataDirectories = new Set<string>();
+  const readableMetas = new Map<string, WorkspaceMeta>();
+
+  try {
+    for (const entry of await readdir(join(rootDir, "meta"), {
+      withFileTypes: true,
+    })) {
+      if (!/^ws_[a-f0-9]{32}$/.test(entry.name)) continue;
+      const metadataDirectory = join(rootDir, "meta", entry.name);
+      metadataDirectories.add(entry.name);
+      try {
+        const directoryStat = await lstat(metadataDirectory);
+        if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+          throw new IntegrityError("workspace state lost");
+        }
+
+        const metadataFile = metaPath(rootDir, entry.name);
+        let metadataStat: Awaited<ReturnType<typeof lstat>> | undefined;
+        try {
+          metadataStat = await lstat(metadataFile);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        if (!metadataStat) {
+          const treeStatus = await workspaceTreeStatus(rootDir, entry.name);
+          if (treeStatus === "missing") {
+            await rm(metadataDirectory, { recursive: true, force: true });
+            metadataDirectories.delete(entry.name);
+            continue;
+          }
+          throw new IntegrityError("workspace state lost");
+        }
+        if (!metadataStat.isFile() || metadataStat.isSymbolicLink()) {
+          throw new IntegrityError("workspace state lost");
+        }
+        const meta = await loadMeta(rootDir, entry.name);
+        if (meta.workspace_id !== entry.name) {
+          throw new IntegrityError("workspace state lost");
+        }
+        readableMetas.set(meta.workspace_id, meta);
+      } catch {
+        lostWorkspaces.add(entry.name);
+        unreadableWorkspaces.add(entry.name);
       }
-      await rm(staging, { recursive: true, force: true });
-      await rm(backup, { recursive: true, force: true });
-      meta.counter = journal.previous.counter;
-      meta.revision = journal.previous.revision;
-      meta.tree_digest = journal.previous.tree_digest;
-      delete meta.restore_journal;
-      await saveMeta(rootDir, meta);
     }
-    await resolveWorkspaceTree(rootDir, meta.workspace_id);
-    if (meta.exec_in_progress) {
-      const snapshot = await snapshotTree(
-        workspacePath(rootDir, meta.workspace_id),
-        {
-          limits,
-          extraIgnores,
-          enforceLimits: false,
-          includeData: false,
-        },
-      );
-      meta.counter += 1;
-      meta.tree_digest = snapshot.digest;
-      meta.revision = revision(meta.counter, snapshot.digest);
-      delete meta.exec_in_progress;
-      await saveMeta(rootDir, meta);
+
+    for (const meta of readableMetas.values()) {
+      try {
+        if (meta.restore_journal) {
+          await rollbackRestoreJournal(
+            rootDir,
+            meta,
+            limits,
+            extraIgnores,
+            hooks,
+          );
+        }
+        await resolveWorkspaceTree(rootDir, meta.workspace_id);
+        if (meta.exec_in_progress) {
+          const snapshot = await snapshotTree(
+            workspacePath(rootDir, meta.workspace_id),
+            {
+              limits,
+              extraIgnores,
+              enforceLimits: false,
+              includeData: false,
+            },
+          );
+          meta.counter += 1;
+          meta.tree_digest = snapshot.digest;
+          meta.revision = revision(meta.counter, snapshot.digest);
+          delete meta.exec_in_progress;
+          await saveMeta(rootDir, meta);
+        }
+      } catch {
+        lostWorkspaces.add(meta.workspace_id);
+      }
     }
-  }
-  const recordedWorkspaces = new Set(metas.map((meta) => meta.workspace_id));
-  for (const entry of await readdir(join(rootDir, "workspaces"), {
-    withFileTypes: true,
-  })) {
-    if (
-      entry.isDirectory() &&
-      /^ws_[a-f0-9]{32}$/.test(entry.name) &&
-      !recordedWorkspaces.has(entry.name)
-    ) {
+
+    for (const entry of await readdir(join(rootDir, "workspaces"), {
+      withFileTypes: true,
+    })) {
+      if (!/^ws_[a-f0-9]{32}$/.test(entry.name)) continue;
+      if (metadataDirectories.has(entry.name)) continue;
+      if (!entry.isDirectory() || entry.isSymbolicLink()) {
+        lostWorkspaces.add(entry.name);
+        unreadableWorkspaces.add(entry.name);
+        continue;
+      }
       await rm(join(rootDir, "workspaces", entry.name), {
         recursive: true,
         force: true,
       });
     }
+  } finally {
+    await cleanupRecoveryDirectories(rootDir, readableMetas, lostWorkspaces);
   }
-  for (const entry of await readdir(join(rootDir, "staging"))) {
-    await rm(join(rootDir, "staging", entry), { recursive: true, force: true });
+
+  return { lostWorkspaces, unreadableWorkspaces };
+}
+
+async function rollbackRestoreJournal(
+  rootDir: string,
+  meta: WorkspaceMeta,
+  limits: WorkspaceLimits,
+  extraIgnores: readonly string[],
+  hooks: LocalWorkspaceProviderOptions["testHooks"],
+): Promise<void> {
+  const journal = meta.restore_journal;
+  if (!journal) return;
+  const workspace = workspacePath(rootDir, meta.workspace_id);
+  const backup = join(rootDir, "trash", journal.backup);
+  const staging = join(rootDir, "staging", journal.staging);
+  let aside: string | undefined;
+  let backupMoved = false;
+  let committed = false;
+  let digestMismatch = false;
+
+  try {
+    if (await pathExists(backup)) {
+      if (await pathExists(workspace)) {
+        aside = join(
+          rootDir,
+          "trash",
+          `${meta.workspace_id}-aside-${randomUUID().replaceAll("-", "")}`,
+        );
+        await rename(workspace, aside);
+      }
+      await mkdir(dirname(workspace), { recursive: true, mode: 0o700 });
+      await hooks?.recoveryPhase?.("before-rollback-rename");
+      await rename(backup, workspace);
+      backupMoved = true;
+    } else if (!(await isRealDirectory(workspace))) {
+      throw new IntegrityError("workspace state lost");
+    }
+
+    await resolveWorkspaceTree(rootDir, meta.workspace_id);
+    const snapshot = await snapshotTree(workspace, {
+      limits,
+      extraIgnores,
+      enforceLimits: false,
+      includeData: false,
+    });
+    if (snapshot.digest !== journal.previous.tree_digest) {
+      digestMismatch = true;
+      throw new IntegrityError("workspace state lost");
+    }
+
+    const recoveredMeta: WorkspaceMeta = {
+      ...meta,
+      counter: journal.previous.counter,
+      revision: journal.previous.revision,
+      tree_digest: journal.previous.tree_digest,
+    };
+    delete recoveredMeta.restore_journal;
+    await saveMeta(rootDir, recoveredMeta);
+    Object.assign(meta, recoveredMeta);
+    delete meta.restore_journal;
+    committed = true;
+  } catch (error) {
+    if (!committed && backupMoved) {
+      try {
+        if (!(await pathExists(backup)) && (await pathExists(workspace)))
+          await rename(workspace, backup);
+      } catch {}
+    }
+    if (!committed && aside && !digestMismatch) {
+      try {
+        if ((await pathExists(aside)) && !(await pathExists(workspace))) {
+          await mkdir(dirname(workspace), { recursive: true, mode: 0o700 });
+          await rename(aside, workspace);
+        }
+      } catch {}
+    }
+    throw error;
   }
-  for (const entry of await readdir(join(rootDir, "trash"))) {
-    await rm(join(rootDir, "trash", entry), { recursive: true, force: true });
+
+  await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+  const trash = join(rootDir, "trash");
+  const asidePrefix = `${meta.workspace_id}-aside-`;
+  for (const entry of await readdir(trash).catch(() => [])) {
+    if (entry.startsWith(asidePrefix))
+      await rm(join(trash, entry), { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+  }
+}
+
+async function workspaceTreeStatus(
+  rootDir: string,
+  workspaceId: string,
+): Promise<"missing" | "valid" | "invalid"> {
+  const workspaceDirectory = join(rootDir, "workspaces", workspaceId);
+  let directoryStat: Awaited<ReturnType<typeof lstat>>;
+  try {
+    directoryStat = await lstat(workspaceDirectory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw error;
+  }
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink())
+    return "invalid";
+
+  try {
+    const treeStat = await lstat(workspacePath(rootDir, workspaceId));
+    return treeStat.isDirectory() && !treeStat.isSymbolicLink()
+      ? "valid"
+      : "invalid";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw error;
+  }
+}
+
+async function cleanupRecoveryDirectories(
+  rootDir: string,
+  readableMetas: ReadonlyMap<string, WorkspaceMeta>,
+  lostWorkspaces: ReadonlySet<string>,
+): Promise<void> {
+  for (const directory of ["staging", "trash"]) {
+    const directoryPath = join(rootDir, directory);
+    const entries = await readdir(directoryPath).catch(() => []);
+    for (const entry of entries) {
+      const match = /^(ws_[a-f0-9]{32})-[A-Za-z0-9-]+$/.exec(entry);
+      const workspaceId = match?.[1];
+      if (!workspaceId) continue;
+      const meta = readableMetas.get(workspaceId);
+      let shouldDelete =
+        meta !== undefined &&
+        !lostWorkspaces.has(workspaceId) &&
+        meta.restore_journal === undefined;
+      if (!shouldDelete) {
+        const [metaExists, workspaceExists] = await Promise.all([
+          pathExists(join(rootDir, "meta", workspaceId)).catch(() => true),
+          pathExists(join(rootDir, "workspaces", workspaceId)).catch(
+            () => true,
+          ),
+        ]);
+        shouldDelete = !metaExists && !workspaceExists;
+      }
+      if (shouldDelete)
+        await rm(join(rootDir, directory, entry), {
+          recursive: true,
+          force: true,
+        }).catch(() => undefined);
+    }
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function isRealDirectory(path: string): Promise<boolean> {
+  try {
+    const info = await lstat(path);
+    return info.isDirectory() && !info.isSymbolicLink();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }
 
@@ -1374,12 +1589,12 @@ function validateManifestPaths(
       throw new IntegrityError("Checkpoint contains duplicate directories");
     dirs.add(directory);
   }
-  if (
-    manifest.directories.some(
-      (path, index) => index > 0 && manifest.directories[index - 1]! > path,
-    )
-  ) {
-    throw new IntegrityError("Checkpoint directories are not sorted");
+  for (let index = 1; index < manifest.directories.length; index += 1) {
+    const previous = manifest.directories[index - 1];
+    const current = manifest.directories[index];
+    if (previous !== undefined && current !== undefined && previous > current) {
+      throw new IntegrityError("Checkpoint directories are not sorted");
+    }
   }
   for (const file of manifest.files) {
     try {
@@ -1429,12 +1644,16 @@ function validateManifestPaths(
         );
     }
   }
-  if (
-    manifest.files.some(
-      (file, index) => index > 0 && manifest.files[index - 1]!.path > file.path,
-    )
-  ) {
-    throw new IntegrityError("Checkpoint files are not sorted");
+  for (let index = 1; index < manifest.files.length; index += 1) {
+    const previous = manifest.files[index - 1];
+    const current = manifest.files[index];
+    if (
+      previous !== undefined &&
+      current !== undefined &&
+      previous.path > current.path
+    ) {
+      throw new IntegrityError("Checkpoint files are not sorted");
+    }
   }
 }
 
@@ -1444,10 +1663,15 @@ function digestManifest(
 ): string {
   const contentByPath = new Map(files.map((file) => [file.path, file]));
   const entries = [
-    ...manifest.files.map((file) => ({
-      path: file.path,
-      line: `F\0${file.path}\0${file.mode}\0${contentByPath.get(file.path)!.sha256}\n`,
-    })),
+    ...manifest.files.map((file) => {
+      const content = contentByPath.get(file.path);
+      if (!content)
+        throw new IntegrityError("Checkpoint file content is missing");
+      return {
+        path: file.path,
+        line: `F\0${file.path}\0${file.mode}\0${content.sha256}\n`,
+      };
+    }),
     ...manifest.directories.map((path) => ({ path, line: `D\0${path}\n` })),
   ];
   entries.sort((a, b) => compareStrings(a.path, b.path));
