@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import type { Scope, Task } from "@mars/contracts";
+import { MarsClient } from "../../../apps/vscode/src/client";
+import { HttpRpcTransport } from "../../../apps/vscode/src/rpc";
 import {
   serveWorkbench,
   WorkbenchError,
@@ -383,4 +385,111 @@ test("RPC refuses weak tokens and invalid ports", () => {
   expect(() => serveWorkbench({ api, token: "short" })).toThrow();
   expect(() => serveWorkbench({ api, token, port: -1 })).toThrow();
   expect(() => serveWorkbench({ api, token, port: 65_536 })).toThrow();
+});
+
+test("RPC refuses cross-scope, duplicate and wrong-identity backend results", async () => {
+  const other = { ...task, scope: { ...scope, owner_id: "another" } };
+  const cases: [Partial<WorkbenchOperations>, string, unknown][] = [
+    [
+      {
+        async list() {
+          return [other];
+        },
+      },
+      "tasks.list",
+      {},
+    ],
+    [
+      {
+        async list() {
+          return [task, task];
+        },
+      },
+      "tasks.list",
+      {},
+    ],
+    [
+      {
+        async inspect() {
+          return { ...task, task_id: "wrong" };
+        },
+      },
+      "tasks.inspect",
+      { task_id: "task" },
+    ],
+    [
+      {
+        async create() {
+          return { ...task, session_id: "wrong" };
+        },
+      },
+      "tasks.create",
+      { task },
+    ],
+    [
+      {
+        async describe() {
+          return {
+            scope: other.scope,
+            workspaceLabel: "fixture",
+            capabilities: { execute: false, checkpoint: true },
+          };
+        },
+      },
+      "workbench.describe",
+      {},
+    ],
+  ];
+  for (const [overrides, method, params] of cases) {
+    const { send } = fixture(overrides);
+    const response = await send({
+      method,
+      ...(method === "workbench.describe" ? {} : { context }),
+      params,
+    });
+    expect(response.status).toBe(500);
+    expect(await response.text()).not.toContain("another");
+  }
+});
+
+test("the actual VS Code typed client interoperates with every RPC over loopback HTTP", async () => {
+  const { url, calls } = fixture();
+  const client = new MarsClient(
+    new HttpRpcTransport({ rpcUrl: url, getToken: async () => token }),
+  );
+  expect((await client.describe()).scope).toEqual(scope);
+  expect(await client.create(task)).toEqual(task);
+  expect(await client.list()).toEqual([task]);
+  expect(await client.inspect("task")).toEqual(task);
+  expect(
+    (
+      await client.start("task", {
+        expectedRevision: 0,
+        approvals: { read: true, write: true, execute: false },
+      })
+    ).status,
+  ).toBe("running");
+  expect((await client.resume("task", 2)).revision).toBe(3);
+  await client.steer("task", "Run tests");
+  await client.cancel("task");
+  expect(await client.events("task", undefined)).toEqual([]);
+  expect((await client.artifact("task", artifact)).bytes.byteLength).toBe(0);
+  expect(await client.diff("task")).toEqual({ files: [] });
+  expect(await client.checkpoint("task")).toEqual(checkpoint);
+  expect(await client.restore("task", checkpoint, "r1")).toEqual(workspace);
+  expect(calls).toEqual([
+    "describe",
+    "create",
+    "list",
+    "inspect",
+    "start",
+    "resume",
+    "steer",
+    "cancel",
+    "events",
+    "artifact",
+    "diff",
+    "checkpoint",
+    "restore",
+  ]);
 });

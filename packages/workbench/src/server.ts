@@ -229,6 +229,51 @@ async function dispatch(
   }
 }
 
+function validateResult(request: RpcRequest, result: unknown, scope: Scope) {
+  const invalid = () => {
+    throw new WorkbenchError("internal_error");
+  };
+  if (request.method === "workbench.describe") {
+    if (!sameScope(DescribeResultSchema.parse(result).scope, scope)) invalid();
+  } else if (request.method === "tasks.list") {
+    const seen = new Set<string>();
+    for (const task of taskList.parse(result)) {
+      if (!sameScope(task.scope, scope) || seen.has(task.task_id)) invalid();
+      seen.add(task.task_id);
+    }
+  } else if (request.method === "tasks.events") {
+    const seen = new Set<string>();
+    for (const event of eventList.parse(result)) {
+      if (
+        !sameScope(event.scope, scope) ||
+        event.task_id !== request.params.task_id ||
+        event.event_id === request.params.after_event_id ||
+        seen.has(event.event_id)
+      )
+        invalid();
+      seen.add(event.event_id);
+    }
+  } else if (
+    request.method === "tasks.create" ||
+    request.method === "tasks.inspect" ||
+    request.method === "tasks.start" ||
+    request.method === "tasks.resume"
+  ) {
+    const task = TaskSchema.parse(result);
+    const taskId =
+      request.method === "tasks.create"
+        ? request.params.task.task_id
+        : request.params.task_id;
+    if (
+      !sameScope(task.scope, scope) ||
+      task.task_id !== taskId ||
+      (request.method === "tasks.create" &&
+        task.session_id !== request.params.task.session_id)
+    )
+      invalid();
+  }
+}
+
 export function serveWorkbench(options: WorkbenchServerOptions) {
   if (!/^[A-Za-z0-9_-]{32,256}$/.test(options.token))
     throw new Error(
@@ -295,6 +340,7 @@ export function serveWorkbench(options: WorkbenchServerOptions) {
           }
         }
         const result = await dispatch(options.api, parsed.data);
+        validateResult(parsed.data, result, scope);
         const body = JSON.stringify({ result });
         if (Buffer.byteLength(body) > MAX_RESPONSE_BYTES)
           return responseError("too_large");
