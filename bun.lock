@@ -42,6 +42,14 @@
         "@mars/contracts": "workspace:*",
       },
     },
+    "packages/workspaces": {
+      "name": "@mars/workspaces",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
   },
   "packages": {
     "@babel/helper-string-parser": ["@babel/helper-string-parser@7.29.11", "", {}, "sha512-snZbO7MEDOof+hvNa97EjEY7qD7h2kwvQr5AJC3ZhQudKW5dnej6k3kP9NQV88hJwaS8vDqRLFo9rivLEhle2g=="],
@@ -139,6 +147,8 @@
     "@mars/execution": ["@mars/execution@workspace:packages/execution"],
 
     "@mars/providers": ["@mars/providers@workspace:packages/providers"],
+
+    "@mars/workspaces": ["@mars/workspaces@workspace:packages/workspaces"],
 
     "@oh-my-pi/omp-stats": ["@oh-my-pi/omp-stats@18.14.0", "", { "dependencies": { "@oh-my-pi/pi-ai": "18.14.0", "@oh-my-pi/pi-catalog": "18.14.0", "@oh-my-pi/pi-utils": "18.14.0", "lucide-react": "^1.24.0", "react": "19.2.7", "react-dom": "19.2.7" }, "bin": { "omp-stats": "src/index.ts" } }, "sha512-RetKUWmyFCqpuAbQmTObgHSNXCmtkZTQFiJm47+q437FJP7bdzZQJL912Lexh5rpLErpXzCTw/kNMsPs/ns4kw=="],
 
