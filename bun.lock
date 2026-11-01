@@ -134,6 +134,7 @@
         "@mars/execution": "workspace:*",
         "@mars/memory": "workspace:*",
         "@mars/providers": "workspace:*",
+        "@mars/specialists": "workspace:*",
         "@mars/tasks": "workspace:*",
         "@mars/workspaces": "workspace:*",
         "zod": "3.25.76",

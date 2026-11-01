@@ -18,8 +18,16 @@ import { createMemoryStore } from "@mars/memory";
 import type { ModelProviderRegistry } from "@mars/providers";
 import { loadModelRegistry } from "@mars/providers";
 import { createTaskStore } from "@mars/tasks";
+import {
+  createRegistry as createSpecialistRegistry,
+  evidenceVerifier,
+  MemoryArtifacts,
+  makeBaseline,
+  makeSpecialistFixture,
+} from "../../specialists/tests/helpers";
 import { createWorkbenchHost, type WorkspaceHost } from "./host";
 import type { WorkbenchMemory } from "./memory-context";
+import type { WorkbenchSpecialists } from "./specialist-routing";
 
 const scope = {
   owner_id: "owner",
@@ -171,6 +179,7 @@ async function fixture() {
     modelRegistry: ModelProviderRegistry = registry,
     memory?: WorkbenchMemory,
     repositoryMap?: Pick<RepositoryMapProvider, "map">,
+    specialists?: WorkbenchSpecialists,
   ) =>
     createWorkbenchHost({
       scope,
@@ -182,6 +191,7 @@ async function fixture() {
       canExecute: false,
       ...(memory ? { memory } : {}),
       ...(repositoryMap ? { repositoryMap } : {}),
+      ...(specialists ? { specialists } : {}),
       async runtimeFactory(options) {
         const outcome = deferred<RuntimeOutcome>();
         const disposed = deferred<void>();
@@ -237,6 +247,37 @@ async function fixture() {
         };
       },
     });
+  const routedRegistry = async () => {
+    const dir = join(root, "routed");
+    await mkdir(join(dir, ".mars"), { recursive: true });
+    await writeFile(
+      join(dir, ".mars", "models.json"),
+      JSON.stringify({
+        version: 1,
+        providers: [
+          {
+            id: "fixture",
+            kind: "openai-compatible",
+            baseUrl: "https://fixture.invalid/v1",
+            apiKeyEnv: "FIXTURE_KEY",
+          },
+        ],
+        models: ["free", "specialist"].map((name) => ({
+          id: `fixture/${name}`,
+          providerId: "fixture",
+          model: name === "free" ? "fixture" : name,
+          capabilities: { tools: true, vision: false, contextWindow: 32768 },
+          pricing: { free: true },
+        })),
+        routes: { default: ["fixture/free"] },
+      }),
+    );
+    return loadModelRegistry({
+      cwd: dir,
+      home: dir,
+      env: { FIXTURE_KEY: "dummy-not-live" },
+    });
+  };
   const smallRegistry = async () => {
     await writeFile(
       join(root, ".mars", "models.json"),
@@ -276,6 +317,7 @@ async function fixture() {
     sessions,
     makeHost,
     smallRegistry,
+    routedRegistry,
     get prepareCalls() {
       return prepareCalls;
     },
@@ -1266,3 +1308,87 @@ test("host shutdown pauses work, drains the runtime and permits journal-backed r
   await replacement.cancel(context(), "task");
   await replacement.close();
 });
+
+test.each(["specialist", "baseline", "manual"])(
+  "launches pin the evidence-gated routing decision (%s)",
+  async (mode) => {
+    const f = await fixture();
+    const routed = await f.routedRegistry();
+    const specialists = new MemoryArtifacts();
+    const registry = createSpecialistRegistry(
+      join(f.root, "specialists"),
+      specialists,
+      {
+        catalog: routed,
+        evidenceVerifier: evidenceVerifier({ ownerIds: [scope.owner_id] }),
+      },
+    );
+    await registry.registerBaseline(
+      context(),
+      makeBaseline(scope, {
+        model_id: "fixture/free",
+        provider_id: "fixture",
+        provider_model: "fixture",
+      }),
+    );
+    if (mode !== "baseline") {
+      const promoted = await makeSpecialistFixture(specialists, {
+        scope,
+        modelId: "fixture/specialist",
+        providerId: "fixture",
+        providerModel: "specialist",
+      });
+      await registry.registerSpecialist(context(), promoted.registration);
+      await registry.promote(context(), "specialist-1", "1", null);
+    }
+    const api = await f.makeHost(routed, undefined, undefined, {
+      router: registry,
+      domain: "coding/mechanical-edit",
+    });
+    const input = task();
+    await api.create(context(), {
+      ...input,
+      budget: { ...input.budget, max_usd: 1 },
+    });
+    await api.start(context(), {
+      task_id: "task",
+      expected_revision: 0,
+      approvals: { read: true, write: false, execute: false },
+      ...(mode === "manual" ? { model_id: "fixture/free" } : {}),
+    });
+    const session = required(f.sessions[0]);
+    const launch = JSON.parse(
+      await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+    );
+    const running = await api.inspect(context(), "task");
+    if (mode === "specialist") {
+      expect(session.options.modelId).toBe("fixture/specialist");
+      expect(launch.routing.outcome).toBe("specialist");
+      expect(launch.routing.specialist_revision).toBe(
+        "specialist:specialist-1@1",
+      );
+      expect(running.specialist_revision).toBe("specialist:specialist-1@1");
+      expect(
+        (await registry.decision(context(), launch.routing.decision_id))
+          .selected?.model_id,
+      ).toBe("fixture/specialist");
+    } else {
+      expect(session.options.modelId).toBe("fixture/free");
+      expect(running.specialist_revision).toBeNull();
+      if (mode === "baseline") expect(launch.routing.outcome).toBe("baseline");
+      else expect(launch.routing).toBeUndefined();
+    }
+    session.finish("paused");
+    await session.disposed;
+    await api.resume(
+      context(),
+      "task",
+      (await api.inspect(context(), "task")).revision,
+    );
+    const resumed = required(f.sessions[1]);
+    expect(resumed.options.modelId).toBe(session.options.modelId);
+    resumed.finish("completed");
+    await resumed.disposed;
+    await api.close();
+  },
+);

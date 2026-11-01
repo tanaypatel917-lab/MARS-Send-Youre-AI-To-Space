@@ -24,6 +24,7 @@ import {
 } from "@mars/workspaces";
 import { createWorkbenchHost, type WorkbenchHostOptions } from "./host";
 import { serveWorkbench, WorkbenchError } from "./server";
+import type { WorkbenchSpecialists } from "./specialist-routing";
 
 export interface WorkbenchServiceOptions {
   sourceRoot: string;
@@ -33,6 +34,8 @@ export interface WorkbenchServiceOptions {
   image?: string;
   trustProjectConfig?: boolean;
   registry?: ModelProviderRegistry;
+  /** Evidence-gated specialist router; launches use the registry default without it. */
+  specialists?: WorkbenchSpecialists;
   runtimeFactory?: WorkbenchHostOptions["runtimeFactory"];
 }
 
@@ -141,6 +144,7 @@ export async function createWorkbenchService(
       canExecute: Boolean(sandbox),
       memory,
       repositoryMap,
+      ...(options.specialists ? { specialists: options.specialists } : {}),
       hostPrivateRoots: [memoryRoot, source],
       workspace: {
         prepare: provider.prepare.bind(provider),
