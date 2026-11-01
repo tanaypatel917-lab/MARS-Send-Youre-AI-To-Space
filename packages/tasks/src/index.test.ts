@@ -7,6 +7,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -16,8 +17,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { RequestContext, Task } from "@mars/contracts";
+import type { ArtifactRef, RequestContext, Task } from "@mars/contracts";
 import { createTaskStore } from "./index";
+import { writeLegacyBindEvent } from "./test-fixtures/legacy-store";
 
 const roots: string[] = [];
 const scope = {
@@ -981,6 +983,7 @@ describe("@mars/tasks durable store", () => {
       const message = error instanceof Error ? error.message : String(error);
       expect(message).not.toContain(sessionFile);
       expect(message).not.toContain(journalDirectory);
+      expect(message).not.toContain(path.basename(sessionFile));
       expect(await countEvents()).toBe(countBefore);
     };
     await expectRejectedWithoutLeak(() =>
@@ -999,6 +1002,24 @@ describe("@mars/tasks durable store", () => {
         producer: "privacy-test",
         versions: [{ component: "test", revision: "1" }],
         payload: { details: { note: `Found ${sessionFile}` } },
+      }),
+    );
+    await expectRejectedWithoutLeak(() =>
+      store.appendEvent(context("path-property"), task.task_id, {
+        event_type: "tool.completed",
+        run_id: "path-property",
+        producer: "privacy-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: { [sessionFile]: 1 },
+      }),
+    );
+    await expectRejectedWithoutLeak(() =>
+      store.appendEvent(context("path-nested-property"), task.task_id, {
+        event_type: "tool.completed",
+        run_id: "path-nested-property",
+        producer: "privacy-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: { a: { [path.join(journalDirectory, "x")]: true } },
       }),
     );
     await expectRejectedWithoutLeak(() =>
@@ -1026,6 +1047,263 @@ describe("@mars/tasks durable store", () => {
         `Continue from ${sessionFile}.`,
       ),
     );
+    await store.close();
+  });
+
+  test("fails closed on legacy host-private event and artifact payloads", async () => {
+    const rootDir = makeRoot();
+    const journalDirectory = mkdtempSync(
+      path.join(tmpdir(), `legacy-journal-${randomUUID()}-`),
+    );
+    roots.push(journalDirectory);
+    const journalPath = path.join(
+      journalDirectory,
+      `session-${randomUUID()}.jsonl`,
+    );
+    writeFileSync(journalPath, '{"entries":[]}\n');
+    const sessionFile = realpathSync(journalPath);
+    const task = makeTask("legacy-private-task");
+    const cleanTask = makeTask("clean-same-scope-task");
+    const binding = {
+      runtime: "oh-my-pi" as const,
+      package_version: "18.14.0",
+      session_id: task.session_id,
+      session_file: sessionFile,
+    };
+    const initial = await openStore(rootDir);
+    await initial.create(context("legacy-create"), task);
+    await initial.create(context("clean-create"), cleanTask);
+    await initial.close();
+    writeLegacyBindEvent(
+      rootDir,
+      task.scope,
+      task.task_id,
+      binding,
+      "legacy-bind",
+    );
+
+    const reopened = await openStore(rootDir);
+    const scopeDigest = createHashScope(task.scope);
+    const readLegacyState = () => {
+      const db = new Database(path.join(rootDir, "tasks.sqlite"), {
+        strict: true,
+      });
+      try {
+        const eventRow = db
+          .query(
+            "SELECT scope_key, task_id, event_id, task_seq, record_json, record_sha256, chain_sha256 FROM events WHERE scope_key = ? AND task_id = ? ORDER BY task_seq DESC LIMIT 1",
+          )
+          .get(scopeDigest, task.task_id) as {
+          scope_key: string;
+          task_id: string;
+          event_id: string;
+          task_seq: number;
+          record_json: string;
+          record_sha256: string;
+          chain_sha256: string;
+        } | null;
+        const bindingRow = db
+          .query(
+            "SELECT scope_key, task_id, record_json, record_sha256 FROM session_bindings WHERE scope_key = ? AND task_id = ?",
+          )
+          .get(scopeDigest, task.task_id) as {
+          scope_key: string;
+          task_id: string;
+          record_json: string;
+          record_sha256: string;
+        } | null;
+        if (!eventRow || !bindingRow)
+          throw new Error("Expected legacy event and binding rows");
+        const legacyEvent = JSON.parse(eventRow.record_json) as {
+          payload: ArtifactRef;
+        };
+        const artifact = db
+          .query(
+            "SELECT artifact_id, sha256, media_type, byte_length FROM artifacts WHERE scope_key = ? AND artifact_id = ?",
+          )
+          .get(scopeDigest, legacyEvent.payload.artifact_id) as {
+          artifact_id: string;
+          sha256: string;
+          media_type: string;
+          byte_length: number;
+        } | null;
+        if (!artifact) throw new Error("Expected legacy payload artifact");
+        const artifactBytes = readFileSync(
+          path.join(
+            rootDir,
+            "artifacts",
+            scopeDigest,
+            artifact.sha256.slice(0, 2),
+            artifact.sha256,
+          ),
+        );
+        return {
+          eventRow,
+          bindingRow,
+          artifact,
+          artifactBytes,
+          ref: legacyEvent.payload,
+        };
+      } finally {
+        db.close();
+      }
+    };
+    const assertSanitizedCorruption = async (
+      operation: () => Promise<unknown>,
+      expectedMessage: string,
+    ) => {
+      let error: unknown;
+      try {
+        await operation();
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toMatchObject({ code: "corrupt_record" });
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toBe(expectedMessage);
+      expect(message).not.toContain(sessionFile);
+      expect(message).not.toContain(journalDirectory);
+      expect(message).not.toContain(path.basename(sessionFile));
+    };
+
+    try {
+      const beforeReads = readLegacyState();
+      expect(await reopened.inspect(context(), task.task_id)).toEqual(task);
+      expect(await reopened.upstreamSession(context(), task.task_id)).toEqual(
+        binding,
+      );
+      const listedTaskIds = (await reopened.list(context())).map(
+        (listedTask) => listedTask.task_id,
+      );
+      expect(listedTaskIds).toContain(task.task_id);
+      expect(listedTaskIds).toContain(cleanTask.task_id);
+      expect(
+        await reopened.recoverInterrupted(context("legacy-recovery"), {
+          reason: "legacy-read-boundary-test",
+        }),
+      ).toEqual([]);
+
+      const received: unknown[] = [];
+      let eventsError: unknown;
+      try {
+        for await (const event of reopened.events(context(), task.task_id)) {
+          received.push(event);
+        }
+      } catch (error) {
+        eventsError = error;
+      }
+      expect(received).toHaveLength(0);
+      expect(eventsError).toMatchObject({ code: "corrupt_record" });
+      const eventsMessage =
+        eventsError instanceof Error
+          ? eventsError.message
+          : String(eventsError);
+      expect(eventsMessage).toBe("Event history contains host-private data");
+      expect(eventsMessage).not.toContain(sessionFile);
+      expect(eventsMessage).not.toContain(journalDirectory);
+      expect(eventsMessage).not.toContain(path.basename(sessionFile));
+      await assertSanitizedCorruption(
+        () => reopened.artifacts.get(context(), beforeReads.ref),
+        "Artifact contains host-private data",
+      );
+
+      const cleanEvents = await collect(
+        reopened.events(context(), cleanTask.task_id),
+      );
+      expect(cleanEvents).toHaveLength(1);
+      expect(cleanEvents[0]?.event_type).toBe("task.created");
+      const afterReads = readLegacyState();
+      expect(afterReads.eventRow).toEqual(beforeReads.eventRow);
+      expect(afterReads.bindingRow).toEqual(beforeReads.bindingRow);
+      expect(afterReads.artifact).toEqual(beforeReads.artifact);
+      expect(afterReads.artifactBytes).toEqual(beforeReads.artifactBytes);
+
+      const appended = await reopened.appendEvent(
+        context("legacy-safe-append"),
+        task.task_id,
+        {
+          event_type: "tool.completed",
+          run_id: "legacy-safe-append",
+          producer: "legacy-test",
+          versions: [{ component: "test", revision: "1" }],
+          payload: { result: "ok" },
+        },
+      );
+      expect(appended.event_type).toBe("tool.completed");
+      await reopened.cancel(context("legacy-cancel"), task.task_id);
+      expect((await reopened.inspect(context(), task.task_id)).status).toBe(
+        "cancelled",
+      );
+    } finally {
+      await reopened.close();
+    }
+  });
+
+  test("rejects bound-path artifact writes and screens artifacts stored before binding", async () => {
+    const rootDir = makeRoot();
+    const journalDirectory = mkdtempSync(
+      path.join(tmpdir(), `artifact-journal-${randomUUID()}-`),
+    );
+    roots.push(journalDirectory);
+    const journalPath = path.join(
+      journalDirectory,
+      `session-${randomUUID()}.jsonl`,
+    );
+    writeFileSync(journalPath, '{"entries":[]}\n');
+    const sessionFile = realpathSync(journalPath);
+    const store = await openStore(rootDir);
+    const task = makeTask("artifact-path-task");
+    await store.create(context("artifact-path-create"), task);
+    const bytes = new TextEncoder().encode(`host journal: ${sessionFile}`);
+    const storedBeforeBinding = await store.artifacts.put(
+      context("artifact-put-before-binding"),
+      bytes,
+      "text/plain",
+    );
+    await store.bindUpstreamSession(
+      context("artifact-path-bind"),
+      task.task_id,
+      {
+        runtime: "oh-my-pi",
+        package_version: "18.14.0",
+        session_id: task.session_id,
+        session_file: sessionFile,
+      },
+    );
+    let getError: unknown;
+    try {
+      await store.artifacts.get(context(), storedBeforeBinding);
+    } catch (error) {
+      getError = error;
+    }
+    expect(getError).toMatchObject({
+      code: "corrupt_record",
+      message: "Artifact contains host-private data",
+    });
+    const getMessage =
+      getError instanceof Error ? getError.message : String(getError);
+    expect(getMessage).not.toContain(sessionFile);
+    expect(getMessage).not.toContain(journalDirectory);
+    expect(getMessage).not.toContain(path.basename(sessionFile));
+    let putError: unknown;
+    try {
+      await store.artifacts.put(
+        context("artifact-put-after-binding"),
+        bytes,
+        "text/plain",
+      );
+    } catch (error) {
+      putError = error;
+    }
+    expect(putError).toMatchObject({
+      code: "invalid_input",
+      message: "Artifact must not contain the upstream journal path",
+    });
+    const putMessage =
+      putError instanceof Error ? putError.message : String(putError);
+    expect(putMessage).not.toContain(sessionFile);
+    expect(putMessage).not.toContain(journalDirectory);
+    expect(putMessage).not.toContain(path.basename(sessionFile));
     await store.close();
   });
 
