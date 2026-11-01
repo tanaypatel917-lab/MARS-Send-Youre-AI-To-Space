@@ -16,6 +16,7 @@ import {
 import { type AppendEventInput, canonicalJson } from "@mars/tasks";
 import { validateCitationUrl } from "./citations";
 import { ResearchError } from "./errors";
+import { proposedEventInput, staleEventInput } from "./events";
 import {
   FindingProposalSchema,
   RequestContextSchema,
@@ -700,6 +701,7 @@ export async function createResearchService(
   let autoPump: ReturnType<typeof setInterval> | undefined;
   let pumping = false;
   let flushInFlight: Promise<void> | null = null;
+  let flushRequested = false;
   let closePromise: Promise<void> | undefined;
 
   const currentTime = (): number => configured.now();
@@ -867,10 +869,18 @@ export async function createResearchService(
 
   const flushEvents = (): Promise<void> => {
     if (!options.events || !dbOpen) return Promise.resolve();
-    if (flushInFlight) return flushInFlight;
+    if (flushInFlight) {
+      flushRequested = true;
+      return flushInFlight;
+    }
     let inFlight!: Promise<void>;
     inFlight = Promise.resolve()
-      .then(flushEventsWork)
+      .then(async () => {
+        do {
+          flushRequested = false;
+          await flushEventsWork();
+        } while (flushRequested && dbOpen);
+      })
       .finally(() => {
         if (flushInFlight === inFlight) flushInFlight = null;
       });
@@ -1474,30 +1484,14 @@ export async function createResearchService(
               id: options.worker.id,
               version: options.worker.version,
             };
-            eventRequestId = `research:${findingId}:proposed`;
-            eventJson = canonicalJson({
-              event_type: "research.proposed",
-              run_id: entry.requestId,
-              producer: "mars-research",
-              versions: [
-                {
-                  component: "@mars/research",
-                  revision: String(RESEARCH_STORE_FORMAT_VERSION),
-                },
-                {
-                  component: `worker:${worker.id}`,
-                  revision: worker.version,
-                },
-              ],
-              payload: {
-                request_id: entry.requestId,
-                finding_id: findingId,
-                task_revision: record.task_revision,
-                confidence: record.confidence,
-                source_count: record.sources.length,
-              },
-              source_event_ids: [],
-            } satisfies AppendEventInput);
+            const event = proposedEventInput(
+              entry.requestId,
+              record,
+              worker,
+              RESEARCH_STORE_FORMAT_VERSION,
+            );
+            eventRequestId = event.eventRequestId;
+            eventJson = event.eventJson;
           }
           db.query(
             `INSERT INTO findings
@@ -1730,32 +1724,15 @@ export async function createResearchService(
              ORDER BY seq`,
           )
           .all(scopeKey, requestId) as Array<{ finding_id: string }>;
-        staleEventRequestId = `research:${row.request_id}:stale`;
-        staleEventJson = canonicalJson({
-          event_type: "research.stale",
-          run_id: row.request_id,
-          producer: "mars-research",
-          versions: [
-            {
-              component: "@mars/research",
-              revision: String(RESEARCH_STORE_FORMAT_VERSION),
-            },
-            worker
-              ? {
-                  component: `worker:${worker.id}`,
-                  revision: worker.version,
-                }
-              : { component: "worker:none", revision: "0" },
-          ],
-          payload: {
-            request_id: row.request_id,
-            task_revision: row.task_revision,
-            stale_finding_ids: staleFindingIds.map(
-              (finding) => finding.finding_id,
-            ),
-          },
-          source_event_ids: [],
-        } satisfies AppendEventInput);
+        const event = staleEventInput(
+          row.request_id,
+          row.task_revision,
+          staleFindingIds.map((finding) => finding.finding_id),
+          worker,
+          RESEARCH_STORE_FORMAT_VERSION,
+        );
+        staleEventRequestId = event.eventRequestId;
+        staleEventJson = event.eventJson;
       }
       const active = ACTIVE_STATUSES.includes(
         row.status as "queued" | "running",

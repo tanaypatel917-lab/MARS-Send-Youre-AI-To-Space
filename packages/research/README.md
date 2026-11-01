@@ -10,6 +10,8 @@ Create the service with a `rootDir`, a `ResearchTaskReader`, an artifact store, 
 
 Requests and findings survive restarts in `research.sqlite`. SQLite transactions use immediate locking; lease ownership, retries, idempotency, deadlines, active-request backpressure, and per-instance worker concurrency are enforced. Token and USD limits are enforced only against usage reported by a worker; usage the worker does not report cannot be enforced. `ResearchJob.enforcement` identifies this distinction.
 
+The current `RESEARCH_STORE_FORMAT_VERSION` is 2. Version 1 stores are migrated atomically on open, including pending event-outbox entries.
+
 Workers report each usage delta through `reportUsage`. Evidence is stored through the configured artifact store, and finding records refer to those captured artifacts. The optional event sink is an outbox: event failures are retained as pending and retried on later pumps.
 
 ## Citations and privacy

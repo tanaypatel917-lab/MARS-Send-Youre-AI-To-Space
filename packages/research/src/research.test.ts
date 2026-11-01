@@ -16,6 +16,7 @@ import path from "node:path";
 import type {
   ArtifactRef,
   RequestContext,
+  ResearchFinding,
   ResearchRequest,
   Task,
 } from "@mars/contracts";
@@ -24,10 +25,12 @@ import {
   createResearchService,
   type DurableResearchService,
   type FindingProposal,
+  RESEARCH_STORE_FORMAT_VERSION,
   type ResearchWorker,
   type ResearchWorkerContext,
   RetryableResearchError,
 } from "./index";
+import { canonicalRecord, sha256 } from "./store";
 
 const roots: string[] = [];
 const services: DurableResearchService[] = [];
@@ -76,6 +79,83 @@ function makeRoot(): string {
   const root = mkdtempSync(path.join(tmpdir(), "mars-research-test-"));
   roots.push(root);
   return root;
+}
+
+function createV1ResearchDatabase(rootDir: string): Database {
+  mkdirSync(rootDir, { recursive: true, mode: 0o700 });
+  const db = new Database(path.join(rootDir, "research.sqlite"), {
+    create: true,
+    strict: true,
+  });
+  db.exec(`
+    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE requests (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      scope_key TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      scope_json TEXT NOT NULL,
+      idem_request_id TEXT NOT NULL,
+      input_sha256 TEXT NOT NULL,
+      record_json TEXT NOT NULL,
+      record_sha256 TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      task_revision INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      stale INTEGER NOT NULL,
+      cancel_requested INTEGER NOT NULL,
+      attempts INTEGER NOT NULL,
+      max_attempts INTEGER NOT NULL,
+      submitted_at TEXT NOT NULL,
+      requested_deadline TEXT NOT NULL,
+      deadline TEXT NOT NULL,
+      available_at INTEGER NOT NULL,
+      lease_owner TEXT,
+      lease_token TEXT,
+      lease_expires_at INTEGER,
+      usage_json TEXT NOT NULL,
+      error_code TEXT,
+      worker_json TEXT,
+      finished_at TEXT,
+      stale_event_state TEXT NOT NULL,
+      UNIQUE(scope_key, request_id),
+      UNIQUE(scope_key, idem_request_id)
+    );
+    CREATE INDEX requests_claimable ON requests(status, available_at, seq);
+    CREATE INDEX requests_scope_active ON requests(scope_key, status);
+    CREATE TABLE findings (
+      scope_key TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      finding_id TEXT NOT NULL,
+      finding_key TEXT NOT NULL,
+      record_json TEXT NOT NULL,
+      record_sha256 TEXT NOT NULL,
+      status TEXT NOT NULL,
+      attempt INTEGER NOT NULL,
+      event_state TEXT NOT NULL,
+      PRIMARY KEY(scope_key, request_id, seq),
+      UNIQUE(scope_key, finding_id),
+      UNIQUE(scope_key, request_id, finding_key),
+      FOREIGN KEY(scope_key, request_id) REFERENCES requests(scope_key, request_id)
+    );
+    CREATE TABLE evidence (
+      scope_key TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      artifact_id TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      media_type TEXT NOT NULL,
+      byte_length INTEGER NOT NULL,
+      url TEXT NOT NULL,
+      retrieved_at TEXT NOT NULL,
+      captured_at TEXT NOT NULL,
+      PRIMARY KEY(scope_key, request_id, artifact_id, url, retrieved_at),
+      FOREIGN KEY(scope_key, request_id) REFERENCES requests(scope_key, request_id)
+    );
+  `);
+  db.query(
+    "INSERT INTO meta (key, value) VALUES ('format_version', '1')",
+  ).run();
+  return db;
 }
 
 function makeRequest(
@@ -1547,6 +1627,264 @@ describe("@mars/research durable control plane", () => {
     expect(JSON.stringify(afterStale.at(-1)?.payload)).not.toContain(env.root);
   });
 
+  test("migrates v1 outbox rows and rejects unsupported store versions", async () => {
+    const root = makeRoot();
+    const tasks = await createTaskStore({
+      rootDir: path.join(root, "tasks"),
+      workspaceRoots: [],
+    });
+    taskStores.push(tasks);
+    const task = makeTask();
+    await tasks.create(context("create-v1-task"), task);
+    const researchRoot = path.join(root, "research");
+    const db = createV1ResearchDatabase(researchRoot);
+    const now = Date.now();
+    const scopeJson = canonicalRecord(scope).record_json;
+    const scopeKey = sha256(scopeJson);
+    const legacyWorkerJson = canonicalRecord({
+      id: "legacy-worker",
+      version: "1",
+    }).record_json;
+    const insertRequest = db.query(
+      `INSERT INTO requests
+       (scope_key, request_id, scope_json, idem_request_id, input_sha256,
+        record_json, record_sha256, task_id, task_revision, status, stale,
+        cancel_requested, attempts, max_attempts, submitted_at,
+        requested_deadline, deadline, available_at, lease_owner, lease_token,
+        lease_expires_at, usage_json, error_code, worker_json, finished_at,
+        stale_event_state)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 3, ?, ?, ?, ?,
+               NULL, NULL, NULL, ?, NULL, ?, ?, ?)`,
+    );
+    const insertFinding = db.query(
+      `INSERT INTO findings
+       (scope_key, request_id, seq, finding_id, finding_key, record_json,
+        record_sha256, status, attempt, event_state)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+    );
+    const seedRequest = (
+      requestId: string,
+      stale: boolean,
+      workerJson: string | null,
+    ) => {
+      const requestValue = makeRequest(Date.now, task.task_id);
+      const requestRecord = canonicalRecord(requestValue);
+      const submittedAt = new Date(now).toISOString();
+      insertRequest.run(
+        scopeKey,
+        requestId,
+        scopeJson,
+        `context-${requestId}`,
+        sha256(requestId),
+        requestRecord.record_json,
+        requestRecord.record_sha256,
+        task.task_id,
+        0,
+        "completed",
+        stale ? 1 : 0,
+        submittedAt,
+        requestValue.deadline,
+        requestValue.deadline,
+        now,
+        JSON.stringify({
+          input_tokens: 0,
+          output_tokens: 0,
+          cost_usd: null,
+          reported: false,
+        }),
+        workerJson,
+        submittedAt,
+        stale ? "pending" : "none",
+      );
+    };
+    const seedFinding = (
+      requestId: string,
+      seq: number,
+      status: ResearchFinding["status"],
+      eventState: string,
+    ) => {
+      const findingId = `rf_${requestId}_${seq}`;
+      const finding: ResearchFinding = {
+        finding_id: findingId,
+        request_id: requestId,
+        task_revision: 0,
+        claim: `Legacy finding ${seq}`,
+        sources: [],
+        recommendation: "Review the finding.",
+        confidence: "medium",
+        remaining_uncertainty: [],
+        status,
+      };
+      const record = canonicalRecord(finding);
+      insertFinding.run(
+        scopeKey,
+        requestId,
+        seq,
+        findingId,
+        `legacy-${seq}`,
+        record.record_json,
+        record.record_sha256,
+        status,
+        eventState,
+      );
+      return findingId;
+    };
+    const proposedRequestId = "rr_legacy_proposed";
+    const staleRequestId = "rr_legacy_stale";
+    seedRequest(proposedRequestId, false, legacyWorkerJson);
+    seedRequest(staleRequestId, true, null);
+    const proposedFindingId = seedFinding(
+      proposedRequestId,
+      1,
+      "proposed",
+      "pending",
+    );
+    const staleFindingIds = [
+      seedFinding(staleRequestId, 1, "stale", "none"),
+      seedFinding(staleRequestId, 2, "stale", "none"),
+    ];
+    db.close();
+
+    const worker: ResearchWorker = {
+      id: "new-worker",
+      version: "2",
+      async run(input, workerContext) {
+        const evidence = await capture(
+          workerContext,
+          Date.now,
+          input.request_id,
+        );
+        await workerContext.publish(
+          proposal(evidence.ref, evidence.url, evidence.retrievedAt),
+        );
+      },
+    };
+    const service = await createResearchService({
+      rootDir: researchRoot,
+      tasks,
+      artifacts: tasks.artifacts,
+      events: tasks,
+      worker,
+      autoStart: false,
+    });
+    services.push(service);
+    expect(RESEARCH_STORE_FORMAT_VERSION).toBe(2);
+    await service.pump();
+
+    let events = await collect(tasks.events(context(), task.task_id));
+    const proposed = events.filter(
+      (event) => event.event_type === "research.proposed",
+    );
+    const stale = events.filter(
+      (event) => event.event_type === "research.stale",
+    );
+    expect(proposed).toHaveLength(1);
+    expect(stale).toHaveLength(1);
+    const proposedEvent = proposed[0];
+    const staleEvent = stale[0];
+    if (!proposedEvent || !staleEvent) {
+      throw new Error("Expected migrated task events");
+    }
+    const proposedPayload = JSON.parse(
+      new TextDecoder().decode(
+        await tasks.artifacts.get(
+          context("read-migrated-proposed-payload"),
+          proposedEvent.payload,
+        ),
+      ),
+    ) as Record<string, unknown>;
+    const stalePayload = JSON.parse(
+      new TextDecoder().decode(
+        await tasks.artifacts.get(
+          context("read-migrated-stale-payload"),
+          staleEvent.payload,
+        ),
+      ),
+    ) as Record<string, unknown>;
+    expect(proposed[0]?.versions).toContainEqual({
+      component: "@mars/research",
+      revision: "1",
+    });
+    expect(proposed[0]?.versions).toContainEqual({
+      component: "worker:legacy-worker",
+      revision: "1",
+    });
+    expect(proposedPayload).toMatchObject({
+      request_id: proposedRequestId,
+      finding_id: proposedFindingId,
+    });
+    expect(stale[0]?.versions).toContainEqual({
+      component: "@mars/research",
+      revision: "1",
+    });
+    expect(stale[0]?.versions).toContainEqual({
+      component: "worker:none",
+      revision: "0",
+    });
+    expect(stalePayload).toEqual({
+      request_id: staleRequestId,
+      task_revision: 0,
+      stale_finding_ids: staleFindingIds,
+    });
+
+    const newRequestId = await request(service, Date.now, "after-v1-migration");
+    await service.pump();
+    await waitFor(
+      async () =>
+        (await service.inspect(context("after-v1-migration"), newRequestId))
+          .status === "completed",
+    );
+    await service.pump();
+    events = await collect(tasks.events(context(), task.task_id));
+    const newProposed = events.find(
+      (event) =>
+        event.event_type === "research.proposed" &&
+        event.versions.some(
+          (version) => version.component === "worker:new-worker",
+        ),
+    );
+    expect(newProposed?.versions).toContainEqual({
+      component: "@mars/research",
+      revision: "2",
+    });
+    expect(newProposed?.versions).toContainEqual({
+      component: "worker:new-worker",
+      revision: "2",
+    });
+
+    const migratedDb = new Database(path.join(researchRoot, "research.sqlite"));
+    const formatVersion = migratedDb
+      .query("SELECT value FROM meta WHERE key = 'format_version'")
+      .get() as { value: string };
+    migratedDb.close();
+    expect(formatVersion.value).toBe("2");
+
+    const versionThreeRoot = path.join(makeRoot(), "research-v3");
+    mkdirSync(versionThreeRoot, { recursive: true, mode: 0o700 });
+    const versionThreeDb = new Database(
+      path.join(versionThreeRoot, "research.sqlite"),
+      { create: true, strict: true },
+    );
+    versionThreeDb.exec(
+      "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    );
+    versionThreeDb
+      .query("INSERT INTO meta (key, value) VALUES ('format_version', '3')")
+      .run();
+    versionThreeDb.close();
+    expect(
+      await errorCode(() =>
+        createResearchService({
+          rootDir: versionThreeRoot,
+          tasks,
+          artifacts: tasks.artifacts,
+          worker,
+          autoStart: false,
+        }),
+      ),
+    ).toBe("corrupt_record");
+  });
+
   test("replays the persisted proposed and stale event inputs after append crashes", async () => {
     let taskStore: Awaited<ReturnType<typeof createTaskStore>> | undefined;
     const worker = (version: string): ResearchWorker => ({
@@ -1735,6 +2073,104 @@ describe("@mars/research durable control plane", () => {
     } finally {
       releaseAppend();
       process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
+  test("repeats a coalesced flush after later findings are published", async () => {
+    let taskStore: Awaited<ReturnType<typeof createTaskStore>> | undefined;
+    let firstAppendStarted!: () => void;
+    let releaseFirstAppend!: () => void;
+    const firstAppendStartedPromise = new Promise<void>((resolve) => {
+      firstAppendStarted = resolve;
+    });
+    const firstAppendGate = new Promise<void>((resolve) => {
+      releaseFirstAppend = resolve;
+    });
+    let appendBlocked = false;
+    const eventSink = {
+      async appendEvent(
+        eventContext: RequestContext,
+        taskId: string,
+        input: Parameters<
+          Awaited<ReturnType<typeof createTaskStore>>["appendEvent"]
+        >[2],
+      ) {
+        if (!appendBlocked && input.event_type === "research.proposed") {
+          appendBlocked = true;
+          firstAppendStarted();
+          await firstAppendGate;
+        }
+        if (!taskStore) throw new Error("Task store is not ready");
+        return taskStore.appendEvent(eventContext, taskId, input);
+      },
+    };
+    const worker: ResearchWorker = {
+      id: "coalescing-worker",
+      version: "1",
+      async run(input, workerContext) {
+        if (input.question === "Second concurrent finding") {
+          await firstAppendStartedPromise;
+        }
+        const evidence = await capture(
+          workerContext,
+          Date.now,
+          input.request_id,
+        );
+        await workerContext.publish(
+          proposal(
+            evidence.ref,
+            evidence.url,
+            evidence.retrievedAt,
+            `finding-${input.request_id}`,
+          ),
+        );
+      },
+    };
+    const env = await setup({
+      worker,
+      service: {
+        autoStart: false,
+        maxConcurrency: 2,
+        events: eventSink,
+      },
+    });
+    taskStore = env.tasks;
+    const firstId = await request(env.service, env.now, "flush-first", {
+      question: "First concurrent finding",
+    });
+    const secondId = await request(env.service, env.now, "flush-second", {
+      question: "Second concurrent finding",
+    });
+
+    try {
+      await env.service.pump();
+      await firstAppendStartedPromise;
+      await waitFor(
+        async () =>
+          (await env.service.inspect(context("flush-second"), secondId))
+            .status === "completed",
+      );
+      const laterPump = env.service.pump();
+      releaseFirstAppend();
+      await laterPump;
+
+      const events = (
+        await collect(env.tasks.events(context(), env.task.task_id))
+      ).filter((event) => event.event_type === "research.proposed");
+      expect(events).toHaveLength(2);
+      const db = new Database(path.join(env.researchRoot, "research.sqlite"));
+      const pendingCount = db
+        .query(
+          "SELECT COUNT(*) AS count FROM findings WHERE event_state = 'pending'",
+        )
+        .get() as { count: number };
+      db.close();
+      expect(pendingCount.count).toBe(0);
+      expect(
+        await env.service.inspect(context("flush-first"), firstId),
+      ).toMatchObject({ status: "completed" });
+    } finally {
+      releaseFirstAppend();
     }
   });
 
