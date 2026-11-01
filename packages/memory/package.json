@@ -1,0 +1,17 @@
+{
+  "name": "@mars/memory",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./journal": "./src/journal.ts"
+  },
+  "dependencies": {
+    "@mars/contracts": "workspace:*",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-coding-agent": "18.14.0"
+  }
+}
