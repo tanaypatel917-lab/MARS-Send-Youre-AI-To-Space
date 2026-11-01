@@ -107,6 +107,7 @@ async function fixture() {
   let restoreCalls = 0;
   let diffFiles: DiffResult["files"] = [];
   const writes: string[] = [];
+  const writeModes = new Map<string, boolean | undefined>();
   const artifact = await store.artifacts.put(
     context(),
     new TextEncoder().encode("checkpoint"),
@@ -116,10 +117,10 @@ async function fixture() {
     async prepare() {
       prepareCalls++;
       if (failPrepare) throw new Error("fixture: prepare failed");
-      return ref;
+      return { ...ref };
     },
     async reopen() {
-      return ref;
+      return { ...ref };
     },
     async cwd() {
       return join(root, "isolated");
@@ -127,8 +128,9 @@ async function fixture() {
     async read() {
       return artifact;
     },
-    async write(_context, _workspace, path) {
+    async write(_context, _workspace, path, _artifact, options) {
       writes.push(path);
+      writeModes.set(path, options?.executable);
     },
     async execute() {
       return {
@@ -380,8 +382,12 @@ async function fixture() {
       return prepareCalls;
     },
     writes,
+    writeModes,
     set diffFiles(files: DiffResult["files"]) {
       diffFiles = files;
+    },
+    set revision(revision: string) {
+      ref.revision = revision;
     },
     get restoreCalls() {
       return restoreCalls;
@@ -1805,8 +1811,18 @@ test("coordinators delegate bounded children that run in private workspaces and 
   );
   expect(launch.collaboration.delegation).toBe(true);
   const prepared = f.prepareCalls;
-  // The coordinator's edits travel into the child's tree, not the source checkout.
-  f.diffFiles = [{ path: "src/feature.ts", status: "modified", patch: "" }];
+  // The coordinator's edits travel into the child's tree, not the source
+  // checkout, mode included, and the proposal base is the coordinator's live
+  // revision at seeding time rather than the one frozen when the runtime began.
+  f.revision = "r2";
+  f.diffFiles = [
+    {
+      path: "src/feature.ts",
+      status: "modified",
+      patch:
+        "diff --git a/src/feature.ts b/src/feature.ts\nold mode 100644\nnew mode 100755\n",
+    },
+  ];
 
   const request = {
     role_label: "worker",
@@ -1829,7 +1845,8 @@ test("coordinators delegate bounded children that run in private workspaces and 
   expect(child.paid_models).toBe(false);
   expect(child.model_id).toEqual(expect.any(String));
   expect(f.writes).toContain("src/feature.ts");
-  expect(required(bindings[0]).base_revision).toBe("r1");
+  expect(f.writeModes.get("src/feature.ts")).toBe(true);
+  expect(required(bindings[0]).base_revision).toBe("r2");
   // Without write authority the collaboration package confines the child to a read-only workspace.
   expect(child.workspace_mode).toBe("read_only");
   expect(child.child_task_id).not.toBe("task");
@@ -1942,6 +1959,7 @@ test("path-scoped writable children write only inside their claim and never exec
   const launches: ChildLaunch[] = [];
   const bindings: Awaited<ReturnType<ChildWorkspaceBinder>>[] = [];
   const finishers: ((outcome: ChildOutcome) => void)[] = [];
+  let binder: ChildWorkspaceBinder | undefined;
   const api = await f.makeHost(undefined, undefined, undefined, undefined, {
     host: collaboration.host,
     agents: collaboration.agents,
@@ -1950,6 +1968,7 @@ test("path-scoped writable children write only inside their claim and never exec
       tickMs: 10,
       adapter: ({ workspaceFor }) => ({
         async start(launch) {
+          binder = workspaceFor;
           launches.push(launch);
           const binding = await workspaceFor(launch);
           bindings.push(binding);
@@ -1979,6 +1998,7 @@ test("path-scoped writable children write only inside their claim and never exec
   const delegation = required(
     required(session.options.collaboration).delegation,
   );
+  f.diffFiles = [{ path: "docs/intro.md", status: "added", patch: "" }];
   // Omitted approvals default to read-only within the coordinator's own.
   await delegation.delegate({
     role_label: "reader",
@@ -2014,8 +2034,23 @@ test("path-scoped writable children write only inside their claim and never exec
   await expect(editor.write("../docs/a.md", bytes)).rejects.toMatchObject({
     code: "forbidden",
   });
+  await expect(editor.write("./docs/a.md", bytes)).rejects.toMatchObject({
+    code: "forbidden",
+  });
+  await expect(editor.write("docs//a.md", bytes)).rejects.toMatchObject({
+    code: "forbidden",
+  });
   await editor.write("docs/guide.md", bytes);
   expect(f.writes).toContain("docs/guide.md");
+  // A retried attempt reopens the child's own tree: no re-seeding over its
+  // edits, and the recorded base survives coordinator progress.
+  const seeded = f.writes.filter((path) => path === "docs/intro.md").length;
+  f.revision = "r9";
+  const again = await required(binder)(required(launches[1]));
+  expect(again.base_revision).toBe(required(bindings[1]).base_revision);
+  expect(f.writes.filter((path) => path === "docs/intro.md").length).toBe(
+    seeded,
+  );
   await expect(editor.execute(["true"])).rejects.toMatchObject({
     code: "forbidden",
   });

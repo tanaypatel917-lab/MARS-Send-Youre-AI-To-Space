@@ -88,7 +88,7 @@ export interface RoomToolHooks {
   /** Runs after a child is queued, e.g. to tick the child runner promptly. */
   afterDelegate?: () => Promise<void>;
   /** Current revision of the coordinator's own workspace, for result reviews. */
-  currentBaseRevision?: () => string | null;
+  currentBaseRevision?: () => string | null | Promise<string | null>;
   /** The room's current task revision; reviews must name it explicitly. */
   roomTaskRevision?: () => Promise<number>;
   /** The coordinator's own approvals; omitted child approvals default within them. */
@@ -210,7 +210,7 @@ function delegationTools(
         {
           decision: input.decision,
           expected_task_revision: input.expected_task_revision,
-          current_base_revision: hooks.currentBaseRevision?.() ?? null,
+          current_base_revision: (await hooks.currentBaseRevision?.()) ?? null,
         },
       );
       return JSON.stringify({ result_id: view.result_id, status: view.status });

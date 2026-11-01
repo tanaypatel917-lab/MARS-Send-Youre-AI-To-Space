@@ -1,6 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, realpath, rename, stat } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
   type ChildLaunch,
@@ -95,6 +103,13 @@ export interface WorkspaceHost extends ExecutionProvider {
   reopen(context: RequestContext, taskId: string): Promise<WorkspaceRef>;
   cwd(context: RequestContext, workspace: WorkspaceRef): Promise<string>;
   diff(context: RequestContext, workspace: WorkspaceRef): Promise<DiffResult>;
+  write(
+    context: RequestContext,
+    workspace: WorkspaceRef,
+    relativePath: string,
+    artifact: ArtifactRef,
+    options?: { executable?: boolean },
+  ): Promise<void>;
 }
 
 export interface WorkbenchHostOptions {
@@ -128,9 +143,18 @@ function normalizeClaimedPath(path: string): string | null {
 }
 
 /** A write is inside the child's claim when it equals or sits under a claimed path. */
+/** The executable bit a workspace diff patch records for the file's new state. */
+function seededExecutable(patch: string): boolean | undefined {
+  const match = /^new (?:file )?mode (\d{6})$/m.exec(patch);
+  if (!match) return undefined;
+  return match[1] === "100755";
+}
+
 function withinClaimedPaths(path: string, claimed: readonly string[]): boolean {
   const target = normalizeClaimedPath(path);
-  if (target === null) return false;
+  // Only the canonical spelling is accepted, so the claim check and the
+  // provider's own path validation always judge the same string.
+  if (target === null || target !== path) return false;
   return claimed.some((claim) => {
     const prefix = normalizeClaimedPath(claim);
     return (
@@ -656,7 +680,13 @@ export async function createWorkbenchHost(
           afterDelegate: async () => {
             await runner?.tick();
           },
-          currentBaseRevision: () => workspace.revision ?? null,
+          currentBaseRevision: async () => {
+            const live = await options.workspace.reopen(
+              internalContext(options.scope),
+              taskId,
+            );
+            return live.revision ?? null;
+          },
           parentApprovals: () => approvals,
           roomTaskRevision: async () =>
             (
@@ -758,23 +788,56 @@ export async function createWorkbenchHost(
     )
       throw new WorkbenchError("forbidden");
     const context = internalContext(options.scope);
-    // The child starts from the coordinator's current tree, not the source
-    // checkout: its proposal base is the coordinator revision it was seeded
-    // from, which the review compares with the coordinator's current revision.
-    const parent = await options.workspace.reopen(context, launch.task_id);
     const workspace = await options.workspace.prepare(
       context,
       launch.child_task_id,
     );
-    const changes = await options.workspace.diff(context, parent);
-    for (const file of changes.files) {
-      if (file.status === "deleted") throw new WorkbenchError("unavailable");
-      await options.workspace.write(
-        context,
-        workspace,
-        file.path,
-        await options.workspace.read(context, parent, file.path),
+    // The child starts from the coordinator's current tree, not the source
+    // checkout: its proposal base is the coordinator revision it was seeded
+    // from, which the review compares with the coordinator's live revision.
+    // Seeding happens once per child; a retried attempt reopens the child's
+    // own tree and keeps the recorded base.
+    const seedsDir = join(options.stateRoot, "children", "seeds");
+    const seedPath = join(
+      seedsDir,
+      encodeURIComponent(launch.child_task_id) + ".json",
+    );
+    let baseRevision: string | null;
+    const recorded = await readFile(seedPath, "utf8").then(
+      (text) => JSON.parse(text) as { base_revision: string | null },
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      },
+    );
+    if (recorded) {
+      baseRevision = recorded.base_revision;
+    } else {
+      const parent = await options.workspace.reopen(context, launch.task_id);
+      const changes = await options.workspace.diff(context, parent);
+      for (const file of changes.files) {
+        if (file.status === "deleted") throw new WorkbenchError("unavailable");
+        const executable = seededExecutable(file.patch);
+        await options.workspace.write(
+          context,
+          workspace,
+          file.path,
+          await options.workspace.read(context, parent, file.path),
+          executable === undefined ? undefined : { executable },
+        );
+      }
+      baseRevision =
+        parent.revision === undefined || parent.revision === null
+          ? null
+          : String(parent.revision);
+      await mkdir(seedsDir, { recursive: true, mode: 0o700 });
+      const temporary = seedPath + "." + randomUUID() + ".tmp";
+      await writeFile(
+        temporary,
+        JSON.stringify({ base_revision: baseRevision }),
+        { mode: 0o600 },
       );
+      await rename(temporary, seedPath);
     }
     const approvals: Approvals =
       launch.workspace_mode === "read_only"
@@ -792,10 +855,7 @@ export async function createWorkbenchHost(
         },
         launch.write_paths,
       ),
-      base_revision:
-        parent.revision === undefined || parent.revision === null
-          ? null
-          : String(parent.revision),
+      base_revision: baseRevision,
     };
   };
   if (options.collaboration && delegation) {
