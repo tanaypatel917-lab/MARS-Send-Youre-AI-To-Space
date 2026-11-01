@@ -22,6 +22,7 @@ import {
   createLocalWorkspaceProvider,
   WorkspaceNotFoundError,
 } from "@mars/workspaces";
+import type { WorkbenchCollaboration } from "./collaboration-context";
 import { createWorkbenchHost, type WorkbenchHostOptions } from "./host";
 import { serveWorkbench, WorkbenchError } from "./server";
 import type { WorkbenchSpecialists } from "./specialist-routing";
@@ -36,6 +37,8 @@ export interface WorkbenchServiceOptions {
   registry?: ModelProviderRegistry;
   /** Evidence-gated specialist router; launches use the registry default without it. */
   specialists?: WorkbenchSpecialists;
+  /** Task-scoped collaboration rooms; launches stay single-agent without it. */
+  collaboration?: WorkbenchCollaboration;
   runtimeFactory?: WorkbenchHostOptions["runtimeFactory"];
 }
 
@@ -145,6 +148,9 @@ export async function createWorkbenchService(
       memory,
       repositoryMap,
       ...(options.specialists ? { specialists: options.specialists } : {}),
+      ...(options.collaboration
+        ? { collaboration: options.collaboration }
+        : {}),
       hostPrivateRoots: [memoryRoot, source],
       workspace: {
         prepare: provider.prepare.bind(provider),

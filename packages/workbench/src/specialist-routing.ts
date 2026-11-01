@@ -6,7 +6,6 @@ import {
   type RoutingRequest,
 } from "@mars/specialists";
 import { z } from "zod";
-import type { Approvals } from "./protocol";
 
 /** The only registry capability the workbench needs: evidence-gated routing. */
 export interface SpecialistRouter {
@@ -54,7 +53,7 @@ export function routingTaskId(taskId: string): string {
 
 export function routingRequest(
   task: Task,
-  approvals: Approvals,
+  toolsRequired: boolean,
   specialists: Pick<
     WorkbenchSpecialists,
     "domain" | "complexity" | "paid_consent"
@@ -68,7 +67,7 @@ export function routingRequest(
     domain: specialists.domain,
     complexity: specialists.complexity ?? "medium",
     requires: {
-      tools: Object.values(approvals).some(Boolean),
+      tools: toolsRequired,
       vision: false,
       reasoning: false,
       min_context_tokens: minContextTokens,
@@ -87,13 +86,13 @@ export function routingRequest(
 export async function routeLaunch(
   context: RequestContext,
   task: Task,
-  approvals: Approvals,
+  toolsRequired: boolean,
   specialists: WorkbenchSpecialists,
   minContextTokens: number,
 ): Promise<FrozenRouting> {
   const decision = await specialists.router.route(
     context,
-    routingRequest(task, approvals, specialists, minContextTokens),
+    routingRequest(task, toolsRequired, specialists, minContextTokens),
   );
   const selected =
     decision.outcome === "specialist" || decision.outcome === "baseline"
