@@ -26,7 +26,7 @@ import {
   parseJournal,
 } from "./journal";
 
-export const MEMORY_STORE_FORMAT_VERSION = 1;
+export const MEMORY_STORE_FORMAT_VERSION = 2;
 export const DEFAULT_BUDGETS = { profile: 1375, project: 2200 } as const;
 export const DISCLOSURE =
   "Deletion cannot erase influence on already-trained model weights; retire or retrain these manifests.";
@@ -302,9 +302,9 @@ export class DurableMemoryStore implements MemoryService {
         CREATE VIRTUAL TABLE IF NOT EXISTS journal_fts USING fts5(session_id UNINDEXED, entry_id UNINDEXED, text, tokenize="unicode61 tokenchars '_'");
         INSERT INTO journal_fts(journal_fts,rank) VALUES('secure-delete',1);
         CREATE TABLE IF NOT EXISTS exclusions (digest TEXT PRIMARY KEY);
-        CREATE TABLE IF NOT EXISTS dataset_use (scope_key TEXT, manifest_id TEXT, source_id TEXT, evidence_id TEXT, PRIMARY KEY(scope_key,manifest_id,source_id,evidence_id));
+        CREATE TABLE IF NOT EXISTS dataset_use (scope_key TEXT, manifest_id TEXT, source_id TEXT, evidence_id TEXT, session_id TEXT, entry_id TEXT, PRIMARY KEY(scope_key,manifest_id,source_id,evidence_id));
         CREATE TABLE IF NOT EXISTS exports (scope_key TEXT, digest TEXT, owner TEXT, PRIMARY KEY(scope_key,digest));
-        PRAGMA user_version=1; COMMIT;`);
+        PRAGMA user_version=2; COMMIT;`);
     } catch (e) {
       if (e instanceof MemoryStoreError) throw e;
       fail("storage_error");
@@ -759,7 +759,8 @@ export class DurableMemoryStore implements MemoryService {
         .get(hash(input.session_id)) as { scope_key: string } | null;
       if (existing && existing.scope_key !== scopeKey(ctx))
         fail("scope_denied");
-      if (this.excluded(`${scopeKey(ctx)}:${input.session_id}`)) return;
+      if (this.excluded(canonicalJson([scopeKey(ctx), input.session_id])))
+        return;
       this.db
         .query("INSERT OR IGNORE INTO session_claims VALUES(?,?)")
         .run(hash(input.session_id), scopeKey(ctx));
@@ -770,7 +771,7 @@ export class DurableMemoryStore implements MemoryService {
       for (const message of messages) {
         if (
           this.excluded(
-            `${scopeKey(ctx)}:${input.session_id}:${message.entry_id}`,
+            canonicalJson([scopeKey(ctx), input.session_id, message.entry_id]),
           )
         )
           continue;
@@ -879,7 +880,7 @@ export class DurableMemoryStore implements MemoryService {
       })),
       ...this.journalRows(ctx).map((row) => {
         const m = this.decodeJournal(row);
-        const source = `journal:${m.session_id}:${m.entry_id}`;
+        const source = this.journalSource(m.session_id, m.entry_id);
         return {
           source_id: source,
           source_ids: [source],
@@ -910,15 +911,29 @@ export class DurableMemoryStore implements MemoryService {
       }
       for (const row of this.journalRows(ctx))
         allow(
-          `journal:${row.session_id}:${row.entry_id}`,
-          `journal:${row.session_id}:${row.entry_id}`,
+          this.journalSource(row.session_id, row.entry_id),
+          this.journalSource(row.session_id, row.entry_id),
         );
       if (sourceIds.some((s) => !allowed.has(s))) fail("not_found");
       for (const source of sourceIds)
-        for (const evidence of allowed.get(source) ?? [])
+        for (const evidence of allowed.get(source) ?? []) {
+          const [sessionId, entryId] = evidence.startsWith("journal:")
+            ? (JSON.parse(evidence.slice("journal:".length)) as [
+                string,
+                string,
+              ])
+            : [null, null];
           this.db
-            .query("INSERT OR IGNORE INTO dataset_use VALUES(?,?,?,?)")
-            .run(scopeKey(ctx), manifestId, source, evidence);
+            .query("INSERT OR IGNORE INTO dataset_use VALUES(?,?,?,?,?,?)")
+            .run(
+              scopeKey(ctx),
+              manifestId,
+              source,
+              evidence,
+              sessionId,
+              entryId,
+            );
+        }
     });
   }
   private affected(ctx: RequestContext, sources: string[]): string[] {
@@ -935,18 +950,19 @@ export class DurableMemoryStore implements MemoryService {
   private memorySources(entryId: string): string[] {
     return [`memory:${entryId}`];
   }
+  private journalSource(sessionId: string, entryId: string): string {
+    return `journal:${canonicalJson([sessionId, entryId])}`;
+  }
   private journalDatasetSources(
     ctx: RequestContext,
-    sessionId?: string,
+    sessionId: string,
   ): string[] {
-    const prefix =
-      sessionId === undefined ? "journal:" : `journal:${sessionId}:`;
     return (
       this.db
         .query(
-          "SELECT DISTINCT evidence_id FROM dataset_use WHERE scope_key=? AND substr(evidence_id,1,length(?))=?",
+          "SELECT DISTINCT evidence_id FROM dataset_use WHERE scope_key=? AND session_id=?",
         )
-        .all(scopeKey(ctx), prefix, prefix) as { evidence_id: string }[]
+        .all(scopeKey(ctx), sessionId) as { evidence_id: string }[]
     ).map((row) => row.evidence_id);
   }
   private clearDatasetUse(ctx: RequestContext, sources: string[]): void {
@@ -982,13 +998,26 @@ export class DurableMemoryStore implements MemoryService {
   ): Promise<ErasureResult> {
     this.context(ctx);
     return this.write(() => {
-      const entry = this.find(ctx, entryId);
+      validate(id, entryId);
       const affected = this.affected(ctx, this.memorySources(entryId));
-      const seq = this.nextSeq();
-      this.db
-        .query("UPDATE streams SET last_seq=? WHERE stream_key=?")
-        .run(seq, streamKey(entry));
-      this.eraseEntry(entryId);
+      let entry: MemoryEntry | undefined;
+      try {
+        entry = this.find(ctx, entryId);
+      } catch (error) {
+        if (
+          !(error instanceof MemoryStoreError) ||
+          error.code !== "not_found" ||
+          !affected.length
+        )
+          throw error;
+      }
+      if (entry) {
+        const seq = this.nextSeq();
+        this.db
+          .query("UPDATE streams SET last_seq=? WHERE stream_key=?")
+          .run(seq, streamKey(entry));
+        this.eraseEntry(entryId);
+      }
       this.clearDatasetUse(ctx, this.memorySources(entryId));
       this.clearExports(ctx.scope.owner_id);
       return { affected_training_manifests: affected, disclosure: DISCLOSURE };
@@ -1003,21 +1032,19 @@ export class DurableMemoryStore implements MemoryService {
     validate(id, sessionId);
     if (entryIds) validate(z.array(id), entryIds);
     return this.write(() => {
-      if (!this.visibleSession(ctx, sessionId)) fail("not_found");
-      const session = this.db
-        .query("SELECT scope_key FROM sessions WHERE session_id=?")
-        .get(sessionId) as { scope_key: string };
       const sources = entryIds
-        ? entryIds.map((key) => `journal:${sessionId}:${key}`)
+        ? entryIds.map((key) => this.journalSource(sessionId, key))
         : this.journalDatasetSources(ctx, sessionId);
       const affected = this.affected(ctx, sources);
+      if (!this.visibleSession(ctx, sessionId) && !affected.length)
+        fail("not_found");
       this.clearDatasetUse(ctx, sources);
       if (!entryIds) {
-        this.exclude(`${session.scope_key}:${sessionId}`);
+        this.exclude(canonicalJson([scopeKey(ctx), sessionId]));
         this.dropSession(sessionId, false);
       } else
         for (const key of entryIds) {
-          this.exclude(`${session.scope_key}:${sessionId}:${key}`);
+          this.exclude(canonicalJson([scopeKey(ctx), sessionId, key]));
           this.db
             .query("DELETE FROM journal WHERE session_id=? AND entry_id=?")
             .run(sessionId, key);
@@ -1072,14 +1099,16 @@ export class DurableMemoryStore implements MemoryService {
       });
       const data = Buffer.from(
         canonicalJson({
-          format_version: 1,
+          format_version: MEMORY_STORE_FORMAT_VERSION,
           scope: ctx.scope,
           entries: history,
           sessions,
           dataset_use: [
             ...history.map((e) => `memory:${e.entry_id}`),
             ...sessions.flatMap((s) =>
-              s.messages.map((m) => `journal:${s.session_id}:${m.entry_id}`),
+              s.messages.map((m) =>
+                this.journalSource(s.session_id, m.entry_id),
+              ),
             ),
           ].flatMap((source) =>
             this.db
@@ -1151,12 +1180,13 @@ export class DurableMemoryStore implements MemoryService {
     this.context(ctx);
     return this.write(() => {
       const entries = this.visibleRows(ctx);
-      const journals = this.journalRows(ctx);
-      const sources = [
-        ...entries.flatMap((e) => this.memorySources(e.entry_id)),
-        ...journals.map((r) => `journal:${r.session_id}:${r.entry_id}`),
-        ...this.journalDatasetSources(ctx),
-      ];
+      const sources = (
+        this.db
+          .query(
+            "SELECT DISTINCT evidence_id FROM dataset_use WHERE scope_key=?",
+          )
+          .all(scopeKey(ctx)) as { evidence_id: string }[]
+      ).map((row) => row.evidence_id);
       const affected = this.affected(ctx, sources);
       const seq = this.nextSeq();
       this.db
@@ -1186,7 +1216,7 @@ export class DurableMemoryStore implements MemoryService {
       for (const s of this.db
         .query(`SELECT * FROM sessions WHERE ${journalVisibility}`)
         .all(...args(ctx)) as { scope_key: string; session_id: string }[]) {
-        this.exclude(`${s.scope_key}:${s.session_id}`);
+        this.exclude(canonicalJson([s.scope_key, s.session_id]));
         this.dropSession(s.session_id);
       }
       this.clearExports(ctx.scope.owner_id);
