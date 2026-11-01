@@ -73,6 +73,143 @@ afterEach(async () => {
     rmSync(dir, { recursive: true, force: true });
 });
 
+test("corrections require identical target and scope and never publish hidden IDs", async () => {
+  const s = open(),
+    w = ctx("p", "w"),
+    other = ctx("p", "other");
+  await add(s, entry("hidden-predecessor", "hidden fact", w), 0, w);
+  for (const [writer, replacementScope] of [
+    [w, c],
+    [other, other],
+  ] as const) {
+    await expect(
+      add(
+        s,
+        {
+          ...entry("rejected", "correction", replacementScope),
+          supersedes: "hidden-predecessor",
+        },
+        (await s.snapshot(writer)).revision,
+        writer,
+      ),
+    ).rejects.toMatchObject({ code: "not_found" });
+  }
+  expect((await s.snapshot(w)).revision).toBe(1);
+  expect(await s.provenance(w, "hidden-predecessor")).toHaveLength(1);
+  for (const viewer of [c, other]) {
+    expect(await s.snapshot(viewer)).toEqual({ revision: 0, entries: [] });
+    expect(await s.search(viewer, "correction")).toEqual([]);
+    expect(
+      Buffer.from(
+        await s.readExport(viewer, await s.export(viewer)),
+      ).toString(),
+    ).not.toContain("hidden-predecessor");
+    await expect(s.provenance(viewer, "rejected")).rejects.toMatchObject({
+      code: "not_found",
+    });
+  }
+  await add(
+    s,
+    {
+      ...entry("same-workspace", "corrected", w),
+      supersedes: "hidden-predecessor",
+    },
+    1,
+    w,
+  );
+  expect((await s.snapshot(w)).entries.map((e) => e.entry_id)).toEqual([
+    "same-workspace",
+  ]);
+  expect(
+    (await s.provenance(w, "same-workspace")).map((e) => e.entry_id),
+  ).toEqual(["hidden-predecessor", "hidden-predecessor", "same-workspace"]);
+  await add(s, entry("wide-predecessor", "wide"), 0, c);
+  await expect(
+    add(
+      s,
+      {
+        ...entry("overlay-correction", "narrow", w),
+        supersedes: "wide-predecessor",
+      },
+      3,
+      w,
+    ),
+  ).rejects.toMatchObject({ code: "not_found" });
+  await add(s, entry("profile-predecessor", "profile", c, "profile"), 3, c);
+  const b = ctx("b");
+  await expect(
+    add(
+      s,
+      {
+        ...entry("cross-project", "changed", b, "profile"),
+        supersedes: "profile-predecessor",
+      },
+      4,
+      b,
+    ),
+  ).rejects.toMatchObject({ code: "not_found" });
+  await expect(
+    add(
+      s,
+      {
+        ...entry("cross-target", "changed"),
+        supersedes: "profile-predecessor",
+      },
+      4,
+      c,
+    ),
+  ).rejects.toMatchObject({ code: "not_found" });
+});
+
+test("lineage exports and mutation reports expose only the exact recording scope", async () => {
+  for (const [a, b, target] of [
+    [ctx("a"), ctx("b"), "profile"],
+    [c, ctx("p", "w"), "project"],
+    [ctx("p", "a"), ctx("p", "b"), "project"],
+  ] as const) {
+    for (const erase of ["forget", "delete"] as const) {
+      const s = open();
+      const evidenceContext = target === "profile" ? a : c;
+      await add(
+        s,
+        entry("shared", "shared evidence", evidenceContext, target),
+        0,
+        evidenceContext,
+      );
+      await s.recordDatasetUse(a, "private-A-manifest", ["memory:shared"]);
+      await s.recordDatasetUse(b, "own-B-manifest", ["memory:shared"]);
+      const exported = JSON.parse(
+        Buffer.from(await s.readExport(b, await s.export(b))).toString(),
+      );
+      expect(exported.dataset_use).toEqual([
+        { manifest_id: "own-B-manifest", source_id: "memory:shared" },
+      ]);
+      expect(JSON.stringify(exported)).not.toContain("private-A-manifest");
+      const report = await s.batchWithReport(b, 1, [
+        {
+          operation: "patch",
+          entry_id: "shared",
+          fact: "replacement evidence",
+          source_event_ids: [],
+        },
+      ]);
+      expect(report.affected_training_manifests).toEqual(["own-B-manifest"]);
+      const removed =
+        erase === "forget"
+          ? await s.forgetEntry(b, "shared")
+          : await s.delete(b);
+      expect(removed.affected_training_manifests).toEqual(["own-B-manifest"]);
+    }
+  }
+  const s = open();
+  expect(
+    (await s.batchWithReport(c, 0, [])).affected_training_manifests,
+  ).toEqual([]);
+  await expect(
+    s.recordDatasetUse(c, "untrusted", ["memory:missing"]),
+  ).rejects.toMatchObject({ code: "not_found" });
+});
+
 test("fresh, persistence in both process directions and stale writes", async () => {
   const dir = root();
   let s = open(dir);
@@ -374,6 +511,80 @@ const journal = (session_id = "session", text = "journalmarker") => ({
       message: { role: "user", content: text },
     },
   ],
+});
+
+test("erasure reports dropped and replaced journal lineage and cleans only its recording scope", async () => {
+  for (const replacement of [false, true]) {
+    for (const operation of ["delete", "session", "message"] as const) {
+      const dir = root(),
+        s = open(dir),
+        other = ctx("other");
+      await s.indexJournal(c, journal("retired"));
+      await s.recordDatasetUse(c, "training-1", ["journal:retired:m1"]);
+      await s.indexJournal(other, journal("other-session"));
+      await s.recordDatasetUse(other, "training-other", [
+        "journal:other-session:m1",
+      ]);
+      if (replacement) {
+        const input = journal("retired");
+        input.entries = input.entries.slice(0, 1);
+        await s.indexJournal(c, input);
+      } else await s.dropHistory(c, "retired");
+      expect(await s.searchHistory(c, "journalmarker")).toEqual([]);
+      const result =
+        operation === "delete"
+          ? await s.delete(c)
+          : await s.excludeJournal(
+              c,
+              "retired",
+              operation === "message" ? ["m1"] : undefined,
+            );
+      expect(result.affected_training_manifests).toEqual(["training-1"]);
+      const db = new Database(join(dir, "memory.sqlite"));
+      try {
+        expect(
+          db
+            .query("SELECT manifest_id FROM dataset_use ORDER BY manifest_id")
+            .all(),
+        ).toEqual([{ manifest_id: "training-other" }]);
+      } finally {
+        db.close();
+      }
+      expect(
+        (await s.excludeJournal(other, "other-session"))
+          .affected_training_manifests,
+      ).toEqual(["training-other"]);
+      if (operation !== "delete")
+        expect(
+          (await s.excludeJournal(c, "retired")).affected_training_manifests,
+        ).toEqual([]);
+    }
+  }
+});
+
+test("profile hard erasure cleans only the caller's recorded lineage", async () => {
+  for (const operation of ["forget", "delete"] as const) {
+    const dir = root(),
+      s = open(dir),
+      a = ctx("a"),
+      b = ctx("b");
+    await add(s, entry("shared", "shared fact", a, "profile"), 0, a);
+    await s.recordDatasetUse(a, "training-a", ["memory:shared"]);
+    await s.recordDatasetUse(b, "training-b", ["memory:shared"]);
+    const result =
+      operation === "forget"
+        ? await s.forgetEntry(b, "shared")
+        : await s.delete(b);
+    expect(result.affected_training_manifests).toEqual(["training-b"]);
+    const db = new Database(join(dir, "memory.sqlite"));
+    try {
+      expect(db.query("SELECT manifest_id FROM dataset_use").all()).toEqual([
+        { manifest_id: "training-a" },
+      ]);
+    } finally {
+      db.close();
+    }
+  }
 });
 
 test("hard forget and delete scrub sqlite/WAL, invalidate exports and suppress reindex", async () => {
