@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import type { Scope, Task } from "@mars/contracts";
+import type { EventEnvelope, Scope, Task } from "@mars/contracts";
 import { MarsClient } from "../../../apps/vscode/src/client";
 import { HttpRpcTransport } from "../../../apps/vscode/src/rpc";
 import {
@@ -46,6 +46,87 @@ const task: Task = {
 const servers: ReturnType<typeof serveWorkbench>[] = [];
 afterEach(async () => {
   for (const server of servers.splice(0)) await server.stop(true);
+});
+
+test("event backlogs page by serialized bytes and count, preserving cursor progress without duplicates or skips", async () => {
+  const backlog: EventEnvelope[] = Array.from(
+    { length: 10500 },
+    (_, index) => ({
+      schema_version: 1,
+      event_id: `event-${index}`,
+      scope,
+      session_id: "session",
+      task_id: "task",
+      occurred_at: "2026-11-01T12:00:00.000Z",
+      event_type: "execution.observed",
+      parent_event_id: index ? `event-${index - 1}` : null,
+      run_id: "run",
+      producer: index < 2 ? "界".repeat(700000) : "fixture",
+      versions: [{ component: "fixture", revision: "1" }],
+      payload: artifact,
+      source_event_ids: [],
+      access: "private",
+    }),
+  );
+  const { url } = fixture({
+    async events(_context, _taskId, cursor) {
+      return backlog.slice(
+        cursor === undefined ? 0 : Number(cursor.slice(6)) + 1,
+      );
+    },
+  });
+  const client = new MarsClient(
+    new HttpRpcTransport({ rpcUrl: url, getToken: async () => token }),
+  );
+  await client.describe();
+  const received: string[] = [];
+  let pages = 0;
+  while (true) {
+    const page = await client.events("task", received.at(-1));
+    expect(
+      Buffer.byteLength(JSON.stringify({ result: page })),
+    ).toBeLessThanOrEqual(4 * 1024 * 1024);
+    if (page.length === 0) break;
+    if (pages === 0) expect(page).toHaveLength(1);
+    expect(page.length).toBeLessThanOrEqual(1000);
+    pages++;
+    received.push(...page.map((event) => event.event_id));
+    if (pages > 20) throw new Error("Cursor did not advance");
+  }
+  expect(pages).toBeGreaterThan(2);
+  expect(received).toEqual(backlog.map((event) => event.event_id));
+});
+
+test("an individually oversized event fails closed rather than silently skipping it", async () => {
+  const { send } = fixture({
+    async events() {
+      return [
+        {
+          schema_version: 1,
+          event_id: "large-event",
+          scope,
+          session_id: "session",
+          task_id: "task",
+          occurred_at: "2026-11-01T12:00:00.000Z",
+          event_type: "execution.observed",
+          parent_event_id: null,
+          run_id: "run",
+          producer: "x".repeat(4 * 1024 * 1024),
+          versions: [{ component: "fixture", revision: "1" }],
+          payload: artifact,
+          source_event_ids: [],
+          access: "private",
+        },
+      ];
+    },
+  });
+  const response = await send({
+    method: "tasks.events",
+    context,
+    params: { task_id: "task" },
+  });
+  expect(response.status).toBe(413);
+  expect(await response.json()).toMatchObject({ error: { code: "too_large" } });
 });
 
 function fixture(overrides: Partial<WorkbenchOperations> = {}) {
