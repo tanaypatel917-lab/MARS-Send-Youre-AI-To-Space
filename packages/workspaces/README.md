@@ -49,7 +49,7 @@ provider.inspect(context: RequestContext, workspaceId: string): Promise<Workspac
 provider.workspacePath(context: RequestContext, workspace: WorkspaceRef): Promise<string>;
 provider.checkpoints(context: RequestContext, workspace: WorkspaceRef): Promise<CheckpointRef[]>;
 provider.skipped(context: RequestContext, workspace: WorkspaceRef):
-  Promise<Array<{ path: string; reason: "symlink" | "special" | "ignored-secret" }>>;
+  Promise<Array<{ path: string; reason: "symlink" | "special" | "ignored-secret" | "unsupported-name" }>>;
 provider.stop(context: RequestContext, workspace: WorkspaceRef): Promise<void>;
 provider.close(): Promise<void>;
 ```
@@ -121,6 +121,10 @@ If rollback fails, the journal, backup, and staging/aside data are retained for
 recovery or forensic inspection; healthy workspaces remain usable. Recovery
 cleanup deletes only safely named entries belonging to resolved workspaces or
 true orphans. Retained entries are deliberately not treated as a startup error.
+Provider writes stage data under `rootDir/staging`, journal the operation, and
+restore the prior file on a failed commit. Startup reconciles interrupted
+writes and executions from the workspace tree. `close()` aborts active runs
+and drains tracked operations before releasing the provider lock.
 
 ## Threat model
 
@@ -128,7 +132,9 @@ This package is for local task workspaces operated by a trusted MARS service pro
 
 It is **not** a VM or a boundary against a compromised Docker daemon, host kernel, host administrator, or an attacker with the same host uid. The workspace process must own its `rootDir`; the Docker daemon is privileged. Containers receive the workspace tree, not the original `sourceRoot`. The provider never modifies `sourceRoot`. The image must already exist locally; verification never pulls it. On startup, a configured sandbox removes containers labeled for the root and provider creation fails if cleanup cannot be verified. The provider lock allows only one live provider process per real `rootDir`, and callers should close the provider to release it.
 
-Host-side operations reject symlinks, but a separate process with the same host permissions can still race filesystem changes or directly alter a workspace. Revision checks detect ordinary out-of-band changes before restore; they are not a defense against a hostile same-uid process racing the provider. Keep `rootDir` private and do not share its tree with unrelated processes.
+Workspace contents are produced by untrusted commands and are written with the host uid through the bind mount. Host integrations must never execute, source, or import workspace files outside the sandbox. Secret-name filtering governs source copying and the provider's `read`, `write`, `diff`, and `checkpoint` APIs. A sandboxed command can read files created earlier by sandboxed commands in that workspace; those files cannot contain host secrets because source secrets are never copied in.
+
+Host-side operations reject symlinks, but a separate process with the same host permissions can still race filesystem changes or directly alter a workspace. Revision checks detect ordinary out-of-band changes before restore; they are not a defense against a hostile same-uid process racing the provider. Keep `rootDir` private and do not share its tree with unrelated processes. Unsupported names created by commands are omitted from snapshots and digests and reported as `unsupported-name`; restoring a checkpoint removes those files.
 
 ## Known gaps
 
@@ -138,6 +144,7 @@ Host-side operations reject symlinks, but a separate process with the same host 
 - In-memory artifacts are neither durable nor suitable for production retention.
 - Docker containment depends on the host daemon and kernel; it does not isolate kernel vulnerabilities.
 - A process crash during restore is recovered from the on-disk journal on next provider creation. Abrupt host power loss and filesystem-specific durability characteristics remain dependent on the host filesystem.
+- Unresolved restore journals and staging/trash entries associated with lost or unreadable workspaces are retained as recovery/forensic data; cleanup only removes entries proven safe to delete.
 
 ## Verification evidence
 
