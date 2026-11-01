@@ -547,10 +547,14 @@ export class DurableMemoryStore implements MemoryService {
             fail("conflict");
           if (entry.supersedes) {
             const old = this.find(ctx, entry.supersedes, true);
+            if (
+              old.target !== entry.target ||
+              canonicalJson(old.scope) !== canonicalJson(entry.scope)
+            )
+              fail("not_found");
             if (old.target === "project")
               changedWorkspaces.add(old.scope.workspace_id ?? "");
             removedSources.push(...this.memorySources(old.entry_id));
-            if (old.target !== entry.target) fail("scope_denied");
             this.append(
               ctx,
               { ...old, revision: old.revision + 1, deleted: true },
@@ -592,7 +596,7 @@ export class DurableMemoryStore implements MemoryService {
       this.checkBudgets(ctx, targets, changedWorkspaces);
       return {
         revision: seq,
-        affected_training_manifests: this.affected(removedSources),
+        affected_training_manifests: this.affected(ctx, removedSources),
         disclosure: DISCLOSURE,
       };
     });
@@ -917,17 +921,39 @@ export class DurableMemoryStore implements MemoryService {
             .run(scopeKey(ctx), manifestId, source, evidence);
     });
   }
-  private affected(sources: string[]): string[] {
+  private affected(ctx: RequestContext, sources: string[]): string[] {
     const out = new Set<string>();
     for (const source of sources)
       for (const row of this.db
-        .query("SELECT manifest_id FROM dataset_use WHERE evidence_id=?")
-        .all(source) as { manifest_id: string }[])
+        .query(
+          "SELECT manifest_id FROM dataset_use WHERE evidence_id=? AND scope_key=?",
+        )
+        .all(source, scopeKey(ctx)) as { manifest_id: string }[])
         out.add(row.manifest_id);
     return [...out].sort();
   }
   private memorySources(entryId: string): string[] {
     return [`memory:${entryId}`];
+  }
+  private journalDatasetSources(
+    ctx: RequestContext,
+    sessionId?: string,
+  ): string[] {
+    const prefix =
+      sessionId === undefined ? "journal:" : `journal:${sessionId}:`;
+    return (
+      this.db
+        .query(
+          "SELECT DISTINCT evidence_id FROM dataset_use WHERE scope_key=? AND substr(evidence_id,1,length(?))=?",
+        )
+        .all(scopeKey(ctx), prefix, prefix) as { evidence_id: string }[]
+    ).map((row) => row.evidence_id);
+  }
+  private clearDatasetUse(ctx: RequestContext, sources: string[]): void {
+    for (const source of sources)
+      this.db
+        .query("DELETE FROM dataset_use WHERE scope_key=? AND evidence_id=?")
+        .run(scopeKey(ctx), source);
   }
   private clearExports(owner: string): void {
     for (const row of this.db
@@ -957,12 +983,13 @@ export class DurableMemoryStore implements MemoryService {
     this.context(ctx);
     return this.write(() => {
       const entry = this.find(ctx, entryId);
-      const affected = this.affected(this.memorySources(entryId));
+      const affected = this.affected(ctx, this.memorySources(entryId));
       const seq = this.nextSeq();
       this.db
         .query("UPDATE streams SET last_seq=? WHERE stream_key=?")
         .run(seq, streamKey(entry));
       this.eraseEntry(entryId);
+      this.clearDatasetUse(ctx, this.memorySources(entryId));
       this.clearExports(ctx.scope.owner_id);
       return { affected_training_manifests: affected, disclosure: DISCLOSURE };
     }, true);
@@ -980,15 +1007,11 @@ export class DurableMemoryStore implements MemoryService {
       const session = this.db
         .query("SELECT scope_key FROM sessions WHERE session_id=?")
         .get(sessionId) as { scope_key: string };
-      const rows = this.db
-        .query("SELECT * FROM journal WHERE session_id=?")
-        .all(sessionId) as JournalRow[];
-      const removed = rows.filter(
-        (r) => !entryIds || entryIds.includes(r.entry_id),
-      );
-      const affected = this.affected(
-        removed.map((r) => `journal:${sessionId}:${r.entry_id}`),
-      );
+      const sources = entryIds
+        ? entryIds.map((key) => `journal:${sessionId}:${key}`)
+        : this.journalDatasetSources(ctx, sessionId);
+      const affected = this.affected(ctx, sources);
+      this.clearDatasetUse(ctx, sources);
       if (!entryIds) {
         this.exclude(`${session.scope_key}:${sessionId}`);
         this.dropSession(sessionId, false);
@@ -1061,9 +1084,9 @@ export class DurableMemoryStore implements MemoryService {
           ].flatMap((source) =>
             this.db
               .query(
-                "SELECT manifest_id,source_id FROM dataset_use WHERE evidence_id=? ORDER BY manifest_id,source_id",
+                "SELECT manifest_id,source_id FROM dataset_use WHERE evidence_id=? AND scope_key=? ORDER BY manifest_id,source_id",
               )
-              .all(source),
+              .all(source, scopeKey(ctx)),
           ),
           disclosure: DISCLOSURE,
         }),
@@ -1132,8 +1155,9 @@ export class DurableMemoryStore implements MemoryService {
       const sources = [
         ...entries.flatMap((e) => this.memorySources(e.entry_id)),
         ...journals.map((r) => `journal:${r.session_id}:${r.entry_id}`),
+        ...this.journalDatasetSources(ctx),
       ];
-      const affected = this.affected(sources);
+      const affected = this.affected(ctx, sources);
       const seq = this.nextSeq();
       this.db
         .query(`UPDATE streams SET last_seq=? WHERE ${visibility}`)
@@ -1166,10 +1190,7 @@ export class DurableMemoryStore implements MemoryService {
         this.dropSession(s.session_id);
       }
       this.clearExports(ctx.scope.owner_id);
-      for (const source of sources)
-        this.db
-          .query("DELETE FROM dataset_use WHERE evidence_id=?")
-          .run(source);
+      this.clearDatasetUse(ctx, sources);
       return { affected_training_manifests: affected, disclosure: DISCLOSURE };
     }, true);
   }
