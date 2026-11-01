@@ -9,11 +9,22 @@ import {
   Settings,
 } from "@oh-my-pi/pi-coding-agent";
 import { grep } from "@oh-my-pi/pi-natives";
+import { postmortem } from "@oh-my-pi/pi-utils";
 
 export { type BudgetLedger, ExecutionLimitError } from "./model-bridge";
 export * from "./runtime";
 
 export const EXECUTION_PACKAGE_VERSION = "18.14.0";
+
+export function registerRuntimeCleanup(
+  id: string,
+  cleanup: () => Promise<void>,
+): () => void {
+  return postmortem.register(id, cleanup, {
+    exitOnly: true,
+    deadlineMs: 30_000,
+  });
+}
 
 export interface ExecutionProbe {
   runtime: "oh-my-pi";

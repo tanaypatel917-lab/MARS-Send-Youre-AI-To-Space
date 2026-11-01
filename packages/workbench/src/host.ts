@@ -14,6 +14,7 @@ import { ScopeSchema } from "@mars/contracts";
 import {
   EXECUTION_PACKAGE_VERSION,
   openRuntimeSession,
+  type RuntimeObservation,
   type RuntimeSession,
   type RuntimeSessionOptions,
   type RuntimeTools,
@@ -193,7 +194,13 @@ export async function createWorkbenchHost(
   };
   const assertPublicBytes = (bytes: Uint8Array, patterns: string[]): void => {
     const buffer = Buffer.from(bytes);
-    if (patterns.some((pattern) => buffer.includes(Buffer.from(pattern))))
+    if (
+      patterns.some((pattern) =>
+        [pattern, JSON.stringify(pattern).slice(1, -1)].some((value) =>
+          buffer.includes(Buffer.from(value)),
+        ),
+      )
+    )
       throw new WorkbenchError("forbidden");
   };
   const ownedArtifact = async (
@@ -431,6 +438,9 @@ export async function createWorkbenchHost(
         { status: "running" },
       );
       let runtime: RuntimeSession | undefined;
+      const initialObservations: RuntimeObservation[] = [];
+      let bound = false;
+      const persistObservation = observe(task.task_id);
       try {
         const workspace = await options.workspace.prepare(
           context,
@@ -447,7 +457,15 @@ export async function createWorkbenchHost(
           ...(params.model_id ? { modelId: params.model_id } : {}),
           approvals: params.approvals,
           tools: toolsFor(running, workspace, params.approvals),
-          onEvent: observe(task.task_id),
+          onEvent: async (event) => {
+            if (!bound) {
+              if (initialObservations.length >= 1000)
+                throw new WorkbenchError("unavailable");
+              initialObservations.push(event);
+              return;
+            }
+            await persistObservation(event);
+          },
         });
         if (closing) throw new WorkbenchError("unavailable");
         await writeLaunch(task, {
@@ -470,6 +488,9 @@ export async function createWorkbenchHost(
           },
         );
         if (closing) throw new WorkbenchError("unavailable");
+        for (const observation of initialObservations)
+          await persistObservation(observation);
+        bound = true;
         run(
           running,
           workspace,

@@ -9,6 +9,7 @@
     "@mars/execution": "workspace:*",
     "@mars/providers": "workspace:*",
     "@mars/tasks": "workspace:*",
+    "@mars/workspaces": "workspace:*",
     "zod": "3.25.76"
   }
 }
