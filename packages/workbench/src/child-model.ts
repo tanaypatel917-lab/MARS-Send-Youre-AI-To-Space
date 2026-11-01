@@ -77,5 +77,7 @@ export function chooseChildModel(
 }
 
 export function isReviewerRole(roleLabel: string): boolean {
-  return /\breview/i.test(roleLabel);
+  // Any label mentioning review (reviewer, code-review, peerreviewer) is a
+  // reviewer; a false negative would silently skip the independence rule.
+  return /review/i.test(roleLabel);
 }

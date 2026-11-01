@@ -83,6 +83,8 @@ describe("chooseChildModel", () => {
   test("role labels containing review select the reviewer path", () => {
     expect(isReviewerRole("Reviewer")).toBe(true);
     expect(isReviewerRole("code-review")).toBe(true);
+    expect(isReviewerRole("peerreviewer")).toBe(true);
+    expect(isReviewerRole("PR_REVIEWS")).toBe(true);
     expect(isReviewerRole("worker")).toBe(false);
   });
 });
