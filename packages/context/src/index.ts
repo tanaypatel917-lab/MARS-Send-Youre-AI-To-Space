@@ -1,6 +1,7 @@
 export {
   ContextCancelledError,
   ContextClosedError,
+  ContextConfinementUnavailableError,
   ContextError,
   ContextIoError,
   ContextLimitError,
@@ -14,6 +15,7 @@ export {
 export { conservativeTokenCounter, utf8ByteTokenCounter } from "./tokens";
 export type {
   AuthorizedWorkspaceRoot,
+  ConfinementMode,
   RepositoryMap,
   RepositoryMapFile,
   RepositoryMapLimits,

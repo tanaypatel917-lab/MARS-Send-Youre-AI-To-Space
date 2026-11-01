@@ -1,9 +1,21 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import * as fsPromises from "node:fs/promises";
+import {
+  type FileHandle,
+  lstat,
+  open,
+  readdir,
+  realpath,
+  stat,
+} from "node:fs/promises";
+import { dirname, join } from "node:path";
 import type { ParseCacheEntry } from "./cache";
-import { ContextCancelledError, ContextIoError } from "./errors";
+import {
+  ContextCancelledError,
+  ContextConfinementUnavailableError,
+  ContextIoError,
+} from "./errors";
 import { extractPython, PYTHON_EXTRACTOR_VERSION } from "./extract-python";
 import { extractTypeScript, TS_EXTRACTOR_VERSION } from "./extract-ts";
 import { type GitignoreRule, isGitignored, parseGitignore } from "./gitignore";
@@ -14,6 +26,7 @@ import {
   validateRelativePath,
 } from "./policy";
 import type {
+  ConfinementMode,
   ExtractedFile,
   InventoryFile,
   RepositoryMapLimits,
@@ -32,10 +45,20 @@ export interface InventoryResult {
 
 export interface InventoryOptions {
   root: string;
+  confinement?: ConfinementMode;
   limits: RepositoryMapLimits;
   previous: ReadonlyMap<string, ParseCacheEntry>;
   signal?: AbortSignal;
   check: () => void;
+}
+
+type ProcFdRootResolverForTest = (rootFd: number) => string | Promise<string>;
+
+interface WalkDirectory {
+  relativePath: string;
+  expectedStat: Awaited<ReturnType<typeof lstat>>;
+  absolutePath?: string;
+  handle?: FileHandle;
 }
 
 const reasons: SkippedReason[] = [
@@ -51,8 +74,21 @@ const reasons: SkippedReason[] = [
   "invalid_name",
   "limit",
 ];
-export async function inventory(
+
+export function inventory(options: InventoryOptions): Promise<InventoryResult> {
+  return inventoryInternal(options);
+}
+
+export function inventoryWithProcFdRootForTest(
   options: InventoryOptions,
+  resolveProcFdRoot: ProcFdRootResolverForTest,
+): Promise<InventoryResult> {
+  return inventoryInternal(options, resolveProcFdRoot);
+}
+
+async function inventoryInternal(
+  options: InventoryOptions,
+  resolveProcFdRootForTest?: ProcFdRootResolverForTest,
 ): Promise<InventoryResult> {
   const files: InventoryFile[] = [];
   const skipped = Object.fromEntries(
@@ -80,18 +116,64 @@ export async function inventory(
     skip("limit");
     return true;
   };
+  const realRoot = options.root;
+  const confinement = options.confinement ?? "anchored";
+  let procFdRoot = "/proc/self/fd";
+  let rootStat: Awaited<ReturnType<typeof lstat>>;
+  try {
+    rootStat = await lstat(realRoot);
+  } catch (error) {
+    throw asIoError(error);
+  }
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new ContextIoError();
+  }
+
+  let rootHandle: FileHandle | undefined;
+  let rootDirectory: WalkDirectory;
+  if (confinement === "anchored") {
+    const anchoredRoot = await openAnchoredRoot(
+      realRoot,
+      rootStat,
+      resolveProcFdRootForTest,
+    );
+    rootHandle = anchoredRoot.handle;
+    procFdRoot = anchoredRoot.procFdRoot;
+    rootDirectory = {
+      relativePath: "",
+      expectedStat: rootStat,
+      handle: rootHandle,
+    };
+  } else {
+    rootDirectory = {
+      relativePath: "",
+      expectedStat: rootStat,
+      absolutePath: realRoot,
+    };
+  }
 
   const walk = async (
-    absoluteDirectory: string,
-    relativeDirectory: string,
+    directory: WalkDirectory,
     inheritedRules: readonly {
       prefix: string;
       rules: readonly GitignoreRule[];
     }[],
   ): Promise<void> => {
     check();
+    if (!(await directoryIsSafe(directory, realRoot, confinement))) {
+      skip("symlink");
+      return;
+    }
+    const relativeDirectory = directory.relativePath;
+    const absoluteDirectory =
+      confinement === "anchored"
+        ? procFdPath(directory.handle as FileHandle, procFdRoot)
+        : (directory.absolutePath as string);
     const rules = [...inheritedRules];
     const ignorePath = join(absoluteDirectory, ".gitignore");
+    const ignoreRelativePath = relativeDirectory
+      ? `${relativeDirectory}/.gitignore`
+      : ".gitignore";
     try {
       const stat = await lstat(ignorePath);
       if (stat.isFile() && !stat.isSymbolicLink()) {
@@ -101,7 +183,13 @@ export async function inventory(
           stopForLimit();
           return;
         } else {
-          const contents = await readNoFollow(ignorePath, stat);
+          const contents = await readNoFollow(
+            ignorePath,
+            stat,
+            confinement,
+            realRoot,
+            ignoreRelativePath,
+          );
           totalBytes += contents.length;
           rules.push({
             prefix: relativeDirectory,
@@ -121,12 +209,28 @@ export async function inventory(
     try {
       names = await readdir(absoluteDirectory);
     } catch (error) {
+      if (!(await directoryIsSafe(directory, realRoot, confinement))) {
+        skip("symlink");
+        return;
+      }
+      if (isSymlinkRace(error)) {
+        skip("symlink");
+        return;
+      }
       if (isMissing(error)) return;
       throw asIoError(error);
+    }
+    if (!(await directoryIsSafe(directory, realRoot, confinement))) {
+      skip("symlink");
+      return;
     }
     names.sort(compare);
     for (const name of names) {
       check();
+      if (!(await directoryIsSafe(directory, realRoot, confinement))) {
+        skip("symlink");
+        return;
+      }
       entriesVisited += 1;
       if (entriesVisited > options.limits.maxDirectoryEntries) {
         stopForLimit();
@@ -164,7 +268,39 @@ export async function inventory(
         continue;
       }
       if (stat.isDirectory()) {
-        await walk(absolute, relative, rules);
+        if (confinement === "anchored") {
+          let childHandle: FileHandle | undefined;
+          try {
+            childHandle = await openAnchoredDirectory(absolute, stat);
+          } catch (error) {
+            throw asIoError(error);
+          }
+          if (!childHandle) {
+            skip("symlink");
+            continue;
+          }
+          try {
+            await walk(
+              {
+                relativePath: relative,
+                expectedStat: stat,
+                handle: childHandle,
+              },
+              rules,
+            );
+          } finally {
+            await childHandle.close().catch(() => undefined);
+          }
+        } else {
+          await walk(
+            {
+              relativePath: relative,
+              expectedStat: stat,
+              absolutePath: absolute,
+            },
+            rules,
+          );
+        }
         if (!complete) return;
         continue;
       }
@@ -187,7 +323,13 @@ export async function inventory(
       }
       let bytes: Buffer;
       try {
-        bytes = await readNoFollow(absolute, stat);
+        bytes = await readNoFollow(
+          absolute,
+          stat,
+          confinement,
+          realRoot,
+          relative,
+        );
       } catch (error) {
         if (isMissing(error)) continue;
         if (isSymlinkRace(error)) {
@@ -263,7 +405,11 @@ export async function inventory(
     }
   };
 
-  await walk(options.root, "", []);
+  try {
+    await walk(rootDirectory, []);
+  } finally {
+    if (rootHandle) await rootHandle.close().catch(() => undefined);
+  }
   files.sort((left, right) => compare(left.path, right.path));
   const digest = createHash("sha256")
     .update(files.map((file) => `${file.path}\0${file.sha256}\n`).join(""))
@@ -282,12 +428,25 @@ export async function inventory(
 async function readNoFollow(
   path: string,
   expectedStat: Awaited<ReturnType<typeof lstat>>,
+  confinement: ConfinementMode,
+  realRoot: string,
+  relativePath: string,
 ): Promise<Buffer> {
+  const expectedDirectory =
+    confinement === "best-effort"
+      ? dirname(join(realRoot, relativePath))
+      : undefined;
+  if (expectedDirectory) {
+    await verifyExpectedDirectory(dirname(path), expectedDirectory);
+  }
   const handle = await open(
     path,
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
   );
   try {
+    if (expectedDirectory) {
+      await verifyExpectedDirectory(dirname(path), expectedDirectory);
+    }
     const openedStat = await handle.stat();
     if (
       !openedStat.isFile() ||
@@ -298,7 +457,193 @@ async function readNoFollow(
     }
     return await handle.readFile();
   } finally {
-    await handle.close();
+    await handle.close().catch(() => undefined);
+  }
+}
+
+async function openAnchoredRoot(
+  realRoot: string,
+  expectedStat: Awaited<ReturnType<typeof lstat>>,
+  resolveProcFdRootForTest?: ProcFdRootResolverForTest,
+): Promise<{ handle: FileHandle; procFdRoot: string }> {
+  if (
+    typeof constants.O_DIRECTORY !== "number" ||
+    typeof constants.O_NOFOLLOW !== "number"
+  ) {
+    throw new ContextConfinementUnavailableError();
+  }
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(
+      realRoot,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    const openedStat = await handle.stat();
+    if (
+      !openedStat.isDirectory() ||
+      openedStat.dev !== expectedStat.dev ||
+      openedStat.ino !== expectedStat.ino
+    ) {
+      throw new FileIdentityMismatchError();
+    }
+  } catch {
+    if (handle) await handle.close().catch(() => undefined);
+    throw new ContextIoError();
+  }
+  if (!handle) throw new ContextIoError();
+
+  let procFdRoot: string;
+  try {
+    procFdRoot = resolveProcFdRootForTest
+      ? await resolveProcFdRootForTest(handle.fd)
+      : "/proc/self/fd";
+    const expectedProcFdRoot = `/proc/${process.pid}/fd`;
+    if (
+      (await realpath("/proc/self/fd")) !== expectedProcFdRoot ||
+      (await realpath(procFdRoot)) !== expectedProcFdRoot
+    ) {
+      throw new Error();
+    }
+    const statfs = (
+      fsPromises as unknown as {
+        statfs?: (path: string) => Promise<{ type: number | bigint }>;
+      }
+    ).statfs;
+    if (typeof statfs === "function") {
+      const filesystem = await statfs(procFdRoot);
+      if (Number(filesystem.type) !== 0x9fa0) throw new Error();
+    } else {
+      // Realpath and fd-link identity are the fallback when statfs is unavailable.
+    }
+    const procPath = procFdPath(handle, procFdRoot);
+    const fdLinkStat = await lstat(procPath);
+    await readdir(procPath);
+    const procStat = await stat(procPath);
+    const openedStat = await handle.stat();
+    if (
+      !fdLinkStat.isSymbolicLink() ||
+      !procStat.isDirectory() ||
+      procStat.dev !== openedStat.dev ||
+      procStat.ino !== openedStat.ino
+    ) {
+      throw new Error();
+    }
+  } catch {
+    await handle.close().catch(() => undefined);
+    throw new ContextConfinementUnavailableError();
+  }
+  return { handle, procFdRoot };
+}
+
+async function openAnchoredDirectory(
+  path: string,
+  expectedStat: Awaited<ReturnType<typeof lstat>>,
+): Promise<FileHandle | undefined> {
+  let handle: FileHandle;
+  try {
+    handle = await open(
+      path,
+      constants.O_RDONLY |
+        (constants.O_DIRECTORY ?? 0) |
+        (constants.O_NOFOLLOW ?? 0),
+    );
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (isMissing(error) || isSymlinkRace(error) || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  }
+  try {
+    const openedStat = await handle.stat();
+    if (
+      !openedStat.isDirectory() ||
+      openedStat.dev !== expectedStat.dev ||
+      openedStat.ino !== expectedStat.ino
+    ) {
+      await handle.close().catch(() => undefined);
+      return undefined;
+    }
+    return handle;
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    if (isMissing(error) || isSymlinkRace(error)) return undefined;
+    throw error;
+  }
+}
+
+function procFdPath(handle: FileHandle, procFdRoot: string): string {
+  return join(procFdRoot, String(handle.fd));
+}
+
+async function directoryIsSafe(
+  directory: WalkDirectory,
+  realRoot: string,
+  confinement: ConfinementMode,
+): Promise<boolean> {
+  if (confinement === "anchored") {
+    try {
+      const currentStat = await directory.handle?.stat();
+      return Boolean(
+        currentStat?.isDirectory() &&
+          currentStat.dev === directory.expectedStat.dev &&
+          currentStat.ino === directory.expectedStat.ino,
+      );
+    } catch {
+      return false;
+    }
+  }
+  if (!directory.absolutePath) return false;
+  return directoryMatchesRoot(
+    directory.absolutePath,
+    directory.relativePath,
+    realRoot,
+    directory.expectedStat,
+  );
+}
+
+async function directoryMatchesRoot(
+  absoluteDirectory: string,
+  relativeDirectory: string,
+  realRoot: string,
+  expectedStat: Awaited<ReturnType<typeof lstat>>,
+): Promise<boolean> {
+  let currentStat: Awaited<ReturnType<typeof lstat>>;
+  try {
+    currentStat = await lstat(absoluteDirectory);
+  } catch (error) {
+    if (isMissing(error) || isSymlinkRace(error)) return false;
+    throw asIoError(error);
+  }
+  if (
+    !currentStat.isDirectory() ||
+    currentStat.isSymbolicLink() ||
+    currentStat.dev !== expectedStat.dev ||
+    currentStat.ino !== expectedStat.ino
+  ) {
+    return false;
+  }
+  const expectedPath = relativeDirectory
+    ? join(realRoot, relativeDirectory)
+    : realRoot;
+  try {
+    return (await realpath(absoluteDirectory)) === expectedPath;
+  } catch (error) {
+    if (isMissing(error) || isSymlinkRace(error)) return false;
+    throw asIoError(error);
+  }
+}
+
+async function verifyExpectedDirectory(
+  directory: string,
+  expectedDirectory: string,
+): Promise<void> {
+  try {
+    if ((await realpath(directory)) !== expectedDirectory) {
+      throw new FileIdentityMismatchError();
+    }
+  } catch {
+    throw new FileIdentityMismatchError();
   }
 }
 

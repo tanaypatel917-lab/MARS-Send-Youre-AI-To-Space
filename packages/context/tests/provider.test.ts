@@ -74,6 +74,30 @@ describe("repository map provider", () => {
     expect(changedQuery.stats.files_reused).toBe(2);
   });
 
+  test("map cache hits refresh inventory-derived fields", async () => {
+    const root = await tempRoot();
+    await putFile(root, ".gitignore", "ignored.ts\n");
+    await putFile(root, "a.ts", "export function one() { return 1; }\n");
+    const provider = providerFor(root);
+    const request = { workspace, max_output_tokens: 200 };
+    const first = await provider.map(context, request);
+    expect(first.stats.skipped.gitignored).toBe(0);
+
+    await putFile(
+      root,
+      "ignored.ts",
+      "export function hidden() { return 2; }\n",
+    );
+    const second = await provider.map(context, request);
+
+    expect(second.stats.map_cache_hit).toBe(true);
+    expect(second.stats.skipped.gitignored).toBe(1);
+    expect(second.stats.files_inventoried).toBe(1);
+    expect(second.stats.files_parsed).toBe(0);
+    expect(second.stats.files_reused).toBe(1);
+    expect(second.complete).toBe(first.complete);
+  });
+
   test("packs 1,500 TypeScript files with five exported functions within budget", async () => {
     const root = await tempRoot();
     await Promise.all(
@@ -414,6 +438,31 @@ describe("repository map provider", () => {
       max_output_tokens: 500,
     });
     expect(recovered.stats.files_parsed).toBe(2);
+  });
+
+  test("does not cache scans whose workspace revision changes before return", async () => {
+    const root = await tempRoot();
+    await putFile(root, "a.ts", "export function alpha() { return 1; }\n");
+    let resolveCalls = 0;
+    const provider = createRepositoryMapProvider({
+      resolveRoot: async () => {
+        resolveCalls += 1;
+        return {
+          root,
+          revision: resolveCalls === 2 ? "revision-b" : "revision-a",
+        };
+      },
+    });
+    const request = {
+      workspace: { ...workspace, revision: "revision-a" },
+      max_output_tokens: 500,
+    };
+    await expect(provider.map(context, request)).rejects.toBeInstanceOf(
+      ContextRevisionError,
+    );
+    const recovered = await provider.map(context, request);
+    expect(recovered.stats.map_cache_hit).toBe(false);
+    expect(recovered.stats.files_parsed).toBe(1);
   });
 
   test("token count and returned tree never disclose local paths", async () => {

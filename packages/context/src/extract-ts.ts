@@ -1,7 +1,7 @@
 import ts from "typescript";
 import type { Definition, ExtractedFile, SymbolKind } from "./types";
 
-export const TS_EXTRACTOR_VERSION = "ts-ast-v1";
+export const TS_EXTRACTOR_VERSION = "ts-ast-v2";
 
 const scriptKinds: Record<string, ts.ScriptKind> = {
   ".tsx": ts.ScriptKind.TSX,
@@ -67,23 +67,24 @@ export function extractTypeScript(
     depth: number,
     scope: "top" | "namespace" | "class" | "other",
   ) => {
-    if (ts.isFunctionDeclaration(node) && node.name) {
+    const declarationScope = scope === "top" || scope === "namespace";
+    if (ts.isFunctionDeclaration(node) && node.name && declarationScope) {
       add(node, node.name, "function", depth, node.body);
-    } else if (ts.isClassDeclaration(node) && node.name) {
+    } else if (ts.isClassDeclaration(node) && node.name && declarationScope) {
       add(node, node.name, "class", depth, node.members[0]);
       node.members.forEach((member) => {
         visit(member, depth + 1, "class");
       });
-    } else if (ts.isInterfaceDeclaration(node)) {
+    } else if (ts.isInterfaceDeclaration(node) && declarationScope) {
       add(node, node.name, "interface", depth, node.members[0]);
       node.members.forEach((member) => {
         visit(member, depth + 1, "class");
       });
-    } else if (ts.isTypeAliasDeclaration(node)) {
+    } else if (ts.isTypeAliasDeclaration(node) && declarationScope) {
       add(node, node.name, "type", depth);
-    } else if (ts.isEnumDeclaration(node)) {
+    } else if (ts.isEnumDeclaration(node) && declarationScope) {
       add(node, node.name, "enum", depth, node.members[0]);
-    } else if (ts.isModuleDeclaration(node)) {
+    } else if (ts.isModuleDeclaration(node) && declarationScope) {
       if (ts.isIdentifier(node.name)) add(node, node.name, "namespace", depth);
       if (node.body) {
         if (ts.isModuleBlock(node.body)) {
@@ -97,7 +98,8 @@ export function extractTypeScript(
     } else if (
       ts.isMethodDeclaration(node) &&
       node.name &&
-      ts.isIdentifier(node.name)
+      ts.isIdentifier(node.name) &&
+      scope === "class"
     ) {
       add(node, node.name, "method", depth, node.body);
     } else if (
@@ -106,6 +108,7 @@ export function extractTypeScript(
         ts.isSetAccessorDeclaration(node)) &&
       node.name &&
       ts.isIdentifier(node.name) &&
+      scope === "class" &&
       !node.name.text.startsWith("#")
     ) {
       const kind = ts.isPropertyDeclaration(node) ? "property" : "method";

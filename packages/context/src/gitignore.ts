@@ -23,14 +23,20 @@ export function parseGitignore(contents: string): GitignoreRule[] {
     const anchored = line.startsWith("/") || line.includes("/");
     line = line.replace(/^\/+/, "");
     const source = globSource(line);
-    const regex = anchored
-      ? new RegExp(`^${source}(?:/.*)?$`)
-      : new RegExp(`(?:^|/)${source}(?:/.*)?$`);
-    const exactDirectoryRegex = directoryOnly
-      ? anchored
-        ? new RegExp(`^${source}$`)
-        : new RegExp(`(?:^|/)${source}$`)
-      : undefined;
+    let regex: RegExp;
+    let exactDirectoryRegex: RegExp | undefined;
+    try {
+      regex = anchored
+        ? new RegExp(`^${source}(?:/.*)?$`)
+        : new RegExp(`(?:^|/)${source}(?:/.*)?$`);
+      exactDirectoryRegex = directoryOnly
+        ? anchored
+          ? new RegExp(`^${source}$`)
+          : new RegExp(`(?:^|/)${source}$`)
+        : undefined;
+    } catch {
+      return [];
+    }
     return [
       {
         regex,

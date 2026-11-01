@@ -11,6 +11,8 @@ export type WorkspaceRootResolver = (
   workspace: WorkspaceRef,
 ) => Promise<AuthorizedWorkspaceRoot>;
 
+export type ConfinementMode = "anchored" | "best-effort";
+
 export interface RepositoryMapLimits {
   maxFiles: number;
   maxFileBytes: number;
@@ -34,6 +36,7 @@ export interface RepositoryMapProviderOptions {
   tokenCounter?: TokenCounter;
   maxCachedWorkspaces?: number;
   maxCachedMapsPerWorkspace?: number;
+  confinement?: ConfinementMode;
   now?: () => number;
 }
 

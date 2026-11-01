@@ -7,14 +7,18 @@ a measurement or claim of live coding quality.
 
 - Environment: Linux 6.8.0-1061-aws, x86_64 GNU/Linux.
 - Bun: `1.4.4`.
-- `bun test packages/context` → 27 pass, 0 fail, 1,412 expectations; 27 tests across 4 files.
-- The 1,500-file packing test completed in **654.61 ms** in that package test run. It asserts the 65,536-token cap.
-- `bun run lint` → pass; Biome checked 125 files with no fixes.
+- `bun test packages/context` → 39 pass, 0 fail, 1,476 expectations; 39 tests across 5 files.
+- The 1,500-file packing test completed in **906.72 ms** in that package test run. It asserts the 65,536-token cap.
+- `bun run lint` → pass; Biome checked 130 files with no fixes.
 - `bun run typecheck` → pass; `tsc --noEmit`.
 - `bun packages/context/bench/compare.ts` → pass; all repeated maps were deterministic using a fresh provider.
-- `bun run check` → pass. The offline source audit validated 25 entries. Root tests: 370 pass, 7 skip, 0 fail,
-  3,432 expectations; 377 tests across 27 files. The seven skipped tests require real containers or the
+- `bun run check` → pass. The offline source audit validated 25 entries. Root tests: 414 pass, 7 skip, 0 fail,
+  3,855 expectations; 421 tests across 29 files. The seven skipped tests require real containers or the
   container/model integration environment. Execution smoke reported `model_requests: 0`; build bundled 27 modules.
+- The dynamic directory-swap sweep on the pre-fix inventory leaked at callback 6. After fd-anchored traversal, both
+  the provider `now()` sweep and direct inventory check-callback sweep passed at every dynamically measured point.
+  A fake proc-fd directory with a root-fd-named symlink was rejected before traversal; the default anchored and normal
+  best-effort tests also passed.
 - No dependency or `bun.lock` changes were made in this follow-up.
 
 ## Fixture comparison
@@ -23,6 +27,8 @@ Command: `bun packages/context/bench/compare.ts`. Six unchanged, hand-authored n
 budgets 256, 512, and 1,024. “Enabled” is the repository map; “disabled” is the alphabetical whole-line file-list
 baseline. The scaled fixture contains the same 31 files plus 300 deterministic linked distractor modules (331 files
 total), generated from indices and a fixed word list. No randomness or task/ground-truth changes are involved.
+Each target's expected source line is hand-recorded in the fixture and checked against that source line by a plain
+whole-word assertion; provenance scoring does not call the map's extractors to establish the expected line.
 
 The small fixture's complete alphabetical listing of 31 paths fits in **236 tokens**, so its baseline trivially has
 100% target-file recall at all three budgets. The enabled map honestly misses `account-allowance`, `delivery-retry`,
@@ -76,7 +82,7 @@ One machine-dependent sample from the same benchmark command:
 
 ```json
 [
-  {"fixture":"small","cold_ms":10.136,"warm_ms":9.0735,"cold_files_parsed":31,"warm_files_parsed":0},
-  {"fixture":"scaled","cold_ms":188.6015,"warm_ms":67.737,"cold_files_parsed":331,"warm_files_parsed":0}
+  {"fixture":"small","cold_ms":8.4186,"warm_ms":6.7205,"cold_files_parsed":31,"warm_files_parsed":0},
+  {"fixture":"scaled","cold_ms":76.3817,"warm_ms":46.4423,"cold_files_parsed":331,"warm_files_parsed":0}
 ]
 ```

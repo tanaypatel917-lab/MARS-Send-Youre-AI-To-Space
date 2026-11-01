@@ -29,6 +29,10 @@ strictly validated; query text is capped at 4,096 characters, mention lists at 2
 tokens. The resolver must return the same workspace revision as the request. If `context.scope.workspace_id` is set, it
 must match the requested workspace.
 
+Inventory uses `confinement: "anchored"` by default, traversing through open directory handles. If descriptor anchoring
+is unavailable, the provider rejects the call with `ContextConfinementUnavailableError` before reading repository files.
+Set `confinement: "best-effort"` explicitly only when a path-based fallback is required.
+
 ## Token budget
 
 The default `mars-conservative-v1` counter estimates tokens as `ceil(UTF-8 bytes / 3)`. This is a conservative heuristic
@@ -47,6 +51,17 @@ into subwords at camelCase/PascalCase boundaries and on digits, `_`, `-`, and `$
 three characters are ignored. Exact identifier matches retain the ×10 ranking multiplier. A non-exact identifier that
 shares a query subword receives ×3, and a file receives an additional half-base personalization when any definition
 shares a query subword. Existing path personalization also matches query subwords in path segments and filename stems.
+
+## Security
+
+Anchored confinement opens the realpathed root and accesses descendants through their parent directory descriptors via
+`/proc/self/fd`. If that mechanism is unavailable, the default fails closed with
+`ContextConfinementUnavailableError`; it does not silently fall back.
+
+`confinement: "best-effort"` opts into path-based checks that compare realpaths and file identities before and after
+directory enumeration and file opens. It retains a residual TOCTOU window: a directory swapped out and back between a
+check and `readdir` or `open` can expose names or file contents. Use this mode only when the workspace tree cannot be
+concurrently manipulated by an untrusted actor.
 
 ## Inventory and exclusions
 
@@ -71,8 +86,8 @@ calls. Pass `{ signal }` to `map()` for cancellation.
 
 Errors are `ContextPolicyError` (`policy`), `ContextRevisionError` (`revision_conflict`),
 `ContextCancelledError` (`cancelled`), `ContextLimitError` (`limit_exceeded`), `ContextClosedError` (`closed`), and
-`ContextIoError` (`io`). Error messages do not include host paths, and resolver failures are deliberately wrapped
-without preserving their message or cause.
+`ContextIoError` (`io`), and `ContextConfinementUnavailableError` (`confinement_unavailable`). Error messages do not
+include host paths, and resolver failures are deliberately wrapped without preserving their message or cause.
 
 ## Attribution and boundaries
 

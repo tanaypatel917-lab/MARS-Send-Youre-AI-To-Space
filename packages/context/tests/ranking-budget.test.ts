@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { conservativeTokenCounter, utf8ByteTokenCounter } from "../src";
 import { extractPython } from "../src/extract-python";
+import { extractTypeScript } from "../src/extract-ts";
 import { context, providerFor, putFile, tempRoot, workspace } from "./helpers";
 
 describe("extractors and ranking", () => {
@@ -64,6 +65,62 @@ describe("extractors and ranking", () => {
     expect(result.files[0]?.symbols[0]?.name).toBe("validateSessionToken");
   });
 
+  test("prioritizes an explicitly mentioned file without definitions", async () => {
+    const root = await tempRoot();
+    await putFile(root, "src/index.ts", "export {};\n");
+    for (let index = 0; index < 10; index += 1) {
+      await putFile(
+        root,
+        `src/modules/module-${index}.ts`,
+        `export function module${index}() { return ${index}; }\n`,
+      );
+    }
+    const result = await providerFor(root).map(context, {
+      workspace,
+      mentioned_files: ["src/index.ts"],
+      max_output_tokens: 100,
+    });
+    expect(result.files.some((file) => file.path === "src/index.ts")).toBe(
+      true,
+    );
+  });
+
+  test("uses raw query identifiers for exact matches before subword matches", async () => {
+    const root = await tempRoot();
+    await putFile(root, "src/users.ts", "export const users = [];\n");
+    await putFile(
+      root,
+      "src/profile.ts",
+      "export function userName() { return 'user'; }\n",
+    );
+    const result = await providerFor(root).map(context, {
+      workspace,
+      query: "users",
+      max_output_tokens: 300,
+    });
+    expect(result.files[0]?.path).toBe("src/users.ts");
+    expect(result.files[0]?.symbols[0]?.name).toBe("users");
+  });
+
+  test("excludes local TypeScript declarations from extracted definitions", () => {
+    const result = extractTypeScript(
+      "src/outer.ts",
+      [
+        "export function outer() {",
+        "  function helper() {}",
+        "  class LocalClass {}",
+        "  interface LocalInterface {}",
+        "  type LocalType = number;",
+        "  enum LocalEnum { Value }",
+        "  namespace LocalNamespace { export function nested() {} }",
+        "  helper();",
+        "}",
+      ].join("\n"),
+      100,
+    );
+    expect(result.defs.map((definition) => definition.name)).toEqual(["outer"]);
+  });
+
   test("mentioned files receive personalization and Python definitions are ranked", async () => {
     const root = await tempRoot();
     await putFile(
@@ -108,6 +165,29 @@ describe("extractors and ranking", () => {
     expect(result.refs.has("fakeName")).toBe(false);
     expect(result.refs.has("hidden")).toBe(false);
     expect(result.refs.has("fakeReference")).toBe(false);
+  });
+
+  test("tracks Python class and def blocks across blank, comment, and string lines", () => {
+    const result = extractPython(
+      [
+        "class Service:",
+        "",
+        "    # c",
+        '    """',
+        "    def fake(): pass",
+        '    """',
+        "    def run(self):",
+        "        def inner(): pass",
+        "        pass",
+      ].join("\n"),
+      100,
+    );
+    expect(
+      result.defs.map(({ name, kind, depth }) => ({ name, kind, depth })),
+    ).toEqual([
+      { name: "Service", kind: "class", depth: 0 },
+      { name: "run", kind: "method", depth: 1 },
+    ]);
   });
 });
 

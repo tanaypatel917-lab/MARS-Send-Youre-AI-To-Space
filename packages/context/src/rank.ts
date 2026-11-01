@@ -12,16 +12,13 @@ export function rankFiles(
   const sorted = [...files].sort((left, right) =>
     compare(left.path, right.path),
   );
-  const queryTerms = new Set(
-    (query.match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? [])
-      .map(normalizeQueryTerm)
+  const queryIdentifiers = query.match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? [];
+  const exactQueryTerms = new Set(
+    queryIdentifiers
+      .map((term) => term.toLowerCase())
       .filter((term) => term.length >= 3),
   );
-  const querySubwords = new Set(
-    [...(query.match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? [])].flatMap(
-      identifierSubwords,
-    ),
-  );
+  const querySubwords = new Set(queryIdentifiers.flatMap(identifierSubwords));
   const normalizedMentions = new Set(
     [...mentionedIdents].map((ident) => ident.toLowerCase()),
   );
@@ -60,7 +57,7 @@ export function rankFiles(
     const basenameWithoutExtension = basename.replace(/\.[^.]*$/, "");
     if (
       [...pathParts, basename, basenameWithoutExtension].some((part) => {
-        return normalizedMentions.has(part) || queryTerms.has(part);
+        return normalizedMentions.has(part) || exactQueryTerms.has(part);
       }) ||
       [...pathParts, basename, basenameWithoutExtension].some((part) =>
         sharesSubword(part, querySubwords),
@@ -72,7 +69,7 @@ export function rankFiles(
       file.defs.some(
         (definition) =>
           normalizedMentions.has(definition.name.toLowerCase()) ||
-          queryTerms.has(definition.name.toLowerCase()),
+          exactQueryTerms.has(definition.name.toLowerCase()),
       )
     ) {
       amount += base;
@@ -107,7 +104,7 @@ export function rankFiles(
     let multiplier = 1;
     const exactMention =
       normalizedMentions.has(ident.toLowerCase()) ||
-      queryTerms.has(ident.toLowerCase());
+      exactQueryTerms.has(ident.toLowerCase());
     if (exactMention) multiplier *= 10;
     else if (sharesSubword(ident, querySubwords)) multiplier *= 3;
     const hasCaseShape =
@@ -161,9 +158,27 @@ export function rankFiles(
         compare(left.path, right.path) ||
         compare(left.name, right.name),
     );
+  const fileRanks = new Map<string, number>();
+  for (const [path, rank] of ranks) fileRanks.set(path, rank);
+  for (const file of sorted) {
+    if (!fileRanks.has(file.path)) fileRanks.set(file.path, 0);
+  }
   const candidates: RankedCandidates["candidates"] = [];
   const candidateFiles = new Set<string>();
   let truncated = false;
+  for (const file of sorted) {
+    if (!mentionedFiles.has(file.path) || file.defs.length > 0) continue;
+    if (candidates.length >= maxCandidates) {
+      truncated = true;
+      break;
+    }
+    candidates.push({
+      type: "file",
+      path: file.path,
+      rank: fileRanks.get(file.path) ?? 0,
+    });
+    candidateFiles.add(file.path);
+  }
   for (const ranked of rankedSymbols) {
     const defs = defsByFileAndName.get(`${ranked.path}\0${ranked.name}`) ?? [];
     for (const definition of [...defs].sort((a, b) => a.line - b.line)) {
@@ -180,11 +195,6 @@ export function rankFiles(
       candidateFiles.add(ranked.path);
     }
     if (truncated) break;
-  }
-  const fileRanks = new Map<string, number>();
-  for (const [path, rank] of ranks) fileRanks.set(path, rank);
-  for (const file of sorted) {
-    if (!fileRanks.has(file.path)) fileRanks.set(file.path, 0);
   }
   for (const file of [...sorted].sort(
     (left, right) =>
