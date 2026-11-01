@@ -69,13 +69,24 @@ export const workspaceMetaSchema = z
       z
         .object({
           path: z.string(),
-          reason: z.enum(["symlink", "special", "ignored-secret"]),
+          reason: z.enum([
+            "symlink",
+            "special",
+            "ignored-secret",
+            "unsupported-name",
+          ]),
         })
         .strict(),
     ),
     exec_in_progress: z
       .object({
         run_id: z.string().regex(/^[A-Za-z0-9._-]+$/),
+        started_at: z.string().datetime({ offset: true }),
+      })
+      .strict()
+      .optional(),
+    write_in_progress: z
+      .object({
         started_at: z.string().datetime({ offset: true }),
       })
       .strict()

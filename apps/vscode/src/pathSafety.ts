@@ -1,4 +1,4 @@
-import { isAbsolute, join, relative } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 export type PathCheck =
   | { ok: true; segments: string[] }
@@ -40,7 +40,12 @@ export function checkRelativePath(path: string): PathCheck {
 
 function inside(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
-  return rel === "" ? false : !rel.startsWith("..") && !isAbsolute(rel);
+  return (
+    rel !== "" &&
+    rel !== ".." &&
+    !rel.startsWith(`..${sep}`) &&
+    !isAbsolute(rel)
+  );
 }
 
 export type Realpath = (path: string) => Promise<string>;

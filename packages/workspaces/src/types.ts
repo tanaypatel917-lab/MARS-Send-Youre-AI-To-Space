@@ -81,6 +81,8 @@ export interface LocalWorkspaceProviderOptions {
   testHooks?: {
     /** Test-only hook for failing restore rollback before the backup rename. */
     recoveryPhase?(phase: "before-rollback-rename"): void | Promise<void>;
+    /** Test-only hook for write transaction failure injection. */
+    writePhase?(phase: "before-sync" | "after-rename"): void | Promise<void>;
     restorePhase?(
       phase: "staged" | "backed-up" | "swapped" | "committed",
     ): void | Promise<void>;
@@ -143,7 +145,10 @@ export interface LocalWorkspaceProvider extends ExecutionProvider {
     context: RequestContext,
     workspace: WorkspaceRef,
   ): Promise<
-    Array<{ path: string; reason: "symlink" | "special" | "ignored-secret" }>
+    Array<{
+      path: string;
+      reason: "symlink" | "special" | "ignored-secret" | "unsupported-name";
+    }>
   >;
   close(): Promise<void>;
 }

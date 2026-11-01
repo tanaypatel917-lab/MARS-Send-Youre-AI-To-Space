@@ -27,7 +27,7 @@ Run it in VS Code: open `apps/vscode` and launch an Extension Development Host (
 | Setting | Default | Notes |
 | --- | --- | --- |
 | `mars.serverUrl` | `http://127.0.0.1:7331` | Loopback only by default. No credentials, query or fragment. |
-| `mars.allowNonLoopbackServer` | `false` | Required for non-loopback servers, which must also use HTTPS and are confirmed once per origin per session. |
+| `mars.allowNonLoopbackServer` | `false` | Required for non-loopback servers, which must also use HTTPS and are confirmed once per exact RPC URL (`<origin><path>/v1/rpc`) per window; a different path on the same host asks again. |
 | `mars.modelId` | empty | Optional model id sent with `tasks.start`; empty uses the server's free-cloud default. Paid models are governed only by server policy. |
 | `mars.requestTimeoutMs` | `15000` | Per-request timeout. |
 

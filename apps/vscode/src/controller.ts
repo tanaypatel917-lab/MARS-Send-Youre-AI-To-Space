@@ -2,6 +2,7 @@ import type {
   ArtifactRef,
   CheckpointRef,
   EventEnvelope,
+  Scope,
   Task,
   TaskStatus,
   WorkspaceRef,
@@ -23,7 +24,12 @@ import { WebviewMessageSchema } from "./messages";
 import { patchStats } from "./patch";
 import { checkRelativePath } from "./pathSafety";
 import { EventPoller, type PollerOptions, type PollerStatus } from "./poller";
-import type { Approvals, DescribeResult, DiffFile } from "./protocol";
+import {
+  type Approvals,
+  type DescribeResult,
+  type DiffFile,
+  sameScope,
+} from "./protocol";
 import { RpcError } from "./rpc";
 import { buildPendingTask } from "./taskFactory";
 
@@ -109,6 +115,13 @@ export class WorkbenchController {
   private notice: Notice | null = null;
   private readonly inflight = new Set<AbortController>();
   private disposedFlag = false;
+  /** Server identity of the last successful describe; a change drops all task state. */
+  private identity: { server: string; scope: Scope } | undefined;
+  /** Checkpoints created in this session, kept per task across selections. */
+  private readonly checkpointCache = new Map<
+    string,
+    { checkpoints: CheckpointRef[]; workspace: WorkspaceRef | null }
+  >();
 
   constructor(private readonly options: ControllerOptions) {}
 
@@ -343,6 +356,14 @@ export class WorkbenchController {
     this.inflight.add(controller);
     try {
       const server = await result.client.describe(controller.signal);
+      const previous = this.identity;
+      if (
+        previous &&
+        (previous.server !== result.server ||
+          !sameScope(previous.scope, server.scope))
+      )
+        this.resetServerState();
+      this.identity = { server: result.server, scope: server.scope };
       this.client = result.client;
       this.server = server;
       this.connection = {
@@ -390,14 +411,35 @@ export class WorkbenchController {
       const fresh = tasks.find(
         (task) => task.task_id === selected.task.task_id,
       );
-      if (fresh) this.replaceTask(fresh);
-      if (!this.poller && fresh && !TERMINAL.includes(fresh.status))
-        this.startPolling(selected.generation, fresh.task_id);
+      if (!fresh) {
+        this.stopPolling();
+        this.generation++;
+        this.selection = undefined;
+      } else {
+        this.replaceTask(fresh);
+        if (!this.poller && !TERMINAL.includes(fresh.status))
+          this.startPolling(selected.generation, fresh.task_id);
+      }
     }
     this.emit();
   }
 
   // ---------------------------------------------------------- selection
+
+  private resetServerState(): void {
+    this.stopPolling();
+    this.generation++;
+    this.selection = undefined;
+    this.tasks = [];
+    this.checkpointCache.clear();
+  }
+
+  private rememberCheckpoints(selected: Selection): void {
+    this.checkpointCache.set(selected.task.task_id, {
+      checkpoints: [...selected.checkpoints],
+      workspace: selected.workspace,
+    });
+  }
 
   private stopPolling(): void {
     this.poller?.dispose();
@@ -435,6 +477,7 @@ export class WorkbenchController {
       );
     }
     this.replaceTask(task);
+    const cached = this.checkpointCache.get(taskId);
     this.selection = {
       generation,
       task,
@@ -443,8 +486,8 @@ export class WorkbenchController {
       polling: "idle",
       usage: { input: 0, output: 0, cost: 0, unknown: false },
       diff: null,
-      checkpoints: [],
-      workspace: null,
+      checkpoints: [...(cached?.checkpoints ?? [])],
+      workspace: cached?.workspace ?? null,
       artifact: null,
       refreshing: false,
     };
@@ -456,6 +499,13 @@ export class WorkbenchController {
     const client = this.client;
     if (!client) return;
     this.stopPolling();
+    // A new poller replays from the first event, so drop what it will resend.
+    const selected = this.current(taskId);
+    if (selected) {
+      selected.events = [];
+      selected.eventsTruncated = false;
+      selected.usage = { input: 0, output: 0, cost: 0, unknown: false };
+    }
     const poller = new EventPoller({
       ...this.options.poller,
       fetchBatch: (after, signal) => client.events(taskId, after, signal),
@@ -833,6 +883,7 @@ export class WorkbenchController {
       ),
     ];
     selected.workspace = checkpoint.workspace;
+    this.rememberCheckpoints(selected);
     this.setNotice("info", `Checkpoint ${checkpoint.checkpoint_id} created.`);
     this.emit();
   }
@@ -879,6 +930,7 @@ export class WorkbenchController {
     if (!restored || !current) return;
     current.workspace = restored;
     current.diff = null;
+    this.rememberCheckpoints(current);
     this.setNotice(
       "info",
       `Workspace ${restored.workspace_id} restored to checkpoint ${checkpointId}.`,

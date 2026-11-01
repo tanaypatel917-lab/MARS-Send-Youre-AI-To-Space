@@ -62,7 +62,7 @@ class WorkbenchViewProvider
 {
   private controller: WorkbenchController | undefined;
   private view: vscode.WebviewView | undefined;
-  private readonly trustedOrigins = new Set<string>();
+  private readonly trustedEndpoints = new Set<string>();
   private suspended = 0;
 
   constructor(
@@ -150,13 +150,13 @@ class WorkbenchViewProvider
     const endpoint = checkServerUrl(config.serverUrl, config.allowNonLoopback);
     if (!endpoint.ok)
       return { ok: false, status: "blocked", message: endpoint.reason };
-    if (!endpoint.loopback && !this.trustedOrigins.has(endpoint.origin)) {
+    if (!endpoint.loopback && !this.trustedEndpoints.has(endpoint.rpcUrl)) {
       const action = "Trust and connect";
       const choice = await vscode.window.showWarningMessage(
         "Send your MARS token to a non-loopback server?",
         {
           modal: true,
-          detail: `${endpoint.origin}\nOnly continue if you operate this server. The token is sent as a bearer credential on every request.`,
+          detail: `${endpoint.rpcUrl}\nOnly continue if you operate this server. The token is sent as a bearer credential on every request.`,
         },
         action,
       );
@@ -164,9 +164,9 @@ class WorkbenchViewProvider
         return {
           ok: false,
           status: "blocked",
-          message: `Connection to ${endpoint.origin} was not trusted.`,
+          message: `Connection to ${endpoint.rpcUrl} was not trusted.`,
         };
-      this.trustedOrigins.add(endpoint.origin);
+      this.trustedEndpoints.add(endpoint.rpcUrl);
     }
     const token = await this.context.secrets.get(TOKEN_KEY);
     if (!token)
@@ -186,7 +186,7 @@ class WorkbenchViewProvider
     return {
       ok: true,
       client: new MarsClient(transport),
-      server: endpoint.origin,
+      server: endpoint.rpcUrl,
     };
   }
 

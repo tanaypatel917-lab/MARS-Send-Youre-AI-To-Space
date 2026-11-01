@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import {
   chmod,
+  link,
   lstat,
   mkdir,
   open,
@@ -229,6 +230,23 @@ export async function createLocalWorkspaceProvider(
   const prepareMutex = createMutex();
   const activeRuns = new Map<string, ActiveRun>();
   const now = options.now ?? (() => new Date());
+  const inFlight = new Set<Promise<unknown>>();
+  let closed = false;
+  let closing: Promise<void> | undefined;
+  const assertOpen = (): void => {
+    if (closed)
+      throw new SandboxUnavailableError("Workspace provider is closed");
+  };
+  const track = <T>(fn: () => Promise<T>): Promise<T> => {
+    if (closed)
+      return Promise.reject(
+        new SandboxUnavailableError("Workspace provider is closed"),
+      );
+    const operation = Promise.resolve().then(fn);
+    inFlight.add(operation);
+    void operation.finally(() => inFlight.delete(operation)).catch(() => {});
+    return operation;
+  };
   const assertWorkspaceNotLost = (workspaceId: string): void => {
     if (lostWorkspaces.has(workspaceId))
       throw new IntegrityError("workspace state lost");
@@ -326,6 +344,7 @@ export async function createLocalWorkspaceProvider(
   const reloadWorkspaceMeta = async (
     workspaceId: string,
   ): Promise<WorkspaceMeta> => {
+    assertOpen();
     assertWorkspaceNotLost(workspaceId);
     try {
       return await loadMeta(rootDir, workspaceId);
@@ -340,13 +359,17 @@ export async function createLocalWorkspaceProvider(
     meta: WorkspaceMeta,
     enforceLimits = true,
     includeData = true,
-  ): Promise<TreeSnapshot> =>
-    snapshotTree(treeDir(meta), {
+  ): Promise<TreeSnapshot> => {
+    const skipped: NonNullable<TreeSnapshot["skipped"]> = [];
+    return snapshotTree(treeDir(meta), {
       limits,
       extraIgnores,
       enforceLimits,
       includeData,
+      tolerateUnsupportedNames: true,
+      skipped,
     });
+  };
 
   const validateArtifact = (artifact: ArtifactRef): ArtifactRef => {
     const parsed = ArtifactRefSchema.safeParse(artifact);
@@ -355,6 +378,18 @@ export async function createLocalWorkspaceProvider(
         cause: parsed.error,
       });
     return parsed.data;
+  };
+
+  const updateUnsupportedSkipped = (
+    meta: WorkspaceMeta,
+    snapshot: TreeSnapshot,
+  ): void => {
+    meta.skipped = [
+      ...meta.skipped.filter((entry) => entry.reason !== "unsupported-name"),
+      ...(snapshot.skipped ?? []).filter(
+        (entry) => entry.reason === "unsupported-name",
+      ),
+    ];
   };
 
   const storeCheckpoint = async (
@@ -564,6 +599,7 @@ export async function createLocalWorkspaceProvider(
   ): Promise<CheckpointRef> => {
     const meta = await assertWorkspace(context, workspace);
     return withMutex(lockFor(meta.workspace_id), async () => {
+      assertOpen();
       const fresh = await reloadWorkspaceMeta(meta.workspace_id);
       await assertWorkspaceAvailable(fresh);
       const snapshot = await treeSnapshot(fresh, true, true);
@@ -576,15 +612,13 @@ export async function createLocalWorkspaceProvider(
     });
   };
 
-  let closed = false;
   const provider: LocalWorkspaceProvider = {
     providerId,
     async prepare(context, taskId) {
       return withMutex(prepareMutex, async () => {
+        assertOpen();
         verifyContext(context);
         assertTaskId(taskId);
-        if (closed)
-          throw new SandboxUnavailableError("Workspace provider is closed");
         assertNoUnreadableMetadata();
         const existing = (await listMetas(rootDir)).find(
           (meta) =>
@@ -596,6 +630,7 @@ export async function createLocalWorkspaceProvider(
         );
         if (existing) {
           return withMutex(lockFor(existing.workspace_id), async () => {
+            assertOpen();
             const current = await reloadWorkspaceMeta(existing.workspace_id);
             if (
               current.owner_id !== context.scope.owner_id ||
@@ -613,7 +648,7 @@ export async function createLocalWorkspaceProvider(
 
         const skippedFiles: Array<{
           path: string;
-          reason: "symlink" | "special" | "ignored-secret";
+          reason: "symlink" | "special" | "ignored-secret" | "unsupported-name";
         }> = [];
         const snapshot = await snapshotTree(sourceRoot, {
           limits,
@@ -682,6 +717,7 @@ export async function createLocalWorkspaceProvider(
     async read(context, workspace, relativePath) {
       const meta = await assertWorkspace(context, workspace);
       return withMutex(lockFor(meta.workspace_id), async () => {
+        assertOpen();
         const current = await reloadWorkspaceMeta(meta.workspace_id);
         await assertWorkspaceAvailable(current);
         const path = validateRelativePath(relativePath, limits, extraIgnores);
@@ -724,6 +760,7 @@ export async function createLocalWorkspaceProvider(
     async write(context, workspace, relativePath, artifact, writeOptions) {
       const meta = await assertWorkspace(context, workspace);
       return withMutex(lockFor(meta.workspace_id), async () => {
+        assertOpen();
         const current = await reloadWorkspaceMeta(meta.workspace_id);
         await assertWorkspaceAvailable(current);
         const path = validateRelativePath(relativePath, limits, extraIgnores);
@@ -772,35 +809,97 @@ export async function createLocalWorkspaceProvider(
               ? 0o755
               : 0o644;
         const temporary = join(
-          dirname(absolute),
-          `.mars-tmp-${randomUUID().replaceAll("-", "")}`,
+          rootDir,
+          "staging",
+          `${current.workspace_id}-write-${randomUUID().replaceAll("-", "")}`,
         );
-        const handle = await open(temporary, "wx", mode);
+        const priorPath = join(
+          rootDir,
+          "staging",
+          `${current.workspace_id}-prior-${randomUUID().replaceAll("-", "")}`,
+        );
+        let handle: FileHandle | undefined;
         try {
+          handle = await open(temporary, "wx", mode);
           await handle.writeFile(data);
+          await options.testHooks?.writePhase?.("before-sync");
           await handle.sync();
-        } finally {
+          await handle.chmod(mode);
           await handle.close();
+          handle = undefined;
+        } catch (error) {
+          await handle?.close().catch(() => undefined);
+          await rm(temporary, { force: true }).catch(() => undefined);
+          throw error;
         }
+        const previous = {
+          counter: current.counter,
+          revision: current.revision,
+          tree_digest: current.tree_digest,
+          skipped: current.skipped,
+        };
+        let markerSaved = false;
+        let targetReplaced = false;
+        let priorLinked = false;
+        let committed = false;
         try {
+          current.write_in_progress = { started_at: now().toISOString() };
+          await saveMeta(rootDir, current);
+          markerSaved = true;
+          if (existing) {
+            await link(absolute, priorPath);
+            priorLinked = true;
+          }
           await rename(temporary, absolute);
-          await chmod(absolute, mode);
+          targetReplaced = true;
+          await options.testHooks?.writePhase?.("after-rename");
           const after = await treeSnapshot(current, true, false);
+          updateUnsupportedSkipped(current, after);
           current.counter += 1;
           current.tree_digest = after.digest;
           current.revision = revision(current.counter, after.digest);
+          delete current.write_in_progress;
           await saveMeta(rootDir, current);
+          committed = true;
         } catch (error) {
-          await rm(temporary, { force: true });
+          if (targetReplaced) {
+            try {
+              if (priorLinked) await rename(priorPath, absolute);
+              else await rm(absolute, { force: true });
+              priorLinked = false;
+              targetReplaced = false;
+            } catch {
+              lostWorkspaces.add(current.workspace_id);
+              throw error;
+            }
+          }
+          if (markerSaved) {
+            current.counter = previous.counter;
+            current.revision = previous.revision;
+            current.tree_digest = previous.tree_digest;
+            current.skipped = previous.skipped;
+            delete current.write_in_progress;
+            try {
+              await saveMeta(rootDir, current);
+            } catch {
+              current.write_in_progress = {
+                started_at: now().toISOString(),
+              };
+              lostWorkspaces.add(current.workspace_id);
+            }
+          }
           throw error;
+        } finally {
+          await rm(temporary, { force: true }).catch(() => undefined);
+          if (committed || !targetReplaced)
+            await rm(priorPath, { force: true }).catch(() => undefined);
         }
       });
     },
     async execute(context, workspace, argv, budget, executeOptions) {
       const meta = await assertWorkspace(context, workspace);
       return withMutex(lockFor(meta.workspace_id), async () => {
-        if (closed)
-          throw new SandboxUnavailableError("Workspace provider is closed");
+        assertOpen();
         const current = await reloadWorkspaceMeta(meta.workspace_id);
         await assertWorkspaceAvailable(current);
         if (
@@ -865,6 +964,23 @@ export async function createLocalWorkspaceProvider(
         if (externalSignal?.aborted) abortExternal();
         current.exec_in_progress = { run_id: runId, started_at: startedAt };
         let result: SandboxRunResult;
+        const reconcileExecution = async (): Promise<void> => {
+          let after: TreeSnapshot;
+          try {
+            after = await treeSnapshot(current, false, false);
+          } catch (error) {
+            lostWorkspaces.add(current.workspace_id);
+            throw new IntegrityError("workspace state lost", {
+              cause: error,
+            });
+          }
+          updateUnsupportedSkipped(current, after);
+          current.counter += 1;
+          current.tree_digest = after.digest;
+          current.revision = revision(current.counter, after.digest);
+          delete current.exec_in_progress;
+          await saveMeta(rootDir, current);
+        };
         try {
           try {
             await saveMeta(rootDir, current);
@@ -880,14 +996,11 @@ export async function createLocalWorkspaceProvider(
                 "mars.root": sha256(rootDir).slice(0, 16),
               },
             });
-          } finally {
-            const after = await treeSnapshot(current, false, false);
-            current.counter += 1;
-            current.tree_digest = after.digest;
-            current.revision = revision(current.counter, after.digest);
-            delete current.exec_in_progress;
-            await saveMeta(rootDir, current);
+          } catch (error) {
+            await reconcileExecution();
+            throw error;
           }
+          await reconcileExecution();
           const stdout = result.stdout.subarray(0, limits.maxOutputBytes);
           const stderr = result.stderr.subarray(0, limits.maxOutputBytes);
           const stdoutTruncated =
@@ -943,6 +1056,7 @@ export async function createLocalWorkspaceProvider(
       if (!checkpoint?.workspace) throw new WorkspaceNotFoundError();
       const meta = await assertWorkspace(context, checkpoint.workspace);
       return withMutex(lockFor(meta.workspace_id), async () => {
+        assertOpen();
         const current = await reloadWorkspaceMeta(meta.workspace_id);
         await assertWorkspaceAvailable(current);
         if (expectedRevision !== current.revision)
@@ -1001,6 +1115,9 @@ export async function createLocalWorkspaceProvider(
           current.counter = targetCounter;
           current.revision = targetRevision;
           current.tree_digest = manifest.tree_digest;
+          current.skipped = current.skipped.filter(
+            (entry) => entry.reason !== "unsupported-name",
+          );
           delete current.restore_journal;
           await saveMeta(rootDir, current);
           await invokeRestoreHook("committed");
@@ -1025,6 +1142,7 @@ export async function createLocalWorkspaceProvider(
     async diff(context, workspace, diffOptions): Promise<WorkspaceDiff> {
       const meta = await assertWorkspace(context, workspace);
       return withMutex(lockFor(meta.workspace_id), async () => {
+        assertOpen();
         const current = await reloadWorkspaceMeta(meta.workspace_id);
         await assertWorkspaceAvailable(current);
         const checkpoint =
@@ -1041,6 +1159,7 @@ export async function createLocalWorkspaceProvider(
     async collect(context, workspace) {
       const meta = await assertWorkspace(context, workspace);
       return withMutex(lockFor(meta.workspace_id), async () => {
+        assertOpen();
         const current = await reloadWorkspaceMeta(meta.workspace_id);
         await assertWorkspaceAvailable(current);
         const base = await baselineRef(context, current);
@@ -1101,6 +1220,7 @@ export async function createLocalWorkspaceProvider(
       );
       if (!meta) return null;
       return withMutex(lockFor(meta.workspace_id), async () => {
+        assertOpen();
         const current = await reloadWorkspaceMeta(meta.workspace_id);
         if (
           current.owner_id !== context.scope.owner_id ||
@@ -1116,6 +1236,7 @@ export async function createLocalWorkspaceProvider(
     async inspect(context, workspaceId) {
       const meta = await assertWorkspace(context, workspaceId);
       return withMutex(lockFor(meta.workspace_id), async () => {
+        assertOpen();
         const current = await reloadWorkspaceMeta(meta.workspace_id);
         await assertWorkspaceAvailable(current);
         return currentRef(current);
@@ -1124,6 +1245,7 @@ export async function createLocalWorkspaceProvider(
     async workspacePath(context, workspace) {
       const meta = await assertWorkspace(context, workspace, true);
       return withMutex(lockFor(meta.workspace_id), async () => {
+        assertOpen();
         const current = await assertWorkspace(context, workspace, true);
         return assertWorkspaceAvailable(current);
       });
@@ -1131,6 +1253,7 @@ export async function createLocalWorkspaceProvider(
     async checkpoints(context, workspace) {
       const meta = await assertWorkspace(context, workspace);
       return withMutex(lockFor(meta.workspace_id), async () => {
+        assertOpen();
         const current = await reloadWorkspaceMeta(meta.workspace_id);
         await assertWorkspaceAvailable(current);
         return current.checkpoints.map((record) => ({
@@ -1147,6 +1270,7 @@ export async function createLocalWorkspaceProvider(
     async skipped(context, workspace) {
       const meta = await assertWorkspace(context, workspace);
       return withMutex(lockFor(meta.workspace_id), async () => {
+        assertOpen();
         const current = await reloadWorkspaceMeta(meta.workspace_id);
         await assertWorkspaceAvailable(current);
         return current.skipped.map((entry) => ({ ...entry }));
@@ -1160,17 +1284,22 @@ export async function createLocalWorkspaceProvider(
       await active.done;
     },
     async close() {
+      if (closing) return closing;
       if (closed) return;
       closed = true;
       for (const active of activeRuns.values())
         active.controller.abort(new Error("Provider closed"));
-      try {
-        await Promise.all(
-          [...activeRuns.values()].map((active) => active.done),
-        );
-      } finally {
-        await releaseLock();
-      }
+      closing = (async () => {
+        try {
+          await Promise.allSettled([...inFlight]);
+          await Promise.all(
+            [...activeRuns.values()].map((active) => active.done),
+          );
+        } finally {
+          await releaseLock();
+        }
+      })();
+      return closing;
     },
   };
 
@@ -1190,7 +1319,23 @@ export async function createLocalWorkspaceProvider(
     await loadRecordedManifest(context, meta, ref);
     return ref;
   }
-  return provider;
+  return {
+    ...provider,
+    prepare: (...args) => track(() => provider.prepare(...args)),
+    read: (...args) => track(() => provider.read(...args)),
+    write: (...args) => track(() => provider.write(...args)),
+    execute: (...args) => track(() => provider.execute(...args)),
+    checkpoint: (...args) => track(() => provider.checkpoint(...args)),
+    restore: (...args) => track(() => provider.restore(...args)),
+    diff: (...args) => track(() => provider.diff(...args)),
+    collect: (...args) => track(() => provider.collect(...args)),
+    discover: (...args) => track(() => provider.discover(...args)),
+    inspect: (...args) => track(() => provider.inspect(...args)),
+    workspacePath: (...args) => track(() => provider.workspacePath(...args)),
+    checkpoints: (...args) => track(() => provider.checkpoints(...args)),
+    skipped: (...args) => track(() => provider.skipped(...args)),
+    stop: (...args) => track(() => provider.stop(...args)),
+  };
 }
 
 async function realDirectory(path: string, label: string): Promise<string> {
@@ -1357,7 +1502,8 @@ async function recoverProviderState(
           );
         }
         await resolveWorkspaceTree(rootDir, meta.workspace_id);
-        if (meta.exec_in_progress) {
+        if (meta.exec_in_progress || meta.write_in_progress) {
+          const skipped: NonNullable<TreeSnapshot["skipped"]> = [];
           const snapshot = await snapshotTree(
             workspacePath(rootDir, meta.workspace_id),
             {
@@ -1365,12 +1511,21 @@ async function recoverProviderState(
               extraIgnores,
               enforceLimits: false,
               includeData: false,
+              tolerateUnsupportedNames: true,
+              skipped,
             },
           );
+          meta.skipped = [
+            ...meta.skipped.filter(
+              (entry) => entry.reason !== "unsupported-name",
+            ),
+            ...skipped.filter((entry) => entry.reason === "unsupported-name"),
+          ];
           meta.counter += 1;
           meta.tree_digest = snapshot.digest;
           meta.revision = revision(meta.counter, snapshot.digest);
           delete meta.exec_in_progress;
+          delete meta.write_in_progress;
           await saveMeta(rootDir, meta);
         }
       } catch {
@@ -1441,6 +1596,7 @@ async function rollbackRestoreJournal(
       extraIgnores,
       enforceLimits: false,
       includeData: false,
+      tolerateUnsupportedNames: true,
     });
     if (snapshot.digest !== journal.previous.tree_digest) {
       digestMismatch = true;

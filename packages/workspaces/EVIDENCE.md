@@ -165,3 +165,67 @@ Bundled 21 modules
 
 The master specification SHA-256 remained
 `0e535d3d592fbad5cc9af5a4290d4b981e5ad597ffdaacf91cc6c42a5b9f80a`.
+
+## Sandboxed workspace security boundary
+
+Workspace files are produced by untrusted commands and written with the host
+uid through the bind mount. Host integrations must not execute, source, or
+import workspace files outside the sandbox. Secret-name filtering covers
+source copying and provider `read`/`write`/`diff`/`checkpoint`; commands may
+read files created by earlier sandboxed commands in the same workspace, but
+those files cannot contain host secrets because source secrets are never
+copied into the workspace.
+
+## Post-merge review-fix verification
+
+```text
+export PATH="$HOME/.bun/bin:$PATH"; bun install --frozen-lockfile --ignore-scripts
+bun install v1.4.4 (38afee6c8)
+Checked 129 installs across 169 packages (no changes)
+```
+
+```text
+bun test packages/workspaces
+37 pass
+0 fail
+280 expect() calls
+Ran 37 tests across 2 files.
+```
+
+Six real-container tests ran and passed (none skipped); 30 stub-runner tests
+and one path-filter unit test also passed.
+
+```text
+bunx biome check packages/workspaces
+Checked 14 files in 67ms. No fixes applied.
+
+bun run typecheck
+$ tsc --noEmit
+```
+
+Both commands passed; Biome reported zero warnings and errors.
+
+The final repository check completed:
+
+```text
+bun run check
+Checked 90 files in 77ms. No fixes applied.
+Validated 25 source entries, pinned URLs, master-spec hash and runtime artifact pins (offline).
+265 pass
+0 fail
+1191 expect() calls
+Ran 265 tests across 18 files.
+"model_requests": 0
+Bundled 21 modules
+```
+
+The master specification SHA-256 matched
+`0e535d3d592fbad5cc9af5a4290d4b981e5ad597ffdaacf91cc6c42a5b9f80a9`.
+
+```text
+docker ps -a
+CONTAINER ID   IMAGE     COMMAND   CREATED   STATUS    PORTS     NAMES
+
+git diff --check
+(no output; exit status 0)
+```

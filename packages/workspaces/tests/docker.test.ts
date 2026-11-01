@@ -244,3 +244,29 @@ test.skipIf(!dockerAvailable)(
   },
   30_000,
 );
+
+test.skipIf(!dockerAvailable)(
+  "[real container] unsupported command-created names do not strand later execution",
+  async () => {
+    const fixture = await makeDockerFixture();
+    try {
+      const firstRun = await execute(fixture.provider, fixture.workspace, [
+        "sh",
+        "-c",
+        'touch "bad\\\\name"',
+      ]);
+      const nextRun = await execute(fixture.provider, firstRun.workspace, [
+        "sh",
+        "-c",
+        "echo ok",
+      ]);
+      expect(nextRun.exit_code).toBe(0);
+      expect(
+        await fixture.provider.skipped(context, nextRun.workspace),
+      ).toContainEqual({ path: "bad\\name", reason: "unsupported-name" });
+    } finally {
+      await fixture.close();
+    }
+  },
+  30_000,
+);
