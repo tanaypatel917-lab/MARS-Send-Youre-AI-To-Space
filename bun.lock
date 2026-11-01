@@ -35,6 +35,13 @@
         "@oh-my-pi/pi-natives": "18.14.0",
       },
     },
+    "packages/integration-trust": {
+      "name": "@mars/integration-trust",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+      },
+    },
     "packages/providers": {
       "name": "@mars/providers",
       "version": "0.0.1",
@@ -145,6 +152,8 @@
     "@mars/contracts": ["@mars/contracts@workspace:packages/contracts"],
 
     "@mars/execution": ["@mars/execution@workspace:packages/execution"],
+
+    "@mars/integration-trust": ["@mars/integration-trust@workspace:packages/integration-trust"],
 
     "@mars/providers": ["@mars/providers@workspace:packages/providers"],
 
