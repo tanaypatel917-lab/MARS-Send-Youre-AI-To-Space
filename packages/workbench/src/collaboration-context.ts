@@ -14,6 +14,7 @@ import type { RequestContext } from "@mars/contracts";
 import { BudgetSchema } from "@mars/contracts";
 import type { RuntimeCollaboration, RuntimeDelegation } from "@mars/execution";
 import { z } from "zod";
+import type { Approvals } from "./protocol.js";
 
 /** Room binding persisted in private launch metadata so resume reuses it. */
 export const FrozenCollaborationSchema = z
@@ -90,6 +91,8 @@ export interface RoomToolHooks {
   currentBaseRevision?: () => string | null;
   /** The room's current task revision; reviews must name it explicitly. */
   roomTaskRevision?: () => Promise<number>;
+  /** The coordinator's own approvals; omitted child approvals default within them. */
+  parentApprovals?: () => Approvals;
 }
 
 /** Room listings are paged by the room's page_limit; coordinators see the whole bounded set. */
@@ -121,11 +124,15 @@ function delegationTools(
   const capability = () => frozen.capability;
   return {
     async delegate(input) {
-      const approvals = compact({
-        read: input.read,
-        write: input.write,
-        execute: input.execute,
-      });
+      // Explicit defaults: read follows the coordinator, write and execute
+      // are opt-in, so an ordinary delegation never asks for more than the
+      // room authority allows.
+      const parent = hooks.parentApprovals?.();
+      const approvals = {
+        read: input.read ?? parent?.read ?? true,
+        write: input.write ?? false,
+        execute: input.execute ?? false,
+      };
       const view = await agents.delegate(
         context(),
         capability(),
@@ -136,7 +143,7 @@ function delegationTools(
           acceptance_criteria: input.acceptance_criteria,
           solution_space: input.solution_space,
           complexity: input.complexity,
-          approvals: Object.keys(approvals).length > 0 ? approvals : undefined,
+          approvals,
           paid_models: false,
           may_delegate: false,
           budget: {

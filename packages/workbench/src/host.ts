@@ -8,7 +8,6 @@ import {
   CollaborationError,
   createChildRunner,
   createOhMyPiChildAdapter,
-  inheritModelPolicy,
 } from "@mars/collaboration";
 import type { RepositoryMapProvider } from "@mars/context";
 import type {
@@ -116,6 +115,28 @@ export interface WorkbenchHostOptions {
 
 export interface WorkbenchHostApi extends WorkbenchOperations {
   close(): Promise<void>;
+}
+
+function normalizeClaimedPath(path: string): string | null {
+  if (path.startsWith("/") || path.startsWith("\\")) return null;
+  const segments = path
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter((segment) => segment !== "" && segment !== ".");
+  if (segments.length === 0 || segments.includes("..")) return null;
+  return segments.join("/");
+}
+
+/** A write is inside the child's claim when it equals or sits under a claimed path. */
+function withinClaimedPaths(path: string, claimed: readonly string[]): boolean {
+  const target = normalizeClaimedPath(path);
+  if (target === null) return false;
+  return claimed.some((claim) => {
+    const prefix = normalizeClaimedPath(claim);
+    return (
+      prefix !== null && (target === prefix || target.startsWith(prefix + "/"))
+    );
+  });
 }
 
 function internalContext(scope: Scope): RequestContext {
@@ -621,6 +642,7 @@ export async function createWorkbenchHost(
     taskId: string,
     frozen: FrozenCollaboration,
     workspace: WorkspaceRef,
+    approvals: Approvals,
   ) => {
     const collaboration = options.collaboration;
     if (!collaboration) return {};
@@ -635,6 +657,7 @@ export async function createWorkbenchHost(
             await runner?.tick();
           },
           currentBaseRevision: () => workspace.revision ?? null,
+          parentApprovals: () => approvals,
           roomTaskRevision: async () =>
             (
               await collaboration.host.inspectRoom(
@@ -656,6 +679,7 @@ export async function createWorkbenchHost(
     approvals: Approvals,
     budget: Budget,
     assertActive: () => Promise<void>,
+    writePaths: readonly string[] = [],
   ): RuntimeTools => {
     const authorize = async (permission: keyof Approvals) => {
       if (
@@ -676,6 +700,8 @@ export async function createWorkbenchHost(
       },
       async write(path, bytes) {
         const context = await authorize("write");
+        if (writePaths.length > 0 && !withinClaimedPaths(path, writePaths))
+          throw new WorkbenchError("forbidden");
         const artifact = await options.store.artifacts.put(
           context,
           bytes,
@@ -685,6 +711,9 @@ export async function createWorkbenchHost(
         await options.workspace.write(context, workspace, path, artifact);
       },
       async execute(argv) {
+        // Execution cannot be confined to claimed paths, so a path-scoped
+        // child does not execute at all.
+        if (writePaths.length > 0) throw new WorkbenchError("forbidden");
         const context = await authorize("execute");
         const result = await options.workspace.execute(
           context,
@@ -729,24 +758,44 @@ export async function createWorkbenchHost(
     )
       throw new WorkbenchError("forbidden");
     const context = internalContext(options.scope);
+    // The child starts from the coordinator's current tree, not the source
+    // checkout: its proposal base is the coordinator revision it was seeded
+    // from, which the review compares with the coordinator's current revision.
+    const parent = await options.workspace.reopen(context, launch.task_id);
     const workspace = await options.workspace.prepare(
       context,
       launch.child_task_id,
     );
+    const changes = await options.workspace.diff(context, parent);
+    for (const file of changes.files) {
+      if (file.status === "deleted") throw new WorkbenchError("unavailable");
+      await options.workspace.write(
+        context,
+        workspace,
+        file.path,
+        await options.workspace.read(context, parent, file.path),
+      );
+    }
     const approvals: Approvals =
       launch.workspace_mode === "read_only"
         ? { read: launch.approvals.read, write: false, execute: false }
         : launch.approvals;
     return {
       cwd: await options.workspace.cwd(context, workspace),
-      tools: toolsFor(workspace, approvals, launch.budget, async () => {
-        const view = await room.host.inspectRoom(context, launch.room_id);
-        if (view.status !== "open") throw new WorkbenchError("conflict");
-      }),
+      tools: toolsFor(
+        workspace,
+        approvals,
+        launch.budget,
+        async () => {
+          const view = await room.host.inspectRoom(context, launch.room_id);
+          if (view.status !== "open") throw new WorkbenchError("conflict");
+        },
+        launch.write_paths,
+      ),
       base_revision:
-        workspace.revision === undefined || workspace.revision === null
+        parent.revision === undefined || parent.revision === null
           ? null
-          : String(workspace.revision),
+          : String(parent.revision),
     };
   };
   if (options.collaboration && delegation) {
@@ -768,7 +817,12 @@ export async function createWorkbenchHost(
         close: async () => undefined,
       },
       adapter,
-      modelPolicy: inheritModelPolicy,
+      // Children never inherit the coordinator's model: a paid coordinator
+      // would otherwise hand children a model they are not allowed to use.
+      modelPolicy: async () => ({
+        model_id: selectExecutionModel(options.registry, undefined, true).id,
+        reason: "workbench free default",
+      }),
     });
     await runner.recover();
     const tick = () => void runner?.tick().catch(() => undefined);
@@ -969,7 +1023,12 @@ export async function createWorkbenchHost(
             activeTask(running.task_id),
           ),
           ...(collaboration
-            ? roomToolsFor(task.task_id, collaboration, workspace)
+            ? roomToolsFor(
+                task.task_id,
+                collaboration,
+                workspace,
+                params.approvals,
+              )
             : {}),
           ...(params.approvals.read ? historyFor(context) : {}),
           onEvent: async (event) => {
@@ -1086,7 +1145,12 @@ export async function createWorkbenchHost(
             activeTask(running.task_id),
           ),
           ...(launch.collaboration
-            ? roomToolsFor(task.task_id, launch.collaboration, workspace)
+            ? roomToolsFor(
+                task.task_id,
+                launch.collaboration,
+                workspace,
+                launch.approvals,
+              )
             : {}),
           ...(launch.approvals.read ? historyFor(context) : {}),
           onEvent: observe(taskId),

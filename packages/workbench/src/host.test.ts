@@ -39,6 +39,7 @@ import type {
 } from "./collaboration-context";
 import { createWorkbenchHost, type WorkspaceHost } from "./host";
 import type { WorkbenchMemory } from "./memory-context";
+import type { DiffResult } from "./protocol.js";
 import type { WorkbenchSpecialists } from "./specialist-routing";
 
 const scope = {
@@ -104,6 +105,8 @@ async function fixture() {
   let prepareCalls = 0;
   let failPrepare = false;
   let restoreCalls = 0;
+  let diffFiles: DiffResult["files"] = [];
+  const writes: string[] = [];
   const artifact = await store.artifacts.put(
     context(),
     new TextEncoder().encode("checkpoint"),
@@ -124,7 +127,9 @@ async function fixture() {
     async read() {
       return artifact;
     },
-    async write() {},
+    async write(_context, _workspace, path) {
+      writes.push(path);
+    },
     async execute() {
       return {
         exit_code: 0,
@@ -146,7 +151,7 @@ async function fixture() {
       return ref;
     },
     async diff() {
-      return { files: [] };
+      return { files: diffFiles };
     },
   };
   const sessions: {
@@ -373,6 +378,10 @@ async function fixture() {
     routedRegistry,
     get prepareCalls() {
       return prepareCalls;
+    },
+    writes,
+    set diffFiles(files: DiffResult["files"]) {
+      diffFiles = files;
     },
     get restoreCalls() {
       return restoreCalls;
@@ -1796,6 +1805,8 @@ test("coordinators delegate bounded children that run in private workspaces and 
   );
   expect(launch.collaboration.delegation).toBe(true);
   const prepared = f.prepareCalls;
+  // The coordinator's edits travel into the child's tree, not the source checkout.
+  f.diffFiles = [{ path: "src/feature.ts", status: "modified", patch: "" }];
 
   const request = {
     role_label: "worker",
@@ -1816,6 +1827,9 @@ test("coordinators delegate bounded children that run in private workspaces and 
   const child = required(launches[0]);
   expect(child.approvals).toEqual({ read: true, write: false, execute: false });
   expect(child.paid_models).toBe(false);
+  expect(child.model_id).toEqual(expect.any(String));
+  expect(f.writes).toContain("src/feature.ts");
+  expect(required(bindings[0]).base_revision).toBe("r1");
   // Without write authority the collaboration package confines the child to a read-only workspace.
   expect(child.workspace_mode).toBe("read_only");
   expect(child.child_task_id).not.toBe("task");
@@ -1916,5 +1930,112 @@ test("coordinators delegate bounded children that run in private workspaces and 
       )
     ).status,
   ).toBe("closed");
+  await api.close();
+});
+
+test("path-scoped writable children write only inside their claim and never execute", async () => {
+  const f = await fixture();
+  const collaboration = await createCollaboration({
+    rootDir: join(f.root, "collaboration"),
+    hostPrivateRoots: [join(f.root, "private")],
+  });
+  const launches: ChildLaunch[] = [];
+  const bindings: Awaited<ReturnType<ChildWorkspaceBinder>>[] = [];
+  const finishers: ((outcome: ChildOutcome) => void)[] = [];
+  const api = await f.makeHost(undefined, undefined, undefined, undefined, {
+    host: collaboration.host,
+    agents: collaboration.agents,
+    delegation: {
+      pool: { max_tokens: 400 },
+      tickMs: 10,
+      adapter: ({ workspaceFor }) => ({
+        async start(launch) {
+          launches.push(launch);
+          const binding = await workspaceFor(launch);
+          bindings.push(binding);
+          return {
+            session_ref: null,
+            base_revision: binding.base_revision,
+            outcome: new Promise<ChildOutcome>((resolve) => {
+              finishers.push(resolve);
+            }),
+            async cancel() {},
+          };
+        },
+      }),
+    },
+  });
+  const base = task();
+  await api.create(context(), {
+    ...base,
+    budget: { ...base.budget, max_duration_ms: 60_000, max_concurrency: 3 },
+  });
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: true, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  const delegation = required(
+    required(session.options.collaboration).delegation,
+  );
+  // Omitted approvals default to read-only within the coordinator's own.
+  await delegation.delegate({
+    role_label: "reader",
+    instruction: "Look only.",
+    max_tokens: 50,
+    max_duration_ms: 30_000,
+    max_steps: 2,
+    max_messages: 2,
+  });
+  await delegation.delegate({
+    role_label: "editor",
+    instruction: "Edit the docs.",
+    write: true,
+    write_paths: ["docs"],
+    max_tokens: 50,
+    max_duration_ms: 30_000,
+    max_steps: 2,
+    max_messages: 2,
+  });
+  const deadline = Date.now() + 5_000;
+  while (bindings.length < 2 && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(launches.map((launch) => launch.approvals)).toEqual([
+    { read: true, write: false, execute: false },
+    { read: true, write: true, execute: false },
+  ]);
+  expect(required(launches[1]).workspace_mode).toBe("private");
+  const editor = required(bindings[1]).tools;
+  const bytes = new TextEncoder().encode("x");
+  await expect(editor.write("src/feature.ts", bytes)).rejects.toMatchObject({
+    code: "forbidden",
+  });
+  await expect(editor.write("../docs/a.md", bytes)).rejects.toMatchObject({
+    code: "forbidden",
+  });
+  await editor.write("docs/guide.md", bytes);
+  expect(f.writes).toContain("docs/guide.md");
+  await expect(editor.execute(["true"])).rejects.toMatchObject({
+    code: "forbidden",
+  });
+  // Rooms with live children drain rather than close, so finish them first.
+  for (const finish of finishers)
+    finish({
+      status: "completed",
+      summary: "Done.",
+      artifacts: [],
+      usage: { input_tokens: 1, output_tokens: 1, usd: 0, steps: 1 },
+    });
+  const settled = Date.now() + 5_000;
+  while (Date.now() < settled) {
+    const listed = JSON.parse(await delegation.children()) as {
+      state: string;
+    }[];
+    if (listed.length === 2 && listed.every((c) => c.state === "completed"))
+      break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  session.finish("completed");
   await api.close();
 });
