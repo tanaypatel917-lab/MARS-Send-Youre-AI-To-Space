@@ -6,6 +6,7 @@ import {
   readFile,
   realpath,
   rename,
+  rm,
   stat,
   writeFile,
 } from "node:fs/promises";
@@ -13,6 +14,7 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
   type ChildLaunch,
   type ChildRunner,
+  type ChildRuntimeAdapter,
   CollaborationError,
   createChildRunner,
   createOhMyPiChildAdapter,
@@ -501,20 +503,221 @@ export async function createWorkbenchHost(
       },
     });
   };
+  /** Usage already mirrored into task events, and the last recorded state, per child. */
+  const childResults = async (context: RequestContext, taskId: string) => {
+    const recorded = new Map<
+      string,
+      { input: number; output: number; usd: number; state: string }
+    >();
+    for await (const event of options.store.events(context, taskId)) {
+      if (
+        event.event_type !== "tool.completed" ||
+        event.producer !== "@mars/workbench"
+      )
+        continue;
+      const bytes = await options.store.artifacts.get(context, event.payload);
+      const payload = z
+        .object({
+          operation: z.literal("child.result"),
+          child_agent_id: z.string(),
+          status: z.string(),
+        })
+        .safeParse(JSON.parse(new TextDecoder().decode(bytes)));
+      if (!payload.success) continue;
+      const previous = recorded.get(payload.data.child_agent_id) ?? {
+        input: 0,
+        output: 0,
+        usd: 0,
+        state: "",
+      };
+      recorded.set(payload.data.child_agent_id, {
+        input: previous.input + (event.usage?.input_tokens ?? 0),
+        output: previous.output + (event.usage?.output_tokens ?? 0),
+        usd: previous.usd + (event.usage?.cost_usd ?? 0),
+        state: payload.data.status,
+      });
+    }
+    return recorded;
+  };
+  const childRouting = new Map<string, FrozenRouting>();
+  /** Routing decisions survive a host restart in a private per-child record. */
+  const childRoutingPath = (childTaskId: string) =>
+    join(
+      options.stateRoot,
+      "children",
+      "routing",
+      childWorkspaceTaskId(childTaskId) + ".json",
+    );
+  const rememberChildRouting = async (
+    childTaskId: string,
+    routing: FrozenRouting,
+  ) => {
+    childRouting.set(childTaskId, routing);
+    const path = childRoutingPath(childTaskId);
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    const temporary = path + "." + randomUUID() + ".tmp";
+    await writeFile(temporary, JSON.stringify(routing), { mode: 0o600 });
+    await rename(temporary, path);
+  };
+  const recallChildRouting = async (
+    childTaskId: string,
+  ): Promise<FrozenRouting | null> => {
+    const known = childRouting.get(childTaskId);
+    if (known) return known;
+    const parsed = await readFile(childRoutingPath(childTaskId), "utf8")
+      .then((text) => FrozenRoutingSchema.safeParse(JSON.parse(text)))
+      .catch(() => null);
+    if (!parsed?.success) return null;
+    childRouting.set(childTaskId, parsed.data);
+    return parsed.data;
+  };
+  const forgetChildRouting = async (childTaskId: string) => {
+    childRouting.delete(childTaskId);
+    await rm(childRoutingPath(childTaskId), { force: true }).catch(
+      () => undefined,
+    );
+  };
+  const childLaunches = new Map<string, ChildLaunch>();
+  const childSweeps = new Map<string, Promise<void>>();
+  /** Room capabilities kept for sweeping after the coordinator has exited. */
+  const sweepRooms = new Map<string, FrozenCollaboration>();
+  const TERMINAL_CHILD_STATES = new Set([
+    "completed",
+    "failed",
+    "cancelled",
+    "expired",
+  ]);
+  /**
+   * Mirrors the room's children into the parent task's durable timeline from
+   * the collaboration store's charged usage (the authority for budgets, which
+   * also covers usage reconciled during recovery). Sweeps are serialized per
+   * task so overlapping attempts can never record the same usage twice: each
+   * sweep records only the delta over what earlier events already carry, and
+   * a terminal state once.
+   */
+  const sweepChildren = (
+    taskId: string,
+    room?: FrozenCollaboration,
+  ): Promise<void> => {
+    const collaboration = options.collaboration;
+    const frozen = room ?? liveRooms.get(taskId) ?? sweepRooms.get(taskId);
+    if (!collaboration || !frozen) return Promise.resolve();
+    sweepRooms.set(taskId, frozen);
+    const run = async () => {
+      const context = internalContext(options.scope);
+      const recorded = await childResults(context, taskId);
+      let settled = true;
+      let cursor: string | null = null;
+      do {
+        const page = await collaboration.agents.children(
+          context,
+          frozen.capability,
+          cursor ? { cursor } : undefined,
+        );
+        for (const child of page.children) {
+          const previous = recorded.get(child.agent_id) ?? {
+            input: 0,
+            output: 0,
+            usd: 0,
+            state: "",
+          };
+          const delta = {
+            input_tokens: Math.max(
+              0,
+              child.usage.input_tokens - previous.input,
+            ),
+            output_tokens: Math.max(
+              0,
+              child.usage.output_tokens - previous.output,
+            ),
+            cost_usd: Math.max(0, child.usage.usd - previous.usd),
+          };
+          const final = TERMINAL_CHILD_STATES.has(child.state);
+          if (!final) settled = false;
+          const terminal = final && previous.state !== child.state;
+          if (
+            !terminal &&
+            delta.input_tokens === 0 &&
+            delta.output_tokens === 0 &&
+            delta.cost_usd === 0
+          )
+            continue;
+          const childTaskId = `${taskId}.child.${child.agent_id}`;
+          const launch = childLaunches.get(childTaskId);
+          await options.store.appendEvent(context, taskId, {
+            event_type: "tool.completed",
+            producer: "@mars/workbench",
+            run_id: randomUUID(),
+            versions: [{ component: "@mars/workbench", revision: "0.0.1" }],
+            payload: {
+              operation: "child.result",
+              child_task_id: childTaskId,
+              child_agent_id: child.agent_id,
+              role_label: child.role_label,
+              task_revision: child.task_revision,
+              attempt: launch?.attempt ?? null,
+              status: child.state,
+              model_id: launch?.model_id ?? null,
+              routing: await recallChildRouting(childTaskId),
+            },
+            usage: delta,
+          });
+          if (final) {
+            childLaunches.delete(childTaskId);
+            await forgetChildRouting(childTaskId);
+          }
+        }
+        cursor = page.next_cursor;
+      } while (cursor);
+      if (settled && !liveRooms.has(taskId)) sweepRooms.delete(taskId);
+    };
+    const queued = (childSweeps.get(taskId) ?? Promise.resolve()).then(
+      run,
+      run,
+    );
+    const pending = queued
+      .catch(() => undefined)
+      .then(() => {
+        if (childSweeps.get(taskId) === pending) childSweeps.delete(taskId);
+      });
+    childSweeps.set(taskId, pending);
+    return queued;
+  };
+  const observeChildren = (
+    adapter: ChildRuntimeAdapter,
+  ): ChildRuntimeAdapter => ({
+    async start(launch, hooks) {
+      childLaunches.set(launch.child_task_id, launch);
+      const run = await adapter.start(launch, hooks);
+      const sweep = () => {
+        // Let the runner finalize the child in the collaboration store first.
+        setTimeout(
+          () => void sweepChildren(launch.task_id).catch(() => undefined),
+          0,
+        ).unref();
+      };
+      void run.outcome.then(sweep, sweep);
+      return run;
+    },
+    ...(adapter.reconcile
+      ? { reconcile: adapter.reconcile.bind(adapter) }
+      : {}),
+  });
   const closeFrozenRoom = (
+    taskId: string,
     frozen: FrozenCollaboration,
     mode: "drain" | "cancel",
   ) =>
     options.collaboration
       ? options.collaboration.host
           .closeRoom(internalContext(options.scope), frozen.room_id, mode)
-          .then(() => undefined)
+          .then(() => sweepChildren(taskId, frozen))
           .catch(() => undefined)
       : Promise.resolve();
   const closeRecordedRoom = async (task: Task, mode: "drain" | "cancel") => {
     const launch = await readLaunch(task).catch(() => null);
     if (launch?.collaboration)
-      await closeFrozenRoom(launch.collaboration, mode);
+      await closeFrozenRoom(task.task_id, launch.collaboration, mode);
   };
   // Steering advances the task revision; the room marks pending child
   // proposals stale so the coordinator reviews them against current intent.
@@ -587,7 +790,9 @@ export async function createWorkbenchHost(
     collaboration?: FrozenCollaboration,
   ) => {
     const closeRoom = (mode: "drain" | "cancel") =>
-      collaboration ? closeFrozenRoom(collaboration, mode) : Promise.resolve();
+      collaboration
+        ? closeFrozenRoom(task.task_id, collaboration, mode)
+        : Promise.resolve();
     active.set(task.task_id, runtime);
     const job = (async () => {
       try {
@@ -663,6 +868,10 @@ export async function createWorkbenchHost(
           active.delete(task.task_id);
           liveRooms.delete(task.task_id);
           jobs.delete(task.task_id);
+          // Re-sweep after the live entry is gone so a room whose children
+          // have all settled releases its retained capability.
+          if (sweepRooms.has(task.task_id))
+            void sweepChildren(task.task_id).catch(() => undefined);
         }
       }
     })();
@@ -682,6 +891,8 @@ export async function createWorkbenchHost(
     const collaboration = options.collaboration;
     if (!collaboration) return {};
     liveRooms.set(taskId, frozen);
+    // A restarted host mirrors whatever recovery charged while it was away.
+    void sweepChildren(taskId).catch(() => undefined);
     return {
       collaboration: collaborationTools(
         collaboration.agents,
@@ -871,16 +1082,18 @@ export async function createWorkbenchHost(
   };
   if (options.collaboration && delegation) {
     const collaboration = options.collaboration;
-    const adapter = delegation.adapter
-      ? delegation.adapter({ workspaceFor: childWorkspaceFor })
-      : createOhMyPiChildAdapter({
-          registry: options.registry,
-          stateRoot: join(options.stateRoot, "children"),
-          workspaceFor: childWorkspaceFor,
-          ...(options.runtimeFactory
-            ? { runtimeFactory: options.runtimeFactory }
-            : {}),
-        });
+    const adapter = observeChildren(
+      delegation.adapter
+        ? delegation.adapter({ workspaceFor: childWorkspaceFor })
+        : createOhMyPiChildAdapter({
+            registry: options.registry,
+            stateRoot: join(options.stateRoot, "children"),
+            workspaceFor: childWorkspaceFor,
+            ...(options.runtimeFactory
+              ? { runtimeFactory: options.runtimeFactory }
+              : {}),
+          }),
+    );
     runner = createChildRunner({
       collaboration: {
         host: collaboration.host,
@@ -890,10 +1103,54 @@ export async function createWorkbenchHost(
       adapter,
       // Children never inherit the coordinator's model: a paid coordinator
       // would otherwise hand children a model they are not allowed to use.
-      modelPolicy: async () => ({
-        model_id: selectExecutionModel(options.registry, undefined, true).id,
-        reason: "workbench free default",
-      }),
+      // With a specialist registry the child is routed like a launch, and a
+      // verified specialist is pinned only when it is free and tool-capable.
+      modelPolicy: async (request) => {
+        const fallback = () =>
+          selectExecutionModel(options.registry, undefined, true);
+        if (!options.specialists)
+          return { model_id: fallback().id, reason: "workbench free default" };
+        let routing: FrozenRouting;
+        try {
+          routing = await routeLaunch(
+            internalContext(options.scope),
+            { task_id: request.child_task_id, budget: request.budget },
+            true,
+            { ...options.specialists, paid_consent: false },
+            initialRequestAllowance({
+              approvals: request.approvals,
+              recall: false,
+              // Children get only workspace tools from the child adapter.
+              collaboration: false,
+              instruction: request.instruction,
+            }) + MIN_INITIAL_OUTPUT_RESERVE,
+          );
+        } catch {
+          return {
+            model_id: fallback().id,
+            reason: "workbench free default (routing unavailable)",
+          };
+        }
+        await rememberChildRouting(request.child_task_id, routing).catch(
+          () => undefined,
+        );
+        const specialist = routing.model_id
+          ? options.registry.getModel(routing.model_id)
+          : undefined;
+        if (
+          specialist &&
+          specialist.pricing.free === true &&
+          specialist.capabilities.tools
+        )
+          return {
+            model_id: specialist.id,
+            reason: `specialist ${routing.decision_id}`,
+          };
+        return {
+          model_id: fallback().id,
+          reason: `workbench free default (${routing.outcome})`,
+        };
+      },
     });
     await runner.recover();
     const tick = () => void runner?.tick().catch(() => undefined);
@@ -1168,7 +1425,8 @@ export async function createWorkbenchHost(
         return running;
       } catch (error) {
         await runtime?.dispose().catch(() => undefined);
-        if (collaboration) await closeFrozenRoom(collaboration, "cancel");
+        if (collaboration)
+          await closeFrozenRoom(task.task_id, collaboration, "cancel");
         const current = await options.store
           .inspect(context, task.task_id)
           .catch(() => null);
@@ -1437,6 +1695,7 @@ export async function createWorkbenchHost(
       closing = true;
       if (runnerTimer) clearInterval(runnerTimer);
       await runner?.shutdown().catch(() => undefined);
+      await Promise.allSettled([...childSweeps.values()]);
       await Promise.allSettled([...operations]);
       let cleanupFailed = false;
       await Promise.all(

@@ -52,7 +52,7 @@ export function routingTaskId(taskId: string): string {
 }
 
 export function routingRequest(
-  task: Task,
+  task: Pick<Task, "task_id" | "budget">,
   toolsRequired: boolean,
   specialists: Pick<
     WorkbenchSpecialists,
@@ -85,7 +85,7 @@ export function routingRequest(
  */
 export async function routeLaunch(
   context: RequestContext,
-  task: Task,
+  task: Pick<Task, "task_id" | "budget">,
   toolsRequired: boolean,
   specialists: WorkbenchSpecialists,
   minContextTokens: number,

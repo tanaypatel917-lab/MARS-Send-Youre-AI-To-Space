@@ -66,6 +66,12 @@ export type ModelSelectionPolicy = (request: {
   parent_model_id: string | null;
   paid_allowed: boolean;
   depth: number;
+  task_id: string;
+  task_revision: number;
+  child_task_id: string;
+  instruction: string;
+  approvals: { read: boolean; write: boolean; execute: boolean };
+  budget: Budget;
 }) => Promise<{ model_id: string | null; reason: string }>;
 
 export const inheritModelPolicy: ModelSelectionPolicy = async () => ({
@@ -140,6 +146,10 @@ export function armDeadline(
   };
 }
 
+function childTaskId(context: LaunchContext): string {
+  return `${context.task_id}.child.${context.member.agent_id}`;
+}
+
 function launchBudget(context: LaunchContext, now: number): Budget {
   const budget = context.member.budget;
   const pool = context.member.pool;
@@ -197,7 +207,7 @@ function makeLaunch(
     scope: context.room.scope,
     task_id: context.task_id,
     task_revision: context.task_revision,
-    child_task_id: `${context.task_id}.child.${context.member.agent_id}`,
+    child_task_id: childTaskId(context),
     instruction: context.instruction,
     approvals: {
       read: authority.read,
@@ -353,6 +363,16 @@ export function createChildRunner(options: ChildRunnerOptions): ChildRunner {
             parent_model_id: context.parent_model_id,
             paid_allowed: context.paid_models,
             depth: context.member.depth,
+            task_id: context.task_id,
+            task_revision: context.task_revision,
+            child_task_id: childTaskId(context),
+            instruction: context.instruction,
+            approvals: {
+              read: context.member.authority.read,
+              write: context.member.authority.write,
+              execute: context.member.authority.execute,
+            },
+            budget: launchBudget(context, context.now),
           });
           if (
             !selected ||

@@ -142,7 +142,10 @@ service owner performs any follow-up action.
 - Adapters report `steps` per attempt; the runner adds the steps charged by
   earlier attempts, launches retries with the remaining allowance, and fails a
   retry with no steps left before the adapter starts. A retry that resumes a
-  journal reuses the persisted model instead of re-running the model policy,
+  journal reuses the persisted model instead of re-running the model policy
+  (the policy request carries the role, complexity, solution space, parent
+  model, depth, task and child task ids, task revision, instruction, the
+  child's approvals and its launch budget),
   so the runtime binding stays valid.
 
 ## Not verified
