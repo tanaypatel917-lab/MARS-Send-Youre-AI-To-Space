@@ -28,6 +28,8 @@ const ctx = (
   request_id: "request",
 });
 const c = ctx();
+const journalSource = (session: string, entry: string) =>
+  `journal:${JSON.stringify([session, entry])}`;
 const entry = (
   entry_id: string,
   fact = entry_id,
@@ -513,6 +515,93 @@ const journal = (session_id = "session", text = "journalmarker") => ({
   ],
 });
 
+test("journal source identities and exclusions distinguish delimiters exactly", async () => {
+  for (const [firstSession, firstEntry, secondSession, secondEntry] of [
+    ["S", "m1", "S:child", "m1"],
+    ["A", "B:C", "A:B", "C"],
+    ['雪:"', 'E:["', "雪:", '"E:["'],
+  ] as const) {
+    for (const entryOnly of [false, true]) {
+      const s = open();
+      const input = (session: string, id: string) => {
+        const j = journal(session);
+        return {
+          ...j,
+          entries: j.entries.map((record) =>
+            record.type === "message" ? { ...record, id } : record,
+          ),
+        };
+      };
+      const first = input(firstSession, firstEntry),
+        second = input(secondSession, secondEntry);
+      await s.indexJournal(c, first);
+      await s.indexJournal(c, second);
+      const sources = (await s.datasetCandidates(c)).map(
+        (candidate) => candidate.source_id,
+      );
+      expect(new Set(sources).size).toBe(2);
+      await s.recordDatasetUse(c, "first-model", [
+        journalSource(firstSession, firstEntry),
+      ]);
+      await s.recordDatasetUse(c, "second-model", [
+        journalSource(secondSession, secondEntry),
+      ]);
+      await s.dropHistory(c, firstSession);
+      expect(
+        (
+          await s.excludeJournal(
+            c,
+            firstSession,
+            entryOnly ? [firstEntry] : undefined,
+          )
+        ).affected_training_manifests,
+      ).toEqual(["first-model"]);
+      await s.indexJournal(c, first);
+      await s.indexJournal(c, second);
+      expect(
+        (await s.datasetCandidates(c)).map((candidate) => candidate.source_id),
+      ).toEqual([journalSource(secondSession, secondEntry)]);
+      expect((await s.delete(c)).affected_training_manifests).toEqual([
+        "second-model",
+      ]);
+      expect((await s.delete(c)).affected_training_manifests).toEqual([]);
+    }
+  }
+  const s = open(),
+    duplicate = journal("duplicate");
+  await expect(
+    s.indexJournal(c, {
+      ...duplicate,
+      entries: [...duplicate.entries, duplicate.entries[1]],
+    }),
+  ).rejects.toMatchObject({ code: "journal_incompatible" });
+  expect(await s.datasetCandidates(c)).toEqual([]);
+  await s.indexJournal(ctx("other"), duplicate);
+});
+
+test("format 1 stores fail closed without changing their version or data", async () => {
+  const dir = root(),
+    db = new Database(join(dir, "memory.sqlite"));
+  db.exec(
+    "CREATE TABLE legacy(marker TEXT); INSERT INTO legacy VALUES ('retained'); PRAGMA user_version=1",
+  );
+  db.close();
+  expect(() => open(dir)).toThrow(
+    expect.objectContaining({ code: "unknown_format" }),
+  );
+  const retained = new Database(join(dir, "memory.sqlite"));
+  try {
+    expect(retained.query("PRAGMA user_version").get()).toEqual({
+      user_version: 1,
+    });
+    expect(retained.query("SELECT marker FROM legacy").get()).toEqual({
+      marker: "retained",
+    });
+  } finally {
+    retained.close();
+  }
+});
+
 test("erasure reports dropped and replaced journal lineage and cleans only its recording scope", async () => {
   for (const replacement of [false, true]) {
     for (const operation of ["delete", "session", "message"] as const) {
@@ -520,10 +609,12 @@ test("erasure reports dropped and replaced journal lineage and cleans only its r
         s = open(dir),
         other = ctx("other");
       await s.indexJournal(c, journal("retired"));
-      await s.recordDatasetUse(c, "training-1", ["journal:retired:m1"]);
+      await s.recordDatasetUse(c, "training-1", [
+        journalSource("retired", "m1"),
+      ]);
       await s.indexJournal(other, journal("other-session"));
       await s.recordDatasetUse(other, "training-other", [
-        "journal:other-session:m1",
+        journalSource("other-session", "m1"),
       ]);
       if (replacement) {
         const input = journal("retired");
@@ -587,6 +678,40 @@ test("profile hard erasure cleans only the caller's recorded lineage", async () 
   }
 });
 
+test("orphaned profile and project-wide lineage remains erasable by its recording scope", async () => {
+  for (const [a, b, target] of [
+    [ctx("a"), ctx("b"), "profile"],
+    [ctx("p", "w1"), ctx("p", "w2"), "project"],
+  ] as const) {
+    for (const operation of ["delete", "forget"] as const) {
+      const dir = root(),
+        s = open(dir),
+        writer = target === "profile" ? a : c;
+      await add(s, entry("shared", "shared", writer, target), 0, writer);
+      await s.recordDatasetUse(a, "model-A", ["memory:shared"]);
+      await s.recordDatasetUse(b, "model-B", ["memory:shared"]);
+      expect((await s.delete(b)).affected_training_manifests).toEqual([
+        "model-B",
+      ]);
+      expect((await s.snapshot(a)).entries).toEqual([]);
+      const result =
+        operation === "delete"
+          ? await s.delete(a)
+          : await s.forgetEntry(a, "shared");
+      expect(result.affected_training_manifests).toEqual(["model-A"]);
+      const db = new Database(join(dir, "memory.sqlite"));
+      try {
+        expect(db.query("SELECT * FROM dataset_use").all()).toEqual([]);
+      } finally {
+        db.close();
+      }
+      await expect(s.forgetEntry(a, "shared")).rejects.toMatchObject({
+        code: "not_found",
+      });
+    }
+  }
+});
+
 test("hard forget and delete scrub sqlite/WAL, invalidate exports and suppress reindex", async () => {
   const dir = root(),
     s = open(dir);
@@ -598,7 +723,7 @@ test("hard forget and delete scrub sqlite/WAL, invalidate exports and suppress r
   ).rejects.toMatchObject({ code: "scope_denied" });
   await s.recordDatasetUse(c, "training-manifest", [
     "memory:secret",
-    "journal:session:m1",
+    journalSource("session", "m1"),
   ]);
   const ref = await s.export(c);
   expect(Buffer.from(await s.readExport(c, ref)).toString()).toContain(marker);
@@ -667,7 +792,7 @@ test("journal compatibility, scope, redaction, exclusions and rebuildable drop",
     await s.delete(other);
     expect(await s.searchHistory(c, "keyword")).toHaveLength(1);
   }
-  await s.recordDatasetUse(c, "manifest", ["journal:session:m1"]);
+  await s.recordDatasetUse(c, "manifest", [journalSource("session", "m1")]);
   expect(
     (await s.excludeJournal(c, "session", ["m1"])).affected_training_manifests,
   ).toEqual(["manifest"]);
