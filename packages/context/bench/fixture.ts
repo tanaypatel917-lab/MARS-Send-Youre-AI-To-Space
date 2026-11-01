@@ -148,7 +148,7 @@ export interface NavigationTask {
   id: string;
   query: string;
   mentioned_symbols?: string[];
-  targets: Array<{ path: string; symbol: string }>;
+  targets: Array<{ path: string; symbol: string; expected_line: number }>;
 }
 
 export const NAVIGATION_TASKS: readonly NavigationTask[] = [
@@ -156,33 +156,69 @@ export const NAVIGATION_TASKS: readonly NavigationTask[] = [
     id: "session-validation",
     query:
       "Trace which credentials are checked before a browser session can be renewed.",
-    targets: [{ path: "src/auth/session.ts", symbol: "validateSessionToken" }],
+    targets: [
+      {
+        path: "src/auth/session.ts",
+        symbol: "validateSessionToken",
+        expected_line: 2,
+      },
+    ],
   },
   {
     id: "credential-expiry",
     query: "Find where stale identity proofs are rejected during a request.",
-    targets: [{ path: "src/auth/session.ts", symbol: "validateSessionToken" }],
+    targets: [
+      {
+        path: "src/auth/session.ts",
+        symbol: "validateSessionToken",
+        expected_line: 2,
+      },
+    ],
   },
   {
     id: "invoice-assembly",
     query:
       "Understand how a customer's charges are gathered into a billing document.",
-    targets: [{ path: "src/billing/invoice.ts", symbol: "buildInvoice" }],
+    targets: [
+      {
+        path: "src/billing/invoice.ts",
+        symbol: "buildInvoice",
+        expected_line: 2,
+      },
+    ],
   },
   {
     id: "account-allowance",
     query: "Which endpoint refuses work when a tenant has used its allocation?",
-    targets: [{ path: "src/http/routes/quota.ts", symbol: "enforceQuota" }],
+    targets: [
+      {
+        path: "src/http/routes/quota.ts",
+        symbol: "enforceQuota",
+        expected_line: 2,
+      },
+    ],
   },
   {
     id: "delivery-retry",
     query: "Track how the wait period grows after repeated delivery failures.",
-    targets: [{ path: "src/utils/backoff.ts", symbol: "nextDelay" }],
+    targets: [
+      {
+        path: "src/utils/backoff.ts",
+        symbol: "nextDelay",
+        expected_line: 1,
+      },
+    ],
   },
   {
     id: "retention-policy",
     query:
       "Locate where long-lived records are admitted to the archive process.",
-    targets: [{ path: "src/storage/retention.py", symbol: "retain_artifact" }],
+    targets: [
+      {
+        path: "src/storage/retention.py",
+        symbol: "retain_artifact",
+        expected_line: 2,
+      },
+    ],
   },
 ];

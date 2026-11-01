@@ -1,6 +1,21 @@
 import { expect, test } from "bun:test";
 import { runComparison } from "../bench/compare";
-import { createScaledFixtureFiles } from "../bench/fixture";
+import {
+  createScaledFixtureFiles,
+  FIXTURE_FILES,
+  NAVIGATION_TASKS,
+} from "../bench/fixture";
+
+test("benchmark target lines independently match their symbols", () => {
+  for (const task of NAVIGATION_TASKS) {
+    for (const target of task.targets) {
+      const source = FIXTURE_FILES[target.path];
+      expect(source).toBeDefined();
+      const line = source?.split(/\r?\n/)[target.expected_line - 1] ?? "";
+      expect(new RegExp(`\\b${target.symbol}\\b`).test(line)).toBe(true);
+    }
+  }
+});
 
 test("scaled fixture contains 300 deterministic linked distractor modules", () => {
   const first = createScaledFixtureFiles();

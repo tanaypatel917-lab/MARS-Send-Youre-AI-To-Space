@@ -54,6 +54,7 @@ export function createRepositoryMapProvider(
 ): RepositoryMapProvider {
   const limits = { ...DEFAULT_REPOSITORY_MAP_LIMITS, ...options.limits };
   const tokenCounter = options.tokenCounter ?? conservativeTokenCounter;
+  const confinement = options.confinement ?? "anchored";
   const maxCachedWorkspaces = options.maxCachedWorkspaces ?? 32;
   const maxCachedMaps = options.maxCachedMapsPerWorkspace ?? 16;
   const now = options.now ?? (() => performance.now());
@@ -146,16 +147,45 @@ export function createRepositoryMapProvider(
       } catch {
         throw new ContextIoError();
       }
+      const revalidateRoot = async () => {
+        let latest: AuthorizedWorkspaceRoot;
+        try {
+          latest = await options.resolveRoot(context, request.workspace);
+        } catch {
+          throw new ContextPolicyError("Workspace is not authorized");
+        }
+        if (
+          !latest ||
+          typeof latest.root !== "string" ||
+          typeof latest.revision !== "string"
+        ) {
+          throw new ContextPolicyError("Workspace is not authorized");
+        }
+        if (latest.revision !== request.workspace.revision) {
+          throw new ContextRevisionError();
+        }
+        let latestRoot: string;
+        try {
+          latestRoot = await realpath(latest.root);
+          if (!(await stat(latestRoot)).isDirectory()) {
+            throw new Error();
+          }
+        } catch {
+          throw new ContextRevisionError();
+        }
+        if (latestRoot !== root) throw new ContextRevisionError();
+      };
       check();
       const rootHash = createHash("sha256").update(root).digest("hex");
       const key = `${baseKey}\0${rootHash}`;
-      for (const [otherKey, entry] of workspaces) {
-        if (entry.scopeKey === baseKey && otherKey !== key)
-          workspaces.delete(otherKey);
-      }
+      const staleWorkspaceKeys = [...workspaces]
+        .filter(
+          ([otherKey, entry]) => entry.scopeKey === baseKey && otherKey !== key,
+        )
+        .map(([otherKey]) => otherKey);
       let workspaceCache = workspaces.get(key);
       if (workspaceCache && workspaceCache.rootHash !== rootHash) {
-        workspaces.delete(key);
+        staleWorkspaceKeys.push(key);
         workspaceCache = undefined;
       }
       if (!workspaceCache) {
@@ -168,6 +198,7 @@ export function createRepositoryMapProvider(
       }
       const result = await inventory({
         root,
+        confinement,
         limits,
         previous: workspaceCache.files,
         ...(callOptions.signal ? { signal: callOptions.signal } : {}),
@@ -188,13 +219,20 @@ export function createRepositoryMapProvider(
         .digest("hex");
       const cachedMap = workspaceCache.maps.get(mapKey);
       if (cachedMap) {
+        await revalidateRoot();
+        for (const staleKey of staleWorkspaceKeys) {
+          workspaces.delete(staleKey);
+        }
         workspaceCache.files = currentFiles;
         touchWorkspace(workspaces, key, workspaceCache, maxCachedWorkspaces);
         touchMap(workspaceCache.maps, mapKey, cachedMap, maxCachedMaps);
         const cloned = cloneMap(cachedMap);
         cloned.stats.map_cache_hit = true;
-        cloned.stats.files_parsed = 0;
-        cloned.stats.files_reused = result.files.length;
+        cloned.complete = result.complete;
+        cloned.stats.files_inventoried = result.files.length;
+        cloned.stats.files_parsed = result.files_parsed;
+        cloned.stats.files_reused = result.files_reused;
+        cloned.stats.skipped = { ...result.skipped };
         return cloned;
       }
       const normalizedMentions = new Set(mentionedSymbols);
@@ -232,6 +270,10 @@ export function createRepositoryMapProvider(
         tokenCounter,
       );
       check();
+      await revalidateRoot();
+      for (const staleKey of staleWorkspaceKeys) {
+        workspaces.delete(staleKey);
+      }
       const baseMap: RepositoryMap = {
         schema_version: 1,
         workspace: {

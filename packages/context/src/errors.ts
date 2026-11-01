@@ -47,3 +47,13 @@ export class ContextIoError extends ContextError {
     super("ContextIoError", "io", "Repository read failed");
   }
 }
+
+export class ContextConfinementUnavailableError extends ContextError {
+  constructor() {
+    super(
+      "ContextConfinementUnavailableError",
+      "confinement_unavailable",
+      "Repository confinement is unavailable",
+    );
+  }
+}

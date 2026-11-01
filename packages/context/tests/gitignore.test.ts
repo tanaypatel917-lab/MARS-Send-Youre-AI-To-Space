@@ -38,6 +38,22 @@ describe(".gitignore matching", () => {
     expect(isGitignored("space", false, rules)).toBe(false);
   });
 
+  test("skips malformed patterns while applying valid rules", async () => {
+    const root = await tempRoot();
+    await putFile(root, ".gitignore", "[z-a]\nsecret-ish.ts\n");
+    await putFile(root, "visible.ts", "export const visible = 1;\n");
+    await putFile(root, "secret-ish.ts", "export const secret = 1;\n");
+    const result = await providerFor(root).map(context, {
+      workspace,
+      max_output_tokens: 300,
+    });
+    expect(result.files.map((file) => file.path)).toContain("visible.ts");
+    expect(result.files.map((file) => file.path)).not.toContain(
+      "secret-ish.ts",
+    );
+    expect(result.stats.skipped.gitignored).toBe(1);
+  });
+
   test("uses root and nested ignore files while walking", async () => {
     const root = await tempRoot();
     await putFile(

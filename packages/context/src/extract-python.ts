@@ -1,6 +1,6 @@
 import type { Definition, ExtractedFile } from "./types";
 
-export const PYTHON_EXTRACTOR_VERSION = "python-lines-v1";
+export const PYTHON_EXTRACTOR_VERSION = "python-lines-v2";
 
 const keywords = new Set(
   "False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield self cls".split(
@@ -12,31 +12,42 @@ export function extractPython(text: string, maxSymbols: number): ExtractedFile {
   const lines = text.split(/\r?\n/);
   const defs: Definition[] = [];
   const refs = new Map<string, number>();
-  const classes: Array<{ indent: number; name: string }> = [];
+  const blocks: Array<{
+    indent: number;
+    kind: "class" | "def";
+    depth: number;
+  }> = [];
   let triple: string | undefined;
   for (let index = 0; index < lines.length; index += 1) {
     const raw = lines[index] ?? "";
     const code = stripPythonComments(raw, triple);
     const tripleState = updateTripleState(raw, triple);
     triple = tripleState;
+    if (!code.trim()) continue;
     const classMatch = /^(\s*)class\s+(\w+)/.exec(code);
     const defMatch = /^(\s*)(?:async\s+)?def\s+(\w+)/.exec(code);
     const indent = (code.match(/^\s*/) ?? [""])[0]?.length ?? 0;
-    while (classes.length > 0 && (classes.at(-1)?.indent ?? -1) >= indent) {
-      classes.pop();
+    while (blocks.length > 0 && (blocks.at(-1)?.indent ?? -1) >= indent) {
+      blocks.pop();
     }
     if (classMatch) {
       const name = classMatch[2] ?? "";
-      classes.push({ indent, name });
+      const enclosingClass = [...blocks]
+        .reverse()
+        .find((block) => block.kind === "class");
+      const depth = enclosingClass ? enclosingClass.depth + 1 : 0;
       defs.push({
         name,
         kind: "class",
         line: index + 1,
         signature: declarationHeader(code),
-        depth: classes.length - 1,
+        depth,
       });
+      blocks.push({ indent, kind: "class", depth });
     } else if (defMatch) {
       const name = defMatch[2] ?? "";
+      const enclosing = blocks.at(-1);
+      const depth = enclosing?.kind === "class" ? enclosing.depth + 1 : 0;
       let signature = code.trim();
       for (
         let next = index + 1;
@@ -49,13 +60,16 @@ export function extractPython(text: string, maxSymbols: number): ExtractedFile {
         if (nextCode) signature += ` ${nextCode}`;
       }
       signature = declarationHeader(signature).replace(/\s+/g, " ");
-      defs.push({
-        name,
-        kind: classes.length > 0 ? "method" : "function",
-        line: index + 1,
-        signature,
-        depth: classes.length,
-      });
+      if (enclosing?.kind !== "def") {
+        defs.push({
+          name,
+          kind: enclosing?.kind === "class" ? "method" : "function",
+          line: index + 1,
+          signature,
+          depth,
+        });
+      }
+      blocks.push({ indent, kind: "def", depth });
     }
     const cleaned = stripSimplePythonStrings(code);
     for (const match of cleaned.matchAll(/[A-Za-z_]\w*/g)) {

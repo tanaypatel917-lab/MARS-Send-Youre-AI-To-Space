@@ -1380,8 +1380,11 @@
         "spdx": "Apache-2.0",
         "path": "LICENSE.txt",
         "url": "https://github.com/Aider-AI/aider/blob/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/LICENSE.txt",
-        "additional_notices": [],
-        "notes": "Preserve upstream notices. No source copied in this increment."
+        "additional_notices": [
+          "packages/context/NOTICE",
+          "packages/context/third_party/aider/LICENSE.txt"
+        ],
+        "notes": "Preserve upstream notices. packages/context/src/rank.ts contains a MARS TypeScript port of the definition/reference PageRank ranking in aider/repomap.py (get_ranked_tags) at this revision, modified by MARS (deterministic ordering, MARS personalization/subword query weighting, no Tree-sitter/NetworkX/diskcache). Upstream Apache-2.0 license copied verbatim to packages/context/third_party/aider/LICENSE.txt; attribution and modification notice in packages/context/NOTICE. No other Aider source was copied."
       },
       "sources": [
         {

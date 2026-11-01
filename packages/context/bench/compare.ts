@@ -2,8 +2,6 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { conservativeTokenCounter, createRepositoryMapProvider } from "../src";
-import { extractPython } from "../src/extract-python";
-import { extractTypeScript } from "../src/extract-ts";
 import { inventory } from "../src/inventory";
 import { DEFAULT_REPOSITORY_MAP_LIMITS } from "../src/provider";
 import type { RepositoryMap, TokenCounter } from "../src/types";
@@ -208,13 +206,13 @@ function measureEnabled(
       ?.symbols.some((symbol) => symbol.name === target.symbol),
   );
   const lineHits = symbolHits.filter((target) => {
-    const source = FIXTURE_FILES[target.path] ?? "";
-    const trueLine = definitionLine(target.path, source, target.symbol);
     return (
       map.files
         .find((file) => file.path === target.path)
         ?.symbols.some(
-          (symbol) => symbol.name === target.symbol && symbol.line === trueLine,
+          (symbol) =>
+            symbol.name === target.symbol &&
+            symbol.line === target.expected_line,
         ) ?? false
     );
   });
@@ -346,15 +344,6 @@ function linesForFile(text: string, path: string): string[] {
     output.push(line);
   }
   return output.filter(Boolean);
-}
-
-function definitionLine(path: string, source: string, symbol: string): number {
-  const extracted = path.endsWith(".py")
-    ? extractPython(source, 10_000)
-    : extractTypeScript(path, source, 10_000);
-  return (
-    extracted.defs.find((definition) => definition.name === symbol)?.line ?? 0
-  );
 }
 
 async function materializeFixture(
