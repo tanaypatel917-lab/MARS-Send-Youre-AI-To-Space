@@ -95,6 +95,17 @@
         "zod": "3.25.76",
       },
     },
+    "packages/specialists": {
+      "name": "@mars/specialists",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
+      },
+      "devDependencies": {
+        "@mars/providers": "workspace:*",
+      },
+    },
     "packages/tasks": {
       "name": "@mars/tasks",
       "version": "0.0.1",
@@ -228,6 +239,8 @@
     "@mars/providers": ["@mars/providers@workspace:packages/providers"],
 
     "@mars/research": ["@mars/research@workspace:packages/research"],
+
+    "@mars/specialists": ["@mars/specialists@workspace:packages/specialists"],
 
     "@mars/tasks": ["@mars/tasks@workspace:packages/tasks"],
 
