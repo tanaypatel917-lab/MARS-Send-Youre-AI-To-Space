@@ -1183,9 +1183,42 @@ describe("@mars/tasks durable store", () => {
         "Artifact must not contain the upstream journal path",
         [privateRoot, privateFile],
       );
+      await expectRejectedWithoutPaths(
+        () =>
+          rootedStore.artifacts.put(
+            context("rooted-artifact-bare"),
+            new TextEncoder().encode(JSON.stringify({ dir: privateRoot })),
+            "application/json",
+          ),
+        "invalid_input",
+        "Artifact must not contain the upstream journal path",
+        [privateRoot, privateFile],
+      );
+      const siblingFile = `${privateRoot}-backup/build.log`;
+      const siblingRef = await rootedStore.artifacts.put(
+        context("rooted-sibling-artifact"),
+        new TextEncoder().encode(`Writing output to ${siblingFile}`),
+        "text/plain",
+      );
+      expect(
+        new TextDecoder().decode(
+          await rootedStore.artifacts.get(context(), siblingRef),
+        ),
+      ).toBe(`Writing output to ${siblingFile}`);
+      await rootedStore.appendEvent(
+        context("rooted-sibling-event"),
+        rootedTask.task_id,
+        {
+          event_type: "tool.completed",
+          run_id: "rooted-sibling-run",
+          producer: "privacy-test",
+          versions: [{ component: "test", revision: "1" }],
+          payload: { path: siblingFile },
+        },
+      );
       expect(
         await collect(rootedStore.events(context(), rootedTask.task_id)),
-      ).toHaveLength(1);
+      ).toHaveLength(2);
       const otherScope = {
         owner_id: "other-owner",
         project_id: "other-project",

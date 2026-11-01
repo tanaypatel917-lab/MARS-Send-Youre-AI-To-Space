@@ -319,13 +319,45 @@ function hostPrivatePaths(binding: UpstreamSessionBinding): Set<string> {
   ]);
 }
 
+interface PrivateNeedles {
+  readonly exact: ReadonlySet<string>;
+  readonly roots: ReadonlySet<string>;
+}
+
+function exactNeedles(paths: ReadonlySet<string>): PrivateNeedles {
+  return { exact: paths, roots: new Set() };
+}
+
+function textForms(value: string): string[] {
+  const escaped = JSON.stringify(value).slice(1, -1);
+  return escaped === value ? [value] : [value, escaped];
+}
+
+const pathSegmentChar = /[A-Za-z0-9._~-]/;
+
+function containsRootAtBoundary(text: string, root: string): boolean {
+  let index = text.indexOf(root);
+  while (index !== -1) {
+    const next = text[index + root.length];
+    if (next === undefined || !pathSegmentChar.test(next)) return true;
+    index = text.indexOf(root, index + 1);
+  }
+  return false;
+}
+
 function containsHostPrivateText(
   text: string,
-  paths: ReadonlySet<string>,
+  needles: PrivateNeedles,
 ): boolean {
-  for (const privatePath of paths) {
-    const escapedPath = JSON.stringify(privatePath).slice(1, -1);
-    if (text.includes(privatePath) || text.includes(escapedPath)) return true;
+  for (const privatePath of needles.exact) {
+    for (const form of textForms(privatePath)) {
+      if (text.includes(form)) return true;
+    }
+  }
+  for (const root of needles.roots) {
+    for (const form of textForms(root)) {
+      if (containsRootAtBoundary(text, form)) return true;
+    }
   }
   return false;
 }
@@ -1171,8 +1203,10 @@ export async function createTaskStore(
     }
     return paths;
   };
-  const privateNeedles = (key: string): Set<string> =>
-    new Set([...configuredHostPrivateRoots, ...hostPrivatePathsForScope(key)]);
+  const privateNeedles = (key: string): PrivateNeedles => ({
+    exact: hostPrivatePathsForScope(key),
+    roots: configuredHostPrivateRoots,
+  });
   const assertNoHostPathLeak = (key: string, value: unknown): void => {
     const paths = privateNeedles(key);
     const pending = [value];
@@ -1290,8 +1324,9 @@ export async function createTaskStore(
   const assertTaskHistoryDoesNotContainPaths = (
     key: string,
     task: Task,
-    paths: ReadonlySet<string>,
+    bound: ReadonlySet<string>,
   ): void => {
+    const paths = exactNeedles(bound);
     const reject = (): never => {
       throw invalidInput(
         "Task history already contains the upstream journal path",
