@@ -2,9 +2,17 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { mkdir, open, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import {
+  type ChildLaunch,
+  type ChildRunner,
+  createChildRunner,
+  createOhMyPiChildAdapter,
+  inheritModelPolicy,
+} from "@mars/collaboration";
 import type { RepositoryMapProvider } from "@mars/context";
 import type {
   ArtifactRef,
+  Budget,
   ExecutionProvider,
   RequestContext,
   Scope,
@@ -451,6 +459,19 @@ export async function createWorkbenchHost(
     if (launch?.collaboration)
       await closeFrozenRoom(launch.collaboration, mode);
   };
+  // Steering advances the task revision; the room marks pending child
+  // proposals stale so the coordinator reviews them against current intent.
+  const reviseRecordedRoom = async (task: Task) => {
+    const launch = await readLaunch(task).catch(() => null);
+    if (launch?.collaboration && options.collaboration)
+      await options.collaboration.host
+        .reviseTask(
+          internalContext(options.scope),
+          launch.collaboration.room_id,
+          task,
+        )
+        .catch(() => undefined);
+  };
   const run = (
     task: Task,
     workspace: WorkspaceRef,
@@ -551,13 +572,22 @@ export async function createWorkbenchHost(
             options.collaboration.agents,
             () => internalContext(options.scope),
             frozen,
+            async () => {
+              await runner?.tick();
+            },
           ),
         }
       : {};
+  const activeTask = (taskId: string) => async () => {
+    const context = internalContext(options.scope);
+    if ((await options.store.inspect(context, taskId)).status !== "running")
+      throw new WorkbenchError("conflict");
+  };
   const toolsFor = (
-    task: Task,
     workspace: WorkspaceRef,
     approvals: Approvals,
+    budget: Budget,
+    assertActive: () => Promise<void>,
   ): RuntimeTools => {
     const authorize = async (permission: keyof Approvals) => {
       if (
@@ -565,13 +595,8 @@ export async function createWorkbenchHost(
         (permission === "execute" && !options.canExecute)
       )
         throw new WorkbenchError("forbidden");
-      const context = internalContext(options.scope);
-      if (
-        (await options.store.inspect(context, task.task_id)).status !==
-        "running"
-      )
-        throw new WorkbenchError("conflict");
-      return context;
+      await assertActive();
+      return internalContext(options.scope);
     };
     return {
       async read(path) {
@@ -597,7 +622,7 @@ export async function createWorkbenchHost(
           context,
           workspace,
           argv,
-          task.budget,
+          budget,
         );
         return {
           exit_code: result.exit_code,
@@ -618,6 +643,70 @@ export async function createWorkbenchHost(
   await options.store.recoverInterrupted(internalContext(options.scope), {
     reason: "Workbench process interrupted.",
   });
+
+  // Children run under the host's own runner, in private workspaces prepared
+  // for their child task id, with tools bound to the child's clamped approvals
+  // and fenced on the room staying open.
+  const delegation = options.collaboration?.delegation;
+  let runner: ChildRunner | undefined;
+  let runnerTimer: ReturnType<typeof setInterval> | undefined;
+  const childWorkspaceFor = async (launch: ChildLaunch) => {
+    const room = options.collaboration;
+    if (
+      !room ||
+      launch.scope.owner_id !== options.scope.owner_id ||
+      launch.scope.project_id !== options.scope.project_id ||
+      (launch.scope.workspace_id ?? null) !==
+        (options.scope.workspace_id ?? null)
+    )
+      throw new WorkbenchError("forbidden");
+    const context = internalContext(options.scope);
+    const workspace = await options.workspace.prepare(
+      context,
+      launch.child_task_id,
+    );
+    const approvals: Approvals =
+      launch.workspace_mode === "read_only"
+        ? { read: launch.approvals.read, write: false, execute: false }
+        : launch.approvals;
+    return {
+      cwd: await options.workspace.cwd(context, workspace),
+      tools: toolsFor(workspace, approvals, launch.budget, async () => {
+        const view = await room.host.inspectRoom(context, launch.room_id);
+        if (view.status !== "open") throw new WorkbenchError("conflict");
+      }),
+      base_revision:
+        workspace.revision === undefined || workspace.revision === null
+          ? null
+          : String(workspace.revision),
+    };
+  };
+  if (options.collaboration && delegation) {
+    const collaboration = options.collaboration;
+    const adapter = delegation.adapter
+      ? delegation.adapter({ workspaceFor: childWorkspaceFor })
+      : createOhMyPiChildAdapter({
+          registry: options.registry,
+          stateRoot: join(options.stateRoot, "children"),
+          workspaceFor: childWorkspaceFor,
+          ...(options.runtimeFactory
+            ? { runtimeFactory: options.runtimeFactory }
+            : {}),
+        });
+    runner = createChildRunner({
+      collaboration: {
+        host: collaboration.host,
+        agents: collaboration.agents,
+        close: async () => undefined,
+      },
+      adapter,
+      modelPolicy: inheritModelPolicy,
+    });
+    await runner.recover();
+    const tick = () => void runner?.tick().catch(() => undefined);
+    runnerTimer = setInterval(tick, delegation.tickMs ?? 1000);
+    runnerTimer.unref();
+  }
 
   const api: WorkbenchOperations = {
     scope: options.scope,
@@ -722,15 +811,22 @@ export async function createWorkbenchHost(
             idempotency_key: running.task_id,
             authority: {
               approvals: params.approvals,
-              allow_delegation: false,
+              allow_delegation: Boolean(delegation),
               paid_consent: false,
             },
+            ...(delegation
+              ? {
+                  delegation_pool: delegation.pool,
+                  ...(delegation.limits ? { limits: delegation.limits } : {}),
+                }
+              : {}),
             model_id: model.id,
           });
           collaboration = {
             room_id: opened.room.room_id,
             capability: opened.coordinator,
             budget: opened.room.coordinator_runtime_budget,
+            delegation: Boolean(delegation),
           };
         } catch {
           await options.store
@@ -798,7 +894,12 @@ export async function createWorkbenchHost(
           registry: options.registry,
           modelId: model.id,
           approvals: params.approvals,
-          tools: toolsFor(running, workspace, params.approvals),
+          tools: toolsFor(
+            workspace,
+            params.approvals,
+            running.budget,
+            activeTask(running.task_id),
+          ),
           ...(collaboration ? roomToolsFor(collaboration) : {}),
           ...(params.approvals.read ? historyFor(context) : {}),
           onEvent: async (event) => {
@@ -908,7 +1009,12 @@ export async function createWorkbenchHost(
           registry: options.registry,
           modelId: launch.model_id,
           approvals: launch.approvals,
-          tools: toolsFor(running, workspace, launch.approvals),
+          tools: toolsFor(
+            workspace,
+            launch.approvals,
+            running.budget,
+            activeTask(running.task_id),
+          ),
           ...(launch.collaboration ? roomToolsFor(launch.collaboration) : {}),
           ...(launch.approvals.read ? historyFor(context) : {}),
           onEvent: observe(taskId),
@@ -950,6 +1056,7 @@ export async function createWorkbenchHost(
       if (task.status !== "paused" && (task.status !== "running" || !runtime))
         throw new WorkbenchError("conflict");
       await options.store.steer(context, taskId, instruction);
+      await reviseRecordedRoom(await options.store.inspect(context, taskId));
       if (task.status === "running") await runtime?.steer(instruction);
     },
     async cancel(context, taskId) {
@@ -1097,6 +1204,8 @@ export async function createWorkbenchHost(
     restore: serialize((_, taskId) => taskId, api.restore),
     async close() {
       closing = true;
+      if (runnerTimer) clearInterval(runnerTimer);
+      await runner?.shutdown().catch(() => undefined);
       await Promise.allSettled([...operations]);
       let cleanupFailed = false;
       await Promise.all(

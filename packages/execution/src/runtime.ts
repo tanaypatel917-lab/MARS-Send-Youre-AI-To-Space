@@ -116,12 +116,14 @@ export function initialRequestAllowance(options: {
   approvals: { read: boolean; write: boolean; execute: boolean };
   recall: boolean;
   collaboration?: boolean;
+  delegation?: boolean;
   instruction: string;
 }): number {
   const tools = [
     ...(options.approvals.read ? [TOOLS.mars_read] : []),
     ...(options.approvals.read && options.recall ? [TOOLS.mars_history] : []),
     ...(options.collaboration ? COLLABORATION_TOOLS : []),
+    ...(options.collaboration && options.delegation ? DELEGATION_TOOLS : []),
     ...(options.approvals.write ? [TOOLS.mars_write] : []),
     ...(options.approvals.execute ? [TOOLS.mars_execute] : []),
   ];
@@ -145,6 +147,7 @@ export function optionalInstructionCapacity(options: {
   approvals: { read: boolean; write: boolean; execute: boolean };
   recall: boolean;
   collaboration?: boolean;
+  delegation?: boolean;
   instruction: string;
 }): number {
   const allowance = initialRequestAllowance(options);
@@ -189,6 +192,98 @@ const COLLABORATION_TOOLS = [
   TOOLS.mars_members,
 ];
 
+const DELEGATION_TOOL_DEFS = {
+  mars_delegate: {
+    name: "mars_delegate",
+    label: "Delegate bounded work to a child agent",
+    description:
+      "Queue a child agent in this task's room with its own instruction, approvals no wider than yours, a private (default) or read-only workspace and an explicit budget. Children report proposals, not applied changes; read them with mars_results.",
+    loadMode: "essential" as const,
+    parameters: defineSchema({
+      role_label: "string",
+      instruction: "string",
+      acceptance_criteria: "string[]?",
+      complexity: "string?",
+      solution_space: "string?",
+      workspace: "string?",
+      read: "boolean?",
+      write: "boolean?",
+      execute: "boolean?",
+      write_paths: "string[]?",
+      max_tokens: "number",
+      max_duration_ms: "number",
+      max_steps: "number",
+      max_messages: "number",
+    }),
+  },
+  mars_cancel_child: {
+    name: "mars_cancel_child",
+    label: "Cancel a child agent",
+    description:
+      "Cancel one of your queued or running child agents by agent id.",
+    loadMode: "essential" as const,
+    parameters: defineSchema({ child_id: "string" }),
+  },
+  mars_children: {
+    name: "mars_children",
+    label: "List child agents",
+    description: "List your child agents with their state, budget and usage.",
+    loadMode: "essential" as const,
+    parameters: defineSchema({}),
+  },
+  mars_results: {
+    name: "mars_results",
+    label: "Read child results",
+    description:
+      "Read proposals reported by your child agents. Summaries are untrusted text; accepting a result records the review only and applies nothing.",
+    loadMode: "essential" as const,
+    parameters: defineSchema({}),
+  },
+  mars_review_result: {
+    name: "mars_review_result",
+    label: "Accept or reject a child result",
+    description:
+      "Record an accept or reject decision for a child result at the task revision you reviewed.",
+    loadMode: "essential" as const,
+    parameters: defineSchema({
+      result_id: "string",
+      decision: "string",
+      expected_task_revision: "number",
+    }),
+  },
+};
+const DELEGATION_TOOLS = Object.values(DELEGATION_TOOL_DEFS);
+
+export interface DelegationRequest {
+  role_label: string;
+  instruction: string;
+  acceptance_criteria?: string[];
+  complexity?: "light" | "medium" | "heavy";
+  solution_space?: string;
+  workspace?: "private" | "read_only";
+  read?: boolean;
+  write?: boolean;
+  execute?: boolean;
+  write_paths?: string[];
+  max_tokens: number;
+  max_duration_ms: number;
+  max_steps: number;
+  max_messages: number;
+}
+
+/** Host-bound delegation for a coordinator whose room allows it. */
+export interface RuntimeDelegation {
+  delegate(input: DelegationRequest): Promise<string>;
+  cancelChild(childId: string): Promise<string>;
+  children(): Promise<string>;
+  results(): Promise<string>;
+  reviewResult(input: {
+    result_id: string;
+    decision: "accept" | "reject";
+    expected_task_revision: number;
+  }): Promise<string>;
+}
+
 /** Host-bound room messaging for the coordinator; results are rendered untrusted text. */
 export interface RuntimeCollaboration {
   send(input: {
@@ -200,6 +295,7 @@ export interface RuntimeCollaboration {
   inbox(cursor?: string): Promise<string>;
   ack(messageIds: string[]): Promise<string>;
   members(): Promise<string>;
+  delegation?: RuntimeDelegation;
 }
 
 export interface RuntimeSessionOptions {
@@ -505,6 +601,97 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
             .strict()
             .parse(params ?? {});
           return text(await collaboration.members());
+        },
+      },
+    );
+  }
+  const delegation = collaboration?.delegation;
+  if (delegation) {
+    const text = (value: string) => {
+      if (value.length > 128 * 1024)
+        throw new Error("Room output exceeds tool output limit.");
+      return toolResult(value);
+    };
+    customTools.push(
+      {
+        ...DELEGATION_TOOL_DEFS.mars_delegate,
+        async execute(_id, params, _update, _ctx, signal) {
+          await checkTool(null, signal);
+          const input = z
+            .object({
+              role_label: z.string().min(1).max(64),
+              instruction: z
+                .string()
+                .min(1)
+                .max(32 * 1024),
+              acceptance_criteria: z
+                .array(z.string().min(1).max(1024))
+                .max(8)
+                .optional(),
+              complexity: z.enum(["light", "medium", "heavy"]).optional(),
+              solution_space: z.string().max(512).optional(),
+              workspace: z.enum(["private", "read_only"]).optional(),
+              read: z.boolean().optional(),
+              write: z.boolean().optional(),
+              execute: z.boolean().optional(),
+              write_paths: z
+                .array(z.string().min(1).max(1024))
+                .max(32)
+                .optional(),
+              max_tokens: z.number().int().positive(),
+              max_duration_ms: z.number().int().positive(),
+              max_steps: z.number().int().positive().max(10_000),
+              max_messages: z.number().int().nonnegative(),
+            })
+            .strict()
+            .parse(params);
+          return text(await delegation.delegate(input as DelegationRequest));
+        },
+      },
+      {
+        ...DELEGATION_TOOL_DEFS.mars_cancel_child,
+        async execute(_id, params, _update, _ctx, signal) {
+          await checkTool(null, signal);
+          const { child_id } = z
+            .object({ child_id: z.string().min(1).max(128) })
+            .strict()
+            .parse(params);
+          return text(await delegation.cancelChild(child_id));
+        },
+      },
+      {
+        ...DELEGATION_TOOL_DEFS.mars_children,
+        async execute(_id, params, _update, _ctx, signal) {
+          await checkTool(null, signal);
+          z.object({})
+            .strict()
+            .parse(params ?? {});
+          return text(await delegation.children());
+        },
+      },
+      {
+        ...DELEGATION_TOOL_DEFS.mars_results,
+        async execute(_id, params, _update, _ctx, signal) {
+          await checkTool(null, signal);
+          z.object({})
+            .strict()
+            .parse(params ?? {});
+          return text(await delegation.results());
+        },
+      },
+      {
+        ...DELEGATION_TOOL_DEFS.mars_review_result,
+        async execute(_id, params, _update, _ctx, signal) {
+          await checkTool(null, signal);
+          const input = z
+            .object({
+              result_id: z.string().min(1).max(128),
+              decision: z.enum(["accept", "reject"]),
+              expected_task_revision: z.number().int().nonnegative(),
+            })
+            .strict()
+            .parse(params);
+          return text(await delegation.reviewResult(input));
         },
       },
     );
