@@ -82,6 +82,12 @@ describe("resolveInsideRoot", () => {
       await resolveInsideRoot(root, ["src", "new.ts"], realpath),
     ).toMatchObject({ ok: true, exists: false });
   });
+  test("root-level names starting with '..' are inside the workspace", async () => {
+    expect(checkRelativePath("..config").ok).toBe(true);
+    expect(await resolveInsideRoot(root, ["..config"], realpath)).toMatchObject(
+      { ok: true, exists: false },
+    );
+  });
   test("rejects symlinks escaping the workspace", async () => {
     expect(
       (await resolveInsideRoot(root, ["link", "secret.txt"], realpath)).ok,

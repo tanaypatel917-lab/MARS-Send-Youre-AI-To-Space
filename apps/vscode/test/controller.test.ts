@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { MarsClient } from "../src/client";
 import { type ConnectResult, WorkbenchController } from "../src/controller";
 import { RpcError } from "../src/rpc";
 import {
@@ -557,6 +558,114 @@ describe("diffs and checkpoints", () => {
   test("posted view state never contains the server token", async () => {
     const ctx = await connectedWithTask("running");
     expect(JSON.stringify(ctx.states)).not.toMatch(/dummy-token|Bearer/);
+    ctx.controller.dispose();
+  });
+});
+
+describe("selection across reconnects and task switches", () => {
+  async function waitFor(check: () => boolean) {
+    for (let i = 0; i < 40 && !check(); i++)
+      await new Promise((r) => setTimeout(r, 5));
+  }
+
+  test("checkpoints created this session survive switching tasks", async () => {
+    const ctx = await connectedWithTask("paused");
+    ctx.server.tasks.set("task-2", makeTask({ task_id: "task-2" }));
+    await ctx.controller.handleMessage({
+      type: "createCheckpoint",
+      taskId: "task-1",
+    });
+    await ctx.controller.handleMessage({
+      type: "selectTask",
+      taskId: "task-2",
+    });
+    expect(ctx.last().selected?.checkpoints).toEqual([]);
+    await ctx.controller.handleMessage({
+      type: "selectTask",
+      taskId: "task-1",
+    });
+    expect(ctx.last().selected?.checkpoints).toEqual([checkpoint]);
+    ctx.answer.value = true;
+    await ctx.controller.handleMessage({
+      type: "restoreCheckpoint",
+      taskId: "task-1",
+      checkpointId: "cp-1",
+    });
+    expect(ctx.server.methods()).toContain("tasks.restore");
+    ctx.controller.dispose();
+  });
+
+  test("reconnecting to the same server does not double events or usage", async () => {
+    const server = new FakeServer();
+    server.events = [
+      makeEvent("e1", {
+        usage: { input_tokens: 10, output_tokens: 1, cost_usd: 0 },
+      }),
+    ];
+    server.tasks.set("task-1", makeTask({ status: "running" }));
+    const ctx = setup({ server });
+    await ctx.controller.handleMessage({ type: "ready" });
+    await ctx.controller.handleMessage({
+      type: "selectTask",
+      taskId: "task-1",
+    });
+    await waitFor(() => (ctx.last().selected?.events.length ?? 0) >= 1);
+    await ctx.controller.handleMessage({ type: "connect" });
+    await waitFor(
+      () =>
+        ctx.last().connection.status === "connected" &&
+        (ctx.last().selected?.events.length ?? 0) >= 1,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ctx.last().selected?.events.map((e) => e.event_id)).toEqual(["e1"]);
+    expect(ctx.last().selected?.usage.input_tokens).toBe(10);
+    ctx.controller.dispose();
+  });
+
+  test("a different server drops the old selection and tasks", async () => {
+    const a = new FakeServer();
+    a.tasks.set("task-old", makeTask({ task_id: "task-old" }));
+    const b = new FakeServer();
+    b.tasks.set("task-new", makeTask({ task_id: "task-new" }));
+    let target = { server: a, url: "http://127.0.0.1:7331" };
+    const ctx = setup({
+      server: a,
+      connect: async () => ({
+        ok: true,
+        client: new MarsClient(target.server, () => crypto.randomUUID()),
+        server: target.url,
+      }),
+    });
+    await ctx.controller.handleMessage({ type: "ready" });
+    await ctx.controller.handleMessage({
+      type: "selectTask",
+      taskId: "task-old",
+    });
+    await ctx.controller.handleMessage({
+      type: "createCheckpoint",
+      taskId: "task-old",
+    });
+    expect(ctx.last().selected?.task.task_id).toBe("task-old");
+    target = { server: b, url: "http://127.0.0.1:7332" };
+    await ctx.controller.handleMessage({ type: "connect" });
+    expect(ctx.last().selected).toBeNull();
+    expect(ctx.last().tasks.map((t) => t.task_id)).toEqual(["task-new"]);
+    target = { server: a, url: "http://127.0.0.1:7331" };
+    await ctx.controller.handleMessage({ type: "connect" });
+    await ctx.controller.handleMessage({
+      type: "selectTask",
+      taskId: "task-old",
+    });
+    expect(ctx.last().selected?.checkpoints).toEqual([]);
+    ctx.controller.dispose();
+  });
+
+  test("refresh drops a selection the server no longer lists", async () => {
+    const ctx = await connectedWithTask("paused");
+    ctx.server.tasks.delete("task-1");
+    await ctx.controller.handleMessage({ type: "refresh" });
+    expect(ctx.last().selected).toBeNull();
+    expect(ctx.controller.activePoller).toBeUndefined();
     ctx.controller.dispose();
   });
 });

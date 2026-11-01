@@ -238,3 +238,53 @@ describe("loopback HTTP stub", () => {
     expect(seen[0]?.auth).toBe(`Bearer ${TOKEN}`);
   });
 });
+
+describe("bounded response bodies", () => {
+  function streamed(chunks: Uint8Array[], onCancel: () => void) {
+    return () =>
+      Promise.resolve({
+        status: 200,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === "content-type" ? "application/json" : null,
+        },
+        text: () => Promise.reject(new Error("text() must not be used")),
+        body: new ReadableStream<Uint8Array>({
+          pull(controller) {
+            const next = chunks.shift();
+            if (next) controller.enqueue(next);
+            else controller.close();
+          },
+          cancel: onCancel,
+        }),
+      });
+  }
+
+  test("stops reading once an undeclared-length body exceeds the limit", async () => {
+    let cancelled = false;
+    const chunk = new Uint8Array(1024).fill(0x20);
+    const t = new HttpRpcTransport({
+      rpcUrl: "http://127.0.0.1:7331/v1/rpc",
+      getToken: () => Promise.resolve(TOKEN),
+      fetch: streamed([chunk, chunk, chunk, chunk], () => {
+        cancelled = true;
+      }),
+      maxResponseBytes: 2048,
+    });
+    const error = await rejection(t.send({ method: "tasks.list", params: {} }));
+    expect(error.kind).toBe("protocol");
+    expect(error.message).toContain("too large");
+    expect(cancelled).toBe(true);
+  });
+
+  test("streamed bodies under the limit are decoded across chunk boundaries", async () => {
+    const bytes = new TextEncoder().encode('{"result":"héllo"}');
+    const t = new HttpRpcTransport({
+      rpcUrl: "http://127.0.0.1:7331/v1/rpc",
+      getToken: () => Promise.resolve(TOKEN),
+      fetch: streamed([bytes.slice(0, 13), bytes.slice(13)], () => {}),
+      maxResponseBytes: 2048,
+    });
+    expect(await t.send({ method: "tasks.list", params: {} })).toBe("héllo");
+  });
+});
