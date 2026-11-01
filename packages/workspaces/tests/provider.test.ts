@@ -177,7 +177,7 @@ test("lost workspace recovery is isolated and healthy workspaces recover journal
     workspaceB.workspace_id,
     "workspace.json",
   );
-  const metadataB = JSON.parse(await readFile(metadataPathB, "utf8")) as {
+  let metadataB = JSON.parse(await readFile(metadataPathB, "utf8")) as {
     counter: number;
     revision: string;
     tree_digest: string;
@@ -190,6 +190,10 @@ test("lost workspace recovery is isolated and healthy workspaces recover journal
   const stagingPath = join(fixture.rootDir, "staging", stageName);
   await mkdir(stagingPath);
   await writeFile(join(treeB, "interrupted.txt"), "recovered output\n");
+  await fixture.provider.checkpoint(context, workspaceB);
+  metadataB = JSON.parse(
+    await readFile(metadataPathB, "utf8"),
+  ) as typeof metadataB;
   await rename(treeB, backupPath);
   metadataB.exec_in_progress = {
     run_id: "interrupted-run",
@@ -367,6 +371,54 @@ async function putText(
     new TextEncoder().encode(text),
     "text/plain",
   );
+}
+
+async function crashDuringRestore() {
+  const fixture = await makeFixture({
+    testHooks: {
+      restorePhase(phase) {
+        if (phase === "swapped") {
+          const error = new Error("simulated crash");
+          error.name = "SimulatedCrash";
+          throw error;
+        }
+      },
+    },
+  });
+  const workspace = fixture.workspace;
+  const baseline = first(
+    await fixture.provider.checkpoints(context, workspace),
+  );
+  const changedValue = await putText(fixture, "pre-restore contents\n");
+  await fixture.provider.write(context, workspace, "tracked.txt", changedValue);
+  const current = await fixture.provider.inspect(
+    context,
+    workspace.workspace_id,
+  );
+  const tree = await fixture.provider.workspacePath(context, current);
+  const treeDigest = await hashDirectory(tree);
+  await expect(
+    fixture.provider.restore(context, baseline, current.revision),
+  ).rejects.toMatchObject({ name: "SimulatedCrash" });
+  const metadata = JSON.parse(
+    await readFile(
+      join(fixture.rootDir, "meta", workspace.workspace_id, "workspace.json"),
+      "utf8",
+    ),
+  ) as { restore_journal: { backup: string; staging: string } };
+  return {
+    fixture,
+    workspace,
+    tree,
+    treeDigest,
+    previousRevision: current.revision,
+    backupPath: join(fixture.rootDir, "trash", metadata.restore_journal.backup),
+    stagingPath: join(
+      fixture.rootDir,
+      "staging",
+      metadata.restore_journal.staging,
+    ),
+  };
 }
 
 test("prepare preserves the source tree and copies only the filtered dirty snapshot [stub runner — not isolation evidence]", async () => {
@@ -1117,6 +1169,295 @@ test("ordinary restore hook errors recover in-process [stub runner — not isola
   } finally {
     await provider.close();
     await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("failed startup rollback retains A's backup while healthy B recovers and cleans [stub runner — not isolation evidence]", async () => {
+  const crashed = await crashDuringRestore();
+  const { fixture, workspace, tree, treeDigest, previousRevision, backupPath } =
+    crashed;
+  const workspaceB = await fixture.provider.prepare(context, "task-second");
+  const staleB = join(
+    fixture.rootDir,
+    "trash",
+    `${workspaceB.workspace_id}-stale`,
+  );
+  await mkdir(staleB);
+  await fixture.provider.close();
+  const reopened = await createLocalWorkspaceProvider({
+    rootDir: fixture.rootDir,
+    sourceRoot: fixture.sourceRoot,
+    artifacts: fixture.artifacts,
+    testHooks: {
+      recoveryPhase() {
+        throw new Error("injected recovery failure");
+      },
+    },
+  });
+  try {
+    expect(await hashDirectory(backupPath)).toBe(treeDigest);
+    await expect(
+      reopened.inspect(context, workspace.workspace_id),
+    ).rejects.toBeInstanceOf(IntegrityError);
+    await expect(
+      reopened.read(context, workspace, "tracked.txt"),
+    ).rejects.toBeInstanceOf(IntegrityError);
+    const journalMeta = JSON.parse(
+      await readFile(
+        join(fixture.rootDir, "meta", workspace.workspace_id, "workspace.json"),
+        "utf8",
+      ),
+    ) as { restore_journal?: unknown };
+    expect(journalMeta.restore_journal).toBeDefined();
+    await expect(lstat(staleB)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(
+      (await reopened.inspect(context, workspaceB.workspace_id)).workspace_id,
+    ).toBe(workspaceB.workspace_id);
+    await reopened.read(context, workspaceB, "tracked.txt");
+  } finally {
+    await reopened.close();
+  }
+  const recovered = await createLocalWorkspaceProvider({
+    rootDir: fixture.rootDir,
+    sourceRoot: fixture.sourceRoot,
+    artifacts: fixture.artifacts,
+  });
+  try {
+    expect(await hashDirectory(tree)).toBe(treeDigest);
+    expect(
+      (await recovered.inspect(context, workspace.workspace_id)).revision,
+    ).toBe(previousRevision);
+    const metadata = JSON.parse(
+      await readFile(
+        join(fixture.rootDir, "meta", workspace.workspace_id, "workspace.json"),
+        "utf8",
+      ),
+    ) as { restore_journal?: unknown };
+    expect(metadata.restore_journal).toBeUndefined();
+    expect(
+      (await readdir(join(fixture.rootDir, "trash"))).filter((name) =>
+        name.startsWith(workspace.workspace_id),
+      ),
+    ).toEqual([]);
+    expect(
+      (await readdir(join(fixture.rootDir, "staging"))).filter((name) =>
+        name.startsWith(workspace.workspace_id),
+      ),
+    ).toEqual([]);
+  } finally {
+    await recovered.close();
+    await fixture.close();
+  }
+});
+
+test("in-process rollback failure retains journal and backup for later recovery [stub runner — not isolation evidence]", async () => {
+  const fixture = await makeFixture({
+    testHooks: {
+      restorePhase(phase) {
+        if (phase === "swapped") throw new Error("restore hook failure");
+      },
+      recoveryPhase() {
+        throw new Error("rollback hook failure");
+      },
+    },
+  });
+  try {
+    const baseline = first(
+      await fixture.provider.checkpoints(context, fixture.workspace),
+    );
+    const artifact = await putText(fixture, "pre-restore contents\n");
+    await fixture.provider.write(
+      context,
+      fixture.workspace,
+      "tracked.txt",
+      artifact,
+    );
+    const changed = await fixture.provider.inspect(
+      context,
+      fixture.workspace.workspace_id,
+    );
+    const tree = await fixture.provider.workspacePath(
+      context,
+      fixture.workspace,
+    );
+    const digestBefore = await hashDirectory(tree);
+    await expect(
+      fixture.provider.restore(context, baseline, changed.revision),
+    ).rejects.toThrow("rollback hook failure");
+    await expect(
+      fixture.provider.inspect(context, fixture.workspace.workspace_id),
+    ).rejects.toBeInstanceOf(IntegrityError);
+    const metadata = JSON.parse(
+      await readFile(
+        join(
+          fixture.rootDir,
+          "meta",
+          fixture.workspace.workspace_id,
+          "workspace.json",
+        ),
+        "utf8",
+      ),
+    ) as { restore_journal: { backup: string } };
+    const backup = join(
+      fixture.rootDir,
+      "trash",
+      metadata.restore_journal.backup,
+    );
+    expect(await hashDirectory(backup)).toBe(digestBefore);
+    await fixture.provider.close();
+    const recovered = await createLocalWorkspaceProvider({
+      rootDir: fixture.rootDir,
+      sourceRoot: fixture.sourceRoot,
+      artifacts: fixture.artifacts,
+    });
+    try {
+      expect(await hashDirectory(tree)).toBe(digestBefore);
+      expect(
+        (await recovered.inspect(context, fixture.workspace.workspace_id))
+          .revision,
+      ).toBe(changed.revision);
+    } finally {
+      await recovered.close();
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("unreadable metadata retains recovery entries while true orphans are removed [stub runner — not isolation evidence]", async () => {
+  const fixture = await makeFixture();
+  const workspaceB = await fixture.provider.prepare(context, "task-second");
+  const id = fixture.workspace.workspace_id;
+  const trashA = join(fixture.rootDir, "trash", `${id}-x`);
+  const stagingA = join(fixture.rootDir, "staging", `${id}-y`);
+  const unknownId = `ws_${"e".repeat(32)}`;
+  const orphan = join(fixture.rootDir, "trash", `${unknownId}-z`);
+  try {
+    await Promise.all([mkdir(trashA), mkdir(stagingA), mkdir(orphan)]);
+    await writeFile(
+      join(fixture.rootDir, "meta", id, "workspace.json"),
+      "{bad",
+    );
+    await fixture.provider.close();
+    const reopened = await createLocalWorkspaceProvider({
+      rootDir: fixture.rootDir,
+      sourceRoot: fixture.sourceRoot,
+      artifacts: fixture.artifacts,
+    });
+    try {
+      expect(await readdir(join(fixture.rootDir, "trash"))).toContain(
+        `${id}-x`,
+      );
+      expect(await readdir(join(fixture.rootDir, "staging"))).toContain(
+        `${id}-y`,
+      );
+      await expect(lstat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+      await reopened.read(context, workspaceB, "tracked.txt");
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("missing rollback backup and tree retain journal and staging [stub runner — not isolation evidence]", async () => {
+  const fixture = await makeFixture();
+  try {
+    const id = fixture.workspace.workspace_id;
+    const metadataPath = join(fixture.rootDir, "meta", id, "workspace.json");
+    const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as {
+      counter: number;
+      revision: string;
+      tree_digest: string;
+      restore_journal?: unknown;
+    };
+    const staging = `${id}-${"a".repeat(32)}`;
+    metadata.restore_journal = {
+      phase: "backed-up",
+      staging,
+      backup: `${id}-${"b".repeat(32)}`,
+      previous: {
+        counter: metadata.counter,
+        revision: metadata.revision,
+        tree_digest: metadata.tree_digest,
+      },
+      target: {
+        counter: metadata.counter + 1,
+        revision: `${metadata.counter + 1}.${"c".repeat(16)}`,
+        tree_digest: "c".repeat(64),
+      },
+    };
+    await mkdir(join(fixture.rootDir, "staging", staging));
+    await rm(join(fixture.rootDir, "workspaces", id, "tree"), {
+      recursive: true,
+    });
+    await writeFile(metadataPath, JSON.stringify(metadata));
+    await fixture.provider.close();
+    const reopened = await createLocalWorkspaceProvider({
+      rootDir: fixture.rootDir,
+      sourceRoot: fixture.sourceRoot,
+      artifacts: fixture.artifacts,
+    });
+    try {
+      await expect(reopened.inspect(context, id)).rejects.toBeInstanceOf(
+        IntegrityError,
+      );
+      expect(
+        (JSON.parse(await readFile(metadataPath, "utf8")) as typeof metadata)
+          .restore_journal,
+      ).toBeDefined();
+      await expect(
+        lstat(join(fixture.rootDir, "staging", staging)),
+      ).resolves.toBeDefined();
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("tampered rollback backup and aside remain for forensics [stub runner — not isolation evidence]", async () => {
+  const crashed = await crashDuringRestore();
+  const { fixture, workspace, backupPath } = crashed;
+  try {
+    await writeFile(join(backupPath, "tracked.txt"), "tampered backup\n");
+    await fixture.provider.close();
+    await fixture.provider.close();
+    const reopened = await createLocalWorkspaceProvider({
+      rootDir: fixture.rootDir,
+      sourceRoot: fixture.sourceRoot,
+      artifacts: fixture.artifacts,
+    });
+    try {
+      await expect(
+        reopened.inspect(context, workspace.workspace_id),
+      ).rejects.toBeInstanceOf(IntegrityError);
+      expect(await lstat(backupPath)).toBeDefined();
+      const trash = await readdir(join(fixture.rootDir, "trash"));
+      expect(
+        trash.some((name) =>
+          name.startsWith(`${workspace.workspace_id}-aside-`),
+        ),
+      ).toBe(true);
+      const metadata = JSON.parse(
+        await readFile(
+          join(
+            fixture.rootDir,
+            "meta",
+            workspace.workspace_id,
+            "workspace.json",
+          ),
+          "utf8",
+        ),
+      ) as { restore_journal?: unknown };
+      expect(metadata.restore_journal).toBeDefined();
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    await fixture.close();
   }
 });
 

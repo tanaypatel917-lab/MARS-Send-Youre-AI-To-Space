@@ -79,6 +79,8 @@ export interface LocalWorkspaceProviderOptions {
   sandbox?: SandboxRunner;
   now?: () => Date;
   testHooks?: {
+    /** Test-only hook for failing restore rollback before the backup rename. */
+    recoveryPhase?(phase: "before-rollback-rename"): void | Promise<void>;
     restorePhase?(
       phase: "staged" | "backed-up" | "swapped" | "committed",
     ): void | Promise<void>;

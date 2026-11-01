@@ -116,6 +116,12 @@ globally until the metadata is repaired. Empty metadata directories without a
 workspace record or tree are treated as uncommitted prepare leftovers and
 removed during recovery.
 
+Restore rollback verifies the previous tree digest before clearing its journal.
+If rollback fails, the journal, backup, and staging/aside data are retained for
+recovery or forensic inspection; healthy workspaces remain usable. Recovery
+cleanup deletes only safely named entries belonging to resolved workspaces or
+true orphans. Retained entries are deliberately not treated as a startup error.
+
 ## Threat model
 
 This package is for local task workspaces operated by a trusted MARS service process. It reduces the effect of untrusted task commands by requiring an approval callback, pinning the container image by digest, removing network access and capabilities, using a non-root container user, restricting writable paths, and bounding runtime, memory, process count, file size, output, and metadata.

@@ -46,7 +46,6 @@ import { resolveSafePath, validateRelativePath } from "./paths";
 import {
   acquireProviderLock,
   type CheckpointRecord,
-  fileExists,
   listMetas,
   loadMeta,
   metaPath,
@@ -214,7 +213,12 @@ export async function createLocalWorkspaceProvider(
         "mars.root": sha256(rootDir).slice(0, 16),
       });
     }
-    recoveryState = await recoverProviderState(rootDir, limits, extraIgnores);
+    recoveryState = await recoverProviderState(
+      rootDir,
+      limits,
+      extraIgnores,
+      options.testHooks,
+    );
   } catch (error) {
     await releaseLock();
     throw error;
@@ -552,26 +556,6 @@ export async function createLocalWorkspaceProvider(
     phase: "staged" | "backed-up" | "swapped" | "committed",
   ): Promise<void> => {
     await options.testHooks?.restorePhase?.(phase);
-  };
-
-  const rollbackRestore = async (meta: WorkspaceMeta): Promise<void> => {
-    const journal = meta.restore_journal;
-    if (!journal) return;
-    const workspace = treeDir(meta);
-    const stage = join(rootDir, "staging", journal.staging);
-    const backup = join(rootDir, "trash", journal.backup);
-    if (await fileExists(backup)) {
-      await rm(workspace, { recursive: true, force: true });
-      await mkdir(dirname(workspace), { recursive: true, mode: 0o700 });
-      await rename(backup, workspace);
-    }
-    await rm(stage, { recursive: true, force: true });
-    await rm(backup, { recursive: true, force: true });
-    meta.counter = journal.previous.counter;
-    meta.revision = journal.previous.revision;
-    meta.tree_digest = journal.previous.tree_digest;
-    delete meta.restore_journal;
-    await saveMeta(rootDir, meta);
   };
 
   const makeCheckpointForPublic = async (
@@ -1026,7 +1010,13 @@ export async function createLocalWorkspaceProvider(
         } catch (error) {
           if ((error as Error)?.name !== "SimulatedCrash") {
             const latest = await loadMeta(rootDir, current.workspace_id);
-            await rollbackRestore(latest);
+            await rollbackRestoreJournal(
+              rootDir,
+              latest,
+              limits,
+              extraIgnores,
+              options.testHooks,
+            );
           }
           throw error;
         }
@@ -1305,11 +1295,12 @@ async function recoverProviderState(
   rootDir: string,
   limits: WorkspaceLimits,
   extraIgnores: readonly string[],
+  hooks: LocalWorkspaceProviderOptions["testHooks"],
 ): Promise<RecoveryState> {
   const lostWorkspaces = new Set<string>();
   const unreadableWorkspaces = new Set<string>();
   const metadataDirectories = new Set<string>();
-  const metas: WorkspaceMeta[] = [];
+  const readableMetas = new Map<string, WorkspaceMeta>();
 
   try {
     for (const entry of await readdir(join(rootDir, "meta"), {
@@ -1347,32 +1338,23 @@ async function recoverProviderState(
         if (meta.workspace_id !== entry.name) {
           throw new IntegrityError("workspace state lost");
         }
-        metas.push(meta);
+        readableMetas.set(meta.workspace_id, meta);
       } catch {
         lostWorkspaces.add(entry.name);
         unreadableWorkspaces.add(entry.name);
       }
     }
 
-    for (const meta of metas) {
+    for (const meta of readableMetas.values()) {
       try {
         if (meta.restore_journal) {
-          const workspace = workspacePath(rootDir, meta.workspace_id);
-          const journal = meta.restore_journal;
-          const backup = join(rootDir, "trash", journal.backup);
-          const staging = join(rootDir, "staging", journal.staging);
-          if (await fileExists(backup)) {
-            await rm(workspace, { recursive: true, force: true });
-            await mkdir(dirname(workspace), { recursive: true, mode: 0o700 });
-            await rename(backup, workspace);
-          }
-          await rm(staging, { recursive: true, force: true });
-          await rm(backup, { recursive: true, force: true });
-          meta.counter = journal.previous.counter;
-          meta.revision = journal.previous.revision;
-          meta.tree_digest = journal.previous.tree_digest;
-          delete meta.restore_journal;
-          await saveMeta(rootDir, meta);
+          await rollbackRestoreJournal(
+            rootDir,
+            meta,
+            limits,
+            extraIgnores,
+            hooks,
+          );
         }
         await resolveWorkspaceTree(rootDir, meta.workspace_id);
         if (meta.exec_in_progress) {
@@ -1412,10 +1394,97 @@ async function recoverProviderState(
       });
     }
   } finally {
-    await cleanupRecoveryDirectories(rootDir);
+    await cleanupRecoveryDirectories(rootDir, readableMetas, lostWorkspaces);
   }
 
   return { lostWorkspaces, unreadableWorkspaces };
+}
+
+async function rollbackRestoreJournal(
+  rootDir: string,
+  meta: WorkspaceMeta,
+  limits: WorkspaceLimits,
+  extraIgnores: readonly string[],
+  hooks: LocalWorkspaceProviderOptions["testHooks"],
+): Promise<void> {
+  const journal = meta.restore_journal;
+  if (!journal) return;
+  const workspace = workspacePath(rootDir, meta.workspace_id);
+  const backup = join(rootDir, "trash", journal.backup);
+  const staging = join(rootDir, "staging", journal.staging);
+  let aside: string | undefined;
+  let backupMoved = false;
+  let committed = false;
+  let digestMismatch = false;
+
+  try {
+    if (await pathExists(backup)) {
+      if (await pathExists(workspace)) {
+        aside = join(
+          rootDir,
+          "trash",
+          `${meta.workspace_id}-aside-${randomUUID().replaceAll("-", "")}`,
+        );
+        await rename(workspace, aside);
+      }
+      await mkdir(dirname(workspace), { recursive: true, mode: 0o700 });
+      await hooks?.recoveryPhase?.("before-rollback-rename");
+      await rename(backup, workspace);
+      backupMoved = true;
+    } else if (!(await isRealDirectory(workspace))) {
+      throw new IntegrityError("workspace state lost");
+    }
+
+    await resolveWorkspaceTree(rootDir, meta.workspace_id);
+    const snapshot = await snapshotTree(workspace, {
+      limits,
+      extraIgnores,
+      enforceLimits: false,
+      includeData: false,
+    });
+    if (snapshot.digest !== journal.previous.tree_digest) {
+      digestMismatch = true;
+      throw new IntegrityError("workspace state lost");
+    }
+
+    const recoveredMeta: WorkspaceMeta = {
+      ...meta,
+      counter: journal.previous.counter,
+      revision: journal.previous.revision,
+      tree_digest: journal.previous.tree_digest,
+    };
+    delete recoveredMeta.restore_journal;
+    await saveMeta(rootDir, recoveredMeta);
+    Object.assign(meta, recoveredMeta);
+    delete meta.restore_journal;
+    committed = true;
+  } catch (error) {
+    if (!committed && backupMoved) {
+      try {
+        if (!(await pathExists(backup)) && (await pathExists(workspace)))
+          await rename(workspace, backup);
+      } catch {}
+    }
+    if (!committed && aside && !digestMismatch) {
+      try {
+        if ((await pathExists(aside)) && !(await pathExists(workspace))) {
+          await mkdir(dirname(workspace), { recursive: true, mode: 0o700 });
+          await rename(aside, workspace);
+        }
+      } catch {}
+    }
+    throw error;
+  }
+
+  await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+  const trash = join(rootDir, "trash");
+  const asidePrefix = `${meta.workspace_id}-aside-`;
+  for (const entry of await readdir(trash).catch(() => [])) {
+    if (entry.startsWith(asidePrefix))
+      await rm(join(trash, entry), { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+  }
 }
 
 async function workspaceTreeStatus(
@@ -1444,29 +1513,58 @@ async function workspaceTreeStatus(
   }
 }
 
-async function cleanupRecoveryDirectories(rootDir: string): Promise<void> {
-  const errors: unknown[] = [];
+async function cleanupRecoveryDirectories(
+  rootDir: string,
+  readableMetas: ReadonlyMap<string, WorkspaceMeta>,
+  lostWorkspaces: ReadonlySet<string>,
+): Promise<void> {
   for (const directory of ["staging", "trash"]) {
-    let entries: string[];
-    try {
-      entries = await readdir(join(rootDir, directory));
-    } catch (error) {
-      errors.push(error);
-      continue;
-    }
+    const directoryPath = join(rootDir, directory);
+    const entries = await readdir(directoryPath).catch(() => []);
     for (const entry of entries) {
-      try {
+      const match = /^(ws_[a-f0-9]{32})-[A-Za-z0-9-]+$/.exec(entry);
+      const workspaceId = match?.[1];
+      if (!workspaceId) continue;
+      const meta = readableMetas.get(workspaceId);
+      let shouldDelete =
+        meta !== undefined &&
+        !lostWorkspaces.has(workspaceId) &&
+        meta.restore_journal === undefined;
+      if (!shouldDelete) {
+        const [metaExists, workspaceExists] = await Promise.all([
+          pathExists(join(rootDir, "meta", workspaceId)).catch(() => true),
+          pathExists(join(rootDir, "workspaces", workspaceId)).catch(
+            () => true,
+          ),
+        ]);
+        shouldDelete = !metaExists && !workspaceExists;
+      }
+      if (shouldDelete)
         await rm(join(rootDir, directory, entry), {
           recursive: true,
           force: true,
-        });
-      } catch (error) {
-        errors.push(error);
-      }
+        }).catch(() => undefined);
     }
   }
-  if (errors.length > 0) {
-    throw new AggregateError(errors, "Unable to clean workspace recovery data");
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function isRealDirectory(path: string): Promise<boolean> {
+  try {
+    const info = await lstat(path);
+    return info.isDirectory() && !info.isSymbolicLink();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }
 

@@ -119,3 +119,49 @@ CONTAINER ID   IMAGE     COMMAND   CREATED   STATUS    PORTS     NAMES
 ```
 
 No `mars-ws` containers remained.
+
+## Restore rollback retention follow-up
+
+The follow-up adds a shared digest-verified rollback path for both in-process
+restore failure and startup recovery. Failure-injection coverage confirms that
+failed rollback keeps its journal and backup; failed digest validation also
+retains the aside tree. Selective cleanup removes only resolved workspace
+entries and true orphans, while healthy workspaces continue to recover.
+
+```text
+bun test packages/workspaces
+32 pass
+0 fail
+248 expect() calls
+Ran 32 tests across 2 files.
+```
+
+Five real-container tests ran and passed; the other 27 tests used stub or
+non-container fixtures. The focused startup, in-process, and tampered-backup
+failure-injection tests also passed: 3 pass, 0 fail, 22 expectations.
+
+```text
+bunx biome check packages/workspaces
+Checked 14 files in 29ms. No fixes applied.
+
+bun run lint
+Checked 90 files. No fixes applied.
+
+bun run typecheck
+tsc --noEmit
+```
+
+The final `bun run check` completed:
+
+```text
+Validated 25 source entries, pinned URLs, master-spec hash and runtime artifact pins (offline).
+260 pass
+0 fail
+1159 expect() calls
+Ran 260 tests across 18 files.
+"model_requests": 0
+Bundled 21 modules
+```
+
+The master specification SHA-256 remained
+`0e535d3d592fbad5cc9af5a4290d4b981e5ad597ffdaacf91cc6c42a5b9f80a`.
