@@ -1002,3 +1002,100 @@ test("advisory scanner records exact review binding for success and failure", as
   await f.admin.attachScan(ctx, r.review_id, failed);
   await denied(f, "no_grant");
 });
+for (const invoke of [false, true]) {
+  for (const lapse of ["grant", "evidence", "remote-ttl"] as const) {
+    for (const phase of [
+      "probe",
+      "load-before-commit",
+      "commit",
+      "load-after-commit",
+    ] as const) {
+      test(`dispatch temporal race ${invoke ? "invoke" : "admit"} ${lapse} during ${phase}`, async () => {
+        const memory = new MemoryTrustStore();
+        let armed = false,
+          loads = 0;
+        const advance = () => {
+          if (armed) {
+            armed = false;
+            f.time(1001);
+          }
+        };
+        const store: TrustStore = {
+          async load() {
+            if (armed) {
+              loads++;
+              if (
+                (phase === "load-before-commit" && loads === 2) ||
+                (phase === "load-after-commit" && loads === 3)
+              )
+                advance();
+            }
+            return memory.load();
+          },
+          async commit(revision, state, events) {
+            if (phase === "commit") advance();
+            return memory.commit(revision, state, events);
+          },
+        };
+        const f = fixture(
+          store,
+          lapse === "grant"
+            ? { maxGrantTtlMs: 1000 }
+            : lapse === "evidence"
+              ? { maxEvidenceAgeMs: 1000 }
+              : { remoteEndpointMaxGrantTtlMs: 1000 },
+        );
+        if (lapse === "remote-ttl")
+          f.set({
+            ...f.current(),
+            source: {
+              type: "remote-endpoint",
+              locator: "https://example.com",
+              revision: null,
+              content_sha256: null,
+            },
+            endpoint: {
+              origin: "https://example.com",
+              descriptor_sha256: "a".repeat(64),
+            },
+          });
+        await f.approved();
+        f.probe.mockImplementation(async () => {
+          if (phase === "probe") advance();
+          return structuredClone(f.current());
+        });
+        const callback = mock(async () => undefined);
+        armed = true;
+        const result = await (invoke
+          ? f.gate.invoke(
+              ctx,
+              {
+                ...id,
+                tool: "read",
+                permissions,
+                caller: { permissions, delegation_depth: 0 },
+                input: {},
+              },
+              callback,
+            )
+          : f.gate.admit(ctx, { ...id, action: "load" }, callback)
+        ).then(
+          () => null,
+          (error) => error,
+        );
+        expect(callback).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          code: lapse === "evidence" ? "stale_evidence" : "expired",
+        });
+        const history = await f.admin.history(ctx);
+        expect(history.at(-1)).toMatchObject({
+          type: "dispatch.denied",
+          reason_code: lapse === "evidence" ? "stale_evidence" : "expired",
+        });
+        expect(history.some((event) => event.type === "dispatch.allowed")).toBe(
+          phase === "commit" || phase === "load-after-commit",
+        );
+      });
+    }
+  }
+}
