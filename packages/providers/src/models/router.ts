@@ -126,7 +126,10 @@ export class ModelRouter {
     const provider = this.registry.getProvider(model.providerId);
     if (!provider)
       throw new Error(`Provider "${model.providerId}" is not configured.`);
-    return this.adapterFactory(provider, this.adapterOptions);
+    return this.adapterFactory(provider, {
+      env: this.registry.getProviderEnvironment(provider.id),
+      ...this.adapterOptions,
+    });
   }
 
   private handleProviderError(
