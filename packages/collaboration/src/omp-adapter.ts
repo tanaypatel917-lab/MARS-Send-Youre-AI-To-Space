@@ -296,8 +296,9 @@ export function createOhMyPiChildAdapter(
         });
       } catch (error) {
         if (error instanceof CollaborationError) throw error;
+        // Opening a runtime session makes no model request, so no usage accrued.
         throw new CollaborationError(
-          "forbidden",
+          "invalid_input",
           "Runtime session could not be opened",
         );
       }

@@ -22,6 +22,8 @@ import {
   type CollaborationLimits,
   CollaborationLimitsSchema,
   DelegateInputSchema,
+  type DelegationPool,
+  DelegationPoolSchema,
   type DeliveredMessage,
   DeliveredMessageSchema,
   ListInputSchema,
@@ -91,13 +93,22 @@ function scopeOf(room: RoomRow): Scope {
   return decodeJson<Scope>(room.scope_json);
 }
 
-function roomView(room: RoomRow): RoomView {
+function roomView(store: CollaborationStore, room: RoomRow): RoomView {
+  const budget = decodeJson<Budget>(room.budget_json);
+  const pool = decodeJson<DelegationPool>(
+    store.getMemberRow(room.root_agent_id).pool_json,
+  );
   return RoomViewSchema.parse({
     room_id: room.room_id,
     scope: scopeOf(room),
     task_id: room.task_id,
     task_revision: room.task_revision,
-    budget: decodeJson<Budget>(room.budget_json),
+    budget,
+    coordinator_runtime_budget: {
+      ...budget,
+      max_tokens: budget.max_tokens - pool.tokens,
+      max_usd: budget.max_usd - pool.usd,
+    },
     deadline: room.deadline,
     limits: decodeJson<CollaborationLimits>(room.limits_json),
     status: room.status,
@@ -119,6 +130,7 @@ function memberView(member: MemberRow): AgentView {
     authority: decodeJson<AgentAuthority>(member.authority_json),
     peers: decodeJson<string[]>(member.peers_json),
     budget: decodeJson<AgentBudget>(member.budget_json),
+    pool: decodeJson<DelegationPool>(member.pool_json),
     usage: decodeJson<ChildUsage>(member.usage_json),
     reserved: decodeJson<{ tokens: number; usd: number }>(member.reserved_json),
     workspace_mode: member.workspace_mode,
@@ -413,6 +425,29 @@ function auth(
     );
   }
   const member = store.getMemberByToken(capability.token);
+  if (!member) {
+    const stale = store.db
+      .query<{ room_id: string; agent_id: string }, [string]>(
+        "SELECT room_id, agent_id FROM stale_capabilities WHERE token_hash = ?",
+      )
+      .get(sha256(capability.token));
+    if (
+      stale &&
+      stale.agent_id === capability.agent_id &&
+      stale.room_id === capability.room_id
+    ) {
+      const staleRoom = store.getRoomRow(stale.room_id);
+      if (!equalContextScope(context.scope, scopeOf(staleRoom)))
+        throw new CollaborationError(
+          "forbidden",
+          "Request scope is not authorized",
+        );
+      throw new CollaborationError(
+        "stale_revision",
+        "Capability has a stale task revision",
+      );
+    }
+  }
   if (
     !member ||
     !store.tokenMatches(capability.token, member.token_hash) ||
@@ -576,13 +611,14 @@ function releaseReservation(
   store.db
     .query("UPDATE members SET reserved_json = ? WHERE agent_id = ?")
     .run(JSON.stringify(next), parent.agent_id);
-  updateStats(store, member.room_id, (stats) => {
-    stats.reserved.tokens = Math.max(
-      0,
-      stats.reserved.tokens - reserved.tokens,
-    );
-    stats.reserved.usd = Math.max(0, stats.reserved.usd - reserved.usd);
-  });
+  if (parent.parent_agent_id === null)
+    updateStats(store, member.room_id, (stats) => {
+      stats.reserved.tokens = Math.max(
+        0,
+        stats.reserved.tokens - reserved.tokens,
+      );
+      stats.reserved.usd = Math.max(0, stats.reserved.usd - reserved.usd);
+    });
   store.db
     .query("UPDATE members SET reserved_json = ? WHERE agent_id = ?")
     .run(JSON.stringify(zeroReserved), member.agent_id);
@@ -643,9 +679,20 @@ function createHost(store: CollaborationStore): CollaborationHost {
           "forbidden",
           "Task scope is not authorized",
         );
-      if (task.budget.max_usd > 0 && !input.authority.paid_consent) {
-        // A budget may reserve paid usage without granting the child paid permission.
-      }
+      const delegationPool = DelegationPoolSchema.parse({
+        tokens: input.delegation_pool?.max_tokens ?? 0,
+        usd: input.delegation_pool?.max_usd ?? 0,
+      });
+      if (
+        delegationPool.tokens > task.budget.max_tokens - 1 ||
+        delegationPool.usd > task.budget.max_usd
+      )
+        invalidInput("Delegation pool exceeds the task budget");
+      if (delegationPool.usd > 0 && !input.authority.paid_consent)
+        throw new CollaborationError(
+          "forbidden",
+          "Paid delegation pool requires paid consent",
+        );
       assertPublishable(task.request, store.hostPrivateRoots, store.rootDir);
       const limits = applyStoreLimits(store, input.limits);
       const effectiveDepth = Math.min(
@@ -659,6 +706,7 @@ function createHost(store: CollaborationStore): CollaborationHost {
         json({
           task,
           authority: input.authority,
+          delegation_pool: delegationPool,
           model_id: input.model_id ?? null,
           limits,
         }),
@@ -680,7 +728,7 @@ function createHost(store: CollaborationStore): CollaborationHost {
             store.getMemberRow(sameKey.root_agent_id),
           );
           return {
-            room: roomView(store.getRoomRow(sameKey.room_id)),
+            room: roomView(store, store.getRoomRow(sameKey.room_id)),
             coordinator,
           };
         }
@@ -704,6 +752,7 @@ function createHost(store: CollaborationStore): CollaborationHost {
           paid: input.authority.paid_consent && task.budget.max_usd > 0,
           delegate:
             input.authority.allow_delegation &&
+            delegationPool.tokens > 0 &&
             effectiveDepth > 0 &&
             task.budget.max_concurrency > 1,
           may_message: [],
@@ -741,10 +790,11 @@ function createHost(store: CollaborationStore): CollaborationHost {
           .query(
             `INSERT INTO members
              (agent_id, room_id, parent_agent_id, depth, role_label, status, task_revision, token_hash,
-             authority_json, peers_json, budget_json, usage_json, reserved_json, instruction_digest,
-              instruction_text, workspace_mode, write_paths_json, created_at, max_steps, max_messages, acceptance_json,
-              solution_space, complexity, paid_models)
-             VALUES (?, ?, NULL, 0, 'coordinator', 'active', ?, ?, ?, '[]', ?, ?, ?, ?, ?, 'parent', '[]', ?, NULL, NULL, '[]', NULL, NULL, 0)`,
+             authority_json, peers_json, budget_json, usage_json, reserved_json, pool_json,
+              instruction_digest,
+          instruction_text, workspace_mode, write_paths_json, created_at, max_steps, max_messages, acceptance_json,
+          solution_space, complexity, paid_models)
+             VALUES (?, ?, NULL, 0, 'coordinator', 'active', ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, 'parent', '[]', ?, NULL, NULL, '[]', NULL, NULL, 0)`,
           )
           .run(
             agentId,
@@ -755,12 +805,13 @@ function createHost(store: CollaborationStore): CollaborationHost {
             json(rootBudget),
             json(zeroMemberUsage),
             json(zeroReserved),
+            json(delegationPool),
             sha256(task.request.trim()),
             task.request,
             created,
           );
         return {
-          room: roomView(store.getRoomRow(roomId)),
+          room: roomView(store, store.getRoomRow(roomId)),
           coordinator: capabilityFor(roomId, agentId, token),
         };
       });
@@ -781,6 +832,8 @@ function createHost(store: CollaborationStore): CollaborationHost {
       const context = parseContext(contextValue);
       const task = parseWith(TaskSchema, taskValue);
       const room = roomByContext(store, context, roomId);
+      if (room.status === "closed")
+        throw new CollaborationError("closed", "Collaboration room is closed");
       if (
         task.task_id !== room.task_id ||
         !equalContextScope(task.scope, scopeOf(room))
@@ -803,11 +856,15 @@ function createHost(store: CollaborationStore): CollaborationHost {
           .all(roomId);
         for (const child of children)
           cancelSubtree(store, roomId, child.agent_id);
-        store.db
-          .query(
-            "UPDATE results SET status = 'stale' WHERE room_id = ? AND status = 'proposed'",
+        const staleResults = store.db
+          .query<{ result_id: string }, [string]>(
+            "UPDATE results SET status = 'stale' WHERE room_id = ? AND status = 'proposed' RETURNING result_id",
           )
-          .run(roomId);
+          .all(roomId).length;
+        if (staleResults > 0)
+          updateStats(store, roomId, (stats) => {
+            stats.results_stale += staleResults;
+          });
         store.db
           .query(
             "UPDATE deliveries SET state = 'expired' WHERE message_id IN (SELECT message_id FROM messages WHERE room_id = ?) AND state IN ('pending', 'delivered')",
@@ -820,6 +877,14 @@ function createHost(store: CollaborationStore): CollaborationHost {
           )
           .run(task.revision, json(task.budget), deadline, roomId);
         const root = store.getMemberRow(room.root_agent_id);
+        const pool = decodeJson<DelegationPool>(root.pool_json);
+        if (
+          pool.tokens > task.budget.max_tokens - 1 ||
+          pool.usd > task.budget.max_usd
+        )
+          invalidInput(
+            "Delegation pool no longer fits the revised task budget",
+          );
         const budget: AgentBudget = {
           max_tokens: task.budget.max_tokens,
           max_usd: task.budget.max_usd,
@@ -837,20 +902,32 @@ function createHost(store: CollaborationStore): CollaborationHost {
             sha256(task.request.trim()),
             root.agent_id,
           );
+        store.db
+          .query(
+            "INSERT OR IGNORE INTO stale_capabilities(token_hash, room_id, agent_id) VALUES (?, ?, ?)",
+          )
+          .run(root.token_hash, room.room_id, root.agent_id);
         const coordinator = upsertMemberToken(
           store,
           store.getMemberRow(root.agent_id),
         );
-        return { room: roomView(store.getRoomRow(roomId)), coordinator };
+        return {
+          room: roomView(store, store.getRoomRow(roomId)),
+          coordinator,
+        };
       });
     },
     async closeRoom(contextValue, roomId, mode) {
       const context = parseContext(contextValue);
-      const room = roomByContext(store, context, roomId);
+      roomByContext(store, context, roomId);
       if (mode !== "drain" && mode !== "cancel")
         invalidInput("Invalid room close mode");
       return store.transaction(() => {
-        if (room.status === "closed") return roomView(room);
+        if (store.getRoomRow(roomId).status === "closed")
+          throw new CollaborationError(
+            "closed",
+            "Collaboration room is already closed",
+          );
         if (mode === "cancel") {
           const roots = store.db
             .query<MemberRow, [string]>(
@@ -871,12 +948,12 @@ function createHost(store: CollaborationStore): CollaborationHost {
         store.db
           .query("UPDATE rooms SET status = ? WHERE room_id = ?")
           .run(status, roomId);
-        return roomView(store.getRoomRow(roomId));
+        return roomView(store, store.getRoomRow(roomId));
       });
     },
     async inspectRoom(contextValue, roomId) {
       const context = parseContext(contextValue);
-      return roomView(roomByContext(store, context, roomId));
+      return roomView(store, roomByContext(store, context, roomId));
     },
     async stats(contextValue, roomId) {
       const context = parseContext(contextValue);
@@ -1426,6 +1503,15 @@ function agentBudget(member: MemberRow): AgentBudget {
   return decodeJson<AgentBudget>(member.budget_json);
 }
 
+function runtimeCap(member: MemberRow): { tokens: number; usd: number } {
+  const budget = agentBudget(member);
+  const pool = decodeJson<DelegationPool>(member.pool_json);
+  return {
+    tokens: budget.max_tokens - pool.tokens,
+    usd: budget.max_usd - pool.usd,
+  };
+}
+
 function messageView(
   store: CollaborationStore,
   message: MessageRow,
@@ -1612,6 +1698,10 @@ function delegateChild(
     };
     const paidModels = input.paid_models ?? false;
     const mayDelegate = input.may_delegate ?? false;
+    const delegationPool = {
+      tokens: input.budget.delegation_pool_tokens ?? 0,
+      usd: input.budget.delegation_pool_usd ?? 0,
+    };
     const workspaceMode =
       input.workspace ?? (requestedApprovals.write ? "private" : "read_only");
     const writePaths = input.write_paths ?? [];
@@ -1632,6 +1722,7 @@ function delegateChild(
           max_duration_ms: input.budget.max_duration_ms,
           max_steps: input.budget.max_steps,
           max_messages: input.budget.max_messages,
+          delegation_pool: delegationPool,
         },
         peers: [...(input.peers ?? [])].sort(),
         workspace: workspaceMode,
@@ -1661,6 +1752,7 @@ function delegateChild(
         member.parent_agent_id === null ? "single_agent" : "forbidden",
         "Delegation is not authorized",
       );
+    const parentBudget = agentBudget(member);
     const limits = decodeJson<CollaborationLimits>(room.limits_json);
     const depth = member.depth + 1;
     const effectiveMaxDepth = Math.min(
@@ -1747,6 +1839,16 @@ function delegateChild(
         "forbidden",
         "Requested authority exceeds parent authority",
       );
+    if ((delegationPool.tokens > 0 || delegationPool.usd > 0) && !mayDelegate)
+      throw new CollaborationError(
+        "forbidden",
+        "Delegation pool requires delegation authority",
+      );
+    if (
+      delegationPool.tokens > input.budget.max_tokens - 1 ||
+      delegationPool.usd > (input.budget.max_usd ?? 0)
+    )
+      invalidInput("Child delegation pool exceeds its budget envelope");
     if (requestedApprovals.write && workspaceMode === "read_only")
       invalidInput("A read-only workspace cannot receive write permission");
     if (input.budget.max_usd && !paidModels)
@@ -1796,19 +1898,22 @@ function delegateChild(
         "write_conflict",
         "Write path is already claimed",
       );
-    const parentBudget = agentBudget(member);
     const parentUsage = decodeJson<MemberUsage>(member.usage_json);
+    const parentPool = decodeJson<DelegationPool>(member.pool_json);
     const parentReserved = decodeJson<{ tokens: number; usd: number }>(
       member.reserved_json,
     );
+    const ownCharged = ownRuntimeCharged(store, member);
     const requestedUsd = input.budget.max_usd ?? 0;
+    const subtreeTokens = Math.max(
+      0,
+      tokensUsed(parentUsage) - tokensUsed(ownCharged),
+    );
+    const subtreeUsd = Math.max(0, parentUsage.usd - ownCharged.usd);
     if (
       input.budget.max_tokens >
-        parentBudget.max_tokens -
-          parentUsage.input_tokens -
-          parentUsage.output_tokens -
-          parentReserved.tokens ||
-      requestedUsd > parentBudget.max_usd - parentUsage.usd - parentReserved.usd
+        parentPool.tokens - parentReserved.tokens - subtreeTokens ||
+      requestedUsd > parentPool.usd - parentReserved.usd - subtreeUsd
     )
       throw new CollaborationError(
         "budget_exceeded",
@@ -1834,7 +1939,7 @@ function delegateChild(
     const childAuthority: AgentAuthority = {
       ...requestedApprovals,
       paid: paidModels,
-      delegate: mayDelegate,
+      delegate: mayDelegate && delegationPool.tokens > 0,
       may_message: resolvedPeers,
     };
     const childBudget: AgentBudget = {
@@ -1850,10 +1955,10 @@ function delegateChild(
       .query(
         `INSERT INTO members
          (agent_id, room_id, parent_agent_id, depth, role_label, status, task_revision, token_hash,
-          authority_json, peers_json, budget_json, usage_json, reserved_json, instruction_digest,
+          authority_json, peers_json, budget_json, usage_json, reserved_json, pool_json, instruction_digest,
           instruction_text, workspace_mode, write_paths_json, created_at, max_steps, max_messages, acceptance_json,
           solution_space, complexity, paid_models)
-         VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         memberId,
@@ -1868,6 +1973,7 @@ function delegateChild(
         json(childBudget),
         json({ ...zeroUsage, messages_sent: 0 }),
         json(zeroReserved),
+        json(delegationPool),
         canonicalInstructionDigest,
         instruction,
         workspaceMode,
@@ -1914,8 +2020,10 @@ function delegateChild(
       .run(json(nextReserved), member.agent_id);
     updateStats(store, room.room_id, (stats) => {
       stats.delegations += 1;
-      stats.reserved.tokens += input.budget.max_tokens;
-      stats.reserved.usd += requestedUsd;
+      if (member.parent_agent_id === null) {
+        stats.reserved.tokens += input.budget.max_tokens;
+        stats.reserved.usd += requestedUsd;
+      }
     });
     store.db
       .query("UPDATE rooms SET next_seq = next_seq + 1 WHERE room_id = ?")
@@ -1948,6 +2056,19 @@ function subtractUsage(left: ChildUsage, right: ChildUsage): ChildUsage {
 
 function tokensUsed(usage: ChildUsage): number {
   return usage.input_tokens + usage.output_tokens;
+}
+
+function ownRuntimeCharged(
+  store: CollaborationStore,
+  member: MemberRow,
+): ChildUsage {
+  if (member.parent_agent_id === null) return zeroUsage;
+  const job = store.db
+    .query<{ charged_usage_json: string }, [string]>(
+      "SELECT charged_usage_json FROM jobs WHERE agent_id = ?",
+    )
+    .get(member.agent_id);
+  return job ? decodeJson<ChildUsage>(job.charged_usage_json) : zeroUsage;
 }
 
 function chargeUsage(
@@ -1988,6 +2109,11 @@ function chargeUsage(
     stats.tokens.output += delta.output_tokens;
     stats.usd += delta.usd;
     stats.steps += delta.steps;
+    stats.reserved.tokens = Math.max(
+      0,
+      stats.reserved.tokens - tokensUsed(delta),
+    );
+    stats.reserved.usd = Math.max(0, stats.reserved.usd - delta.usd);
   });
 }
 
@@ -2018,13 +2144,23 @@ function releaseChildReservation(
   store.db
     .query("UPDATE members SET reserved_json = ? WHERE agent_id = ?")
     .run(json(zeroReserved), member.agent_id);
-  updateStats(store, member.room_id, (stats) => {
-    stats.reserved.tokens = Math.max(
-      0,
-      stats.reserved.tokens - reservation.tokens,
-    );
-    stats.reserved.usd = Math.max(0, stats.reserved.usd - reservation.usd);
-  });
+  if (member.parent_agent_id) {
+    const parent = store.getMemberRow(member.parent_agent_id);
+    if (parent.parent_agent_id === null) {
+      const usage = decodeJson<MemberUsage>(member.usage_json);
+      updateStats(store, member.room_id, (stats) => {
+        stats.reserved.tokens = Math.max(
+          0,
+          stats.reserved.tokens -
+            Math.max(0, reservation.tokens - tokensUsed(usage)),
+        );
+        stats.reserved.usd = Math.max(
+          0,
+          stats.reserved.usd - Math.max(0, reservation.usd - usage.usd),
+        );
+      });
+    }
+  }
   return reservation;
 }
 
@@ -2178,6 +2314,7 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
         const room = store.getRoomRow(job.room_id);
         const member = store.getMemberRow(job.agent_id);
         const budget = agentBudget(member);
+        const ownRuntimeCap = runtimeCap(member);
         const stop =
           Boolean(job.cancel_requested) ||
           member.status === "cancelled" ||
@@ -2186,8 +2323,8 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
           Math.max(progress.steps, progress.usage?.steps ?? 0) >
             (member.max_steps ?? Number.MAX_SAFE_INTEGER) ||
           (progress.usage !== null &&
-            (tokensUsed(progress.usage) > budget.max_tokens ||
-              progress.usage.usd > budget.max_usd));
+            (tokensUsed(progress.usage) > ownRuntimeCap.tokens ||
+              progress.usage.usd > ownRuntimeCap.usd));
         store.db
           .query(
             `UPDATE jobs SET lease_expires_at = ?, session_ref = COALESCE(?, session_ref),
@@ -2238,14 +2375,18 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
         }
         const member = store.getMemberRow(job.agent_id);
         const room = store.getRoomRow(job.room_id);
-        const reserved = releaseChildReservation(store, member);
+        releaseChildReservation(store, member);
         const charged = decodeJson<ChildUsage>(job.charged_usage_json);
+        const ownRuntimeCap = runtimeCap(member);
         let effectiveOutcome = outcome;
         if (outcome.usage === null) {
           const fullUsage: ChildUsage = {
-            input_tokens: Math.max(0, reserved.tokens - tokensUsed(charged)),
+            input_tokens: Math.max(
+              0,
+              ownRuntimeCap.tokens - tokensUsed(charged),
+            ),
             output_tokens: 0,
-            usd: Math.max(0, reserved.usd - charged.usd),
+            usd: Math.max(0, ownRuntimeCap.usd - charged.usd),
             steps: 0,
           };
           chargeUsage(store, member, fullUsage);
@@ -2272,8 +2413,8 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
           const delta = subtractUsage(usage, charged);
           chargeUsage(store, member, delta);
           if (
-            tokensUsed(usage) > reserved.tokens ||
-            usage.usd > reserved.usd ||
+            tokensUsed(usage) > ownRuntimeCap.tokens ||
+            usage.usd > ownRuntimeCap.usd ||
             usage.steps > (member.max_steps ?? Number.MAX_SAFE_INTEGER)
           ) {
             effectiveOutcome = {
@@ -2428,13 +2569,15 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
         const member = store.getMemberRow(job.agent_id);
         const room = store.getRoomRow(job.room_id);
         const charged = decodeJson<ChildUsage>(job.charged_usage_json);
+        const ownRuntimeCap = runtimeCap(member);
         if (usage === null) {
-          const budget = agentBudget(member);
-          const reserved = { tokens: budget.max_tokens, usd: budget.max_usd };
           chargeUsage(store, member, {
-            input_tokens: Math.max(0, reserved.tokens - tokensUsed(charged)),
+            input_tokens: Math.max(
+              0,
+              ownRuntimeCap.tokens - tokensUsed(charged),
+            ),
             output_tokens: 0,
-            usd: Math.max(0, reserved.usd - charged.usd),
+            usd: Math.max(0, ownRuntimeCap.usd - charged.usd),
             steps: 0,
           });
           releaseChildReservation(store, member);
@@ -2458,11 +2601,9 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
         const delta = subtractUsage(usage, charged);
         chargeUsage(store, member, delta);
         const nextCharged = addUsage(charged, delta);
-        const budget = agentBudget(member);
-        const reservation = { tokens: budget.max_tokens, usd: budget.max_usd };
         if (
-          tokensUsed(usage) > reservation.tokens ||
-          usage.usd > reservation.usd ||
+          tokensUsed(usage) > ownRuntimeCap.tokens ||
+          usage.usd > ownRuntimeCap.usd ||
           usage.steps > (member.max_steps ?? Number.MAX_SAFE_INTEGER)
         ) {
           releaseChildReservation(store, member);
@@ -2576,7 +2717,7 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
         assertPublishable(instruction, store.hostPrivateRoots, store.rootDir);
         return {
           now,
-          room: roomView(room),
+          room: roomView(store, room),
           task_id: room.task_id,
           task_revision: room.task_revision,
           member: memberView(member),

@@ -16,7 +16,7 @@ import {
   type RoomStats,
 } from "./schemas";
 
-export const STORE_FORMAT_VERSION = 1;
+export const STORE_FORMAT_VERSION = 2;
 
 export const DEFAULT_LIMITS: CollaborationLimits = {
   max_depth: 2,
@@ -191,7 +191,8 @@ export class CollaborationStore {
           parent_agent_id TEXT, depth INTEGER NOT NULL, role_label TEXT NOT NULL,
           status TEXT NOT NULL, task_revision INTEGER NOT NULL, token_hash TEXT UNIQUE NOT NULL,
           authority_json TEXT NOT NULL, peers_json TEXT NOT NULL, budget_json TEXT NOT NULL,
-          usage_json TEXT NOT NULL, reserved_json TEXT NOT NULL, instruction_digest TEXT NOT NULL,
+          usage_json TEXT NOT NULL, reserved_json TEXT NOT NULL, pool_json TEXT NOT NULL,
+          instruction_digest TEXT NOT NULL,
           instruction_text TEXT NOT NULL, workspace_mode TEXT NOT NULL, write_paths_json TEXT NOT NULL,
           created_at REAL NOT NULL,
           max_steps INTEGER, max_messages INTEGER, acceptance_json TEXT NOT NULL,
@@ -199,6 +200,9 @@ export class CollaborationStore {
           UNIQUE(room_id, agent_id)
         );
         CREATE INDEX IF NOT EXISTS members_room_parent ON members(room_id, parent_agent_id, created_at);
+        CREATE TABLE IF NOT EXISTS stale_capabilities (
+          token_hash TEXT PRIMARY KEY, room_id TEXT NOT NULL, agent_id TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS messages (
           message_id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(room_id),
           seq INTEGER NOT NULL, sender_id TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL,
@@ -240,21 +244,31 @@ export class CollaborationStore {
         );
         CREATE INDEX IF NOT EXISTS results_parent ON results(room_id, parent_agent_id, created_at);
       `);
+      const memberColumns = db
+        .query<{ name: string }, []>("PRAGMA table_info(members)")
+        .all();
+      if (!memberColumns.some((column) => column.name === "pool_json"))
+        db.exec(
+          `ALTER TABLE members ADD COLUMN pool_json TEXT NOT NULL DEFAULT '{"tokens":0,"usd":0}'`,
+        );
       const init = db.transaction(() => {
         const current = db
           .query<{ value: string }, [string]>(
             "SELECT value FROM meta WHERE key = ?",
           )
           .get("format_version");
-        if (current && current.value !== String(STORE_FORMAT_VERSION))
+        if (
+          current &&
+          current.value !== "1" &&
+          current.value !== String(STORE_FORMAT_VERSION)
+        )
           throw new CollaborationError(
             "corrupt_record",
             "Unsupported collaboration store format",
           );
-        db.query("INSERT OR IGNORE INTO meta(key, value) VALUES(?, ?)").run(
-          "format_version",
-          String(STORE_FORMAT_VERSION),
-        );
+        db.query(
+          "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        ).run("format_version", String(STORE_FORMAT_VERSION));
       });
       init.immediate();
     } catch (error) {
@@ -368,6 +382,7 @@ export interface MemberRow {
   budget_json: string;
   usage_json: string;
   reserved_json: string;
+  pool_json: string;
   instruction_digest: string;
   instruction_text: string;
   workspace_mode: "private" | "read_only" | "parent";

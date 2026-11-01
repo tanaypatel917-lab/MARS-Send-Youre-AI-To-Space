@@ -34,6 +34,8 @@ const tokenUsdSchema = z
     usd: z.number().finite().nonnegative(),
   })
   .strict();
+export const DelegationPoolSchema = tokenUsdSchema;
+export type DelegationPool = z.infer<typeof DelegationPoolSchema>;
 
 export const RequestContextSchema = z
   .object({
@@ -89,6 +91,13 @@ export const OpenRoomInputSchema = z
     task: TaskSchema,
     idempotency_key: z.string().min(1).max(128),
     authority: RootAuthoritySchema,
+    delegation_pool: z
+      .object({
+        max_tokens: z.number().int().nonnegative(),
+        max_usd: z.number().finite().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
     model_id: nonempty.optional(),
     limits: z
       .object({
@@ -116,6 +125,7 @@ export const RoomViewSchema = z
     task_id: nonempty,
     task_revision: z.number().int().nonnegative(),
     budget: BudgetSchema,
+    coordinator_runtime_budget: BudgetSchema,
     deadline: z.number().finite(),
     limits: CollaborationLimitsSchema,
     status: z.enum(["open", "draining", "closed"]),
@@ -161,6 +171,7 @@ export const AgentViewSchema = z
     authority: AgentAuthoritySchema,
     peers: z.array(nonempty),
     budget: AgentBudgetSchema,
+    pool: tokenUsdSchema,
     usage: memberUsageSchema,
     reserved: tokenUsdSchema,
     workspace_mode: z.enum(["private", "read_only", "parent"]),
@@ -244,6 +255,8 @@ export const DelegateInputSchema = z
         max_duration_ms: z.number().int().positive(),
         max_steps: z.number().int().positive().max(10_000),
         max_messages: z.number().int().nonnegative(),
+        delegation_pool_tokens: z.number().int().nonnegative().optional(),
+        delegation_pool_usd: z.number().finite().nonnegative().optional(),
       })
       .strict(),
     peers: z.array(nonempty).optional(),

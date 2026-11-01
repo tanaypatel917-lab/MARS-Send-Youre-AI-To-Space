@@ -104,14 +104,14 @@ function tokenUse(usage: ChildUsage): number {
 
 function launchBudget(context: LaunchContext, now: number): Budget {
   const budget = context.member.budget;
-  const usage = context.member.usage;
-  const reserved = context.member.reserved;
+  const pool = context.member.pool;
+  const charged = context.charged_usage;
   const remainingTokens =
     budget.max_tokens -
-    usage.input_tokens -
-    usage.output_tokens -
-    reserved.tokens;
-  const remainingUsd = budget.max_usd - usage.usd - reserved.usd;
+    pool.tokens -
+    charged.input_tokens -
+    charged.output_tokens;
+  const remainingUsd = budget.max_usd - pool.usd - charged.usd;
   const remainingMs = Math.floor(budget.deadline - now);
   if (remainingTokens <= 0)
     throw new CollaborationError(
@@ -386,13 +386,16 @@ export function createChildRunner(options: ChildRunnerOptions): ChildRunner {
       } catch (error) {
         markReady();
         if (leaseLost) return;
-        const forbiddenBeforeOpen =
-          error instanceof CollaborationError && error.code === "forbidden";
+        const zeroUsageStartFailure =
+          childRun === undefined &&
+          adapterCalled &&
+          error instanceof CollaborationError &&
+          (error.code === "forbidden" || error.code === "invalid_input");
         const budgetBeforeOpen =
           error instanceof CollaborationError &&
           (error.code === "budget_exceeded" || error.code === "expired");
         const usage =
-          !adapterCalled || forbiddenBeforeOpen
+          !adapterCalled || zeroUsageStartFailure
             ? { input_tokens: 0, output_tokens: 0, usd: 0, steps: 0 }
             : null;
         const errorCode =

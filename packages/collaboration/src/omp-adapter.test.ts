@@ -158,6 +158,8 @@ test("OMP adapter uses the runtime journal, persists only its binding, and recon
       output_tokens: 12,
     },
   });
+  expect(JSON.stringify(outcome)).not.toContain(f.stateRoot);
+  expect(JSON.stringify(outcome)).not.toContain(run.session_ref);
   expect(outcome.usage?.steps).toBeGreaterThanOrEqual(1);
   expect(f.fetchCalls).toHaveLength(1);
   expect(progress.some((value) => value.steps >= 1)).toBe(true);
@@ -215,6 +217,42 @@ test("paid model rejection happens before runtime or fetch", async () => {
   expect(error).toBeInstanceOf(CollaborationError);
   expect(error).toMatchObject({ code: "forbidden" });
   expect(runtimeOpens).toBe(0);
+  expect(f.fetchCalls).toHaveLength(0);
+});
+
+test("runtime opening failures map to invalid_input before model execution", async () => {
+  const f = await fixture();
+  let runtimeOpens = 0;
+  const adapter = createOhMyPiChildAdapter({
+    registry: f.registry,
+    stateRoot: f.stateRoot,
+    workspaceFor: async () => ({
+      cwd: f.cwd,
+      tools: {
+        read: async () => new Uint8Array(),
+        write: async () => undefined,
+        execute: async () => ({ exit_code: 0, stdout: "", stderr: "" }),
+        stop: async () => undefined,
+      },
+      base_revision: null,
+    }),
+    runtimeFactory: async () => {
+      runtimeOpens += 1;
+      throw new Error("Fixture runtime could not open.");
+    },
+  });
+  let error: unknown;
+  try {
+    await adapter.start(f.launch, {
+      signal: new AbortController().signal,
+      async onProgress() {},
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(CollaborationError);
+  expect(error).toMatchObject({ code: "invalid_input" });
+  expect(runtimeOpens).toBe(1);
   expect(f.fetchCalls).toHaveLength(0);
 });
 

@@ -46,6 +46,16 @@ remaining token/cost budget, deadlines, and write-path claims. A role label such
 as `worker` is metadata only. A child cannot gain approvals, paid-model
 permission, or delegation authority that its parent does not possess.
 
+Each member's envelope is split into an own-runtime allowance and a
+delegation pool. `OpenRoomInput.delegation_pool` reserves part of the task
+budget for descendants, and `RoomView.coordinator_runtime_budget` is the
+remainder. **The host must launch the coordinator's own runtime with
+`room.coordinator_runtime_budget`, not `task.budget`.** This is what keeps the
+coordinator plus all child runtimes within the task envelope. A delegated
+member may similarly reserve `delegation_pool_tokens` and
+`delegation_pool_usd`; its runner receives only the envelope minus that pool
+and its own prior runtime charges.
+
 Messages are directed to named active members. Parent/child relationships and
 explicit peer grants define the normal address set; a valid reply path can
 authorize a response. Inbox bodies are bounded, expiring, and marked untrusted.
@@ -60,8 +70,10 @@ service owner performs any follow-up action.
 1. **Create and recover host state.** Place the store under a private state
    root, for example `<stateRoot>/collaboration`. At process startup, create
    the collaboration instance, call `runner.recover()`, then call `runner.tick()`
-   on a host-controlled interval. Shut down the runner before closing the
-   collaboration store.
+   on a host-controlled interval. When opening the room, choose its
+   `delegation_pool`; launch the coordinator's own `openRuntimeSession` with
+   `room.coordinator_runtime_budget` rather than the full task budget. Shut
+   down the runner before closing the collaboration store.
 2. **Bind agent tools in the host.** Expose selected `AgentPort` methods as
    Oh My Pi custom tools such as `mars_delegate`, `mars_message`, `mars_inbox`,
    `mars_ack`, `mars_results`, `mars_review_result`, and `mars_cancel_child`.
@@ -108,6 +120,12 @@ service owner performs any follow-up action.
   message bodies, instructions, role labels, and published summaries. Unsafe
   child summaries are stored as empty with an `unsafe_summary` marker so
   accounting can still complete.
+- Non-collaboration errors while opening `openRuntimeSession` map to
+  `invalid_input`; opening does not make a model request, so that pre-run
+  failure accrues zero usage. `forbidden` and `invalid_input` from
+  `adapter.start` before a `ChildRun` is returned are also zero-usage
+  failures. Once a `ChildRun` exists, failures use its reported usage or fail
+  closed if usage cannot be reconciled.
 - Results are marked stale when the source task revision changes. Acceptance
   also checks the expected task revision and, where present, the current
   workspace base revision.

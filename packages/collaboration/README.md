@@ -42,6 +42,7 @@ const collaboration = await createCollaboration({
 const { room, coordinator } = await collaboration.host.openRoom(context, {
   task,
   idempotency_key: "task-run-1",
+  delegation_pool: { max_tokens: 800 },
   authority: {
     approvals: { read: true, write: false, execute: false },
     allow_delegation: true,
@@ -61,6 +62,13 @@ const runner = createChildRunner({
 await runner.recover();
 await runner.tick();
 ```
+
+**The host must launch the coordinator's own runtime with
+`room.coordinator_runtime_budget`, not `task.budget`.** The delegation pool is
+reserved for descendants; subtracting it before running the coordinator keeps
+the coordinator and all child runtimes within the task budget. Each delegated
+member likewise has an envelope split between its own runtime and an optional
+delegation pool.
 
 The host binds a capability to the child runtime or custom tool closures; the
 model must not choose or receive another agent's capability. Call `tick()` on a
@@ -98,7 +106,10 @@ host-only operational limits.
 Budgets narrow down the delegation tree. Outstanding child token and cost
 reservations reduce what a parent can allocate; actual usage is charged to the
 child and each ancestor. Concurrency is enforced at job claim time and includes
-the root task.
+the root task. `OpenRoomInput.delegation_pool` reserves part of the task
+envelope for descendants, and `RoomView.coordinator_runtime_budget` provides
+the remainder for the host's coordinator runtime. Delegated children can
+reserve their own `delegation_pool_tokens` and `delegation_pool_usd`.
 
 ## Error codes
 
@@ -110,12 +121,19 @@ the root task.
 
 Error messages are generic and must not include host paths, tokens, or journal
 content. Validation and identity failures are fail-closed.
+The OMP adapter maps non-collaboration failures while opening
+`openRuntimeSession` to `invalid_input`; opening makes no model request, so
+these pre-run failures accrue zero usage. `forbidden` and `invalid_input` from
+`adapter.start` before it returns a `ChildRun` are also zero-usage failures.
+Failures after a `ChildRun` exists use reported usage or fail closed when usage
+cannot be reconciled.
 
 ## Verification status
 
-The package test suite passed three consecutive runs (13 tests per run).
-TypeScript, Biome, the package build, and the full repository check also passed.
-The limitations listed in `documentation/COLLABORATION.md` remain unverified.
+Follow-up verification passed: the collaboration suite passed three consecutive
+runs (31 tests each), and typecheck, package Biome, package build, and root
+`bun run check` passed. The limitations listed in
+`documentation/COLLABORATION.md` remain unverified.
 A fake adapter can test orchestration without network or model calls. The OMP
 adapter's injected `runtimeFactory` is the test seam for an offline runtime
 fixture.
