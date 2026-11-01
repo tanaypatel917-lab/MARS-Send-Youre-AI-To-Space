@@ -517,6 +517,9 @@ export async function createWorkbenchHost(
         throw new WorkbenchError("conflict");
       if (params.approvals.execute && !options.canExecute)
         throw new WorkbenchError("forbidden");
+      const instruction = `${task.request}\n\nAcceptance criteria:\n${task.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
+      if (instruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH)
+        throw new WorkbenchError("too_large");
       const model = selectExecutionModel(
         options.registry,
         params.model_id,
@@ -582,12 +585,7 @@ export async function createWorkbenchHost(
         for (const observation of initialObservations)
           await persistObservation(observation);
         bound = true;
-        run(
-          running,
-          workspace,
-          runtime,
-          `${running.request}\n\nAcceptance criteria:\n${running.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`,
-        );
+        run(running, workspace, runtime, instruction);
         return running;
       } catch (error) {
         await runtime?.dispose().catch(() => undefined);
