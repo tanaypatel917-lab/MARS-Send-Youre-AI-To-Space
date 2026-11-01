@@ -14,7 +14,9 @@ import type {
 import { ScopeSchema } from "@mars/contracts";
 import {
   EXECUTION_PACKAGE_VERSION,
+  initialRequestAllowance,
   MAX_RUNTIME_INSTRUCTION_LENGTH,
+  MIN_INITIAL_OUTPUT_RESERVE,
   openRuntimeSession,
   optionalInstructionCapacity,
   type RuntimeObservation,
@@ -51,6 +53,12 @@ import {
   withFrozenRepositoryMap,
 } from "./repository-context";
 import { WorkbenchError, type WorkbenchOperations } from "./server";
+import {
+  type FrozenRouting,
+  FrozenRoutingSchema,
+  routeLaunch,
+  type WorkbenchSpecialists,
+} from "./specialist-routing";
 
 const launchSchema = z
   .object({
@@ -63,6 +71,7 @@ const launchSchema = z
     cwd: z.string().min(1).refine(isAbsolute),
     memory: FrozenMemorySchema.optional(),
     repository_map: FrozenRepositoryMapSchema.optional(),
+    routing: FrozenRoutingSchema.optional(),
   })
   .strict();
 type Launch = z.infer<typeof launchSchema>;
@@ -83,6 +92,7 @@ export interface WorkbenchHostOptions {
   canExecute: boolean;
   memory?: WorkbenchMemory;
   repositoryMap?: Pick<RepositoryMapProvider, "map">;
+  specialists?: WorkbenchSpecialists;
   hostPrivateRoots?: string[];
   runtimeFactory?: (options: RuntimeSessionOptions) => Promise<RuntimeSession>;
 }
@@ -602,7 +612,28 @@ export async function createWorkbenchHost(
       const baseInstruction = `${task.request}\n\nAcceptance criteria:\n${task.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
       if (baseInstruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH)
         throw new WorkbenchError("too_large");
-      const model = selectModel(params.approvals, params.model_id);
+      let routing: FrozenRouting | undefined;
+      if (options.specialists && params.model_id === undefined) {
+        try {
+          routing = await routeLaunch(
+            context,
+            task,
+            params.approvals,
+            options.specialists,
+            initialRequestAllowance({
+              approvals: params.approvals,
+              recall: Boolean(options.memory),
+              instruction: baseInstruction,
+            }) + MIN_INITIAL_OUTPUT_RESERVE,
+          );
+        } catch {
+          throw new WorkbenchError("unavailable");
+        }
+      }
+      const model = selectModel(
+        params.approvals,
+        params.model_id ?? routing?.model_id ?? undefined,
+      );
       const capacity = optionalInstructionCapacity({
         model,
         budget: task.budget,
@@ -631,7 +662,12 @@ export async function createWorkbenchHost(
         context,
         task.task_id,
         task.revision,
-        { status: "running" },
+        {
+          status: "running",
+          ...(routing?.specialist_revision
+            ? { specialist_revision: routing.specialist_revision }
+            : {}),
+        },
       );
       let runtime: RuntimeSession | undefined;
       const initialObservations: RuntimeObservation[] = [];
@@ -713,6 +749,7 @@ export async function createWorkbenchHost(
           workspace: WorkspaceRefSchema.parse(workspace),
           ...(memory ? { memory } : {}),
           ...(repositoryMap ? { repository_map: repositoryMap } : {}),
+          ...(routing ? { routing } : {}),
         });
         await options.store.bindUpstreamSession(
           internalContext(options.scope),

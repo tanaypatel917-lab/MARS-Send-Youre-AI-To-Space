@@ -79,6 +79,10 @@ The service uses fd-anchored Linux confinement only, with root/revision revalida
 
 The exact text, digest, scope and initial workspace revision are persisted in private launch metadata. Resume validates that binding and uses the original Oh My Pi journal; it neither rebuilds the map nor silently injects changed repository content. The launch map may be stale after edits. Models can read current files through approved tools; there is no repository-map tool, unsaved-editor-buffer capture, or claim of semantic completeness/quality improvement.
 
+## Specialist routing
+
+When the service is configured with an evidence-gated specialist router (`@mars/specialists`), each `start` without an explicit `model_id` routes the task once, as a `worker` for the configured task-coverage domain, before selecting a model, preparing a workspace or opening a runtime. The decision (`decision_id`, outcome, selected ref and model) is frozen into private launch metadata; a specialist outcome also records `Task.specialist_revision` in the same revision step that marks the task running. The selected model stays pinned for the session and all resumes; there are no route hops. Baseline, unavailable and rejected outcomes fall back to the ordinary free-only default, and a routing failure leaves the task pending with `unavailable`. Routing selects a model only; the host must actually serve any adapter the specialist declares, and a routed specialist is not a quality claim beyond the signed evidence the registry verified.
+
 ## Reproducible verification and limits
 
 ```sh
@@ -94,4 +98,4 @@ bun test packages/workbench/src/service.test.ts packages/workspaces
 
 The service tests send authenticated HTTP through the actual VS Code typed client and actual Oh My Pi SDK, using injected model HTTP responses and dummy keys. They cover private file writes, progress/artifact/diff retrieval, checkpoint/restore, source immutability, shutdown/restart with the same journal/workspace, steering, cancellation and token rotation. The optional Docker flow has the SDK write a file and invoke a real sandbox command that verifies its contents and non-root identity. CLI tests cover private connection credentials, no-credential startup, sanitized failures and signal cleanup releasing the provider lock. These tests demonstrate harness integration, **not model quality**.
 
-No live model request, paid service or real VS Code window is used for this verification. Live-model task quality and the complete master-spec Milestone 1 acceptance evidence remain outstanding. Frozen memory, journal recall and repository maps are connected; live research, collaboration tools, specialist routing, learned skills, independent evaluation and training are not connected by this increment. A normal agent completion status does not claim independent acceptance tests passed.
+No live model request, paid service or real VS Code window is used for this verification. Live-model task quality and the complete master-spec Milestone 1 acceptance evidence remain outstanding. Frozen memory, journal recall, repository maps and evidence-gated specialist routing are connected; live research, collaboration tools, learned skills, independent evaluation and training are not connected by this increment. A normal agent completion status does not claim independent acceptance tests passed.

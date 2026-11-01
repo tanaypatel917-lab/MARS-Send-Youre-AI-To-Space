@@ -41,6 +41,16 @@ behavior.
 2. At a task/session boundary, call `route` or `routeTeam` and persist the
    returned `decision_id`. For a specialist outcome, write
    `Task.specialist_revision` via `taskStore.update(...)`.
+   The local workbench does this when configured with
+   `specialists: { router, domain, complexity?, paid_consent? }`: `start`
+   routes once as role `worker` before any workspace or runtime exists,
+   freezes `{decision_id, outcome, ref, specialist_revision, model_id}` into
+   private launch metadata, sets `Task.specialist_revision` in the same
+   revision step that marks the task running, and pins the selected model for
+   that session and every resume. An explicit `model_id` on `start` skips
+   routing. Baseline, unavailable and rejected outcomes use the ordinary
+   free-only registry default; a registry error leaves the task pending with
+   `unavailable`.
 3. Execution passes `{ model: selected.model_id }` to the existing
    `ModelRouter` through the execution/model-bridge, keeping the selected
    model pinned for that attempt. The specialist package does not perform
