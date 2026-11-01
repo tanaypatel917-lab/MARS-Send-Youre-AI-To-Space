@@ -123,6 +123,10 @@ export interface DurableTaskStore extends TaskService {
     taskId: string,
     binding: UpstreamSessionBinding,
   ): Promise<void>;
+  /**
+   * Returns the host-private journal binding for in-process runtime resume.
+   * Do not expose this method over RPC.
+   */
   upstreamSession(
     context: RequestContext,
     taskId: string,
@@ -298,6 +302,56 @@ function resolveForSafety(value: string): string {
     }
     return path.resolve(realpathSync(existing), ...suffix);
   }
+}
+
+const forbiddenHostPrivateKeys = new Set([
+  "session_file",
+  "sessionFile",
+  "journal_path",
+  "journalPath",
+]);
+
+function hostPrivatePaths(binding: UpstreamSessionBinding): Set<string> {
+  const paths = new Set<string>();
+  const journalPath = binding.session_file;
+  const realJournalPath = resolveForSafety(journalPath);
+  for (const candidate of [journalPath, realJournalPath]) {
+    if (candidate.length > 1 && candidate !== path.parse(candidate).root) {
+      paths.add(candidate);
+    }
+    const directory = path.dirname(candidate);
+    if (directory.length > 1 && directory !== path.parse(directory).root) {
+      paths.add(directory);
+    }
+  }
+  return paths;
+}
+
+function containsHostPrivateText(
+  text: string,
+  paths: ReadonlySet<string>,
+): boolean {
+  for (const privatePath of paths) {
+    const escapedPath = JSON.stringify(privatePath).slice(1, -1);
+    if (text.includes(privatePath) || text.includes(escapedPath)) return true;
+  }
+  return false;
+}
+
+function containsForbiddenHostPrivateKey(value: unknown): boolean {
+  const pending = [value];
+  const visited = new WeakSet<object>();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === null || typeof current !== "object") continue;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    for (const [property, child] of Object.entries(current)) {
+      if (forbiddenHostPrivateKeys.has(property)) return true;
+      pending.push(child);
+    }
+  }
+  return false;
 }
 
 function scopeKey(scope: Scope): string {
@@ -1081,6 +1135,55 @@ export async function createTaskStore(
       "upstream session binding",
     );
   };
+  const hostPrivatePathsForScope = (key: string): Set<string> => {
+    const rows = db
+      .query("SELECT task_id FROM session_bindings WHERE scope_key = ?")
+      .all(key) as Array<{ task_id: string }>;
+    const paths = new Set<string>();
+    for (const { task_id: taskId } of rows) {
+      const binding = readBinding(key, taskId);
+      if (!binding) fail("corrupt_record", "Corrupt upstream session binding");
+      for (const privatePath of hostPrivatePaths(binding)) {
+        paths.add(privatePath);
+      }
+    }
+    return paths;
+  };
+  const assertNoHostPathLeak = (
+    key: string,
+    taskId: string,
+    value: unknown,
+  ): void => {
+    const binding = readBinding(key, taskId);
+    const paths = binding ? hostPrivatePaths(binding) : new Set<string>();
+    const pending = [value];
+    const visited = new WeakSet<object>();
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (typeof current === "string") {
+        if (containsHostPrivateText(current, paths)) {
+          throw invalidInput(
+            "Event payload must not contain the upstream journal path",
+          );
+        }
+        continue;
+      }
+      if (current === null || typeof current !== "object") continue;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      for (const [property, child] of Object.entries(current)) {
+        if (
+          forbiddenHostPrivateKeys.has(property) ||
+          containsHostPrivateText(property, paths)
+        ) {
+          throw invalidInput(
+            "Event payload must not contain the upstream journal path",
+          );
+        }
+        pending.push(child);
+      }
+    }
+  };
   const bindingSchema = z
     .object({
       runtime: z.literal("oh-my-pi"),
@@ -1108,9 +1211,73 @@ export async function createTaskStore(
     })
     .strict();
 
+  const readArtifactBytes = (key: string, refInput: unknown): Uint8Array => {
+    const ref = assertSchema(
+      ArtifactRefSchema,
+      refInput,
+      "Invalid artifact reference",
+    );
+    if (artifactId(ref.media_type, ref.sha256) !== ref.artifact_id) {
+      throw invalidInput("Artifact reference does not match its content hash");
+    }
+    const row = db
+      .query(
+        "SELECT scope_key, artifact_id, sha256, media_type, byte_length FROM artifacts WHERE scope_key = ? AND artifact_id = ?",
+      )
+      .get(key, ref.artifact_id) as ArtifactRow | null;
+    if (!row) fail("not_found", NOT_FOUND_MESSAGE);
+    if (
+      row.sha256 !== ref.sha256 ||
+      row.media_type !== ref.media_type ||
+      row.byte_length !== ref.byte_length
+    ) {
+      throw invalidInput("Artifact reference does not match stored artifact");
+    }
+    const relative = artifactRelativePath(key, row.sha256);
+    const filePath = path.join(rootDir, relative);
+    assertPathComponents(rootDir, filePath);
+    let fd: number;
+    try {
+      fd = openSync(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch {
+      fail("corrupt_record", "Artifact file is missing or unsafe");
+    }
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isFile())
+        fail("corrupt_record", "Artifact is not a regular file");
+      const data = readFileSync(fd);
+      if (data.byteLength !== row.byte_length || sha256(data) !== row.sha256) {
+        fail("corrupt_record", "Artifact content hash mismatch");
+      }
+      return new Uint8Array(data);
+    } finally {
+      closeSync(fd);
+    }
+  };
+
   const artifactStore: ArtifactStore = {
     async put(context, data, mediaType) {
       const { scopeKey: key, context: parsed } = contextFor(context);
+      if (
+        !(data instanceof Uint8Array) ||
+        typeof mediaType !== "string" ||
+        mediaType.length === 0
+      ) {
+        throw invalidInput("Invalid artifact data or media type");
+      }
+      if (data.byteLength > maxArtifactBytes)
+        throw invalidInput("Artifact exceeds maxArtifactBytes");
+      if (
+        containsHostPrivateText(
+          new TextDecoder().decode(data),
+          hostPrivatePathsForScope(key),
+        )
+      ) {
+        throw invalidInput(
+          "Artifact must not contain the upstream journal path",
+        );
+      }
       const ref = prepareArtifact(parsed.scope, data, mediaType);
       const transaction = db.transaction(() => {
         insertArtifactRow(key, ref);
@@ -1120,53 +1287,16 @@ export async function createTaskStore(
     },
     async get(context, refInput) {
       const { scopeKey: key } = contextFor(context);
-      const ref = assertSchema(
-        ArtifactRefSchema,
-        refInput,
-        "Invalid artifact reference",
-      );
-      if (artifactId(ref.media_type, ref.sha256) !== ref.artifact_id) {
-        throw invalidInput(
-          "Artifact reference does not match its content hash",
-        );
-      }
-      const row = db
-        .query(
-          "SELECT scope_key, artifact_id, sha256, media_type, byte_length FROM artifacts WHERE scope_key = ? AND artifact_id = ?",
-        )
-        .get(key, ref.artifact_id) as ArtifactRow | null;
-      if (!row) fail("not_found", NOT_FOUND_MESSAGE);
+      const data = readArtifactBytes(key, refInput);
       if (
-        row.sha256 !== ref.sha256 ||
-        row.media_type !== ref.media_type ||
-        row.byte_length !== ref.byte_length
+        containsHostPrivateText(
+          new TextDecoder().decode(data),
+          hostPrivatePathsForScope(key),
+        )
       ) {
-        throw invalidInput("Artifact reference does not match stored artifact");
+        fail("corrupt_record", "Artifact contains host-private data");
       }
-      const relative = artifactRelativePath(key, row.sha256);
-      const filePath = path.join(rootDir, relative);
-      assertPathComponents(rootDir, filePath);
-      let fd: number;
-      try {
-        fd = openSync(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
-      } catch {
-        fail("corrupt_record", "Artifact file is missing or unsafe");
-      }
-      try {
-        const stat = fstatSync(fd);
-        if (!stat.isFile())
-          fail("corrupt_record", "Artifact is not a regular file");
-        const data = readFileSync(fd);
-        if (
-          data.byteLength !== row.byte_length ||
-          sha256(data) !== row.sha256
-        ) {
-          fail("corrupt_record", "Artifact content hash mismatch");
-        }
-        return new Uint8Array(data);
-      } finally {
-        closeSync(fd);
-      }
+      return data;
     },
   };
 
@@ -1508,6 +1638,7 @@ export async function createTaskStore(
       ) {
         throw invalidInput("Instruction must be non-empty and at most 16 KiB");
       }
+      assertNoHostPathLeak(key, taskId, instruction);
       const inputHash = idemKeyInput({ instruction });
       const replay = getIdempotent(
         key,
@@ -1542,6 +1673,7 @@ export async function createTaskStore(
           if (["completed", "cancelled", "failed"].includes(current.status)) {
             fail("invalid_transition", "Terminal tasks cannot be steered");
           }
+          assertNoHostPathLeak(key, taskId, instruction);
           insertArtifactRow(key, prepared.ref);
           const event = lifecycleEvent(
             parsedContext,
@@ -1580,6 +1712,7 @@ export async function createTaskStore(
       ) {
         throw invalidInput("Lifecycle event types are reserved");
       }
+      assertNoHostPathLeak(key, taskId, input);
       const versions = assertSchema(
         z.array(VersionRefSchema).min(1),
         input.versions,
@@ -1694,6 +1827,7 @@ export async function createTaskStore(
           for (const ref of observed.artifacts ?? [])
             assertArtifactOwned(key, ref);
         }
+        assertNoHostPathLeak(key, taskId, input);
         insertArtifactRow(key, prepared.ref);
         const tail = verifiedEventTail(key, taskId);
         const event = buildEvent(task, {
@@ -1739,7 +1873,9 @@ export async function createTaskStore(
       const snapshot = readTask(key, taskId);
       const prepared = preparePayloadArtifact(snapshot.scope, {
         change: "upstream_session_bound",
-        binding,
+        runtime: binding.runtime,
+        package_version: binding.package_version,
+        session_id: binding.session_id,
       });
       const transaction = db.transaction(() => {
         const replay = getIdempotent(
@@ -1751,12 +1887,6 @@ export async function createTaskStore(
         );
         if (replay !== null) return;
         const task = readTask(key, taskId);
-        if (["completed", "cancelled", "failed"].includes(task.status)) {
-          fail(
-            "invalid_transition",
-            "Terminal tasks cannot bind an upstream session",
-          );
-        }
         const existing = readBinding(key, taskId);
         if (existing) {
           if (canonicalJson(existing) !== canonicalJson(binding)) {
@@ -1771,6 +1901,12 @@ export async function createTaskStore(
             null,
           );
           return;
+        }
+        if (["completed", "cancelled", "failed"].includes(task.status)) {
+          fail(
+            "invalid_transition",
+            "Terminal tasks cannot bind an upstream session",
+          );
         }
         insertArtifactRow(key, prepared.ref);
         const bindingJson = canonicalJson(binding);
@@ -1900,6 +2036,45 @@ export async function createTaskStore(
       const snapshot = db.transaction(() => {
         readTask(key, taskId);
         const events = verifiedEvents(key, taskId);
+        const binding = readBinding(key, taskId);
+        if (binding) {
+          const paths = hostPrivatePaths(binding);
+          for (const event of events) {
+            if (containsHostPrivateText(JSON.stringify(event), paths)) {
+              fail(
+                "corrupt_record",
+                "Event history contains host-private data",
+              );
+            }
+            if (
+              event.event_type !== "task.updated" ||
+              event.producer !== "mars.tasks"
+            ) {
+              continue;
+            }
+            const text = new TextDecoder().decode(
+              readArtifactBytes(key, event.payload),
+            );
+            let payload: unknown;
+            try {
+              payload = JSON.parse(text);
+            } catch {
+              fail(
+                "corrupt_record",
+                "Event history contains host-private data",
+              );
+            }
+            if (
+              containsForbiddenHostPrivateKey(payload) ||
+              containsHostPrivateText(text, paths)
+            ) {
+              fail(
+                "corrupt_record",
+                "Event history contains host-private data",
+              );
+            }
+          }
+        }
         let offset = 0;
         if (afterEventId !== undefined) {
           const index = events.findIndex(

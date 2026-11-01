@@ -6,6 +6,7 @@ import {
   loadModelRegistry,
   ModelRouter,
 } from "@mars/providers";
+import { runServer } from "./serve";
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -229,7 +230,7 @@ try {
       execution: await probeExecution(),
       limitations: [
         "Initialization probe only; no agent task or model request was run.",
-        "IDE, durable task API, checkpoints, memory, learning, and training are not implemented.",
+        "Live-provider and real IDE workbench acceptance remain unverified; memory, learning, and training are not implemented.",
         "Python services must use separate versioned environments.",
       ],
     };
@@ -238,8 +239,19 @@ try {
     console.log(JSON.stringify(await probeExecution(), null, 2));
   } else if (command === "models") {
     await runModels(process.argv.slice(3));
+  } else if (command === "serve") {
+    try {
+      await runServer(process.argv.slice(3));
+    } catch {
+      console.error(
+        "MARS workbench could not start or stop safely. Check the source, private state directory, port, and optional pinned local image.",
+      );
+      process.exitCode = 1;
+    }
   } else {
-    console.error("Usage: bun apps/cli/src/main.ts <doctor|smoke|models>");
+    console.error(
+      "Usage: bun apps/cli/src/main.ts <doctor|smoke|models|serve>",
+    );
     process.exitCode = 2;
   }
 } catch (error) {

@@ -18,6 +18,7 @@
         "@mars/contracts": "workspace:*",
         "@mars/execution": "workspace:*",
         "@mars/providers": "workspace:*",
+        "@mars/workbench": "workspace:*",
       },
     },
     "apps/vscode": {
@@ -48,6 +49,7 @@
         "@oh-my-pi/pi-ai": "18.14.0",
         "@oh-my-pi/pi-coding-agent": "18.14.0",
         "@oh-my-pi/pi-natives": "18.14.0",
+        "@oh-my-pi/pi-utils": "18.14.0",
         "zod": "3.25.76",
       },
     },
@@ -78,6 +80,10 @@
       "version": "0.0.1",
       "dependencies": {
         "@mars/contracts": "workspace:*",
+        "@mars/execution": "workspace:*",
+        "@mars/providers": "workspace:*",
+        "@mars/tasks": "workspace:*",
+        "@mars/workspaces": "workspace:*",
         "zod": "3.25.76",
       },
     },
