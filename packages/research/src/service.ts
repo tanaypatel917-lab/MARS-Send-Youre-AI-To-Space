@@ -1104,7 +1104,7 @@ export async function createResearchService(
       ) {
         return false;
       }
-      if (row.attempts < row.max_attempts) {
+      if (!nonRetryable && row.attempts < row.max_attempts) {
         db.query(
           `UPDATE requests SET status = 'queued', available_at = ?,
              lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
@@ -1540,7 +1540,7 @@ export async function createResearchService(
         localRuns.delete(key);
         wake();
         await flushEvents();
-        if (state === "open") await pump();
+        if (state === "open" && configured.autoStart) await pump();
       })
       .catch(() => {
         clearInterval(entry.heartbeat);
@@ -2007,10 +2007,17 @@ export async function createResearchService(
       wake();
       closePromise = (async () => {
         if (localRuns.size > 0 && drainMs > 0) {
-          await Promise.race([
-            Promise.all([...localRuns.values()].map((run) => run.settled)),
-            new Promise<void>((resolve) => setTimeout(resolve, drainMs)),
-          ]);
+          let drainTimer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              Promise.all([...localRuns.values()].map((run) => run.settled)),
+              new Promise<void>((resolve) => {
+                drainTimer = setTimeout(resolve, drainMs);
+              }),
+            ]);
+          } finally {
+            if (drainTimer !== undefined) clearTimeout(drainTimer);
+          }
         }
         for (const run of [...localRuns.values()]) {
           run.forced = true;

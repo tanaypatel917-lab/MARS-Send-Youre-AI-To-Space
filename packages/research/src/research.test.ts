@@ -894,6 +894,38 @@ describe("@mars/research durable control plane", () => {
     );
   });
 
+  test("fails immediately when a worker rethrows a non-retryable research error", async () => {
+    let runCount = 0;
+    const worker: ResearchWorker = {
+      id: "non-retryable-worker",
+      version: "1",
+      async run(input, workerContext) {
+        runCount += 1;
+        const evidence = await capture(
+          workerContext,
+          Date.now,
+          input.request_id,
+        );
+        await workerContext.publish(
+          proposal(evidence.ref, "javascript:alert(1)", evidence.retrievedAt),
+        );
+      },
+    };
+    const env = await setup({
+      worker,
+      service: { maxAttempts: 3, retryBackoffMs: 0 },
+    });
+    const id = await request(env.service, env.now, "non-retryable");
+    await waitFor(
+      async () =>
+        (await env.service.inspect(context(), id)).status === "failed",
+    );
+    const job = await env.service.inspect(context(), id);
+    expect(job.error_code).toBe("worker_failed");
+    expect(job.attempts).toBe(1);
+    expect(runCount).toBe(1);
+  });
+
   test("denies expired lease writes and prevents an old owner overwriting a replacement", async () => {
     let nowMs = 1_700_000_000_000;
     const now = () => nowMs;
@@ -1219,6 +1251,49 @@ describe("@mars/research durable control plane", () => {
         )
       ).status,
     ).toBe("queued");
+  });
+
+  test("autoStart false only claims queued work on an explicit pump", async () => {
+    let runCount = 0;
+    const now = Date.now;
+    const worker: ResearchWorker = {
+      id: "manual-pump-worker",
+      version: "1",
+      async run(input, workerContext) {
+        runCount += 1;
+        const evidence = await capture(workerContext, now, input.request_id);
+        await workerContext.publish(
+          proposal(evidence.ref, evidence.url, evidence.retrievedAt),
+        );
+      },
+    };
+    const env = await setup({
+      worker,
+      service: { autoStart: false, maxConcurrency: 1 },
+    });
+    const first = await request(env.service, now, "manual-first");
+    const second = await request(env.service, now, "manual-second");
+    expect((await env.service.inspect(context(), first)).status).toBe("queued");
+    expect((await env.service.inspect(context(), second)).status).toBe(
+      "queued",
+    );
+
+    await env.service.pump();
+    await waitFor(
+      async () =>
+        (await env.service.inspect(context(), first)).status === "completed",
+    );
+    expect(runCount).toBe(1);
+    expect((await env.service.inspect(context(), second)).status).toBe(
+      "queued",
+    );
+
+    await env.service.pump();
+    await waitFor(
+      async () =>
+        (await env.service.inspect(context(), second)).status === "completed",
+    );
+    expect(runCount).toBe(2);
   });
 
   test("drains or requeues workers on shutdown and closes streams", async () => {

@@ -20,11 +20,33 @@ Inputs and captured text are checked against configured private paths and the re
 
 ## Parent wiring hooks
 
-- Construct with `tasks: taskStore`, `artifacts: taskStore.artifacts`, and `events: taskStore` using the workbench's shared `DurableTaskStore`.
-- Call `reconcileTask` after each task revision change (update, steer, or resume) and before presenting findings.
-- Call `markUsed` when a worker actually consumes a finding (for example, when the research panel records it as used).
-- Register `close()` through `registerRuntimeCleanup` from `@mars/execution` in the host.
-- Map RPC methods one-to-one to service methods while supplying the caller's context.
+The host supplies `rootDir`, `taskStore`, `worker`, `ompSessionDir`, and the caller context:
+
+```ts
+import { registerRuntimeCleanup } from "@mars/execution";
+import { createResearchService } from "@mars/research";
+
+const research = await createResearchService({
+  rootDir,
+  tasks: taskStore,
+  artifacts: taskStore.artifacts,
+  events: taskStore,
+  worker,
+  hostPrivateRoots: [ompSessionDir],
+});
+
+await taskStore.update(context, taskId, expectedRevision, patch);
+await research.reconcileTask(context, taskId);
+await research.markUsed(context, findingId, taskRevision);
+
+registerRuntimeCleanup("research", () =>
+  research.close({ drainMs: 5000 }),
+);
+```
+
+Call `reconcileTask` after each task revision change (update, steer, or resume) and before presenting findings. Call `markUsed` when a worker actually consumes a finding. Map RPC methods one-to-one to service methods while supplying the caller's context.
+
+Exports: `createResearchService`, `RetryableResearchError`, `ResearchError`, `ResearchErrorCode`, `RESEARCH_STORE_FORMAT_VERSION`, `FindingProposalSchema`, `ResearchFindingSchema`, `ResearchRequestSchema`, `ResearchFinding`, `ResearchRequest`, `ResearchService`, `DurableResearchService`, `EvidenceCapture`, `FindingProposal`, `ResearchArtifactStore`, `ResearchEventSink`, `ResearchJob`, `ResearchJobStatus`, `ResearchServiceOptions`, `ResearchTaskReader`, `ResearchUsage`, `ResearchWorker`, `ResearchWorkerContext`, and `ResearchWorkerInput`.
 
 ## Live dispatch status
 
@@ -36,3 +58,5 @@ No live research or browser worker is available. Live research dispatch is unwir
 - Token and USD ceilings depend on truthful worker-reported usage.
 - Citation capture records provenance, not source authenticity or truth.
 - Parent lifecycle wiring, task-revision reconciliation, and RPC privacy boundaries remain the host's responsibility.
+- Outbox entries rejected by the task store (for example, for a terminal task or payload conflict) remain pending and are retried on every pump, with no retry cap.
+- Evidence bytes stored before a lease-loss check fails remain as unreferenced content-addressed artifacts.
