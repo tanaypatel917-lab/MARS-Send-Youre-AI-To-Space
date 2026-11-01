@@ -11,7 +11,11 @@ import {
 import { grep } from "@oh-my-pi/pi-natives";
 import { postmortem } from "@oh-my-pi/pi-utils";
 
-export { type BudgetLedger, ExecutionLimitError } from "./model-bridge";
+export {
+  type BudgetLedger,
+  ExecutionLimitError,
+  selectExecutionModel,
+} from "./model-bridge";
 export * from "./runtime";
 
 export const EXECUTION_PACKAGE_VERSION = "18.14.0";

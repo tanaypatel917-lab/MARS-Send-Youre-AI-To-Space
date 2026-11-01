@@ -1743,6 +1743,7 @@ export async function createTaskStore(
         const payload = {
           change: "steered",
           instruction,
+          task_status: snapshot.status,
           task_revision: snapshot.revision,
         };
         const prepared = preparePayloadArtifact(snapshot.scope, payload);
