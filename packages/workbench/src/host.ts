@@ -170,13 +170,13 @@ export async function createWorkbenchHost(
       ? { recall: (query: string) => recallHistory(memory, context, query) }
       : {};
   };
-  const selectModel = (approvals: Approvals, modelId?: string) => {
+  // Room tools are always declared for a collaboration session, so the model
+  // must support tools even when no file approval is granted.
+  const toolsRequired = (approvals: Approvals, collaboration: boolean) =>
+    collaboration || Object.values(approvals).some(Boolean);
+  const selectModel = (modelId: string | undefined, needsTools: boolean) => {
     try {
-      return selectExecutionModel(
-        options.registry,
-        modelId,
-        Object.values(approvals).some(Boolean),
-      );
+      return selectExecutionModel(options.registry, modelId, needsTools);
     } catch {
       throw new WorkbenchError("model_unavailable");
     }
@@ -436,6 +436,21 @@ export async function createWorkbenchHost(
       },
     });
   };
+  const closeFrozenRoom = (
+    frozen: FrozenCollaboration,
+    mode: "drain" | "cancel",
+  ) =>
+    options.collaboration
+      ? options.collaboration.host
+          .closeRoom(internalContext(options.scope), frozen.room_id, mode)
+          .then(() => undefined)
+          .catch(() => undefined)
+      : Promise.resolve();
+  const closeRecordedRoom = async (task: Task, mode: "drain" | "cancel") => {
+    const launch = await readLaunch(task).catch(() => null);
+    if (launch?.collaboration)
+      await closeFrozenRoom(launch.collaboration, mode);
+  };
   const run = (
     task: Task,
     workspace: WorkspaceRef,
@@ -446,16 +461,7 @@ export async function createWorkbenchHost(
     collaboration?: FrozenCollaboration,
   ) => {
     const closeRoom = (mode: "drain" | "cancel") =>
-      collaboration && options.collaboration
-        ? options.collaboration.host
-            .closeRoom(
-              internalContext(options.scope),
-              collaboration.room_id,
-              mode,
-            )
-            .then(() => undefined)
-            .catch(() => undefined)
-        : Promise.resolve();
+      collaboration ? closeFrozenRoom(collaboration, mode) : Promise.resolve();
     active.set(task.task_id, runtime);
     const job = (async () => {
       try {
@@ -608,9 +614,11 @@ export async function createWorkbenchHost(
     };
   };
 
-  await options.store.recoverInterrupted(internalContext(options.scope), {
-    reason: "Workbench process interrupted.",
-  });
+  const interrupted = await options.store.recoverInterrupted(
+    internalContext(options.scope),
+    { reason: "Workbench process interrupted." },
+  );
+  for (const task of interrupted) await closeRecordedRoom(task, "cancel");
 
   const api: WorkbenchOperations = {
     scope: options.scope,
@@ -654,7 +662,7 @@ export async function createWorkbenchHost(
           routing = await routeLaunch(
             context,
             task,
-            params.approvals,
+            toolsRequired(params.approvals, Boolean(options.collaboration)),
             options.specialists,
             initialRequestAllowance({
               approvals: params.approvals,
@@ -667,8 +675,8 @@ export async function createWorkbenchHost(
         }
       }
       const model = selectModel(
-        params.approvals,
         params.model_id ?? routing?.model_id ?? undefined,
+        toolsRequired(params.approvals, Boolean(options.collaboration)),
       );
       const capacity = optionalInstructionCapacity({
         model,
@@ -835,6 +843,7 @@ export async function createWorkbenchHost(
         return running;
       } catch (error) {
         await runtime?.dispose().catch(() => undefined);
+        if (collaboration) await closeFrozenRoom(collaboration, "cancel");
         const current = await options.store
           .inspect(context, task.task_id)
           .catch(() => null);
@@ -876,7 +885,10 @@ export async function createWorkbenchHost(
       }
       if (queued.length && !steeringEventIds.length)
         throw new WorkbenchError("too_large");
-      selectModel(launch.approvals, launch.model_id);
+      selectModel(
+        launch.model_id,
+        toolsRequired(launch.approvals, Boolean(launch.collaboration)),
+      );
       const workspace = await options.workspace.reopen(context, taskId);
       if (
         workspace.workspace_id !== launch.workspace.workspace_id ||
@@ -947,6 +959,7 @@ export async function createWorkbenchHost(
         throw new WorkbenchError("conflict");
       await options.store.cancel(context, taskId);
       await active.get(taskId)?.cancel();
+      await closeRecordedRoom(task, "cancel");
     },
     async events(context, taskId, cursor) {
       checkContext(context);

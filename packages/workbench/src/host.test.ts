@@ -95,6 +95,7 @@ async function fixture() {
     revision: "r1",
   };
   let prepareCalls = 0;
+  let failPrepare = false;
   let restoreCalls = 0;
   const artifact = await store.artifacts.put(
     context(),
@@ -104,6 +105,7 @@ async function fixture() {
   const workspace: WorkspaceHost = {
     async prepare() {
       prepareCalls++;
+      if (failPrepare) throw new Error("fixture: prepare failed");
       return ref;
     },
     async reopen() {
@@ -285,6 +287,39 @@ async function fixture() {
       env: { FIXTURE_KEY: "dummy-not-live" },
     });
   };
+  const textOnlyRegistry = async () => {
+    const dir = join(root, "text-only");
+    await mkdir(join(dir, ".mars"), { recursive: true });
+    await writeFile(
+      join(dir, ".mars", "models.json"),
+      JSON.stringify({
+        version: 1,
+        providers: [
+          {
+            id: "fixture",
+            kind: "openai-compatible",
+            baseUrl: "https://fixture.invalid/v1",
+            apiKeyEnv: "FIXTURE_KEY",
+          },
+        ],
+        models: [
+          {
+            id: "fixture/text",
+            providerId: "fixture",
+            model: "fixture",
+            capabilities: { tools: false, vision: false, contextWindow: 32768 },
+            pricing: { free: true },
+          },
+        ],
+        routes: { default: ["fixture/text"] },
+      }),
+    );
+    return loadModelRegistry({
+      cwd: dir,
+      home: dir,
+      env: { FIXTURE_KEY: "dummy-not-live" },
+    });
+  };
   const smallRegistry = async () => {
     await writeFile(
       join(root, ".mars", "models.json"),
@@ -324,6 +359,10 @@ async function fixture() {
     sessions,
     makeHost,
     smallRegistry,
+    textOnlyRegistry,
+    set failPrepare(value: boolean) {
+      failPrepare = value;
+    },
     routedRegistry,
     get prepareCalls() {
       return prepareCalls;
@@ -1523,4 +1562,119 @@ test("launches open a task-scoped room and bind coordinator tools host-side", as
   ).toBe("closed");
   await api.close();
   await collaboration.close();
+});
+
+test("cancelling a paused task and failing a launch both close the frozen room", async () => {
+  const f = await fixture();
+  const collaboration = await createCollaboration({
+    rootDir: join(f.root, "collaboration"),
+    hostPrivateRoots: [join(f.root, "private")],
+  });
+  const opened: string[] = [];
+  const host = new Proxy(collaboration.host, {
+    get(target, key, receiver) {
+      if (key === "openRoom")
+        return async (
+          ...args: Parameters<typeof collaboration.host.openRoom>
+        ) => {
+          const result = await target.openRoom(...args);
+          opened.push(result.room.room_id);
+          return result;
+        };
+      const value = Reflect.get(target, key, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const api = await f.makeHost(undefined, undefined, undefined, undefined, {
+    host,
+    agents: collaboration.agents,
+  });
+  const none = { read: false, write: false, execute: false };
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: none,
+  });
+  const session = required(f.sessions[0]);
+  const launch = JSON.parse(
+    await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+  );
+  session.finish("paused");
+  await session.disposed;
+  expect((await api.inspect(context(), "task")).status).toBe("paused");
+  expect(
+    (
+      await collaboration.host.inspectRoom(
+        context(),
+        launch.collaboration.room_id,
+      )
+    ).status,
+  ).toBe("open");
+  await api.cancel(context(), "task");
+  expect((await api.inspect(context(), "task")).status).toBe("cancelled");
+  expect(
+    (
+      await collaboration.host.inspectRoom(
+        context(),
+        launch.collaboration.room_id,
+      )
+    ).status,
+  ).toBe("closed");
+
+  await api.create(context(), { ...task(), task_id: "broken" });
+  f.failPrepare = true;
+  await expect(
+    api.start(context(), {
+      task_id: "broken",
+      expected_revision: 0,
+      approvals: none,
+    }),
+  ).rejects.toThrow();
+  f.failPrepare = false;
+  expect((await api.inspect(context(), "broken")).status).toBe("failed");
+  expect(opened).toHaveLength(2);
+  expect(
+    (await collaboration.host.inspectRoom(context(), required(opened[1])))
+      .status,
+  ).toBe("closed");
+  await api.close();
+});
+
+test("room sessions require a tool-capable model even without file approvals", async () => {
+  const f = await fixture();
+  const collaboration = await createCollaboration({
+    rootDir: join(f.root, "collaboration"),
+    hostPrivateRoots: [join(f.root, "private")],
+  });
+  const textOnly = await f.textOnlyRegistry();
+  const plain = await f.makeHost(textOnly);
+  await plain.create(context(), task());
+  await plain.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: false, write: false, execute: false },
+  });
+  required(f.sessions[0]).finish("completed");
+  await required(f.sessions[0]).disposed;
+  await plain.close();
+
+  const api = await f.makeHost(
+    textOnly,
+    undefined,
+    undefined,
+    undefined,
+    collaboration,
+  );
+  await api.create(context(), { ...task(), task_id: "room" });
+  await expect(
+    api.start(context(), {
+      task_id: "room",
+      expected_revision: 0,
+      approvals: { read: false, write: false, execute: false },
+    }),
+  ).rejects.toMatchObject({ code: "model_unavailable" });
+  expect((await api.inspect(context(), "room")).status).toBe("pending");
+  expect(f.sessions).toHaveLength(1);
+  await api.close();
 });

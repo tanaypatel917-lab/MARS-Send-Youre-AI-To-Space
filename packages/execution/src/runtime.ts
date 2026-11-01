@@ -144,6 +144,7 @@ export function optionalInstructionCapacity(options: {
   budget: Pick<Budget, "max_tokens">;
   approvals: { read: boolean; write: boolean; execute: boolean };
   recall: boolean;
+  collaboration?: boolean;
   instruction: string;
 }): number {
   const allowance = initialRequestAllowance(options);
