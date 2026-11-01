@@ -41,7 +41,7 @@ Commands: `mars.connect`, `mars.setToken`, `mars.clearToken`, `mars.newTask`, `m
 
 - Webview: strict CSP (`default-src 'none'`, nonce script, no connect/frame/form), no command URIs, no forms, DOM built with `textContent` only. Messages from the webview are validated with a strict schema (`src/messages.ts`).
 - Start, resume, cancel and restore require native modal confirmation; restore shows the exact workspace and checkpoint ids and revisions. Execute approval defaults to off and is disabled when the server does not offer execution.
-- Native diffs open only for server paths that pass `checkRelativePath` and resolve (following symlinks) inside the single open workspace folder named by `workbench.describe.workspaceLabel`; otherwise a read-only patch is shown, and unsafe paths are refused.
+- Native diffs are read-only and never write files. Task edits live in a private copy on the server, so the local checkout normally holds BEFORE: for modified files the patch is applied forward (exact, no fuzz) to the local file inside the single open folder named by `workbench.describe.workspaceLabel` to build a virtual AFTER buffer. Added/deleted files are derived from a pure add/remove patch alone. A local file that already matches AFTER is shown against a reconstructed BEFORE. If the local file matches neither side the patch is shown read-only; unsafe paths and binary/malformed patches are refused.
 - Artifacts are verified against their `ArtifactRef` (SHA-256, byte length, media type) before display.
 - Event polling uses one reader per selected task, advances `after_event_id`, backs off exponentially (bounded) and is disposed on task switch and view close.
 

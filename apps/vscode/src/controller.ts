@@ -753,6 +753,11 @@ export class WorkbenchController {
       );
     else if (outcome.mode === "patch")
       this.setNotice("info", `Showing patch only: ${outcome.reason}`);
+    else if (outcome.basis === "local-after")
+      this.setNotice(
+        "info",
+        `${file.path} already contains the task change locally; showing it against the reconstructed original.`,
+      );
     else this.notice = null;
     this.emit();
   }

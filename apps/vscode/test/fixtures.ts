@@ -224,7 +224,7 @@ export function harness(server = new FakeServer()): Harness {
     promptToken: async () => {},
     openDiff: async (_server, file): Promise<OpenOutcome> => {
       opened.push(file.path);
-      return { mode: "diff" };
+      return { mode: "diff", basis: "local-before" };
     },
     openArtifact: async (artifact) => {
       opened.push(artifact.ref.artifact_id);

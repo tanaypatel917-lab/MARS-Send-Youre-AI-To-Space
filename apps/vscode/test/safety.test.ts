@@ -1,7 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -28,6 +30,8 @@ const outside = join(base, "outside");
 mkdirSync(join(root, "src"), { recursive: true });
 mkdirSync(outside);
 writeFileSync(join(root, "src", "a.ts"), "one\nTWO\nthree\n");
+writeFileSync(join(root, "src", "base.ts"), "one\ntwo\nthree\n");
+writeFileSync(join(root, "src", "dirty.ts"), "one\nlocal edit\nthree\n");
 writeFileSync(join(outside, "secret.txt"), "secret\n");
 symlinkSync(outside, join(root, "link"));
 afterAll(() => rmSync(base, { recursive: true, force: true }));
@@ -127,11 +131,11 @@ describe("openFileDiff", () => {
         status: "modified",
         patch,
       }),
-    ).toEqual({ mode: "diff" });
+    ).toEqual({ mode: "diff", basis: "local-after" });
     expect(diffs[0]?.left).toEqual({
       kind: "text",
       text: "one\ntwo\nthree\n",
-      label: "before",
+      label: "before-a.ts",
     });
     expect(diffs[0]?.right).toEqual({
       kind: "file",
@@ -189,6 +193,165 @@ describe("openFileDiff", () => {
         })
       ).mode,
     ).toBe("patch");
+  });
+});
+
+describe("openFileDiff in an isolated task workspace", () => {
+  const modify = (path: string, body: string) =>
+    `--- a/${path}\n+++ b/${path}\n${body}`;
+  const addPatch =
+    "--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,2 @@\n+export const x = 1;\n+// <script>\n";
+
+  function tracked(folders = [{ name: "demo", fsPath: root }]) {
+    const base = host(folders);
+    const reads: string[] = [];
+    const readText = base.h.readText;
+    base.h.readText = (path) => {
+      reads.push(path);
+      return readText(path);
+    };
+    return { ...base, reads };
+  }
+
+  test("before-only modified file: applies the patch forward into a virtual task buffer", async () => {
+    const { h, diffs, patches } = tracked();
+    const outcome = await openFileDiff(h, describeResult, {
+      path: "src/base.ts",
+      status: "modified",
+      patch: modify(
+        "src/base.ts",
+        "@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n",
+      ),
+    });
+    expect(outcome).toEqual({ mode: "diff", basis: "local-before" });
+    expect(patches).toHaveLength(0);
+    expect(diffs[0]).toEqual({
+      left: { kind: "text", text: "one\ntwo\nthree\n", label: "local-base.ts" },
+      right: { kind: "text", text: "one\nTWO\nthree\n", label: "task-base.ts" },
+    });
+    expect(readFileSync(join(root, "src", "base.ts"), "utf8")).toBe(
+      "one\ntwo\nthree\n",
+    );
+  });
+
+  test("task-only added file: derives full content from the add patch without a local file", async () => {
+    for (const folders of [[{ name: "demo", fsPath: root }], []]) {
+      const { h, diffs, reads } = tracked(folders);
+      const outcome = await openFileDiff(h, describeResult, {
+        path: "src/new.ts",
+        status: "added",
+        patch: addPatch,
+      });
+      expect(outcome).toEqual({ mode: "diff", basis: "task-only" });
+      expect(reads).toHaveLength(0);
+      expect(diffs[0]).toEqual({
+        left: { kind: "text", text: "", label: "empty-new.ts" },
+        right: {
+          kind: "text",
+          text: "export const x = 1;\n// <script>\n",
+          label: "task-new.ts",
+        },
+      });
+    }
+    expect(existsSync(join(root, "src", "new.ts"))).toBe(false);
+  });
+
+  test("added patch with context lines or wrong origin is not treated as complete content", async () => {
+    const { h, diffs, patches } = tracked();
+    for (const patch of [
+      "@@ -1,1 +1,2 @@\n keep\n+added\n",
+      "@@ -0,0 +2,1 @@\n+added\n",
+    ]) {
+      const outcome = await openFileDiff(h, describeResult, {
+        path: "src/new.ts",
+        status: "added",
+        patch,
+      });
+      expect(outcome.mode).toBe("patch");
+    }
+    expect(diffs).toHaveLength(0);
+    expect(patches).toHaveLength(2);
+  });
+
+  test("deleted file is derived from a pure removal patch", async () => {
+    const { h, diffs } = tracked();
+    expect(
+      await openFileDiff(h, describeResult, {
+        path: "src/gone.ts",
+        status: "deleted",
+        patch: "--- a/src/gone.ts\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\n",
+      }),
+    ).toEqual({ mode: "diff", basis: "task-only" });
+    expect(diffs[0]?.left).toEqual({
+      kind: "text",
+      text: "a\nb\n",
+      label: "before-gone.ts",
+    });
+  });
+
+  test("mismatched/dirty local baseline falls back to the read-only patch", async () => {
+    const { h, diffs, patches } = tracked();
+    const patch = modify(
+      "src/dirty.ts",
+      "@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n",
+    );
+    const outcome = await openFileDiff(h, describeResult, {
+      path: "src/dirty.ts",
+      status: "modified",
+      patch,
+    });
+    expect(outcome.mode).toBe("patch");
+    expect(diffs).toHaveLength(0);
+    expect(patches).toEqual([patch]);
+    const missing = await openFileDiff(h, describeResult, {
+      path: "src/missing.ts",
+      status: "modified",
+      patch,
+    });
+    expect(missing.mode).toBe("patch");
+  });
+
+  test("binary and malformed patches are refused without opening anything", async () => {
+    const { h, diffs, patches, reads } = tracked();
+    for (const patch of [
+      "diff --git a/src/base.ts b/src/base.ts\nBinary files a/src/base.ts and b/src/base.ts differ\n",
+      "diff --git a/x b/x\nGIT binary patch\nliteral 4\nLcmZ?d00001\n",
+      "@@ -1,1 +1,1 @@\n-two\u0000\n+TWO\n",
+      "@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n",
+      "@@ -1,1 +1,1 @@\n-two\n+TWO\n+extra\n",
+      "@@ -1 +1 @@\n*two\n",
+      "@@ garbage @@\n-two\n",
+      "just text, no hunks\n",
+      "@@ -1 +1 @@\n-a\n+b\ndiff --git a/other b/other\n@@ -1 +1 @@\n-c\n+d\n",
+    ]) {
+      for (const status of ["added", "modified", "deleted"] as const) {
+        const outcome = await openFileDiff(h, describeResult, {
+          path: "src/base.ts",
+          status,
+          patch,
+        });
+        expect(outcome.mode).toBe("rejected");
+      }
+    }
+    expect(diffs).toHaveLength(0);
+    expect(patches).toHaveLength(0);
+    expect(reads).toHaveLength(0);
+  });
+
+  test("unsafe paths are refused for added files too", async () => {
+    const { h, diffs } = tracked();
+    for (const path of ["../x.ts", "command:evil", ".git/config"]) {
+      expect(
+        (
+          await openFileDiff(h, describeResult, {
+            path,
+            status: "added",
+            patch: addPatch,
+          })
+        ).mode,
+      ).toBe("rejected");
+    }
+    expect(diffs).toHaveLength(0);
   });
 });
 

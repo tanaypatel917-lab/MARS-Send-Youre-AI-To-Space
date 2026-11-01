@@ -1,4 +1,4 @@
-import { reconstructOriginal, removedText } from "./patch";
+import { applyParsed, parsePatch } from "./patch";
 import {
   checkRelativePath,
   type Realpath,
@@ -23,10 +23,20 @@ export interface DiffOpenerHost {
   showPatch(patch: string, title: string): Promise<void>;
 }
 
+/**
+ * How a native diff was built. `task-only` sides come entirely from the patch;
+ * `local-before` means the local file is the untouched baseline (isolated task
+ * workspace) and the task version was derived by applying the patch forward;
+ * `local-after` means the local file already contains the change.
+ */
+export type DiffBasis = "task-only" | "local-before" | "local-after";
+
 export type OpenOutcome =
-  | { mode: "diff" }
+  | { mode: "diff"; basis: DiffBasis }
   | { mode: "patch"; reason: string }
   | { mode: "rejected"; reason: string };
+
+const MAX_LOCAL_CHARS = 8 * 1024 * 1024;
 
 /**
  * Picks the open workspace folder the server describes. A diff is opened
@@ -49,9 +59,13 @@ export function matchWorkspaceFolder(
 }
 
 /**
- * Opens a native diff for one server-reported file. Paths are validated and
- * resolved inside the matched workspace folder; if that is not possible the
- * patch is shown read-only instead, and unsafe paths are refused entirely.
+ * Opens a read-only native diff for one server-reported file. The task's edits
+ * live in a private copy, so the local checkout normally holds BEFORE: the
+ * patch is applied forward to derive the task's AFTER into a virtual buffer.
+ * Added and deleted files are derived from the patch alone. A local file that
+ * already matches AFTER is shown against a reconstructed BEFORE. Anything else
+ * falls back to the read-only patch; unsafe paths and binary or malformed
+ * patches are refused. Nothing is ever written to disk.
  */
 export async function openFileDiff(
   host: DiffOpenerHost,
@@ -60,11 +74,41 @@ export async function openFileDiff(
 ): Promise<OpenOutcome> {
   const check = checkRelativePath(file.path);
   if (!check.ok) return { mode: "rejected", reason: check.reason };
+  const parsed = parsePatch(file.patch);
+  if (!parsed.ok) return { mode: "rejected", reason: parsed.reason };
   const title = `MARS: ${file.path} (${file.status})`;
+  const name = check.segments.at(-1) ?? "file";
+  const side = (role: string, text: string): DiffSide => ({
+    kind: "text",
+    text,
+    label: `${role}-${name}`,
+  });
   const fallback = async (reason: string): Promise<OpenOutcome> => {
     await host.showPatch(file.patch, title);
     return { mode: "patch", reason };
   };
+  const show = async (
+    left: DiffSide,
+    right: DiffSide,
+    basis: DiffBasis,
+  ): Promise<OpenOutcome> => {
+    await host.showDiff(left, right, title);
+    return { mode: "diff", basis };
+  };
+
+  if (file.status === "added") {
+    const content = applyParsed("", parsed.patch);
+    if (content === null)
+      return fallback("Patch is not a pure added-file patch.");
+    return show(side("empty", ""), side("task", content), "task-only");
+  }
+  if (file.status === "deleted") {
+    const original = applyParsed("", parsed.patch, true);
+    if (original === null)
+      return fallback("Patch is not a pure deleted-file patch.");
+    return show(side("before", original), side("deleted", ""), "task-only");
+  }
+
   const folder = matchWorkspaceFolder(host.folders(), server);
   if ("reason" in folder) return fallback(folder.reason);
   const resolved = await resolveInsideRoot(
@@ -73,38 +117,27 @@ export async function openFileDiff(
     host.realpath,
   );
   if (!resolved.ok) return { mode: "rejected", reason: resolved.reason };
-  const empty = { kind: "text", text: "", label: "empty" } as const;
-
-  if (file.status === "deleted") {
-    const original = removedText(file.patch);
-    if (original === null) return fallback("Patch could not be parsed.");
-    await host.showDiff(
-      { kind: "text", text: original, label: "before" },
-      empty,
-      title,
-    );
-    return { mode: "diff" };
-  }
   if (!resolved.exists)
-    return fallback("File is not present in the workspace.");
-  const right = { kind: "file", fsPath: resolved.fsPath } as const;
-  if (file.status === "added") {
-    await host.showDiff(empty, right, title);
-    return { mode: "diff" };
-  }
-  let current: string;
+    return fallback("The local baseline file is not present.");
+  let local: string;
   try {
-    current = await host.readText(resolved.fsPath);
+    local = await host.readText(resolved.fsPath);
   } catch {
-    return fallback("File could not be read.");
+    return fallback("The local file could not be read.");
   }
-  const original = reconstructOriginal(current, file.patch);
-  if (original === null)
-    return fallback("The file changed since the patch was produced.");
-  await host.showDiff(
-    { kind: "text", text: original, label: "before" },
-    right,
-    title,
+  if (local.length > MAX_LOCAL_CHARS || local.includes("\u0000"))
+    return fallback("The local file is too large or not text.");
+  const after = applyParsed(local, parsed.patch);
+  if (after !== null)
+    return show(side("local", local), side("task", after), "local-before");
+  const before = applyParsed(local, parsed.patch, true);
+  if (before !== null)
+    return show(
+      side("before", before),
+      { kind: "file", fsPath: resolved.fsPath },
+      "local-after",
+    );
+  return fallback(
+    "The local file matches neither side of the patch (it may have local edits).",
   );
-  return { mode: "diff" };
 }
