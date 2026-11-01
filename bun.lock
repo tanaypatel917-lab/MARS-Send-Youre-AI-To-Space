@@ -60,6 +60,17 @@
         "@mars/contracts": "workspace:*",
       },
     },
+    "packages/memory": {
+      "name": "@mars/memory",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
+      },
+      "devDependencies": {
+        "@oh-my-pi/pi-coding-agent": "18.14.0",
+      },
+    },
     "packages/providers": {
       "name": "@mars/providers",
       "version": "0.0.1",
@@ -192,6 +203,8 @@
     "@mars/execution": ["@mars/execution@workspace:packages/execution"],
 
     "@mars/integration-trust": ["@mars/integration-trust@workspace:packages/integration-trust"],
+
+    "@mars/memory": ["@mars/memory@workspace:packages/memory"],
 
     "@mars/providers": ["@mars/providers@workspace:packages/providers"],
 
