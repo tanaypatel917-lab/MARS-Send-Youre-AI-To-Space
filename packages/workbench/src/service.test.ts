@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Task } from "@mars/contracts";
 import {
+  MAX_RUNTIME_INSTRUCTION_LENGTH,
   openRuntimeSession,
   type RuntimeSessionOptions,
 } from "@mars/execution";
@@ -167,6 +168,39 @@ async function fixture(contextWindow = 32000) {
   }
   return { base, source, root, registry, launches, start };
 }
+
+test("HTTP oversized startup returns too_large without a runtime or revision change, including after restart", async () => {
+  const f = await fixture();
+  let requests = 0;
+  const fetch = async () => {
+    requests++;
+    throw new Error("Oversized startup must not call a model");
+  };
+  let { client, service } = await f.start(fetch);
+  const oversized = task();
+  oversized.request = "x".repeat(MAX_RUNTIME_INSTRUCTION_LENGTH);
+  const created = await client.create(oversized);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await expect(
+      client.start(created.task_id, {
+        expectedRevision: 0,
+        approvals: { read: true, write: true, execute: false },
+      }),
+    ).rejects.toMatchObject({ code: "too_large" });
+    expect(await client.inspect(created.task_id)).toEqual(created);
+    expect(f.launches).toHaveLength(0);
+    expect(requests).toBe(0);
+    expect(await readFile(join(f.source, "baseline.txt"), "utf8")).toBe(
+      "untouched\n",
+    );
+    if (attempt === 0) {
+      await service.close();
+      ({ client, service } = await f.start(fetch));
+    }
+  }
+  const normal = await client.create(task());
+  expect(normal.status).toBe("pending");
+});
 
 test("HTTP + actual Oh My Pi + real private workspace writes, progress, artifacts, checkpoint and restore (injected model)", async () => {
   const f = await fixture();

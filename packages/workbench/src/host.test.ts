@@ -299,6 +299,61 @@ test("missing-model setup fails before reserving a task, so it can start after c
   await configured.close();
 });
 
+test.each(["request", "criteria"])(
+  "oversized initial %s is rejected before reserving a task or preparing execution",
+  async (field) => {
+    const f = await fixture();
+    const api = await f.makeHost();
+    const oversized = task();
+    if (field === "request")
+      oversized.request = "x".repeat(MAX_RUNTIME_INSTRUCTION_LENGTH);
+    else
+      oversized.acceptance_criteria = [
+        "x".repeat(MAX_RUNTIME_INSTRUCTION_LENGTH),
+      ];
+    await api.create(context(), oversized);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(
+        api.start(context(), {
+          task_id: "task",
+          expected_revision: 0,
+          approvals: { read: true, write: true, execute: false },
+        }),
+      ).rejects.toMatchObject({ code: "too_large" });
+      expect(await api.inspect(context(), "task")).toEqual(oversized);
+      expect(f.prepareCalls).toBe(0);
+      expect(f.sessions).toHaveLength(0);
+      expect(await f.store.upstreamSession(context(), "task")).toBeNull();
+    }
+    await api.close();
+  },
+);
+
+test("the exact runtime character limit is accepted without truncating request or criteria", async () => {
+  const f = await fixture();
+  const api = await f.makeHost();
+  const bounded = task();
+  const suffix = `\n\nAcceptance criteria:\n${bounded.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
+  const remaining = MAX_RUNTIME_INSTRUCTION_LENGTH - suffix.length;
+  bounded.request =
+    "😀".repeat(Math.floor(remaining / 2)) + "x".repeat(remaining % 2);
+  await api.create(context(), bounded);
+  const running = await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: true, execute: false },
+  });
+  expect(running.status).toBe("running");
+  const session = required(f.sessions[0]);
+  const instruction = required(session.instructions[0]);
+  expect(instruction.length).toBe(MAX_RUNTIME_INSTRUCTION_LENGTH);
+  expect(instruction === bounded.request + suffix).toBe(true);
+  session.finish("completed");
+  await session.disposed;
+  expect((await api.inspect(context(), "task")).status).toBe("completed");
+  await api.close();
+});
+
 test("paused steering survives host restart, is consumed on resume, and usage counts only new tokens", async () => {
   const f = await fixture();
   const api = await f.makeHost();
