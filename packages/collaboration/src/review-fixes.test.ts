@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -535,4 +536,64 @@ test("a retry with no remaining steps fails before the adapter starts", async ()
   const stats = await f.collaboration.host.stats(context, f.room.room_id);
   expect(stats.children_failed).toBe(1);
   expect(stats.reserved.tokens).toBe(0);
+});
+
+test("reopening a store created before unsafe_artifacts migrates the results table", async () => {
+  const f = await fixture();
+  await f.collaboration.agents.delegate(
+    context,
+    f.coordinator,
+    delegation("legacy-child"),
+  );
+  const claim = await f.collaboration.host.jobs.claim("runner-a");
+  if (!claim) throw new Error("Child was not claimed");
+  await f.collaboration.host.jobs.finalize(
+    claim.job_id,
+    "runner-a",
+    claim.lease_epoch,
+    {
+      status: "completed",
+      summary: "Legacy result.",
+      artifacts: [],
+      usage: { input_tokens: 1, output_tokens: 0, usd: 0, steps: 1 },
+    },
+  );
+  const legacy = new Database(join(f.rootDir, "collaboration.sqlite"));
+  legacy.exec("ALTER TABLE results DROP COLUMN unsafe_artifacts");
+  expect(
+    legacy
+      .query<{ name: string }, []>("PRAGMA table_info(results)")
+      .all()
+      .some((column) => column.name === "unsafe_artifacts"),
+  ).toBe(false);
+  legacy.close();
+  const reopened = await createCollaboration({
+    rootDir: f.rootDir,
+    hostPrivateRoots: [join(f.rootDir, "private")],
+  });
+  cleanup.push(() => reopened.close());
+  const { results } = await reopened.agents.results(context, f.coordinator);
+  expect(results).toHaveLength(1);
+  expect(results[0]?.unsafe_artifacts).toBe(0);
+  const second = new Database(join(f.rootDir, "collaboration.sqlite"));
+  second.exec("ALTER TABLE results DROP COLUMN unsafe_artifacts");
+  second.close();
+  const [again, parallel] = await Promise.all([
+    createCollaboration({
+      rootDir: f.rootDir,
+      hostPrivateRoots: [join(f.rootDir, "private")],
+    }),
+    createCollaboration({
+      rootDir: f.rootDir,
+      hostPrivateRoots: [join(f.rootDir, "private")],
+    }),
+  ]);
+  cleanup.push(() => again.close());
+  cleanup.push(() => parallel.close());
+  expect(
+    (await parallel.agents.results(context, f.coordinator)).results,
+  ).toHaveLength(1);
+  expect(
+    (await again.agents.results(context, f.coordinator)).results,
+  ).toHaveLength(1);
 });

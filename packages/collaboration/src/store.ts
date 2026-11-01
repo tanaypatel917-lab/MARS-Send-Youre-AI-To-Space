@@ -244,14 +244,22 @@ export class CollaborationStore {
         );
         CREATE INDEX IF NOT EXISTS results_parent ON results(room_id, parent_agent_id, created_at);
       `);
-      const memberColumns = db
-        .query<{ name: string }, []>("PRAGMA table_info(members)")
-        .all();
-      if (!memberColumns.some((column) => column.name === "pool_json"))
-        db.exec(
-          `ALTER TABLE members ADD COLUMN pool_json TEXT NOT NULL DEFAULT '{"tokens":0,"usd":0}'`,
-        );
+      const hasColumn = (table: "members" | "results", name: string) =>
+        db
+          .query<{ name: string }, []>(`PRAGMA table_info(${table})`)
+          .all()
+          .some((column) => column.name === name);
       const init = db.transaction(() => {
+        // Column checks run inside the write lock so two processes opening a
+        // legacy store cannot both observe the old schema and race the ALTER.
+        if (!hasColumn("members", "pool_json"))
+          db.exec(
+            `ALTER TABLE members ADD COLUMN pool_json TEXT NOT NULL DEFAULT '{"tokens":0,"usd":0}'`,
+          );
+        if (!hasColumn("results", "unsafe_artifacts"))
+          db.exec(
+            "ALTER TABLE results ADD COLUMN unsafe_artifacts INTEGER NOT NULL DEFAULT 0",
+          );
         const current = db
           .query<{ value: string }, [string]>(
             "SELECT value FROM meta WHERE key = ?",
