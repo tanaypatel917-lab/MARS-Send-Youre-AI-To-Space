@@ -2,17 +2,20 @@
 
 An IDE-connected agent platform for completing work, retaining useful context, and promoting workflows and specialist models **only when independent evidence supports improvement**.
 
-## Current increment: source and integration baseline
+## Current increment: local coding workbench
 
-This is not yet a usable coding agent or IDE extension. It contains:
+The local workbench connects the VS Code client and CLI to durable tasks, isolated filesystem copies, checkpoints, and the Oh My Pi execution engine. It is a development integration, **not** a Milestone 1 acceptance claim. It contains:
 
 - The unchanged [master specification](documentation/MASTER_SPECIFICATION.md).
 - A [24-component source audit](documentation/SOURCE_REGISTER.md), with exact commits, licenses, APIs, integration owners, runtime requirements, risks, and proposed acceptance tests.
 - Initial [shared TypeScript contracts](packages/contracts/src/index.ts), with runtime schemas for tasks, budgets, events, scope, and immutable artifact references.
-- Actual Oh My Pi SDK initialization, native search, and journal persistence/reopen probes; **no model request, coding task, or training run**.
+- Oh My Pi start/resume/cancel/steer through the existing configurable model registry. No second agent loop or task database.
+- Authenticated loopback RPC, private connection-file import into VS Code SecretStorage, task progress/artifacts/diffs, checkpoint/restore, and isolated task copies that leave the source checkout unchanged.
+- Digest-pinned Docker execution with no host-shell fallback; command execution is disabled when no sandbox is configured.
+- Offline integration tests using the actual SDK with injected model responses; these are **not** live-model or real VS Code UI acceptance evidence.
 - A CLI diagnostic, source-pin validator, tests, and CI.
 
-The IDE, task service, approvals/sandbox, memory service, skill service, research, evaluation, datasets, training, and serving are **not implemented**. Contracts describe intended interfaces; they do not provide enforcement or persistent services. See [milestone evidence and gates](documentation/MILESTONE_0.md).
+The memory service, skill service, research, evaluation, datasets, training, and specialist serving are **not implemented**. The integration trust gate is a library, not an enabled third-party loader or approval UI. Real-model and real IDE acceptance remain unverified. See [local workbench setup and evidence limits](documentation/LOCAL_WORKBENCH.md) and [milestone gates](documentation/MILESTONE_0.md).
 
 ## Setup
 
@@ -40,6 +43,7 @@ Lifecycle scripts stay disabled: optional `onnxruntime-node` and `protobufjs` po
 | --- | --- |
 | `bun run check` | Lint, typecheck, offline source validation, tests, actual execution SDK/native initialization |
 | `bun run doctor` | JSON diagnostic with explicit unimplemented features |
+| `bun apps/cli/src/main.ts serve --help` | Local workbench service options; no provider request at startup |
 | `bun run smoke:execution` | No-provider/no-tool SDK and native search probe |
 | `bun run audit:sources` | Validate source references, spec digest, package pins, installed versions, and lockfile integrity |
 | `bun run audit:sources:remote` | Fetch immutable source/license files and emit content hashes; network required |

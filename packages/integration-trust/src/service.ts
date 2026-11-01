@@ -628,11 +628,15 @@ export function createIntegrationTrust(options: IntegrationTrustOptions): {
       if ((await store.load()).revision !== l.revision)
         fail("revision_conflict");
       const authorized = frozenClone(artifact);
+      if (clock().getTime() >= Date.parse(r.expires_at)) fail("expired");
+      fresh(evidence);
       const committed = await store.commit(l.revision, l.state, [
         event(ctx, r, "dispatch.allowed", "gate"),
       ]);
       if ((await store.load()).revision !== committed)
         fail("revision_conflict");
+      if (clock().getTime() >= Date.parse(r.expires_at)) fail("expired");
+      fresh(evidence);
       dispatched = true;
       return await callback(authorized);
     } catch (error) {

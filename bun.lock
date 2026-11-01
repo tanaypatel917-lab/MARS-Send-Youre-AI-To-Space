@@ -18,6 +18,7 @@
         "@mars/contracts": "workspace:*",
         "@mars/execution": "workspace:*",
         "@mars/providers": "workspace:*",
+        "@mars/workbench": "workspace:*",
       },
     },
     "apps/vscode": {
@@ -48,6 +49,7 @@
         "@oh-my-pi/pi-ai": "18.14.0",
         "@oh-my-pi/pi-coding-agent": "18.14.0",
         "@oh-my-pi/pi-natives": "18.14.0",
+        "@oh-my-pi/pi-utils": "18.14.0",
         "zod": "3.25.76",
       },
     },
@@ -70,6 +72,18 @@
       "version": "0.0.1",
       "dependencies": {
         "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
+    "packages/workbench": {
+      "name": "@mars/workbench",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "@mars/execution": "workspace:*",
+        "@mars/providers": "workspace:*",
+        "@mars/tasks": "workspace:*",
+        "@mars/workspaces": "workspace:*",
         "zod": "3.25.76",
       },
     },
@@ -184,6 +198,8 @@
     "@mars/tasks": ["@mars/tasks@workspace:packages/tasks"],
 
     "@mars/vscode-client": ["@mars/vscode-client@workspace:apps/vscode"],
+
+    "@mars/workbench": ["@mars/workbench@workspace:packages/workbench"],
 
     "@mars/workspaces": ["@mars/workspaces@workspace:packages/workspaces"],
 

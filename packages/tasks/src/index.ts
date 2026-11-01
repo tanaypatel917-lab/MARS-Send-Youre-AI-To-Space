@@ -69,6 +69,7 @@ export const ExecutionObservedPayloadSchema = z
 export interface TaskStoreOptions {
   rootDir: string;
   workspaceRoots?: readonly string[];
+  hostPrivateRoots?: readonly string[];
   maxArtifactBytes?: number;
 }
 
@@ -123,6 +124,10 @@ export interface DurableTaskStore extends TaskService {
     taskId: string,
     binding: UpstreamSessionBinding,
   ): Promise<void>;
+  /**
+   * Returns the host-private journal binding for in-process runtime resume.
+   * Do not expose this method over RPC.
+   */
   upstreamSession(
     context: RequestContext,
     taskId: string,
@@ -298,6 +303,79 @@ function resolveForSafety(value: string): string {
     }
     return path.resolve(realpathSync(existing), ...suffix);
   }
+}
+
+const forbiddenHostPrivateKeys = new Set([
+  "session_file",
+  "sessionFile",
+  "journal_path",
+  "journalPath",
+]);
+
+function hostPrivatePaths(binding: UpstreamSessionBinding): Set<string> {
+  return new Set([
+    binding.session_file,
+    resolveForSafety(binding.session_file),
+  ]);
+}
+
+interface PrivateNeedles {
+  readonly exact: ReadonlySet<string>;
+  readonly roots: ReadonlySet<string>;
+}
+
+function exactNeedles(paths: ReadonlySet<string>): PrivateNeedles {
+  return { exact: paths, roots: new Set() };
+}
+
+function textForms(value: string): string[] {
+  const escaped = JSON.stringify(value).slice(1, -1);
+  return escaped === value ? [value] : [value, escaped];
+}
+
+const pathSegmentChar = /[A-Za-z0-9._~-]/;
+
+function containsRootAtBoundary(text: string, root: string): boolean {
+  let index = text.indexOf(root);
+  while (index !== -1) {
+    const next = text[index + root.length];
+    if (next === undefined || !pathSegmentChar.test(next)) return true;
+    index = text.indexOf(root, index + 1);
+  }
+  return false;
+}
+
+function containsHostPrivateText(
+  text: string,
+  needles: PrivateNeedles,
+): boolean {
+  for (const privatePath of needles.exact) {
+    for (const form of textForms(privatePath)) {
+      if (text.includes(form)) return true;
+    }
+  }
+  for (const root of needles.roots) {
+    for (const form of textForms(root)) {
+      if (containsRootAtBoundary(text, form)) return true;
+    }
+  }
+  return false;
+}
+
+function containsForbiddenHostPrivateKey(value: unknown): boolean {
+  const pending = [value];
+  const visited = new WeakSet<object>();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === null || typeof current !== "object") continue;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    for (const [property, child] of Object.entries(current)) {
+      if (forbiddenHostPrivateKeys.has(property)) return true;
+      pending.push(child);
+    }
+  }
+  return false;
 }
 
 function scopeKey(scope: Scope): string {
@@ -545,6 +623,28 @@ export async function createTaskStore(
       options.maxArtifactBytes < 0)
   ) {
     throw invalidInput("maxArtifactBytes must be a nonnegative safe integer");
+  }
+  if (
+    options.hostPrivateRoots !== undefined &&
+    !Array.isArray(options.hostPrivateRoots)
+  ) {
+    throw invalidInput("hostPrivateRoots must be an array");
+  }
+  const configuredHostPrivateRoots = new Set<string>();
+  for (const root of options.hostPrivateRoots ?? []) {
+    if (typeof root !== "string" || !path.isAbsolute(root)) {
+      throw invalidInput("hostPrivateRoots must be absolute non-root paths");
+    }
+    const lexicalRoot = path.resolve(root);
+    if (lexicalRoot === path.parse(lexicalRoot).root) {
+      throw invalidInput("hostPrivateRoots must be absolute non-root paths");
+    }
+    const realRoot = resolveForSafety(lexicalRoot);
+    if (realRoot === path.parse(realRoot).root) {
+      throw invalidInput("hostPrivateRoots must be absolute non-root paths");
+    }
+    configuredHostPrivateRoots.add(lexicalRoot);
+    configuredHostPrivateRoots.add(realRoot);
   }
   const maxArtifactBytes = options.maxArtifactBytes ?? 64 * 1024 * 1024;
   const rootDir = prepareRoot(options);
@@ -910,12 +1010,18 @@ export async function createTaskStore(
   };
   const insertTaskRecord = (key: string, task: Task): void => {
     const json = canonicalJson(task);
+    if (containsHostPrivateText(json, privateNeedles(key))) {
+      throw invalidInput("Task must not contain the upstream journal path");
+    }
     db.query(
       "INSERT INTO tasks (scope_key, task_id, record_json, record_sha256, created_at) VALUES (?, ?, ?, ?, ?)",
     ).run(key, task.task_id, json, sha256(json), new Date().toISOString());
   };
   const saveTaskRecord = (key: string, task: Task): void => {
     const json = canonicalJson(task);
+    if (containsHostPrivateText(json, privateNeedles(key))) {
+      throw invalidInput("Task must not contain the upstream journal path");
+    }
     const result = db
       .query(
         "UPDATE tasks SET record_json = ?, record_sha256 = ? WHERE scope_key = ? AND task_id = ?",
@@ -927,6 +1033,7 @@ export async function createTaskStore(
     key: string,
     task: Task,
     event: EventEnvelope,
+    payloadBytes: Uint8Array,
   ): void => {
     const events = db
       .query(
@@ -944,6 +1051,7 @@ export async function createTaskStore(
     const json = canonicalJson(event);
     const digest = sha256(json);
     const chain = sha256(`${events?.chain_sha256 ?? ""}${digest}`);
+    assertPublishable(key, event, payloadBytes);
     db.query(
       "INSERT INTO events (scope_key, task_id, event_id, task_seq, record_json, record_sha256, chain_sha256) VALUES (?, ?, ?, ?, ?, ?, ?)",
     ).run(key, task.task_id, event.event_id, seq, json, digest, chain);
@@ -1081,6 +1189,67 @@ export async function createTaskStore(
       "upstream session binding",
     );
   };
+  const hostPrivatePathsForScope = (key: string): Set<string> => {
+    const rows = db
+      .query("SELECT task_id FROM session_bindings WHERE scope_key = ?")
+      .all(key) as Array<{ task_id: string }>;
+    const paths = new Set<string>();
+    for (const { task_id: taskId } of rows) {
+      const binding = readBinding(key, taskId);
+      if (!binding) fail("corrupt_record", "Corrupt upstream session binding");
+      for (const privatePath of hostPrivatePaths(binding)) {
+        paths.add(privatePath);
+      }
+    }
+    return paths;
+  };
+  const privateNeedles = (key: string): PrivateNeedles => ({
+    exact: hostPrivatePathsForScope(key),
+    roots: configuredHostPrivateRoots,
+  });
+  const assertNoHostPathLeak = (key: string, value: unknown): void => {
+    const paths = privateNeedles(key);
+    const pending = [value];
+    const visited = new WeakSet<object>();
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (typeof current === "string") {
+        if (containsHostPrivateText(current, paths)) {
+          throw invalidInput(
+            "Event payload must not contain the upstream journal path",
+          );
+        }
+        continue;
+      }
+      if (current === null || typeof current !== "object") continue;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      for (const [property, child] of Object.entries(current)) {
+        if (
+          forbiddenHostPrivateKeys.has(property) ||
+          containsHostPrivateText(property, paths)
+        ) {
+          throw invalidInput(
+            "Event payload must not contain the upstream journal path",
+          );
+        }
+        pending.push(child);
+      }
+    }
+  };
+  const assertPublishable = (
+    key: string,
+    event: EventEnvelope,
+    payloadBytes: Uint8Array,
+  ): void => {
+    const needles = privateNeedles(key);
+    if (
+      containsHostPrivateText(canonicalJson(event), needles) ||
+      containsHostPrivateText(new TextDecoder().decode(payloadBytes), needles)
+    ) {
+      throw invalidInput("Event must not contain the upstream journal path");
+    }
+  };
   const bindingSchema = z
     .object({
       runtime: z.literal("oh-my-pi"),
@@ -1108,11 +1277,96 @@ export async function createTaskStore(
     })
     .strict();
 
+  const readArtifactBytes = (key: string, refInput: unknown): Uint8Array => {
+    const ref = assertSchema(
+      ArtifactRefSchema,
+      refInput,
+      "Invalid artifact reference",
+    );
+    if (artifactId(ref.media_type, ref.sha256) !== ref.artifact_id) {
+      throw invalidInput("Artifact reference does not match its content hash");
+    }
+    const row = db
+      .query(
+        "SELECT scope_key, artifact_id, sha256, media_type, byte_length FROM artifacts WHERE scope_key = ? AND artifact_id = ?",
+      )
+      .get(key, ref.artifact_id) as ArtifactRow | null;
+    if (!row) fail("not_found", NOT_FOUND_MESSAGE);
+    if (
+      row.sha256 !== ref.sha256 ||
+      row.media_type !== ref.media_type ||
+      row.byte_length !== ref.byte_length
+    ) {
+      throw invalidInput("Artifact reference does not match stored artifact");
+    }
+    const relative = artifactRelativePath(key, row.sha256);
+    const filePath = path.join(rootDir, relative);
+    assertPathComponents(rootDir, filePath);
+    let fd: number;
+    try {
+      fd = openSync(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch {
+      fail("corrupt_record", "Artifact file is missing or unsafe");
+    }
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isFile())
+        fail("corrupt_record", "Artifact is not a regular file");
+      const data = readFileSync(fd);
+      if (data.byteLength !== row.byte_length || sha256(data) !== row.sha256) {
+        fail("corrupt_record", "Artifact content hash mismatch");
+      }
+      return new Uint8Array(data);
+    } finally {
+      closeSync(fd);
+    }
+  };
+  const assertTaskHistoryDoesNotContainPaths = (
+    key: string,
+    task: Task,
+    bound: ReadonlySet<string>,
+  ): void => {
+    const paths = exactNeedles(bound);
+    const reject = (): never => {
+      throw invalidInput(
+        "Task history already contains the upstream journal path",
+      );
+    };
+    if (containsHostPrivateText(canonicalJson(task), paths)) reject();
+    for (const event of verifiedEvents(key, task.task_id)) {
+      if (containsHostPrivateText(canonicalJson(event), paths)) reject();
+      const payloadText = new TextDecoder().decode(
+        readArtifactBytes(key, event.payload),
+      );
+      if (containsHostPrivateText(payloadText, paths)) reject();
+    }
+  };
+
   const artifactStore: ArtifactStore = {
     async put(context, data, mediaType) {
       const { scopeKey: key, context: parsed } = contextFor(context);
+      if (
+        !(data instanceof Uint8Array) ||
+        typeof mediaType !== "string" ||
+        mediaType.length === 0
+      ) {
+        throw invalidInput("Invalid artifact data or media type");
+      }
+      if (data.byteLength > maxArtifactBytes)
+        throw invalidInput("Artifact exceeds maxArtifactBytes");
+      const text = new TextDecoder().decode(data);
+      if (containsHostPrivateText(text, privateNeedles(key))) {
+        throw invalidInput(
+          "Artifact must not contain the upstream journal path",
+        );
+      }
       const ref = prepareArtifact(parsed.scope, data, mediaType);
       const transaction = db.transaction(() => {
+        if (containsHostPrivateText(text, privateNeedles(key))) {
+          throw invalidInput(
+            "Artifact must not contain the upstream journal path",
+          );
+        }
         insertArtifactRow(key, ref);
       });
       transaction.immediate();
@@ -1120,53 +1374,16 @@ export async function createTaskStore(
     },
     async get(context, refInput) {
       const { scopeKey: key } = contextFor(context);
-      const ref = assertSchema(
-        ArtifactRefSchema,
-        refInput,
-        "Invalid artifact reference",
-      );
-      if (artifactId(ref.media_type, ref.sha256) !== ref.artifact_id) {
-        throw invalidInput(
-          "Artifact reference does not match its content hash",
-        );
-      }
-      const row = db
-        .query(
-          "SELECT scope_key, artifact_id, sha256, media_type, byte_length FROM artifacts WHERE scope_key = ? AND artifact_id = ?",
-        )
-        .get(key, ref.artifact_id) as ArtifactRow | null;
-      if (!row) fail("not_found", NOT_FOUND_MESSAGE);
+      const data = readArtifactBytes(key, refInput);
       if (
-        row.sha256 !== ref.sha256 ||
-        row.media_type !== ref.media_type ||
-        row.byte_length !== ref.byte_length
+        containsHostPrivateText(
+          new TextDecoder().decode(data),
+          privateNeedles(key),
+        )
       ) {
-        throw invalidInput("Artifact reference does not match stored artifact");
+        fail("corrupt_record", "Artifact contains host-private data");
       }
-      const relative = artifactRelativePath(key, row.sha256);
-      const filePath = path.join(rootDir, relative);
-      assertPathComponents(rootDir, filePath);
-      let fd: number;
-      try {
-        fd = openSync(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
-      } catch {
-        fail("corrupt_record", "Artifact file is missing or unsafe");
-      }
-      try {
-        const stat = fstatSync(fd);
-        if (!stat.isFile())
-          fail("corrupt_record", "Artifact is not a regular file");
-        const data = readFileSync(fd);
-        if (
-          data.byteLength !== row.byte_length ||
-          sha256(data) !== row.sha256
-        ) {
-          fail("corrupt_record", "Artifact content hash mismatch");
-        }
-        return new Uint8Array(data);
-      } finally {
-        closeSync(fd);
-      }
+      return data;
     },
   };
 
@@ -1214,7 +1431,7 @@ export async function createTaskStore(
           "task.created",
           prepared.ref,
         );
-        insertEventRecord(key, task, event);
+        insertEventRecord(key, task, event, prepared.bytes);
         saveIdempotent(
           key,
           parsedContext.request_id,
@@ -1284,7 +1501,7 @@ export async function createTaskStore(
           "task.updated",
           prepared.ref,
         );
-        insertEventRecord(key, updated, event);
+        insertEventRecord(key, updated, event, prepared.bytes);
         saveIdempotent(
           key,
           parsedContext.request_id,
@@ -1408,7 +1625,7 @@ export async function createTaskStore(
           "task.updated",
           prepared.ref,
         );
-        insertEventRecord(key, next, event);
+        insertEventRecord(key, next, event, prepared.bytes);
         saveIdempotent(
           key,
           parsedContext.request_id,
@@ -1480,7 +1697,7 @@ export async function createTaskStore(
               "task.updated",
               prepared.ref,
             );
-            insertEventRecord(key, next, event);
+            insertEventRecord(key, next, event, prepared.bytes);
           }
           saveIdempotent(
             key,
@@ -1508,6 +1725,7 @@ export async function createTaskStore(
       ) {
         throw invalidInput("Instruction must be non-empty and at most 16 KiB");
       }
+      assertNoHostPathLeak(key, instruction);
       const inputHash = idemKeyInput({ instruction });
       const replay = getIdempotent(
         key,
@@ -1542,6 +1760,7 @@ export async function createTaskStore(
           if (["completed", "cancelled", "failed"].includes(current.status)) {
             fail("invalid_transition", "Terminal tasks cannot be steered");
           }
+          assertNoHostPathLeak(key, instruction);
           insertArtifactRow(key, prepared.ref);
           const event = lifecycleEvent(
             parsedContext,
@@ -1549,7 +1768,7 @@ export async function createTaskStore(
             "task.updated",
             prepared.ref,
           );
-          insertEventRecord(key, current, event);
+          insertEventRecord(key, current, event, prepared.bytes);
           saveIdempotent(
             key,
             parsedContext.request_id,
@@ -1580,6 +1799,7 @@ export async function createTaskStore(
       ) {
         throw invalidInput("Lifecycle event types are reserved");
       }
+      assertNoHostPathLeak(key, input);
       const versions = assertSchema(
         z.array(VersionRefSchema).min(1),
         input.versions,
@@ -1694,6 +1914,7 @@ export async function createTaskStore(
           for (const ref of observed.artifacts ?? [])
             assertArtifactOwned(key, ref);
         }
+        assertNoHostPathLeak(key, input);
         insertArtifactRow(key, prepared.ref);
         const tail = verifiedEventTail(key, taskId);
         const event = buildEvent(task, {
@@ -1706,7 +1927,7 @@ export async function createTaskStore(
           ...(input.usage === undefined ? {} : { usage: input.usage }),
           parent_event_id: tail?.event_id ?? null,
         });
-        insertEventRecord(key, task, event);
+        insertEventRecord(key, task, event, prepared.bytes);
         saveIdempotent(
           key,
           parsedContext.request_id,
@@ -1739,7 +1960,9 @@ export async function createTaskStore(
       const snapshot = readTask(key, taskId);
       const prepared = preparePayloadArtifact(snapshot.scope, {
         change: "upstream_session_bound",
-        binding,
+        runtime: binding.runtime,
+        package_version: binding.package_version,
+        session_id: binding.session_id,
       });
       const transaction = db.transaction(() => {
         const replay = getIdempotent(
@@ -1751,17 +1974,16 @@ export async function createTaskStore(
         );
         if (replay !== null) return;
         const task = readTask(key, taskId);
-        if (["completed", "cancelled", "failed"].includes(task.status)) {
-          fail(
-            "invalid_transition",
-            "Terminal tasks cannot bind an upstream session",
-          );
-        }
         const existing = readBinding(key, taskId);
         if (existing) {
           if (canonicalJson(existing) !== canonicalJson(binding)) {
             fail("conflict", "A different upstream session is already bound");
           }
+          assertPublishable(
+            key,
+            lifecycleEvent(parsedContext, task, "task.updated", prepared.ref),
+            prepared.bytes,
+          );
           saveIdempotent(
             key,
             parsedContext.request_id,
@@ -1772,18 +1994,29 @@ export async function createTaskStore(
           );
           return;
         }
+        if (["completed", "cancelled", "failed"].includes(task.status)) {
+          fail(
+            "invalid_transition",
+            "Terminal tasks cannot bind an upstream session",
+          );
+        }
         insertArtifactRow(key, prepared.ref);
         const bindingJson = canonicalJson(binding);
         db.query(
           "INSERT INTO session_bindings (scope_key, task_id, record_json, record_sha256) VALUES (?, ?, ?, ?)",
         ).run(key, taskId, bindingJson, sha256(bindingJson));
+        assertTaskHistoryDoesNotContainPaths(
+          key,
+          task,
+          hostPrivatePaths(binding),
+        );
         const event = lifecycleEvent(
           parsedContext,
           task,
           "task.updated",
           prepared.ref,
         );
-        insertEventRecord(key, task, event);
+        insertEventRecord(key, task, event, prepared.bytes);
         saveIdempotent(
           key,
           parsedContext.request_id,
@@ -1886,7 +2119,7 @@ export async function createTaskStore(
             "task.updated",
             prepared.ref,
           );
-          insertEventRecord(key, next, event);
+          insertEventRecord(key, next, event, prepared.bytes);
           return next;
         });
         const result = transaction.immediate();
@@ -1900,6 +2133,35 @@ export async function createTaskStore(
       const snapshot = db.transaction(() => {
         readTask(key, taskId);
         const events = verifiedEvents(key, taskId);
+        const binding = readBinding(key, taskId);
+        const paths = privateNeedles(key);
+        for (const event of events) {
+          if (containsHostPrivateText(canonicalJson(event), paths)) {
+            fail("corrupt_record", "Event history contains host-private data");
+          }
+          if (
+            !binding ||
+            event.event_type !== "task.updated" ||
+            event.producer !== "mars.tasks"
+          ) {
+            continue;
+          }
+          const text = new TextDecoder().decode(
+            readArtifactBytes(key, event.payload),
+          );
+          let payload: unknown;
+          try {
+            payload = JSON.parse(text);
+          } catch {
+            fail("corrupt_record", "Event history contains host-private data");
+          }
+          if (
+            containsForbiddenHostPrivateKey(payload) ||
+            containsHostPrivateText(text, paths)
+          ) {
+            fail("corrupt_record", "Event history contains host-private data");
+          }
+        }
         let offset = 0;
         if (afterEventId !== undefined) {
           const index = events.findIndex(

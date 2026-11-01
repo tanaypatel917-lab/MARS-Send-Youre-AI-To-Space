@@ -1,0 +1,15 @@
+{
+  "name": "@mars/workbench",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@mars/contracts": "workspace:*",
+    "@mars/execution": "workspace:*",
+    "@mars/providers": "workspace:*",
+    "@mars/tasks": "workspace:*",
+    "@mars/workspaces": "workspace:*",
+    "zod": "3.25.76"
+  }
+}

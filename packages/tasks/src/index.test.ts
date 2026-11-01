@@ -1,12 +1,14 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   truncateSync,
@@ -15,8 +17,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { RequestContext, Task } from "@mars/contracts";
+import type { ArtifactRef, RequestContext, Task } from "@mars/contracts";
 import { createTaskStore } from "./index";
+import { writeLegacyBindEvent } from "./test-fixtures/legacy-store";
 
 const roots: string[] = [];
 const scope = {
@@ -67,8 +70,30 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   return values;
 }
 
-async function openStore(rootDir: string) {
-  return createTaskStore({ rootDir, workspaceRoots: [] });
+async function expectRejectedWithoutPaths(
+  operation: () => Promise<unknown>,
+  code: string,
+  message: string,
+  privateValues: readonly string[],
+): Promise<void> {
+  let error: unknown;
+  try {
+    await operation();
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toMatchObject({ code, message });
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  for (const privateValue of privateValues) {
+    expect(errorMessage).not.toContain(privateValue);
+  }
+}
+
+async function openStore(
+  rootDir: string,
+  options: { hostPrivateRoots?: readonly string[] } = {},
+) {
+  return createTaskStore({ rootDir, workspaceRoots: [], ...options });
 }
 
 function spawnWorker(
@@ -814,6 +839,1031 @@ describe("@mars/tasks durable store", () => {
         event_type: "task.updated",
       }),
     ).rejects.toMatchObject({ code: "invalid_input" });
+    await store.close();
+  });
+
+  test("never exposes the upstream journal path in public events or artifacts", async () => {
+    const rootDir = makeRoot();
+    const journalDirectory = path.join(
+      tmpdir(),
+      `secret-journal-${randomUUID()}`,
+    );
+    mkdirSync(journalDirectory, { mode: 0o700 });
+    roots.push(journalDirectory);
+    const journalPath = path.join(
+      journalDirectory,
+      `session-${randomUUID()}.jsonl`,
+    );
+    writeFileSync(journalPath, '{"entries":[]}\n');
+    const sessionFile = realpathSync(journalPath);
+    const store = await openStore(rootDir);
+    const task = makeTask("privacy-task");
+    const binding = {
+      runtime: "oh-my-pi" as const,
+      package_version: "18.14.0",
+      session_id: task.session_id,
+      session_file: sessionFile,
+    };
+    try {
+      await store.create(context("privacy-create"), task);
+      await store.bindUpstreamSession(
+        context("privacy-bind"),
+        task.task_id,
+        binding,
+      );
+      await store.appendEvent(context("privacy-observed"), task.task_id, {
+        event_type: "execution.observed",
+        run_id: "privacy-run",
+        producer: "privacy-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: {
+          upstream: {
+            runtime: binding.runtime,
+            package_version: binding.package_version,
+            session_id: binding.session_id,
+            entry_ids: ["entry-1"],
+          },
+          kind: "turn",
+        },
+      });
+      await store.steer(
+        context("privacy-steer"),
+        task.task_id,
+        "Continue without quoting the journal path.",
+      );
+      await store.update(context("privacy-update"), task.task_id, 0, {
+        specialist_revision: "privacy-v1",
+      });
+      await store.cancel(context("privacy-cancel"), task.task_id);
+
+      const events = await collect(store.events(context(), task.task_id));
+      const payloads = await Promise.all(
+        events.map(async (event) =>
+          JSON.parse(
+            new TextDecoder().decode(
+              await store.artifacts.get(context(), event.payload),
+            ),
+          ),
+        ),
+      );
+      const privateValues = [
+        sessionFile,
+        journalDirectory,
+        path.basename(sessionFile),
+        rootDir,
+        "session_file",
+        "journal_path",
+      ];
+      for (const [index, event] of events.entries()) {
+        const publicEnvelope = JSON.stringify(event);
+        const publicPayload = JSON.stringify(payloads[index]);
+        for (const privateValue of privateValues) {
+          expect(publicEnvelope).not.toContain(privateValue);
+          expect(publicPayload).not.toContain(privateValue);
+        }
+      }
+      expect(
+        payloads.find((payload) => payload.change === "upstream_session_bound"),
+      ).toEqual({
+        change: "upstream_session_bound",
+        runtime: binding.runtime,
+        package_version: binding.package_version,
+        session_id: binding.session_id,
+      });
+      await store.close();
+
+      const reopened = await openStore(rootDir);
+      try {
+        expect(await reopened.upstreamSession(context(), task.task_id)).toEqual(
+          binding,
+        );
+        const countBeforeRebind = (
+          await collect(reopened.events(context(), task.task_id))
+        ).length;
+        await reopened.bindUpstreamSession(
+          context("privacy-bind-again"),
+          task.task_id,
+          binding,
+        );
+        expect(
+          (await collect(reopened.events(context(), task.task_id))).length,
+        ).toBe(countBeforeRebind);
+        await expect(
+          reopened.bindUpstreamSession(
+            context("privacy-bind-conflict"),
+            task.task_id,
+            { ...binding, package_version: "18.14.1" },
+          ),
+        ).rejects.toMatchObject({ code: "conflict" });
+      } finally {
+        await reopened.close();
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("rejects caller payloads that expose the bound journal path", async () => {
+    const rootDir = makeRoot();
+    const journalDirectory = mkdtempSync(
+      path.join(tmpdir(), `secret-journal-${randomUUID()}-`),
+    );
+    roots.push(journalDirectory);
+    const journalPath = path.join(
+      journalDirectory,
+      `session-${randomUUID()}.jsonl`,
+    );
+    writeFileSync(journalPath, '{"entries":[]}\n');
+    const sessionFile = realpathSync(journalPath);
+    const store = await openStore(rootDir);
+    const task = makeTask("path-guard-task");
+    const binding = {
+      runtime: "oh-my-pi" as const,
+      package_version: "18.14.0",
+      session_id: task.session_id,
+      session_file: sessionFile,
+    };
+    await store.create(context("path-guard-create"), task);
+    await store.bindUpstreamSession(
+      context("path-guard-bind"),
+      task.task_id,
+      binding,
+    );
+    const countEvents = async () =>
+      (await collect(store.events(context(), task.task_id))).length;
+    const expectRejectedWithoutLeak = async (
+      operation: () => Promise<unknown>,
+    ) => {
+      const countBefore = await countEvents();
+      let error: unknown;
+      try {
+        await operation();
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toMatchObject({ code: "invalid_input" });
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).not.toContain(sessionFile);
+      expect(message).not.toContain(journalDirectory);
+      expect(message).not.toContain(path.basename(sessionFile));
+      expect(await countEvents()).toBe(countBefore);
+    };
+    await expectRejectedWithoutLeak(() =>
+      store.appendEvent(context("path-key"), task.task_id, {
+        event_type: "tool.completed",
+        run_id: "path-key",
+        producer: "privacy-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: { journal_path: sessionFile },
+      }),
+    );
+    await expectRejectedWithoutLeak(() =>
+      store.appendEvent(context("path-nested"), task.task_id, {
+        event_type: "tool.completed",
+        run_id: "path-nested",
+        producer: "privacy-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: { details: { note: `Found ${sessionFile}` } },
+      }),
+    );
+    await expectRejectedWithoutLeak(() =>
+      store.appendEvent(context("path-property"), task.task_id, {
+        event_type: "tool.completed",
+        run_id: "path-property",
+        producer: "privacy-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: { [sessionFile]: 1 },
+      }),
+    );
+    await expectRejectedWithoutLeak(() =>
+      store.appendEvent(context("path-nested-property"), task.task_id, {
+        event_type: "tool.completed",
+        run_id: "path-nested-property",
+        producer: "privacy-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: { a: { [sessionFile]: true } },
+      }),
+    );
+    await expectRejectedWithoutLeak(() =>
+      store.appendEvent(context("path-summary"), task.task_id, {
+        event_type: "execution.observed",
+        run_id: "path-summary",
+        producer: "privacy-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: {
+          upstream: {
+            runtime: binding.runtime,
+            package_version: binding.package_version,
+            session_id: binding.session_id,
+            entry_ids: ["entry-1"],
+          },
+          kind: "turn",
+          summary: `Observed ${sessionFile}`,
+        },
+      }),
+    );
+    await expectRejectedWithoutLeak(() =>
+      store.steer(
+        context("path-steer"),
+        task.task_id,
+        `Continue from ${sessionFile}.`,
+      ),
+    );
+    await store.close();
+  });
+
+  test("matches bound journal paths exactly and enforces configured private roots", async () => {
+    const rootDir = makeRoot();
+    const journalDirectory = mkdtempSync(
+      path.join(tmpdir(), `shared-journal-${randomUUID()}-`),
+    );
+    roots.push(journalDirectory);
+    const sessionFile = path.join(
+      journalDirectory,
+      `session-${randomUUID()}.jsonl`,
+    );
+    writeFileSync(sessionFile, '{"entries":[]}\n');
+    const realSessionFile = realpathSync(sessionFile);
+    const store = await openStore(rootDir);
+    const task = makeTask("shared-directory-task");
+    const binding = {
+      runtime: "oh-my-pi" as const,
+      package_version: "18.14.0",
+      session_id: task.session_id,
+      session_file: realSessionFile,
+    };
+    const siblingFile = path.join(journalDirectory, "build.log");
+    const siblingBytes = new TextEncoder().encode(
+      `build output: ${siblingFile}`,
+    );
+    try {
+      await store.create(context("shared-create"), task);
+      await store.bindUpstreamSession(
+        context("shared-bind"),
+        task.task_id,
+        binding,
+      );
+      const siblingRef = await store.artifacts.put(
+        context("shared-artifact-put"),
+        siblingBytes,
+        "text/plain",
+      );
+      expect(await store.artifacts.get(context(), siblingRef)).toEqual(
+        siblingBytes,
+      );
+      await store.appendEvent(context("shared-event"), task.task_id, {
+        event_type: "tool.completed",
+        run_id: "shared-run",
+        producer: "privacy-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: { output: siblingFile },
+      });
+      const events = await collect(store.events(context(), task.task_id));
+      expect(events).toHaveLength(3);
+      expect(events.map((event) => event.event_type)).toEqual([
+        "task.created",
+        "task.updated",
+        "tool.completed",
+      ]);
+      await expectRejectedWithoutPaths(
+        () =>
+          store.appendEvent(context("shared-full-path"), task.task_id, {
+            event_type: "tool.completed",
+            run_id: "shared-full-path",
+            producer: "privacy-test",
+            versions: [{ component: "test", revision: "1" }],
+            payload: { path: realSessionFile },
+          }),
+        "invalid_input",
+        "Event payload must not contain the upstream journal path",
+        [realSessionFile, journalDirectory, path.basename(realSessionFile)],
+      );
+      const eventsAfterRejection = await collect(
+        store.events(context(), task.task_id),
+      );
+      expect(eventsAfterRejection.map((event) => event.event_id)).toEqual(
+        events.map((event) => event.event_id),
+      );
+    } finally {
+      await store.close();
+    }
+
+    const privateRoot = mkdtempSync(
+      path.join(tmpdir(), `omp-sessions-${randomUUID()}-`),
+    );
+    roots.push(privateRoot);
+    const rootedStore = await openStore(makeRoot(), {
+      hostPrivateRoots: [privateRoot],
+    });
+    const rootedTask = makeTask("configured-root-task");
+    try {
+      await rootedStore.create(context("rooted-create"), rootedTask);
+      const privateFile = path.join(privateRoot, "x.jsonl");
+      await expectRejectedWithoutPaths(
+        () =>
+          rootedStore.appendEvent(context("rooted-event"), rootedTask.task_id, {
+            event_type: "tool.completed",
+            run_id: "rooted-run",
+            producer: "privacy-test",
+            versions: [{ component: "test", revision: "1" }],
+            payload: { path: privateFile },
+          }),
+        "invalid_input",
+        "Event payload must not contain the upstream journal path",
+        [privateRoot, privateFile],
+      );
+      await expectRejectedWithoutPaths(
+        () =>
+          rootedStore.artifacts.put(
+            context("rooted-artifact"),
+            new TextEncoder().encode(privateFile),
+            "text/plain",
+          ),
+        "invalid_input",
+        "Artifact must not contain the upstream journal path",
+        [privateRoot, privateFile],
+      );
+      await expectRejectedWithoutPaths(
+        () =>
+          rootedStore.artifacts.put(
+            context("rooted-artifact-bare"),
+            new TextEncoder().encode(JSON.stringify({ dir: privateRoot })),
+            "application/json",
+          ),
+        "invalid_input",
+        "Artifact must not contain the upstream journal path",
+        [privateRoot, privateFile],
+      );
+      const siblingFile = `${privateRoot}-backup/build.log`;
+      const siblingRef = await rootedStore.artifacts.put(
+        context("rooted-sibling-artifact"),
+        new TextEncoder().encode(`Writing output to ${siblingFile}`),
+        "text/plain",
+      );
+      expect(
+        new TextDecoder().decode(
+          await rootedStore.artifacts.get(context(), siblingRef),
+        ),
+      ).toBe(`Writing output to ${siblingFile}`);
+      await rootedStore.appendEvent(
+        context("rooted-sibling-event"),
+        rootedTask.task_id,
+        {
+          event_type: "tool.completed",
+          run_id: "rooted-sibling-run",
+          producer: "privacy-test",
+          versions: [{ component: "test", revision: "1" }],
+          payload: { path: siblingFile },
+        },
+      );
+      expect(
+        await collect(rootedStore.events(context(), rootedTask.task_id)),
+      ).toHaveLength(2);
+      const otherScope = {
+        owner_id: "other-owner",
+        project_id: "other-project",
+        workspace_id: "other-workspace",
+      };
+      const otherScopeTask = makeTask(
+        "configured-root-other-scope",
+        otherScope,
+      );
+      await rootedStore.create(
+        context("rooted-other-create", otherScope),
+        otherScopeTask,
+      );
+      await expectRejectedWithoutPaths(
+        () =>
+          rootedStore.appendEvent(
+            context("rooted-other-event", otherScope),
+            otherScopeTask.task_id,
+            {
+              event_type: "tool.completed",
+              run_id: "rooted-other-run",
+              producer: "privacy-test",
+              versions: [{ component: "test", revision: "1" }],
+              payload: { path: privateFile },
+            },
+          ),
+        "invalid_input",
+        "Event payload must not contain the upstream journal path",
+        [privateRoot, privateFile],
+      );
+    } finally {
+      await rootedStore.close();
+    }
+
+    await expectRejectedWithoutPaths(
+      () =>
+        createTaskStore({
+          rootDir: makeRoot(),
+          workspaceRoots: [],
+          hostPrivateRoots: ["relative"],
+        }),
+      "invalid_input",
+      "hostPrivateRoots must be absolute non-root paths",
+      ["relative"],
+    );
+    await expectRejectedWithoutPaths(
+      () =>
+        createTaskStore({
+          rootDir: makeRoot(),
+          workspaceRoots: [],
+          hostPrivateRoots: [path.parse(process.cwd()).root],
+        }),
+      "invalid_input",
+      "hostPrivateRoots must be absolute non-root paths",
+      [path.parse(process.cwd()).root],
+    );
+  });
+
+  test("rejects bound paths supplied as lifecycle request ids", async () => {
+    const rootDir = makeRoot();
+    const journalDirectory = mkdtempSync(
+      path.join(tmpdir(), `request-id-journal-${randomUUID()}-`),
+    );
+    roots.push(journalDirectory);
+    const sessionFile = path.join(
+      journalDirectory,
+      `session-${randomUUID()}.jsonl`,
+    );
+    writeFileSync(sessionFile, '{"entries":[]}\n');
+    const realSessionFile = realpathSync(sessionFile);
+    const privateValues = [
+      realSessionFile,
+      journalDirectory,
+      path.basename(realSessionFile),
+    ];
+    const store = await openStore(rootDir);
+    const task = makeTask("request-id-task");
+    const binding = {
+      runtime: "oh-my-pi" as const,
+      package_version: "18.14.0",
+      session_id: task.session_id,
+      session_file: realSessionFile,
+    };
+    const countEvents = async (taskId: string) =>
+      (await collect(store.events(context(), taskId))).length;
+    const expectUnchangedRejection = async (
+      taskId: string,
+      operation: () => Promise<unknown>,
+    ) => {
+      const taskBefore = await store.inspect(context(), taskId);
+      const eventsBefore = await countEvents(taskId);
+      await expectRejectedWithoutPaths(
+        operation,
+        "invalid_input",
+        "Event must not contain the upstream journal path",
+        privateValues,
+      );
+      expect(await store.inspect(context(), taskId)).toEqual(taskBefore);
+      expect(await countEvents(taskId)).toBe(eventsBefore);
+    };
+    try {
+      await store.create(context("request-id-create"), task);
+      await store.bindUpstreamSession(
+        context("request-id-bind"),
+        task.task_id,
+        binding,
+      );
+      await expectUnchangedRejection(task.task_id, () =>
+        store.steer(context(realSessionFile), task.task_id, "Continue safely."),
+      );
+      await expectUnchangedRejection(task.task_id, () =>
+        store.update(context(realSessionFile), task.task_id, 0, {
+          specialist_revision: "safe-revision",
+        }),
+      );
+      await expectUnchangedRejection(task.task_id, () =>
+        store.cancel(context(realSessionFile), task.task_id),
+      );
+
+      const running = await store.update(
+        context("request-id-running"),
+        task.task_id,
+        0,
+        { status: "running" },
+      );
+      const paused = await store.update(
+        context("request-id-paused"),
+        task.task_id,
+        running.revision,
+        { status: "paused" },
+      );
+      await expectUnchangedRejection(task.task_id, () =>
+        store.resume(context(realSessionFile), task.task_id, paused.revision),
+      );
+      await expectUnchangedRejection(task.task_id, () =>
+        store.bindUpstreamSession(
+          context(realSessionFile),
+          task.task_id,
+          binding,
+        ),
+      );
+
+      const createTask = makeTask("request-id-create-rejected");
+      const beforeCreateEvents = await countEvents(task.task_id);
+      await expectRejectedWithoutPaths(
+        () => store.create(context(realSessionFile), createTask),
+        "invalid_input",
+        "Event must not contain the upstream journal path",
+        privateValues,
+      );
+      expect(await countEvents(task.task_id)).toBe(beforeCreateEvents);
+      await expect(
+        store.inspect(context(), createTask.task_id),
+      ).rejects.toMatchObject({ code: "not_found" });
+
+      const recoveryTask = makeTask("request-id-recovery-task");
+      await store.create(context("request-id-recovery-create"), recoveryTask);
+      await store.bindUpstreamSession(
+        context("request-id-recovery-bind"),
+        recoveryTask.task_id,
+        { ...binding, session_id: recoveryTask.session_id },
+      );
+      await runWorker("leave-running", rootDir, {
+        context: context("request-id-recovery-running"),
+        taskId: recoveryTask.task_id,
+      });
+      await expectUnchangedRejection(recoveryTask.task_id, () =>
+        store.recoverInterrupted(context(realSessionFile), {
+          reason: "request-id recovery test",
+        }),
+      );
+
+      const newBindTask = makeTask("request-id-new-bind-task");
+      await store.create(context("request-id-new-bind-create"), newBindTask);
+      const newSessionFile = path.join(
+        journalDirectory,
+        `new-session-${randomUUID()}.jsonl`,
+      );
+      writeFileSync(newSessionFile, '{"entries":[]}\n');
+      const realNewSessionFile = realpathSync(newSessionFile);
+      const newBindEventsBefore = await countEvents(newBindTask.task_id);
+      await expectRejectedWithoutPaths(
+        () =>
+          store.bindUpstreamSession(
+            context(realNewSessionFile),
+            newBindTask.task_id,
+            {
+              ...binding,
+              session_id: newBindTask.session_id,
+              session_file: realNewSessionFile,
+            },
+          ),
+        "invalid_input",
+        "Event must not contain the upstream journal path",
+        [
+          realNewSessionFile,
+          journalDirectory,
+          path.basename(realNewSessionFile),
+        ],
+      );
+      expect(await store.upstreamSession(context(), newBindTask.task_id)).toBe(
+        null,
+      );
+      expect(await store.inspect(context(), newBindTask.task_id)).toEqual(
+        newBindTask,
+      );
+      expect(await countEvents(newBindTask.task_id)).toBe(newBindEventsBefore);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("binding fails when the task already contains the journal path", async () => {
+    const store = await openStore(makeRoot());
+    const eventDirectory = mkdtempSync(
+      path.join(tmpdir(), `prebind-event-${randomUUID()}-`),
+    );
+    const recordDirectory = mkdtempSync(
+      path.join(tmpdir(), `prebind-record-${randomUUID()}-`),
+    );
+    roots.push(eventDirectory, recordDirectory);
+    const eventPath = path.join(eventDirectory, "session.jsonl");
+    const recordPath = path.join(recordDirectory, "session.jsonl");
+    writeFileSync(eventPath, '{"entries":[]}\n');
+    writeFileSync(recordPath, '{"entries":[]}\n');
+    const eventSessionFile = realpathSync(eventPath);
+    const recordSessionFile = realpathSync(recordPath);
+    const eventTask = makeTask("prebind-event-task");
+    const recordTask = makeTask("prebind-record-task");
+    const bindingFor = (task: Task, sessionFile: string) => ({
+      runtime: "oh-my-pi" as const,
+      package_version: "18.14.0",
+      session_id: task.session_id,
+      session_file: sessionFile,
+    });
+    const countEvents = async (taskId: string) =>
+      (await collect(store.events(context(), taskId))).length;
+    try {
+      await store.create(context("prebind-event-create"), eventTask);
+      await store.appendEvent(
+        context("prebind-event-append"),
+        eventTask.task_id,
+        {
+          event_type: "tool.completed",
+          run_id: "prebind-event",
+          producer: "privacy-test",
+          versions: [{ component: "test", revision: "1" }],
+          payload: { copiedFrom: eventSessionFile },
+        },
+      );
+      const eventCountBefore = await countEvents(eventTask.task_id);
+      await expectRejectedWithoutPaths(
+        () =>
+          store.bindUpstreamSession(
+            context("prebind-event-bind"),
+            eventTask.task_id,
+            bindingFor(eventTask, eventSessionFile),
+          ),
+        "invalid_input",
+        "Task history already contains the upstream journal path",
+        [eventSessionFile, eventDirectory, path.basename(eventSessionFile)],
+      );
+      expect(
+        await store.upstreamSession(context(), eventTask.task_id),
+      ).toBeNull();
+      expect(await countEvents(eventTask.task_id)).toBe(eventCountBefore);
+
+      await store.create(context("prebind-record-create"), recordTask);
+      const updatedRecordTask = await store.update(
+        context("prebind-record-update"),
+        recordTask.task_id,
+        0,
+        { specialist_revision: recordSessionFile },
+      );
+      const recordCountBefore = await countEvents(recordTask.task_id);
+      await expectRejectedWithoutPaths(
+        () =>
+          store.bindUpstreamSession(
+            context("prebind-record-bind"),
+            recordTask.task_id,
+            bindingFor(recordTask, recordSessionFile),
+          ),
+        "invalid_input",
+        "Task history already contains the upstream journal path",
+        [recordSessionFile, recordDirectory, path.basename(recordSessionFile)],
+      );
+      expect(
+        await store.upstreamSession(context(), recordTask.task_id),
+      ).toBeNull();
+      expect(await store.inspect(context(), recordTask.task_id)).toEqual(
+        updatedRecordTask,
+      );
+      expect(await countEvents(recordTask.task_id)).toBe(recordCountBefore);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("bound paths screen caller events and artifacts across the scope", async () => {
+    const rootDir = makeRoot();
+    const pathDirectoryP = mkdtempSync(
+      path.join(tmpdir(), `cross-task-p-${randomUUID()}-`),
+    );
+    const pathDirectoryQ = mkdtempSync(
+      path.join(tmpdir(), `cross-task-q-${randomUUID()}-`),
+    );
+    roots.push(pathDirectoryP, pathDirectoryQ);
+    const sessionFileP = path.join(pathDirectoryP, "session-p.jsonl");
+    const sessionFileQ = path.join(pathDirectoryQ, "session-q.jsonl");
+    writeFileSync(sessionFileP, '{"entries":[]}\n');
+    writeFileSync(sessionFileQ, '{"entries":[]}\n');
+    const realSessionFileP = realpathSync(sessionFileP);
+    const realSessionFileQ = realpathSync(sessionFileQ);
+    const store = await openStore(rootDir);
+    const taskA = makeTask("cross-task-a");
+    const taskB = makeTask("cross-task-b");
+    const taskC = makeTask("cross-task-c");
+    const bindingFor = (task: Task, sessionFile: string) => ({
+      runtime: "oh-my-pi" as const,
+      package_version: "18.14.0",
+      session_id: task.session_id,
+      session_file: sessionFile,
+    });
+    const privateValuesP = [
+      realSessionFileP,
+      pathDirectoryP,
+      path.basename(realSessionFileP),
+    ];
+    const privateValuesQ = [
+      realSessionFileQ,
+      pathDirectoryQ,
+      path.basename(realSessionFileQ),
+    ];
+    const countEvents = async (taskId: string) =>
+      (await collect(store.events(context(), taskId))).length;
+    try {
+      await store.create(context("cross-create-a"), taskA);
+      await store.create(context("cross-create-b"), taskB);
+      await store.create(context("cross-create-c"), taskC);
+      await store.bindUpstreamSession(
+        context("cross-bind-a"),
+        taskA.task_id,
+        bindingFor(taskA, realSessionFileP),
+      );
+
+      const taskBEventsBefore = await countEvents(taskB.task_id);
+      await expectRejectedWithoutPaths(
+        () =>
+          store.appendEvent(context("cross-event-p"), taskB.task_id, {
+            event_type: "tool.completed",
+            run_id: "cross-event-p",
+            producer: "privacy-test",
+            versions: [{ component: "test", revision: "1" }],
+            payload: { copiedFrom: realSessionFileP },
+          }),
+        "invalid_input",
+        "Event payload must not contain the upstream journal path",
+        privateValuesP,
+      );
+      expect(await countEvents(taskB.task_id)).toBe(taskBEventsBefore);
+
+      const qEvent = await store.appendEvent(
+        context("cross-event-q"),
+        taskB.task_id,
+        {
+          event_type: "tool.completed",
+          run_id: "cross-event-q",
+          producer: "privacy-test",
+          versions: [{ component: "test", revision: "1" }],
+          payload: { copiedFrom: realSessionFileQ },
+        },
+      );
+      await store.bindUpstreamSession(
+        context("cross-bind-c"),
+        taskC.task_id,
+        bindingFor(taskC, realSessionFileQ),
+      );
+      expect(await store.upstreamSession(context(), taskC.task_id)).toEqual(
+        bindingFor(taskC, realSessionFileQ),
+      );
+      await expectRejectedWithoutPaths(
+        () => store.artifacts.get(context(), qEvent.payload),
+        "corrupt_record",
+        "Artifact contains host-private data",
+        privateValuesQ,
+      );
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("fails closed on legacy host-private event and artifact payloads", async () => {
+    const rootDir = makeRoot();
+    const journalDirectory = mkdtempSync(
+      path.join(tmpdir(), `legacy-journal-${randomUUID()}-`),
+    );
+    roots.push(journalDirectory);
+    const journalPath = path.join(
+      journalDirectory,
+      `session-${randomUUID()}.jsonl`,
+    );
+    writeFileSync(journalPath, '{"entries":[]}\n');
+    const sessionFile = realpathSync(journalPath);
+    const task = makeTask("legacy-private-task");
+    const cleanTask = makeTask("clean-same-scope-task");
+    const binding = {
+      runtime: "oh-my-pi" as const,
+      package_version: "18.14.0",
+      session_id: task.session_id,
+      session_file: sessionFile,
+    };
+    const initial = await openStore(rootDir);
+    await initial.create(context("legacy-create"), task);
+    await initial.create(context("clean-create"), cleanTask);
+    await initial.close();
+    writeLegacyBindEvent(
+      rootDir,
+      task.scope,
+      task.task_id,
+      binding,
+      "legacy-bind",
+    );
+
+    const reopened = await openStore(rootDir);
+    const scopeDigest = createHashScope(task.scope);
+    const readLegacyState = () => {
+      const db = new Database(path.join(rootDir, "tasks.sqlite"), {
+        strict: true,
+      });
+      try {
+        const eventRow = db
+          .query(
+            "SELECT scope_key, task_id, event_id, task_seq, record_json, record_sha256, chain_sha256 FROM events WHERE scope_key = ? AND task_id = ? ORDER BY task_seq DESC LIMIT 1",
+          )
+          .get(scopeDigest, task.task_id) as {
+          scope_key: string;
+          task_id: string;
+          event_id: string;
+          task_seq: number;
+          record_json: string;
+          record_sha256: string;
+          chain_sha256: string;
+        } | null;
+        const bindingRow = db
+          .query(
+            "SELECT scope_key, task_id, record_json, record_sha256 FROM session_bindings WHERE scope_key = ? AND task_id = ?",
+          )
+          .get(scopeDigest, task.task_id) as {
+          scope_key: string;
+          task_id: string;
+          record_json: string;
+          record_sha256: string;
+        } | null;
+        if (!eventRow || !bindingRow)
+          throw new Error("Expected legacy event and binding rows");
+        const legacyEvent = JSON.parse(eventRow.record_json) as {
+          payload: ArtifactRef;
+        };
+        const artifact = db
+          .query(
+            "SELECT artifact_id, sha256, media_type, byte_length FROM artifacts WHERE scope_key = ? AND artifact_id = ?",
+          )
+          .get(scopeDigest, legacyEvent.payload.artifact_id) as {
+          artifact_id: string;
+          sha256: string;
+          media_type: string;
+          byte_length: number;
+        } | null;
+        if (!artifact) throw new Error("Expected legacy payload artifact");
+        const artifactBytes = readFileSync(
+          path.join(
+            rootDir,
+            "artifacts",
+            scopeDigest,
+            artifact.sha256.slice(0, 2),
+            artifact.sha256,
+          ),
+        );
+        return {
+          eventRow,
+          bindingRow,
+          artifact,
+          artifactBytes,
+          ref: legacyEvent.payload,
+        };
+      } finally {
+        db.close();
+      }
+    };
+    const assertSanitizedCorruption = async (
+      operation: () => Promise<unknown>,
+      expectedMessage: string,
+    ) => {
+      let error: unknown;
+      try {
+        await operation();
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toMatchObject({ code: "corrupt_record" });
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toBe(expectedMessage);
+      expect(message).not.toContain(sessionFile);
+      expect(message).not.toContain(journalDirectory);
+      expect(message).not.toContain(path.basename(sessionFile));
+    };
+
+    try {
+      const beforeReads = readLegacyState();
+      expect(await reopened.inspect(context(), task.task_id)).toEqual(task);
+      expect(await reopened.upstreamSession(context(), task.task_id)).toEqual(
+        binding,
+      );
+      const listedTaskIds = (await reopened.list(context())).map(
+        (listedTask) => listedTask.task_id,
+      );
+      expect(listedTaskIds).toContain(task.task_id);
+      expect(listedTaskIds).toContain(cleanTask.task_id);
+      expect(
+        await reopened.recoverInterrupted(context("legacy-recovery"), {
+          reason: "legacy-read-boundary-test",
+        }),
+      ).toEqual([]);
+
+      const received: unknown[] = [];
+      let eventsError: unknown;
+      try {
+        for await (const event of reopened.events(context(), task.task_id)) {
+          received.push(event);
+        }
+      } catch (error) {
+        eventsError = error;
+      }
+      expect(received).toHaveLength(0);
+      expect(eventsError).toMatchObject({ code: "corrupt_record" });
+      const eventsMessage =
+        eventsError instanceof Error
+          ? eventsError.message
+          : String(eventsError);
+      expect(eventsMessage).toBe("Event history contains host-private data");
+      expect(eventsMessage).not.toContain(sessionFile);
+      expect(eventsMessage).not.toContain(journalDirectory);
+      expect(eventsMessage).not.toContain(path.basename(sessionFile));
+      await assertSanitizedCorruption(
+        () => reopened.artifacts.get(context(), beforeReads.ref),
+        "Artifact contains host-private data",
+      );
+
+      const cleanEvents = await collect(
+        reopened.events(context(), cleanTask.task_id),
+      );
+      expect(cleanEvents).toHaveLength(1);
+      expect(cleanEvents[0]?.event_type).toBe("task.created");
+      const afterReads = readLegacyState();
+      expect(afterReads.eventRow).toEqual(beforeReads.eventRow);
+      expect(afterReads.bindingRow).toEqual(beforeReads.bindingRow);
+      expect(afterReads.artifact).toEqual(beforeReads.artifact);
+      expect(afterReads.artifactBytes).toEqual(beforeReads.artifactBytes);
+
+      const appended = await reopened.appendEvent(
+        context("legacy-safe-append"),
+        task.task_id,
+        {
+          event_type: "tool.completed",
+          run_id: "legacy-safe-append",
+          producer: "legacy-test",
+          versions: [{ component: "test", revision: "1" }],
+          payload: { result: "ok" },
+        },
+      );
+      expect(appended.event_type).toBe("tool.completed");
+      await reopened.cancel(context("legacy-cancel"), task.task_id);
+      expect((await reopened.inspect(context(), task.task_id)).status).toBe(
+        "cancelled",
+      );
+    } finally {
+      await reopened.close();
+    }
+  });
+
+  test("rejects bound-path artifact writes and screens artifacts stored before binding", async () => {
+    const rootDir = makeRoot();
+    const journalDirectory = mkdtempSync(
+      path.join(tmpdir(), `artifact-journal-${randomUUID()}-`),
+    );
+    roots.push(journalDirectory);
+    const journalPath = path.join(
+      journalDirectory,
+      `session-${randomUUID()}.jsonl`,
+    );
+    writeFileSync(journalPath, '{"entries":[]}\n');
+    const sessionFile = realpathSync(journalPath);
+    const store = await openStore(rootDir);
+    const task = makeTask("artifact-path-task");
+    await store.create(context("artifact-path-create"), task);
+    const bytes = new TextEncoder().encode(`host journal: ${sessionFile}`);
+    const storedBeforeBinding = await store.artifacts.put(
+      context("artifact-put-before-binding"),
+      bytes,
+      "text/plain",
+    );
+    await store.bindUpstreamSession(
+      context("artifact-path-bind"),
+      task.task_id,
+      {
+        runtime: "oh-my-pi",
+        package_version: "18.14.0",
+        session_id: task.session_id,
+        session_file: sessionFile,
+      },
+    );
+    let getError: unknown;
+    try {
+      await store.artifacts.get(context(), storedBeforeBinding);
+    } catch (error) {
+      getError = error;
+    }
+    expect(getError).toMatchObject({
+      code: "corrupt_record",
+      message: "Artifact contains host-private data",
+    });
+    const getMessage =
+      getError instanceof Error ? getError.message : String(getError);
+    expect(getMessage).not.toContain(sessionFile);
+    expect(getMessage).not.toContain(journalDirectory);
+    expect(getMessage).not.toContain(path.basename(sessionFile));
+    let putError: unknown;
+    try {
+      await store.artifacts.put(
+        context("artifact-put-after-binding"),
+        bytes,
+        "text/plain",
+      );
+    } catch (error) {
+      putError = error;
+    }
+    expect(putError).toMatchObject({
+      code: "invalid_input",
+      message: "Artifact must not contain the upstream journal path",
+    });
+    const putMessage =
+      putError instanceof Error ? putError.message : String(putError);
+    expect(putMessage).not.toContain(sessionFile);
+    expect(putMessage).not.toContain(journalDirectory);
+    expect(putMessage).not.toContain(path.basename(sessionFile));
     await store.close();
   });
 
