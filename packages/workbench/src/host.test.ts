@@ -4,7 +4,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RequestContext, Task, WorkspaceRef } from "@mars/contracts";
-import type { RuntimeOutcome, RuntimeSessionOptions } from "@mars/execution";
+import {
+  MAX_RUNTIME_INSTRUCTION_LENGTH,
+  type RuntimeOutcome,
+  type RuntimeSessionOptions,
+} from "@mars/execution";
 import type { ModelProviderRegistry } from "@mars/providers";
 import { loadModelRegistry } from "@mars/providers";
 import { createTaskStore } from "@mars/tasks";
@@ -199,6 +203,11 @@ async function fixture() {
           journalPath:
             options.sessionFile ?? join(options.stateDir, "session.jsonl"),
           run: (instruction: string) => {
+            if (
+              !instruction.trim() ||
+              instruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH
+            )
+              throw new Error("Invalid task instruction.");
             instructions.push(instruction);
             return outcome.promise;
           },
@@ -335,6 +344,143 @@ test("paused steering survives host restart, is consumed on resume, and usage co
     { input_tokens: 30, output_tokens: 5, cost_usd: 0 },
     { input_tokens: 0, output_tokens: 0, cost_usd: 0 },
   ]);
+});
+
+test("oversized paused steering is delivered in ordered bounded batches across restart without losing acknowledgments", async () => {
+  const f = await fixture();
+  const api = await f.makeHost();
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  required(f.sessions[0]).finish("paused");
+  await required(f.sessions[0]).disposed;
+  const instructions = Array.from({ length: 8 }, (_, index) =>
+    `instruction-${index}:`.padEnd(16 * 1024, "x"),
+  );
+  for (const instruction of instructions)
+    await api.steer(context(), "task", instruction);
+  await api.close();
+  const replacement = await f.makeHost();
+  await replacement.resume(
+    context(),
+    "task",
+    (await replacement.inspect(context(), "task")).revision,
+  );
+  const first = required(f.sessions[1]);
+  const prompt = required(first.instructions[0]);
+  expect(prompt.length).toBeLessThanOrEqual(128 * 1024);
+  expect(prompt).toContain(instructions.slice(0, 7).join("\n\n"));
+  expect(prompt).not.toContain(required(instructions[7]));
+  first.finish("completed");
+  await first.disposed;
+  expect((await replacement.inspect(context(), "task")).status).toBe("paused");
+  await replacement.close();
+  const lastHost = await f.makeHost();
+  await lastHost.resume(
+    context(),
+    "task",
+    (await lastHost.inspect(context(), "task")).revision,
+  );
+  const last = required(f.sessions[2]);
+  const remaining = required(last.instructions[0]);
+  expect(remaining.length).toBeLessThanOrEqual(128 * 1024);
+  expect(remaining).toContain(required(instructions[7]));
+  for (const instruction of instructions.slice(0, 7))
+    expect(remaining).not.toContain(instruction);
+  last.finish("completed");
+  await last.disposed;
+  expect((await lastHost.inspect(context(), "task")).status).toBe("completed");
+  const steeringIds: string[] = [];
+  const acknowledgments: string[][] = [];
+  for await (const event of f.store.events(context(), "task")) {
+    const payload = JSON.parse(
+      new TextDecoder().decode(
+        await f.store.artifacts.get(context(), event.payload),
+      ),
+    );
+    if (payload.change === "steered") steeringIds.push(event.event_id);
+    if (payload.operation === "runtime.result")
+      acknowledgments.push(payload.steering_event_ids);
+  }
+  expect(acknowledgments).toEqual([
+    [],
+    steeringIds.slice(0, 7),
+    steeringIds.slice(7),
+  ]);
+  await lastHost.close();
+});
+
+test("a near-limit original request does not inflate the resumed prompt", async () => {
+  const f = await fixture();
+  const api = await f.makeHost();
+  const large = task();
+  large.request = "x".repeat(MAX_RUNTIME_INSTRUCTION_LENGTH - 1024);
+  await api.create(context(), large);
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  expect(
+    required(required(f.sessions[0]).instructions[0]).startsWith(large.request),
+  ).toBe(true);
+  required(f.sessions[0]).finish("paused");
+  await required(f.sessions[0]).disposed;
+  const steering = "Keep the saved task requirements".padEnd(16 * 1024, "y");
+  await api.steer(context(), "task", steering);
+  await api.resume(
+    context(),
+    "task",
+    (await api.inspect(context(), "task")).revision,
+  );
+  const resumed = required(f.sessions[1]);
+  expect(required(resumed.instructions[0]).length).toBeLessThanOrEqual(
+    128 * 1024,
+  );
+  expect(required(resumed.instructions[0]).includes(steering)).toBe(true);
+  resumed.finish("completed");
+  await resumed.disposed;
+  expect((await api.inspect(context(), "task")).status).toBe("completed");
+  await api.close();
+});
+
+test("unbatchable stored steering is rejected while paused without reserving a revision or opening a runtime", async () => {
+  const f = await fixture();
+  const api = await f.makeHost();
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  required(f.sessions[0]).finish("paused");
+  await required(f.sessions[0]).disposed;
+  const instruction = "x".repeat(MAX_RUNTIME_INSTRUCTION_LENGTH + 1);
+  const event = await f.store.appendEvent(context(), "task", {
+    event_type: "tool.completed",
+    producer: "@mars/workbench",
+    run_id: "legacy-steering",
+    versions: [{ component: "fixture", revision: "1" }],
+    payload: { change: "steered", task_status: "paused", instruction },
+  });
+  const paused = await api.inspect(context(), "task");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await expect(
+      api.resume(context(), "task", paused.revision),
+    ).rejects.toMatchObject({ code: "too_large" });
+    expect(await api.inspect(context(), "task")).toEqual(paused);
+    expect(f.sessions).toHaveLength(1);
+  }
+  const payload = JSON.parse(
+    new TextDecoder().decode(
+      await f.store.artifacts.get(context(), event.payload),
+    ),
+  );
+  expect(payload.instruction === instruction).toBe(true);
+  await api.close();
 });
 
 test("shutdown during queued steering delivery leaves the instruction available for the next resume", async () => {
