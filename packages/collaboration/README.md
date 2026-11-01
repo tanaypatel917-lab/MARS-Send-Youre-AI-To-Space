@@ -128,6 +128,10 @@ these pre-run failures accrue zero usage. `forbidden` and `invalid_input` from
 Failures after a `ChildRun` exists use reported usage or fail closed when usage
 cannot be reconciled.
 
+`closed` is returned for `send`, `delegate`, and other mutations on a closed
+or draining room; `results`, `reviewResult`, `members`, `children`, `inbox`,
+and `ack` still work on a closed room so proposals can be reviewed.
+
 ## Verification status
 
 Follow-up verification passed: the collaboration suite passed three consecutive

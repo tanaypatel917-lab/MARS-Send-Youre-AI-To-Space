@@ -309,6 +309,7 @@ export const ResultViewSchema = z
     summary: z.string(),
     summary_truncated: z.boolean(),
     unsafe_summary: z.boolean(),
+    unsafe_artifacts: z.number().int().nonnegative(),
     artifacts: z.array(ArtifactRefSchema),
     usage: ChildUsageSchema,
     created_at: z.number().finite(),

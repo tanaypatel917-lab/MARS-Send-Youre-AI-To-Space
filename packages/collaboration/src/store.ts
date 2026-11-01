@@ -239,7 +239,7 @@ export class CollaborationStore {
           source_task_id TEXT NOT NULL, source_task_revision INTEGER NOT NULL,
           base_revision TEXT, status TEXT NOT NULL, outcome TEXT NOT NULL,
           summary TEXT NOT NULL, summary_truncated INTEGER NOT NULL,
-          unsafe_summary INTEGER NOT NULL, artifacts_json TEXT NOT NULL,
+          unsafe_summary INTEGER NOT NULL, unsafe_artifacts INTEGER NOT NULL DEFAULT 0, artifacts_json TEXT NOT NULL,
           usage_json TEXT NOT NULL, created_at REAL NOT NULL
         );
         CREATE INDEX IF NOT EXISTS results_parent ON results(room_id, parent_agent_id, created_at);

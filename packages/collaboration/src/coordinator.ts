@@ -467,8 +467,6 @@ function auth(
       "Capability has a stale task revision",
     );
   liveStatus(member.status);
-  if (room.status === "closed")
-    throw new CollaborationError("closed", "Collaboration room is closed");
   if (mutation) assertRoomMutation(room);
   return { context, member, room };
 }
@@ -507,6 +505,7 @@ function resultViewFromRow(row: ResultRow): ResultView {
     summary: row.summary,
     summary_truncated: Boolean(row.summary_truncated),
     unsafe_summary: Boolean(row.unsafe_summary),
+    unsafe_artifacts: row.unsafe_artifacts,
     artifacts: decodeJson<ArtifactRef[]>(row.artifacts_json),
     usage: decodeJson<ChildUsage>(row.usage_json),
     created_at: row.created_at,
@@ -527,6 +526,7 @@ interface ResultRow {
   summary: string;
   summary_truncated: number;
   unsafe_summary: number;
+  unsafe_artifacts: number;
   artifacts_json: string;
   usage_json: string;
   created_at: number;
@@ -593,35 +593,112 @@ function releaseClaims(store: CollaborationStore, agentId: string): void {
   store.db.query("DELETE FROM write_claims WHERE agent_id = ?").run(agentId);
 }
 
+function jobReleased(store: CollaborationStore, agentId: string): boolean {
+  const job = store.db
+    .query<{ state: string }, [string]>(
+      "SELECT state FROM jobs WHERE agent_id = ?",
+    )
+    .get(agentId);
+  return (
+    job !== null &&
+    job !== undefined &&
+    job.state !== "queued" &&
+    job.state !== "running"
+  );
+}
+
+function activeDescendantUsage(
+  store: CollaborationStore,
+  member: MemberRow,
+): { tokens: number; usd: number } {
+  const children = store.db
+    .query<MemberRow, [string, string]>(
+      "SELECT * FROM members WHERE room_id = ? AND parent_agent_id = ?",
+    )
+    .all(member.room_id, member.agent_id);
+  const total = { tokens: 0, usd: 0 };
+  for (const child of children) {
+    if (jobReleased(store, child.agent_id)) continue;
+    const usage = decodeJson<MemberUsage>(child.usage_json);
+    total.tokens += tokensUsed(usage);
+    total.usd += usage.usd;
+  }
+  return total;
+}
+
+/**
+ * Releases the part of a terminal member's envelope that is not still held
+ * for its own active descendants. The release walks up through ancestors
+ * whose jobs already ended, so a grandchild that outlives its parent keeps
+ * its reservation in every ancestor's accounting until it ends itself.
+ */
 function releaseReservation(
   store: CollaborationStore,
   member: MemberRow,
 ): void {
   if (!member.parent_agent_id) return;
   const budget = agentBudget(member);
-  const reserved = { tokens: budget.max_tokens, usd: budget.max_usd };
-  const parent = store.getMemberRow(member.parent_agent_id);
-  const parentReserved = decodeJson<{ tokens: number; usd: number }>(
-    parent.reserved_json,
+  const held = decodeJson<{ tokens: number; usd: number }>(
+    member.reserved_json,
   );
-  const next = {
-    tokens: Math.max(0, parentReserved.tokens - reserved.tokens),
-    usd: Math.max(0, parentReserved.usd - reserved.usd),
+  const release = {
+    tokens: Math.max(0, budget.max_tokens - held.tokens),
+    usd: Math.max(0, budget.max_usd - held.usd),
   };
-  store.db
-    .query("UPDATE members SET reserved_json = ? WHERE agent_id = ?")
-    .run(JSON.stringify(next), parent.agent_id);
-  if (parent.parent_agent_id === null)
+  let ancestorId: string | null = member.parent_agent_id;
+  let reachedRoot = false;
+  while (ancestorId) {
+    const ancestor: MemberRow = store.getMemberRow(ancestorId);
+    const reserved = decodeJson<{ tokens: number; usd: number }>(
+      ancestor.reserved_json,
+    );
+    store.db
+      .query("UPDATE members SET reserved_json = ? WHERE agent_id = ?")
+      .run(
+        json({
+          tokens: Math.max(0, reserved.tokens - release.tokens),
+          usd: Math.max(0, reserved.usd - release.usd),
+        }),
+        ancestor.agent_id,
+      );
+    if (ancestor.parent_agent_id === null) {
+      reachedRoot = true;
+      break;
+    }
+    if (!jobReleased(store, ancestor.agent_id)) break;
+    ancestorId = ancestor.parent_agent_id;
+  }
+  if (reachedRoot) {
+    const usage = decodeJson<MemberUsage>(member.usage_json);
+    const active = activeDescendantUsage(store, member);
+    const consumed = {
+      tokens: Math.max(0, tokensUsed(usage) - active.tokens),
+      usd: Math.max(0, usage.usd - active.usd),
+    };
     updateStats(store, member.room_id, (stats) => {
       stats.reserved.tokens = Math.max(
         0,
-        stats.reserved.tokens - reserved.tokens,
+        stats.reserved.tokens - Math.max(0, release.tokens - consumed.tokens),
       );
-      stats.reserved.usd = Math.max(0, stats.reserved.usd - reserved.usd);
+      stats.reserved.usd = Math.max(
+        0,
+        stats.reserved.usd - Math.max(0, release.usd - consumed.usd),
+      );
     });
-  store.db
-    .query("UPDATE members SET reserved_json = ? WHERE agent_id = ?")
-    .run(JSON.stringify(zeroReserved), member.agent_id);
+  }
+}
+
+function cancelDescendants(
+  store: CollaborationStore,
+  roomId: string,
+  agentId: string,
+): void {
+  const children = store.db
+    .query<{ agent_id: string }, [string, string]>(
+      "SELECT agent_id FROM members WHERE room_id = ? AND parent_agent_id = ?",
+    )
+    .all(roomId, agentId);
+  for (const child of children) cancelSubtree(store, roomId, child.agent_id);
 }
 
 function cancelSubtree(
@@ -1006,178 +1083,189 @@ function createAgentPort(store: CollaborationStore): AgentPort {
           ttl_ms: ttl,
         }),
       );
-      return store.transaction(() => {
-        const previous = store.db
-          .query<MessageRow, [string, string, string]>(
-            "SELECT * FROM messages WHERE room_id = ? AND sender_id = ? AND idempotency_key = ?",
-          )
-          .get(room.room_id, member.agent_id, input.idempotency_key);
-        if (previous) {
-          if (previous.digest !== digest)
-            throw new CollaborationError(
-              "conflict",
-              "Message idempotency key was reused",
-            );
-          updateStats(store, room.room_id, (stats) => {
-            stats.replayed_sends += 1;
-          });
-          return messageView(store, previous, true);
-        }
-        const now = store.now();
-        const expiresAt = Math.min(
-          now + ttl,
-          room.deadline,
-          agentBudget(member).deadline,
-        );
-        if (expiresAt <= now)
-          throw new CollaborationError("expired", "Message has expired");
-        const targets = recipients.map((id) => {
-          const target = store.db
-            .query<MemberRow, [string, string]>(
-              "SELECT * FROM members WHERE room_id = ? AND agent_id = ?",
+      const rejection = {
+        code: null as "rejected_backpressure" | "rejected_loop" | null,
+      };
+      try {
+        return store.transaction(() => {
+          const previous = store.db
+            .query<MessageRow, [string, string, string]>(
+              "SELECT * FROM messages WHERE room_id = ? AND sender_id = ? AND idempotency_key = ?",
             )
-            .get(room.room_id, id);
-          if (!target || target.status !== "active")
-            throw new CollaborationError(
-              "forbidden",
-              "Recipient is not authorized",
-            );
-          if (!canAddress(store, member, target, input.kind, input.in_reply_to))
-            throw new CollaborationError(
-              "forbidden",
-              "Recipient is not authorized",
-            );
-          return target;
-        });
-        const hop = input.in_reply_to
-          ? replyHop(store, room.room_id, input.in_reply_to) + 1
-          : 0;
-        if (hop > limits.max_reply_hops) {
-          updateStats(store, room.room_id, (stats) => {
-            stats.rejected_loop += 1;
-          });
-          throw new CollaborationError(
-            "loop_limit",
-            "Reply chain exceeds room limit",
-          );
-        }
-        const total =
-          store.db
-            .query<{ amount: number }, [string]>(
-              "SELECT COUNT(*) AS amount FROM messages WHERE room_id = ?",
-            )
-            .get(room.room_id)?.amount ?? 0;
-        if (total >= limits.max_room_messages)
-          throw new CollaborationError(
-            "limit_exceeded",
-            "Room message limit reached",
-          );
-        const maxMessages = agentBudget(member).max_messages;
-        const sentCount =
-          store.db
-            .query<{ amount: number }, [string]>(
-              "SELECT COUNT(*) AS amount FROM messages WHERE sender_id = ?",
-            )
-            .get(member.agent_id)?.amount ?? 0;
-        if (maxMessages !== null && sentCount >= maxMessages)
-          throw new CollaborationError(
-            "budget_exceeded",
-            "Message budget reached",
-          );
-        for (const target of targets) {
-          const pairCount =
-            store.db
-              .query<{ amount: number }, [string, string, string]>(
-                "SELECT COUNT(*) AS amount FROM messages m JOIN deliveries d ON d.message_id = m.message_id WHERE m.room_id = ? AND m.sender_id = ? AND d.recipient_id = ?",
-              )
-              .get(room.room_id, member.agent_id, target.agent_id)?.amount ?? 0;
-          if (pairCount >= limits.max_pair_messages) {
+            .get(room.room_id, member.agent_id, input.idempotency_key);
+          if (previous) {
+            if (previous.digest !== digest)
+              throw new CollaborationError(
+                "conflict",
+                "Message idempotency key was reused",
+              );
             updateStats(store, room.room_id, (stats) => {
-              stats.rejected_loop += 1;
+              stats.replayed_sends += 1;
             });
+            return messageView(store, previous, true);
+          }
+          const now = store.now();
+          const expiresAt = Math.min(
+            now + ttl,
+            room.deadline,
+            agentBudget(member).deadline,
+          );
+          if (expiresAt <= now)
+            throw new CollaborationError("expired", "Message has expired");
+          const targets = recipients.map((id) => {
+            const target = store.db
+              .query<MemberRow, [string, string]>(
+                "SELECT * FROM members WHERE room_id = ? AND agent_id = ?",
+              )
+              .get(room.room_id, id);
+            if (!target || target.status !== "active")
+              throw new CollaborationError(
+                "forbidden",
+                "Recipient is not authorized",
+              );
+            if (
+              !canAddress(store, member, target, input.kind, input.in_reply_to)
+            )
+              throw new CollaborationError(
+                "forbidden",
+                "Recipient is not authorized",
+              );
+            return target;
+          });
+          const hop = input.in_reply_to
+            ? replyHop(store, room.room_id, input.in_reply_to) + 1
+            : 0;
+          if (hop > limits.max_reply_hops) {
+            rejection.code = "rejected_loop";
             throw new CollaborationError(
               "loop_limit",
-              "Message pair limit reached",
+              "Reply chain exceeds room limit",
             );
           }
-          const backlog =
+          const total =
             store.db
-              .query<{ amount: number }, [string, number]>(
-                `SELECT COUNT(*) AS amount FROM deliveries d
+              .query<{ amount: number }, [string]>(
+                "SELECT COUNT(*) AS amount FROM messages WHERE room_id = ?",
+              )
+              .get(room.room_id)?.amount ?? 0;
+          if (total >= limits.max_room_messages)
+            throw new CollaborationError(
+              "limit_exceeded",
+              "Room message limit reached",
+            );
+          const maxMessages = agentBudget(member).max_messages;
+          const sentCount =
+            store.db
+              .query<{ amount: number }, [string]>(
+                "SELECT COUNT(*) AS amount FROM messages WHERE sender_id = ?",
+              )
+              .get(member.agent_id)?.amount ?? 0;
+          if (maxMessages !== null && sentCount >= maxMessages)
+            throw new CollaborationError(
+              "budget_exceeded",
+              "Message budget reached",
+            );
+          for (const target of targets) {
+            const pairCount =
+              store.db
+                .query<{ amount: number }, [string, string, string]>(
+                  "SELECT COUNT(*) AS amount FROM messages m JOIN deliveries d ON d.message_id = m.message_id WHERE m.room_id = ? AND m.sender_id = ? AND d.recipient_id = ?",
+                )
+                .get(room.room_id, member.agent_id, target.agent_id)?.amount ??
+              0;
+            if (pairCount >= limits.max_pair_messages) {
+              rejection.code = "rejected_loop";
+              throw new CollaborationError(
+                "loop_limit",
+                "Message pair limit reached",
+              );
+            }
+            const backlog =
+              store.db
+                .query<{ amount: number }, [string, number]>(
+                  `SELECT COUNT(*) AS amount FROM deliveries d
                JOIN messages m ON m.message_id = d.message_id
                WHERE d.recipient_id = ? AND d.state IN ('pending', 'delivered') AND m.expires_at > ?`,
-              )
-              .get(target.agent_id, now)?.amount ?? 0;
-          if (backlog >= limits.max_inbox_backlog) {
-            updateStats(store, room.room_id, (stats) => {
-              stats.rejected_backpressure += 1;
-            });
-            throw new CollaborationError(
-              "backpressure",
-              "Recipient inbox is full",
-            );
+                )
+                .get(target.agent_id, now)?.amount ?? 0;
+            if (backlog >= limits.max_inbox_backlog) {
+              rejection.code = "rejected_backpressure";
+              throw new CollaborationError(
+                "backpressure",
+                "Recipient inbox is full",
+              );
+            }
           }
-        }
-        const seq = room.next_seq;
-        const messageId = store.randomId();
-        const message: MessageRow = {
-          message_id: messageId,
-          room_id: room.room_id,
-          seq,
-          sender_id: member.agent_id,
-          kind: input.kind,
-          body: input.body,
-          in_reply_to: input.in_reply_to ?? null,
-          artifacts_json: json(artifacts),
-          created_at: now,
-          expires_at: expiresAt,
-          hop,
-          idempotency_key: input.idempotency_key,
-          digest,
-        };
-        store.db
-          .query(
-            `INSERT INTO messages
+          const seq = room.next_seq;
+          const messageId = store.randomId();
+          const message: MessageRow = {
+            message_id: messageId,
+            room_id: room.room_id,
+            seq,
+            sender_id: member.agent_id,
+            kind: input.kind,
+            body: input.body,
+            in_reply_to: input.in_reply_to ?? null,
+            artifacts_json: json(artifacts),
+            created_at: now,
+            expires_at: expiresAt,
+            hop,
+            idempotency_key: input.idempotency_key,
+            digest,
+          };
+          store.db
+            .query(
+              `INSERT INTO messages
              (message_id, room_id, seq, sender_id, kind, body, in_reply_to, artifacts_json,
               created_at, expires_at, hop, idempotency_key, digest)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            messageId,
-            room.room_id,
-            seq,
-            member.agent_id,
-            input.kind,
-            input.body,
-            input.in_reply_to ?? null,
-            json(artifacts),
-            now,
-            expiresAt,
-            hop,
-            input.idempotency_key,
-            digest,
-          );
-        for (const target of targets) {
-          store.db
-            .query(
-              "INSERT INTO deliveries(message_id, recipient_id, state, delivered_count) VALUES (?, ?, 'pending', 0)",
             )
-            .run(messageId, target.agent_id);
-        }
-        store.db
-          .query("UPDATE rooms SET next_seq = next_seq + 1 WHERE room_id = ?")
-          .run(room.room_id);
-        const usage = decodeJson<MemberUsage>(member.usage_json);
-        usage.messages_sent += 1;
-        store.db
-          .query("UPDATE members SET usage_json = ? WHERE agent_id = ?")
-          .run(json(usage), member.agent_id);
-        updateStats(store, room.room_id, (stats) => {
-          stats.messages_sent += 1;
-          stats.deliveries += targets.length;
+            .run(
+              messageId,
+              room.room_id,
+              seq,
+              member.agent_id,
+              input.kind,
+              input.body,
+              input.in_reply_to ?? null,
+              json(artifacts),
+              now,
+              expiresAt,
+              hop,
+              input.idempotency_key,
+              digest,
+            );
+          for (const target of targets) {
+            store.db
+              .query(
+                "INSERT INTO deliveries(message_id, recipient_id, state, delivered_count) VALUES (?, ?, 'pending', 0)",
+              )
+              .run(messageId, target.agent_id);
+          }
+          store.db
+            .query("UPDATE rooms SET next_seq = next_seq + 1 WHERE room_id = ?")
+            .run(room.room_id);
+          const usage = decodeJson<MemberUsage>(member.usage_json);
+          usage.messages_sent += 1;
+          store.db
+            .query("UPDATE members SET usage_json = ? WHERE agent_id = ?")
+            .run(json(usage), member.agent_id);
+          updateStats(store, room.room_id, (stats) => {
+            stats.messages_sent += 1;
+            stats.deliveries += targets.length;
+          });
+          return messageView(store, message, false);
         });
-        return messageView(store, message, false);
-      });
+      } catch (error) {
+        const code = rejection.code;
+        if (code !== null)
+          store.transaction(() => {
+            updateStats(store, room.room_id, (stats) => {
+              stats[code] += 1;
+            });
+          });
+        throw error;
+      }
     },
     async inbox(contextValue, capabilityValue, inputValue = {}) {
       const { member, room } = auth(
@@ -2122,46 +2210,9 @@ function releaseChildReservation(
   member: MemberRow,
 ): { tokens: number; usd: number } {
   const budget = agentBudget(member);
-  const reservation = {
-    tokens: budget.max_tokens,
-    usd: budget.max_usd,
-  };
-  if (member.parent_agent_id) {
-    const parent = store.getMemberRow(member.parent_agent_id);
-    const parentReservation = decodeJson<{ tokens: number; usd: number }>(
-      parent.reserved_json,
-    );
-    store.db
-      .query("UPDATE members SET reserved_json = ? WHERE agent_id = ?")
-      .run(
-        json({
-          tokens: Math.max(0, parentReservation.tokens - reservation.tokens),
-          usd: Math.max(0, parentReservation.usd - reservation.usd),
-        }),
-        parent.agent_id,
-      );
-  }
-  store.db
-    .query("UPDATE members SET reserved_json = ? WHERE agent_id = ?")
-    .run(json(zeroReserved), member.agent_id);
-  if (member.parent_agent_id) {
-    const parent = store.getMemberRow(member.parent_agent_id);
-    if (parent.parent_agent_id === null) {
-      const usage = decodeJson<MemberUsage>(member.usage_json);
-      updateStats(store, member.room_id, (stats) => {
-        stats.reserved.tokens = Math.max(
-          0,
-          stats.reserved.tokens -
-            Math.max(0, reservation.tokens - tokensUsed(usage)),
-        );
-        stats.reserved.usd = Math.max(
-          0,
-          stats.reserved.usd - Math.max(0, reservation.usd - usage.usd),
-        );
-      });
-    }
-  }
-  return reservation;
+  cancelDescendants(store, member.room_id, member.agent_id);
+  releaseReservation(store, store.getMemberRow(member.agent_id));
+  return { tokens: budget.max_tokens, usd: budget.max_usd };
 }
 
 function closeDrainedRoom(store: CollaborationStore, roomId: string): void {
@@ -2375,7 +2426,6 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
         }
         const member = store.getMemberRow(job.agent_id);
         const room = store.getRoomRow(job.room_id);
-        releaseChildReservation(store, member);
         const charged = decodeJson<ChildUsage>(job.charged_usage_json);
         const ownRuntimeCap = runtimeCap(member);
         let effectiveOutcome = outcome;
@@ -2390,6 +2440,7 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
             steps: 0,
           };
           chargeUsage(store, member, fullUsage);
+          releaseChildReservation(store, member);
           store.db
             .query(
               "UPDATE jobs SET state = 'failed', lease_owner = NULL WHERE job_id = ?",
@@ -2412,6 +2463,7 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
           const usage = outcome.usage;
           const delta = subtractUsage(usage, charged);
           chargeUsage(store, member, delta);
+          releaseChildReservation(store, member);
           if (
             tokensUsed(usage) > ownRuntimeCap.tokens ||
             usage.usd > ownRuntimeCap.usd ||
@@ -2490,9 +2542,29 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
           const maxArtifacts = decodeJson<CollaborationLimits>(
             freshRoom.limits_json,
           ).max_artifacts;
-          const artifacts = effectiveOutcome.artifacts
-            .slice(0, maxArtifacts)
-            .map((artifact) => ArtifactRefSchema.parse(artifact));
+          const artifacts: ArtifactRef[] = [];
+          let unsafeArtifacts = 0;
+          for (const candidate of effectiveOutcome.artifacts.slice(
+            0,
+            maxArtifacts,
+          )) {
+            const parsed = ArtifactRefSchema.safeParse(candidate);
+            if (!parsed.success) {
+              unsafeArtifacts += 1;
+              continue;
+            }
+            try {
+              assertPublishable(
+                json(parsed.data),
+                store.hostPrivateRoots,
+                store.rootDir,
+              );
+              artifacts.push(parsed.data);
+            } catch (error) {
+              if (!(error instanceof CollaborationError)) throw error;
+              unsafeArtifacts += 1;
+            }
+          }
           const resultId = store.randomId();
           const resultStatus =
             freshRoom.task_revision === member.task_revision
@@ -2503,8 +2575,8 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
               `INSERT INTO results
                (result_id, room_id, child_agent_id, parent_agent_id, source_task_id,
                 source_task_revision, base_revision, status, outcome, summary,
-                summary_truncated, unsafe_summary, artifacts_json, usage_json, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                summary_truncated, unsafe_summary, unsafe_artifacts, artifacts_json, usage_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               resultId,
@@ -2519,6 +2591,7 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
               safeSummary,
               truncated ? 1 : 0,
               unsafeSummary ? 1 : 0,
+              unsafeArtifacts,
               json(artifacts),
               json(effectiveOutcome.usage ?? zeroUsage),
               store.now(),

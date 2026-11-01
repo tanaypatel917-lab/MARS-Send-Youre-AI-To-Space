@@ -129,6 +129,21 @@ service owner performs any follow-up action.
 - Results are marked stale when the source task revision changes. Acceptance
   also checks the expected task revision and, where present, the current
   workspace base revision.
+- Child artifact references pass the same `assertPublishable` check as
+  message artifacts. Unsafe or malformed references are dropped and counted in
+  the result's `unsafe_artifacts` field.
+- A closed room (after drain or cancel) still allows read-only calls and
+  `reviewResult`, so the parent can review proposals produced during a drain.
+  `send` and `delegate` fail with `closed`.
+- Reservations stay held for active descendants: when a member ends before its
+  own children, its orphaned descendants are cancelled and its envelope is
+  released only up to the part they still hold; each descendant releases its
+  own part when its job ends, through any ancestors that have already ended.
+- Adapters report `steps` per attempt; the runner adds the steps charged by
+  earlier attempts, launches retries with the remaining allowance, and fails a
+  retry with no steps left before the adapter starts. A retry that resumes a
+  journal reuses the persisted model instead of re-running the model policy,
+  so the runtime binding stays valid.
 
 ## Not verified
 

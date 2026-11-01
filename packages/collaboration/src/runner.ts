@@ -25,6 +25,7 @@ export interface ChildLaunch {
   attempt: number;
 }
 
+/** `steps` counts this attempt only; the runner adds earlier attempts. */
 export interface ChildProgress {
   steps: number;
   usage: ChildUsage | null;
@@ -39,6 +40,7 @@ export interface ChildRun {
   cancel(): Promise<void>;
 }
 
+/** `usage.steps` counts this attempt only; tokens and usd are session totals. */
 export interface ChildOutcome {
   status: "completed" | "paused" | "failed" | "cancelled";
   summary: string;
@@ -170,6 +172,17 @@ function launchBudget(context: LaunchContext, now: number): Budget {
   };
 }
 
+function remainingSteps(context: LaunchContext): number {
+  const limit = context.member.budget.max_steps ?? 10_000;
+  const remaining = limit - context.charged_usage.steps;
+  if (remaining <= 0)
+    throw new CollaborationError(
+      "budget_exceeded",
+      "Child step budget is exhausted",
+    );
+  return remaining;
+}
+
 function makeLaunch(
   context: LaunchContext,
   modelId: string | null,
@@ -194,7 +207,7 @@ function makeLaunch(
     paid_models: context.paid_models,
     model_id: modelId,
     budget: launchBudget(context, now),
-    max_steps: context.member.budget.max_steps ?? 10_000,
+    max_steps: remainingSteps(context),
     workspace_mode:
       context.member.workspace_mode === "private" ? "private" : "read_only",
     write_paths: context.member.write_paths,
@@ -256,11 +269,18 @@ export function createChildRunner(options: ChildRunnerOptions): ChildRunner {
           : latest.base_revision;
       const normalizedProgress: ChildProgress = {
         ...progressWithoutSessionRef,
+        steps: usageBaseline.steps + progress.steps,
+        usage: progress.usage
+          ? {
+              ...progress.usage,
+              steps: usageBaseline.steps + progress.usage.steps,
+            }
+          : null,
         ...(sessionRef ? { session_ref: sessionRef } : {}),
       };
       latest = {
         ...latest,
-        ...normalizedProgress,
+        ...progressWithoutSessionRef,
         ...(sessionRef ? { session_ref: sessionRef } : {}),
         ...(baseRevision !== undefined ? { base_revision: baseRevision } : {}),
       };
@@ -275,7 +295,7 @@ export function createChildRunner(options: ChildRunnerOptions): ChildRunner {
               progress.usage.output_tokens - usageBaseline.output_tokens,
             ),
             usd: Math.max(0, progress.usage.usd - usageBaseline.usd),
-            steps: Math.max(0, progress.usage.steps - usageBaseline.steps),
+            steps: progress.usage.steps,
           }
         : null;
       const isBudgetStop =
@@ -324,32 +344,35 @@ export function createChildRunner(options: ChildRunnerOptions): ChildRunner {
           await options.collaboration.host.jobs.getLaunchContext(jobId);
         contextDeadline = context.member.budget.deadline;
         usageBaseline = context.charged_usage;
-        const selected = await modelPolicy({
-          role_label: context.member.role_label,
-          complexity: context.complexity,
-          solution_space: context.solution_space,
-          parent_model_id: context.parent_model_id,
-          paid_allowed: context.paid_models,
-          depth: context.member.depth,
-        });
-        if (
-          !selected ||
-          (typeof selected.model_id !== "string" &&
-            selected.model_id !== null) ||
-          typeof selected.reason !== "string"
-        )
-          throw new CollaborationError(
-            "invalid_input",
-            "Model policy returned invalid selection",
+        let modelId: string | null = context.model_id;
+        if (context.session_ref === null) {
+          const selected = await modelPolicy({
+            role_label: context.member.role_label,
+            complexity: context.complexity,
+            solution_space: context.solution_space,
+            parent_model_id: context.parent_model_id,
+            paid_allowed: context.paid_models,
+            depth: context.member.depth,
+          });
+          if (
+            !selected ||
+            (typeof selected.model_id !== "string" &&
+              selected.model_id !== null) ||
+            typeof selected.reason !== "string"
+          )
+            throw new CollaborationError(
+              "invalid_input",
+              "Model policy returned invalid selection",
+            );
+          modelId = selected.model_id ?? context.parent_model_id;
+          await options.collaboration.host.jobs.setModelSelection(
+            jobId,
+            runnerId,
+            claimed.lease_epoch,
+            modelId,
+            selected.reason,
           );
-        const modelId = selected.model_id ?? context.parent_model_id;
-        await options.collaboration.host.jobs.setModelSelection(
-          jobId,
-          runnerId,
-          claimed.lease_epoch,
-          modelId,
-          selected.reason,
-        );
+        }
         launch = makeLaunch(context, modelId, context.now);
         disarmDeadline = armDeadline(
           context.member.budget.deadline,
@@ -422,6 +445,14 @@ export function createChildRunner(options: ChildRunnerOptions): ChildRunner {
         if (stopReason === "budget") outcome = { ...outcome, status: "failed" };
         if (stopReason === "cancelled" && outcome.status !== "failed")
           outcome = { ...outcome, status: "cancelled" };
+        if (outcome.usage)
+          outcome = {
+            ...outcome,
+            usage: {
+              ...outcome.usage,
+              steps: usageBaseline.steps + outcome.usage.steps,
+            },
+          };
         await options.collaboration.host.jobs.finalize(
           jobId,
           runnerId,
