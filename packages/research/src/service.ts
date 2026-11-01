@@ -228,6 +228,8 @@ interface RequestRow {
   worker_json: string | null;
   finished_at: string | null;
   stale_event_state: "none" | "pending" | "sent";
+  stale_event_request_id: string | null;
+  stale_event_json: string | null;
   seq: number;
 }
 
@@ -242,6 +244,8 @@ interface FindingRow {
   status: ResearchFinding["status"];
   attempt: number;
   event_state: "none" | "pending" | "sent";
+  event_request_id: string | null;
+  event_json: string | null;
 }
 
 interface ClaimedJob {
@@ -496,6 +500,76 @@ function rowWorker(row: RequestRow): { id: string; version: string } | null {
   throw new ResearchError("corrupt_record", "Corrupt worker record");
 }
 
+function parseStoredEventInput(value: string | null): AppendEventInput | null {
+  if (value === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
+      return null;
+    }
+    const event = parsed as Record<string, unknown>;
+    if (
+      (event.event_type !== "research.proposed" &&
+        event.event_type !== "research.stale") ||
+      typeof event.run_id !== "string" ||
+      event.run_id.length === 0 ||
+      event.producer !== "mars-research" ||
+      !Array.isArray(event.versions) ||
+      event.versions.length === 0 ||
+      event.versions.some(
+        (version) =>
+          version === null ||
+          typeof version !== "object" ||
+          typeof (version as { component?: unknown }).component !== "string" ||
+          typeof (version as { revision?: unknown }).revision !== "string",
+      ) ||
+      !Array.isArray(event.source_event_ids) ||
+      event.source_event_ids.some((id) => typeof id !== "string")
+    ) {
+      return null;
+    }
+    if (
+      event.payload === null ||
+      typeof event.payload !== "object" ||
+      Array.isArray(event.payload)
+    ) {
+      return null;
+    }
+    const payload = event.payload as Record<string, unknown>;
+    if (
+      typeof payload.request_id !== "string" ||
+      !Number.isSafeInteger(payload.task_revision)
+    ) {
+      return null;
+    }
+    if (
+      event.event_type === "research.proposed" &&
+      (typeof payload.finding_id !== "string" ||
+        typeof payload.confidence !== "string" ||
+        !Number.isSafeInteger(payload.source_count))
+    ) {
+      return null;
+    }
+    if (
+      event.event_type === "research.stale" &&
+      (!Array.isArray(payload.stale_finding_ids) ||
+        payload.stale_finding_ids.some((id) => typeof id !== "string"))
+    ) {
+      return null;
+    }
+    if (event.usage !== undefined || canonicalJson(parsed) !== value) {
+      return null;
+    }
+    return parsed as AppendEventInput;
+  } catch {
+    return null;
+  }
+}
+
 function findRequest(
   db: Database,
   scopeKey: string,
@@ -596,6 +670,15 @@ export async function createResearchService(
     );
   }
   const configured = validateOptions(options);
+  const requestedMaxTimerMs = (
+    options as ResearchServiceOptions & { __maxTimerMs?: number }
+  ).__maxTimerMs;
+  const maxTimerMs =
+    typeof requestedMaxTimerMs === "number" &&
+    Number.isSafeInteger(requestedMaxTimerMs) &&
+    requestedMaxTimerMs > 0
+      ? Math.min(MAX_TIMER_MS, requestedMaxTimerMs)
+      : MAX_TIMER_MS;
   const storeOptions =
     options.hostPrivateRoots === undefined
       ? { rootDir: options.rootDir }
@@ -616,6 +699,7 @@ export async function createResearchService(
   let dbOpen = true;
   let autoPump: ReturnType<typeof setInterval> | undefined;
   let pumping = false;
+  let flushInFlight: Promise<void> | null = null;
   let closePromise: Promise<void> | undefined;
 
   const currentTime = (): number => configured.now();
@@ -713,7 +797,7 @@ export async function createResearchService(
       )
       .all(scopeKey, requestId, afterSeq) as FindingRow[];
 
-  const flushEvents = async (): Promise<void> => {
+  const flushEventsWork = async (): Promise<void> => {
     if (!options.events || !dbOpen) return;
     const pending = db
       .query(
@@ -724,49 +808,33 @@ export async function createResearchService(
     for (const row of pending) {
       if (!dbOpen) return;
       try {
-        const finding = verifiedFinding(row);
+        const eventInput = parseStoredEventInput(row.event_json);
+        if (!eventInput || row.event_request_id === null) continue;
+        verifiedFinding(row);
         const request = findRequest(db, row.scope_key, row.request_id);
         const scopeContext = scopeCanonicalContext(
           request.scope_json,
-          `research:${finding.finding_id}:proposed`,
+          row.event_request_id,
         );
-        await options.events.appendEvent(scopeContext, request.task_id, {
-          event_type: "research.proposed",
-          run_id: row.request_id,
-          producer: "mars-research",
-          versions: [
-            {
-              component: "@mars/research",
-              revision: String(RESEARCH_STORE_FORMAT_VERSION),
-            },
-            {
-              component: `worker:${options.worker.id}`,
-              revision: options.worker.version,
-            },
-          ],
-          payload: {
-            request_id: row.request_id,
-            finding_id: finding.finding_id,
-            task_revision: finding.task_revision,
-            confidence: finding.confidence,
-            source_count: finding.sources.length,
-          },
-          source_event_ids: [],
+        await options.events.appendEvent(
+          scopeContext,
+          request.task_id,
+          eventInput,
+        );
+        if (!dbOpen) return;
+        immediate(db, () => {
+          db.query(
+            `UPDATE findings SET event_state = 'sent'
+             WHERE scope_key = ? AND request_id = ? AND seq = ?
+               AND event_state = 'pending'`,
+          ).run(row.scope_key, row.request_id, row.seq);
         });
-        if (dbOpen) {
-          immediate(db, () => {
-            db.query(
-              `UPDATE findings SET event_state = 'sent'
-               WHERE scope_key = ? AND request_id = ? AND seq = ?
-                 AND event_state = 'pending'`,
-            ).run(row.scope_key, row.request_id, row.seq);
-          });
-        }
       } catch {
         // Pending outbox records are retried on a later pump.
       }
     }
 
+    if (!dbOpen) return;
     const staleRows = db
       .query(
         `SELECT * FROM requests WHERE stale_event_state = 'pending'
@@ -776,57 +844,69 @@ export async function createResearchService(
     for (const row of staleRows) {
       if (!dbOpen) return;
       try {
-        const staleFindingIds = db
-          .query(
-            `SELECT finding_id FROM findings
-             WHERE scope_key = ? AND request_id = ? AND status = 'stale'
-             ORDER BY seq`,
-          )
-          .all(row.scope_key, row.request_id) as Array<{ finding_id: string }>;
+        const eventInput = parseStoredEventInput(row.stale_event_json);
+        if (!eventInput || row.stale_event_request_id === null) continue;
         const context = scopeCanonicalContext(
           row.scope_json,
-          `research:${row.request_id}:stale`,
+          row.stale_event_request_id,
         );
-        await options.events.appendEvent(context, row.task_id, {
-          event_type: "research.stale",
-          run_id: row.request_id,
-          producer: "mars-research",
-          versions: [
-            {
-              component: "@mars/research",
-              revision: String(RESEARCH_STORE_FORMAT_VERSION),
-            },
-            {
-              component: `worker:${options.worker.id}`,
-              revision: options.worker.version,
-            },
-          ],
-          payload: {
-            request_id: row.request_id,
-            task_revision: row.task_revision,
-            stale_finding_ids: staleFindingIds.map(
-              (finding) => finding.finding_id,
-            ),
-          },
-          source_event_ids: [],
+        await options.events.appendEvent(context, row.task_id, eventInput);
+        if (!dbOpen) return;
+        immediate(db, () => {
+          db.query(
+            `UPDATE requests SET stale_event_state = 'sent'
+             WHERE scope_key = ? AND request_id = ?
+               AND stale_event_state = 'pending'`,
+          ).run(row.scope_key, row.request_id);
         });
-        if (dbOpen) {
-          immediate(db, () => {
-            db.query(
-              `UPDATE requests SET stale_event_state = 'sent'
-               WHERE scope_key = ? AND request_id = ?
-                 AND stale_event_state = 'pending'`,
-            ).run(row.scope_key, row.request_id);
-          });
-        }
       } catch {
         // Pending outbox records are retried on a later pump.
       }
     }
   };
 
+  const flushEvents = (): Promise<void> => {
+    if (!options.events || !dbOpen) return Promise.resolve();
+    if (flushInFlight) return flushInFlight;
+    let inFlight!: Promise<void>;
+    inFlight = Promise.resolve()
+      .then(flushEventsWork)
+      .finally(() => {
+        if (flushInFlight === inFlight) flushInFlight = null;
+      });
+    flushInFlight = inFlight;
+    return inFlight;
+  };
+
   const markExpired = (entry: LocalRun): void => {
-    if (!dbOpen) return;
+    if (
+      !dbOpen ||
+      entry.controller.signal.aborted ||
+      localRuns.get(entry.key) !== entry
+    ) {
+      return;
+    }
+    const row = db
+      .query(
+        `SELECT deadline FROM requests
+         WHERE scope_key = ? AND request_id = ? AND lease_token = ?
+           AND status IN ('queued', 'running')`,
+      )
+      .get(entry.scopeKey, entry.requestId, entry.token) as {
+      deadline: string;
+    } | null;
+    if (!row) return;
+    const deadline = Date.parse(row.deadline);
+    const remaining = deadline - currentTime();
+    if (remaining > 0) {
+      clearTimeout(entry.deadlineTimer);
+      entry.deadlineTimer = setTimeout(
+        () => markExpired(entry),
+        Math.max(0, Math.min(maxTimerMs, remaining)),
+      );
+      entry.deadlineTimer.unref?.();
+      return;
+    }
     const changed = immediate(db, () =>
       db
         .query(
@@ -845,6 +925,7 @@ export async function createResearchService(
         ),
     );
     if (changed.changes === 1) {
+      clearTimeout(entry.deadlineTimer);
       entry.controller.abort("deadline_exceeded");
       wake();
     }
@@ -1386,11 +1467,44 @@ export async function createResearchService(
             status: "proposed",
           };
           const canonical = canonicalRecord(record);
+          let eventRequestId: string | null = null;
+          let eventJson: string | null = null;
+          if (options.events) {
+            const worker = rowWorker(row) ?? {
+              id: options.worker.id,
+              version: options.worker.version,
+            };
+            eventRequestId = `research:${findingId}:proposed`;
+            eventJson = canonicalJson({
+              event_type: "research.proposed",
+              run_id: entry.requestId,
+              producer: "mars-research",
+              versions: [
+                {
+                  component: "@mars/research",
+                  revision: String(RESEARCH_STORE_FORMAT_VERSION),
+                },
+                {
+                  component: `worker:${worker.id}`,
+                  revision: worker.version,
+                },
+              ],
+              payload: {
+                request_id: entry.requestId,
+                finding_id: findingId,
+                task_revision: record.task_revision,
+                confidence: record.confidence,
+                source_count: record.sources.length,
+              },
+              source_event_ids: [],
+            } satisfies AppendEventInput);
+          }
           db.query(
             `INSERT INTO findings
              (scope_key, request_id, seq, finding_id, finding_key, record_json,
-              record_sha256, status, attempt, event_state)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?)`,
+              record_sha256, status, attempt, event_state, event_request_id,
+              event_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?)`,
           ).run(
             entry.scopeKey,
             entry.requestId,
@@ -1401,6 +1515,8 @@ export async function createResearchService(
             canonical.record_sha256,
             row.attempts,
             options.events ? "pending" : "none",
+            eventRequestId,
+            eventJson,
           );
           wake();
           return record;
@@ -1491,10 +1607,7 @@ export async function createResearchService(
         () => markExpired(entry),
         Math.max(
           0,
-          Math.min(
-            MAX_TIMER_MS,
-            Date.parse(claim.row.deadline) - currentTime(),
-          ),
+          Math.min(maxTimerMs, Date.parse(claim.row.deadline) - currentTime()),
         ),
       ),
       forced: false,
@@ -1569,7 +1682,7 @@ export async function createResearchService(
       while (localRuns.size < configured.maxConcurrency && state === "open") {
         const claim = claimNext();
         if (!claim) break;
-        void executeClaim(claim);
+        void executeClaim(claim).catch(() => {});
       }
       wake();
     } finally {
@@ -1580,7 +1693,7 @@ export async function createResearchService(
   const schedulePump = (): void => {
     if (configured.autoStart && state === "open") {
       queueMicrotask(() => {
-        void pump();
+        void pump().catch(() => {});
       });
     }
   };
@@ -1606,29 +1719,77 @@ export async function createResearchService(
           );
         }
       }
+      let staleEventRequestId: string | null = null;
+      let staleEventJson: string | null = null;
+      if (options.events) {
+        const worker = rowWorker(row);
+        const staleFindingIds = db
+          .query(
+            `SELECT finding_id FROM findings
+             WHERE scope_key = ? AND request_id = ? AND status = 'stale'
+             ORDER BY seq`,
+          )
+          .all(scopeKey, requestId) as Array<{ finding_id: string }>;
+        staleEventRequestId = `research:${row.request_id}:stale`;
+        staleEventJson = canonicalJson({
+          event_type: "research.stale",
+          run_id: row.request_id,
+          producer: "mars-research",
+          versions: [
+            {
+              component: "@mars/research",
+              revision: String(RESEARCH_STORE_FORMAT_VERSION),
+            },
+            worker
+              ? {
+                  component: `worker:${worker.id}`,
+                  revision: worker.version,
+                }
+              : { component: "worker:none", revision: "0" },
+          ],
+          payload: {
+            request_id: row.request_id,
+            task_revision: row.task_revision,
+            stale_finding_ids: staleFindingIds.map(
+              (finding) => finding.finding_id,
+            ),
+          },
+          source_event_ids: [],
+        } satisfies AppendEventInput);
+      }
       const active = ACTIVE_STATUSES.includes(
         row.status as "queued" | "running",
       );
       if (active) {
         db.query(
           `UPDATE requests SET stale = 1,
-             stale_event_state = ?, cancel_requested = 1,
+             stale_event_state = ?, stale_event_request_id = ?,
+             stale_event_json = ?, cancel_requested = 1,
              status = 'cancelled', error_code = 'cancelled', finished_at = ?,
              lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
            WHERE scope_key = ? AND request_id = ?
              AND status IN ('queued', 'running')`,
         ).run(
           options.events ? "pending" : "none",
+          staleEventRequestId,
+          staleEventJson,
           timestamp(currentTime()),
           scopeKey,
           requestId,
         );
       } else {
         db.query(
-          `UPDATE requests SET stale = 1, stale_event_state = ?
+          `UPDATE requests SET stale = 1, stale_event_state = ?,
+             stale_event_request_id = ?, stale_event_json = ?
            WHERE scope_key = ? AND request_id = ?
              AND status NOT IN ('queued', 'running')`,
-        ).run(options.events ? "pending" : "none", scopeKey, requestId);
+        ).run(
+          options.events ? "pending" : "none",
+          staleEventRequestId,
+          staleEventJson,
+          scopeKey,
+          requestId,
+        );
       }
       return true;
     });
@@ -2002,17 +2163,19 @@ export async function createResearchService(
         throw new ResearchError("invalid_input", "Invalid close options");
       }
       const drainMs = closeOptions?.drainMs ?? 5000;
+      const drainDeadline = Date.now() + drainMs;
       state = "closing";
       if (autoPump) clearInterval(autoPump);
       wake();
       closePromise = (async () => {
-        if (localRuns.size > 0 && drainMs > 0) {
+        const runDrainMs = Math.max(0, drainDeadline - Date.now());
+        if (localRuns.size > 0 && runDrainMs > 0) {
           let drainTimer: ReturnType<typeof setTimeout> | undefined;
           try {
             await Promise.race([
               Promise.all([...localRuns.values()].map((run) => run.settled)),
               new Promise<void>((resolve) => {
-                drainTimer = setTimeout(resolve, drainMs);
+                drainTimer = setTimeout(resolve, runDrainMs);
               }),
             ]);
           } finally {
@@ -2039,6 +2202,24 @@ export async function createResearchService(
         state = "closed";
         wake();
         dbOpen = false;
+        const pendingFlush = flushInFlight;
+        if (pendingFlush) {
+          const safeFlush = pendingFlush.catch(() => {});
+          const remainingMs = Math.max(0, drainDeadline - Date.now());
+          if (remainingMs > 0) {
+            let flushTimer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              await Promise.race([
+                safeFlush,
+                new Promise<void>((resolve) => {
+                  flushTimer = setTimeout(resolve, remainingMs);
+                }),
+              ]);
+            } finally {
+              if (flushTimer !== undefined) clearTimeout(flushTimer);
+            }
+          }
+        }
         store.close();
       })();
       return closePromise;
@@ -2047,10 +2228,11 @@ export async function createResearchService(
 
   if (configured.autoStart) {
     autoPump = setInterval(() => {
-      void pump();
+      void pump().catch(() => {});
     }, configured.pollMs);
     autoPump.unref?.();
     schedulePump();
+    void pump().catch(() => {});
   }
 
   return api;

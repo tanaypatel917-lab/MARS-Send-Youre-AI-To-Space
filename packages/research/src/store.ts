@@ -194,6 +194,8 @@ function prepareDatabase(db: Database): void {
       worker_json TEXT,
       finished_at TEXT,
       stale_event_state TEXT NOT NULL,
+      stale_event_request_id TEXT,
+      stale_event_json TEXT,
       UNIQUE(scope_key, request_id),
       UNIQUE(scope_key, idem_request_id)
     );
@@ -212,6 +214,8 @@ function prepareDatabase(db: Database): void {
       status TEXT NOT NULL,
       attempt INTEGER NOT NULL,
       event_state TEXT NOT NULL,
+      event_request_id TEXT,
+      event_json TEXT,
       PRIMARY KEY(scope_key, request_id, seq),
       UNIQUE(scope_key, finding_id),
       UNIQUE(scope_key, request_id, finding_key),

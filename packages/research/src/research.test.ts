@@ -151,7 +151,9 @@ async function setup(
     task?: Task;
     taskScope?: RequestContext["scope"];
     now?: () => number;
-    service?: Partial<Parameters<typeof createResearchService>[0]>;
+    service?: Partial<Parameters<typeof createResearchService>[0]> & {
+      __maxTimerMs?: number;
+    };
   } = {},
 ) {
   const root = makeRoot();
@@ -1006,6 +1008,56 @@ describe("@mars/research durable control plane", () => {
     expect((await second.inspect(context(), id)).attempts).toBe(2);
   });
 
+  test("reschedules capped deadline timers until the stored deadline", async () => {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const worker: ResearchWorker = {
+      id: "capped-deadline-worker",
+      version: "1",
+      async run(_input, workerContext) {
+        resolveStarted();
+        await new Promise<void>((_resolve, reject) => {
+          const onAbort = () => reject(new Error("deadline reached"));
+          if (workerContext.signal.aborted) {
+            onAbort();
+          } else {
+            workerContext.signal.addEventListener("abort", onAbort, {
+              once: true,
+            });
+          }
+        });
+      },
+    };
+    const env = await setup({
+      worker,
+      service: {
+        autoStart: false,
+        maxAttempts: 1,
+        __maxTimerMs: 10,
+      },
+    });
+    const id = await request(env.service, env.now, "capped-deadline", {
+      deadline: new Date(env.now() + 300).toISOString(),
+    });
+    await env.service.pump();
+    await started;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const beforeDeadline = await env.service.inspect(context(), id);
+    expect(beforeDeadline.status).toBe("running");
+    expect(Date.now()).toBeLessThan(Date.parse(beforeDeadline.deadline));
+
+    await waitFor(
+      async () =>
+        (await env.service.inspect(context(), id)).status === "expired",
+      1000,
+    );
+    expect((await env.service.inspect(context(), id)).error_code).toBe(
+      "deadline_exceeded",
+    );
+  });
+
   test("expires deadlines across queued work and reports persisted late-write codes", async () => {
     let nowMs = 1_700_000_100_000;
     const now = () => nowMs;
@@ -1493,6 +1545,197 @@ describe("@mars/research durable control plane", () => {
       afterStale.filter((event) => event.event_type === "research.stale"),
     ).toHaveLength(1);
     expect(JSON.stringify(afterStale.at(-1)?.payload)).not.toContain(env.root);
+  });
+
+  test("replays the persisted proposed and stale event inputs after append crashes", async () => {
+    let taskStore: Awaited<ReturnType<typeof createTaskStore>> | undefined;
+    const worker = (version: string): ResearchWorker => ({
+      id: "outbox-versioned-worker",
+      version,
+      async run(input, workerContext) {
+        const evidence = await capture(
+          workerContext,
+          Date.now,
+          input.request_id,
+        );
+        await workerContext.publish(
+          proposal(evidence.ref, evidence.url, evidence.retrievedAt),
+        );
+      },
+    });
+    const failingSink = (
+      eventType: "research.proposed" | "research.stale",
+      onAppend: () => void,
+    ) => ({
+      async appendEvent(
+        eventContext: RequestContext,
+        taskId: string,
+        input: Parameters<
+          Awaited<ReturnType<typeof createTaskStore>>["appendEvent"]
+        >[2],
+      ) {
+        if (!taskStore) throw new Error("Task store is not ready");
+        const event = await taskStore.appendEvent(eventContext, taskId, input);
+        if (input.event_type === eventType) {
+          onAppend();
+          throw new Error("Simulated crash after task event append");
+        }
+        return event;
+      },
+    });
+    let proposedAppended!: () => void;
+    const proposedAppend = new Promise<void>((resolve) => {
+      proposedAppended = resolve;
+    });
+    const env = await setup({
+      worker: worker("1"),
+      service: {
+        autoStart: false,
+        events: failingSink("research.proposed", proposedAppended),
+      },
+    });
+    taskStore = env.tasks;
+    const id = await request(env.service, env.now, "outbox-stable");
+    await env.service.pump();
+    await proposedAppend;
+    await waitFor(
+      async () =>
+        (await env.service.inspect(context(), id)).status === "completed",
+    );
+    await env.service.close();
+
+    const proposedReplay = await createResearchService({
+      rootDir: env.researchRoot,
+      tasks: env.tasks,
+      artifacts: env.tasks.artifacts,
+      events: env.tasks,
+      worker: worker("2"),
+      autoStart: false,
+      now: env.now,
+    });
+    services.push(proposedReplay);
+    await proposedReplay.pump();
+    const proposedEvents = (
+      await collect(env.tasks.events(context(), env.task.task_id))
+    ).filter((event) => event.event_type === "research.proposed");
+    expect(proposedEvents).toHaveLength(1);
+    expect(proposedEvents[0]?.versions).toContainEqual({
+      component: "worker:outbox-versioned-worker",
+      revision: "1",
+    });
+    await proposedReplay.close();
+
+    let staleAppended!: () => void;
+    const staleAppend = new Promise<void>((resolve) => {
+      staleAppended = resolve;
+    });
+    const staleReplay = await createResearchService({
+      rootDir: env.researchRoot,
+      tasks: env.tasks,
+      artifacts: env.tasks.artifacts,
+      events: failingSink("research.stale", staleAppended),
+      worker: worker("2"),
+      autoStart: false,
+      now: env.now,
+    });
+    services.push(staleReplay);
+    await staleReplay.markStale(context("outbox-stable-stale"), id);
+    await staleAppend;
+    await staleReplay.close();
+
+    const finalReplay = await createResearchService({
+      rootDir: env.researchRoot,
+      tasks: env.tasks,
+      artifacts: env.tasks.artifacts,
+      events: env.tasks,
+      worker: worker("2"),
+      autoStart: false,
+      now: env.now,
+    });
+    services.push(finalReplay);
+    await finalReplay.pump();
+    const events = await collect(env.tasks.events(context(), env.task.task_id));
+    const staleEvents = events.filter(
+      (event) => event.event_type === "research.stale",
+    );
+    expect(staleEvents).toHaveLength(1);
+    expect(staleEvents[0]?.versions).toContainEqual({
+      component: "worker:outbox-versioned-worker",
+      revision: "1",
+    });
+  });
+
+  test("close leaves a blocked outbox event pending for safe replay", async () => {
+    let taskStore: Awaited<ReturnType<typeof createTaskStore>> | undefined;
+    let appendStarted!: () => void;
+    let releaseAppend!: () => void;
+    const appendStartedPromise = new Promise<void>((resolve) => {
+      appendStarted = resolve;
+    });
+    const appendGate = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    const eventSink = {
+      async appendEvent(
+        eventContext: RequestContext,
+        taskId: string,
+        input: Parameters<
+          Awaited<ReturnType<typeof createTaskStore>>["appendEvent"]
+        >[2],
+      ) {
+        appendStarted();
+        await appendGate;
+        if (!taskStore) throw new Error("Task store is not ready");
+        return taskStore.appendEvent(eventContext, taskId, input);
+      },
+    };
+    const env = await setup({
+      service: { autoStart: false, events: eventSink },
+    });
+    taskStore = env.tasks;
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      const id = await request(env.service, env.now, "close-outbox");
+      await env.service.pump();
+      await appendStartedPromise;
+      const close = env.service.close({ drainMs: 500 });
+      releaseAppend();
+      await close;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(unhandled).toEqual([]);
+
+      const db = new Database(path.join(env.researchRoot, "research.sqlite"));
+      const outbox = db
+        .query(
+          "SELECT event_state FROM findings WHERE request_id = ? ORDER BY seq",
+        )
+        .get(id) as { event_state: string } | null;
+      db.close();
+      expect(outbox?.event_state).toBe("pending");
+
+      const replay = await createResearchService({
+        rootDir: env.researchRoot,
+        tasks: env.tasks,
+        artifacts: env.tasks.artifacts,
+        events: env.tasks,
+        worker: publishingWorker(env.now),
+        autoStart: false,
+        now: env.now,
+      });
+      services.push(replay);
+      await replay.pump();
+      const events = (
+        await collect(env.tasks.events(context(), env.task.task_id))
+      ).filter((event) => event.event_type === "research.proposed");
+      expect(events).toHaveLength(1);
+    } finally {
+      releaseAppend();
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
   });
 
   test("hardens store paths, avoids exposing them, and rejects corrupt records", async () => {
