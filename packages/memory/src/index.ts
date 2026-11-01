@@ -767,7 +767,7 @@ export class DurableMemoryStore implements MemoryService {
       this.db
         .query("INSERT OR IGNORE INTO sessions VALUES(?,?,?,?,?)")
         .run(input.session_id, scopeKey(ctx), ...args(ctx));
-      this.dropSession(input.session_id, false);
+      this.dropSession(ctx, input.session_id, false);
       for (const message of messages) {
         if (
           this.excluded(
@@ -796,11 +796,22 @@ export class DurableMemoryStore implements MemoryService {
   private visibleSession(ctx: RequestContext, sessionId: string): boolean {
     return !!this.db
       .query(
-        `SELECT 1 FROM sessions WHERE session_id=? AND ${journalVisibility}`,
+        `SELECT 1 FROM sessions WHERE session_id=? AND ${journalVisibility} AND scope_key=? AND EXISTS (SELECT 1 FROM session_claims WHERE session_digest=? AND scope_key=?)`,
       )
-      .get(sessionId, ...args(ctx));
+      .get(
+        sessionId,
+        ...args(ctx),
+        scopeKey(ctx),
+        hash(sessionId),
+        scopeKey(ctx),
+      );
   }
-  private dropSession(sessionId: string, session = true): void {
+  private dropSession(
+    ctx: RequestContext,
+    sessionId: string,
+    session = true,
+  ): void {
+    if (!this.visibleSession(ctx, sessionId)) fail("not_found");
     this.db.query("DELETE FROM journal_fts WHERE session_id=?").run(sessionId);
     this.db.query("DELETE FROM journal WHERE session_id=?").run(sessionId);
     if (session)
@@ -1036,18 +1047,25 @@ export class DurableMemoryStore implements MemoryService {
         ? entryIds.map((key) => this.journalSource(sessionId, key))
         : this.journalDatasetSources(ctx, sessionId);
       const affected = this.affected(ctx, sources);
-      if (!this.visibleSession(ctx, sessionId) && !affected.length)
-        fail("not_found");
+      const visible = this.visibleSession(ctx, sessionId);
+      if (!visible && !affected.length) fail("not_found");
       this.clearDatasetUse(ctx, sources);
+      if (!visible)
+        return {
+          affected_training_manifests: affected,
+          disclosure: DISCLOSURE,
+        };
       if (!entryIds) {
         this.exclude(canonicalJson([scopeKey(ctx), sessionId]));
-        this.dropSession(sessionId, false);
+        this.dropSession(ctx, sessionId, false);
       } else
         for (const key of entryIds) {
           this.exclude(canonicalJson([scopeKey(ctx), sessionId, key]));
           this.db
-            .query("DELETE FROM journal WHERE session_id=? AND entry_id=?")
-            .run(sessionId, key);
+            .query(
+              "DELETE FROM journal WHERE session_id=? AND entry_id=? AND scope_key=?",
+            )
+            .run(sessionId, key, scopeKey(ctx));
           this.db
             .query("DELETE FROM journal_fts WHERE session_id=? AND entry_id=?")
             .run(sessionId, key);
@@ -1061,7 +1079,7 @@ export class DurableMemoryStore implements MemoryService {
     validate(id, sessionId);
     return this.write(() => {
       if (!this.visibleSession(ctx, sessionId)) fail("not_found");
-      this.dropSession(sessionId, false);
+      this.dropSession(ctx, sessionId, false);
     });
   }
   async export(ctx: RequestContext): Promise<ArtifactRef> {
@@ -1217,7 +1235,7 @@ export class DurableMemoryStore implements MemoryService {
         .query(`SELECT * FROM sessions WHERE ${journalVisibility}`)
         .all(...args(ctx)) as { scope_key: string; session_id: string }[]) {
         this.exclude(canonicalJson([s.scope_key, s.session_id]));
-        this.dropSession(s.session_id);
+        this.dropSession(ctx, s.session_id);
       }
       this.clearExports(ctx.scope.owner_id);
       this.clearDatasetUse(ctx, sources);

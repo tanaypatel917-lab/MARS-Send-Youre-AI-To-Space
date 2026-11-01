@@ -937,6 +937,96 @@ test("forgetEntry alone erases history and FTS text bytes", async () => {
       ).toBe(false);
 });
 
+test("foreign retained lineage permits cleanup but never session mutation", async () => {
+  for (const entryIds of [undefined, ["m1"]]) {
+    const dir = root(),
+      s = open(dir),
+      x = ctx("p", "x"),
+      y = ctx("p", "y");
+    await s.indexJournal(x, journal("claimed", "foreignsecret"));
+    await s.indexJournal(y, journal("own", "owntext"));
+    await s.recordDatasetUse(x, "model-X", [journalSource("claimed", "m1")]);
+    await s.export(x);
+    await s.export(y);
+    const db = new Database(join(dir, "memory.sqlite"));
+    try {
+      db.query(
+        "INSERT INTO dataset_use SELECT scope_key, ?, ?, ?, ?, ? FROM sessions WHERE session_id=?",
+      ).run(
+        "model-Y",
+        journalSource("claimed", "m1"),
+        journalSource("claimed", "m1"),
+        "claimed",
+        "m1",
+        "own",
+      );
+      const before = {
+        sessions: db.query("SELECT * FROM sessions ORDER BY session_id").all(),
+        claims: db
+          .query("SELECT * FROM session_claims ORDER BY session_digest")
+          .all(),
+        journal: db
+          .query("SELECT * FROM journal ORDER BY session_id,entry_id")
+          .all(),
+        fts: db
+          .query("SELECT * FROM journal_fts ORDER BY session_id,entry_id")
+          .all(),
+        exclusions: db.query("SELECT * FROM exclusions ORDER BY digest").all(),
+        exports: db
+          .query("SELECT * FROM exports ORDER BY scope_key,digest")
+          .all(),
+      };
+      expect(
+        (await s.excludeJournal(y, "claimed", entryIds))
+          .affected_training_manifests,
+      ).toEqual(["model-Y"]);
+      expect(
+        db
+          .query("SELECT manifest_id FROM dataset_use ORDER BY manifest_id")
+          .all(),
+      ).toEqual([{ manifest_id: "model-X" }]);
+      expect({
+        sessions: db.query("SELECT * FROM sessions ORDER BY session_id").all(),
+        claims: db
+          .query("SELECT * FROM session_claims ORDER BY session_digest")
+          .all(),
+        journal: db
+          .query("SELECT * FROM journal ORDER BY session_id,entry_id")
+          .all(),
+        fts: db
+          .query("SELECT * FROM journal_fts ORDER BY session_id,entry_id")
+          .all(),
+        exclusions: db.query("SELECT * FROM exclusions ORDER BY digest").all(),
+        exports: db
+          .query("SELECT * FROM exports ORDER BY scope_key,digest")
+          .all(),
+      }).toEqual(before);
+      expect(await s.searchHistory(x, "foreignsecret")).toHaveLength(1);
+      expect(await s.searchHistory(y, "foreignsecret")).toEqual([]);
+      await expect(
+        s.excludeJournal(y, "claimed", entryIds),
+      ).rejects.toMatchObject({ code: "not_found" });
+      await expect(s.dropHistory(y, "claimed")).rejects.toMatchObject({
+        code: "not_found",
+      });
+      await expect(
+        s.indexJournal(y, journal("claimed", "replacement")),
+      ).rejects.toMatchObject({ code: "scope_denied" });
+      await s.delete(y);
+      expect(await s.searchHistory(x, "foreignsecret")).toHaveLength(1);
+      await s.indexJournal(x, journal("claimed", "foreignsecret"));
+      expect(await s.searchHistory(x, "foreignsecret")).toHaveLength(1);
+      expect(
+        (await s.excludeJournal(x, "claimed", entryIds))
+          .affected_training_manifests,
+      ).toEqual(["model-X"]);
+      expect(await s.searchHistory(x, "foreignsecret")).toEqual([]);
+    } finally {
+      db.close();
+    }
+  }
+});
+
 test("journal evidence is exact-scope only, never owner/profile memory", async () => {
   const s = open(),
     w = ctx("p", "w");
