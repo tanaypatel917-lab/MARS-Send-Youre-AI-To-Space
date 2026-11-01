@@ -20,7 +20,12 @@ import type { ModelProviderRegistry } from "@mars/providers";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { z } from "zod";
 import { CollaborationError } from "./errors";
-import type { ChildLaunch, ChildOutcome, ChildRuntimeAdapter } from "./runner";
+import type {
+  ChildLaunch,
+  ChildOutcome,
+  ChildRun,
+  ChildRuntimeAdapter,
+} from "./runner";
 import type { ChildUsage } from "./schemas";
 
 const ledgerSchema = z
@@ -203,28 +208,104 @@ async function usageFromJournal(
   }
 }
 
+const zeroUsage: ChildUsage = {
+  input_tokens: 0,
+  output_tokens: 0,
+  usd: 0,
+  steps: 0,
+};
+
+function cancelledOutcome(usage: ChildUsage | null): ChildOutcome {
+  return {
+    status: "cancelled",
+    summary: "Cancelled before the runtime started.",
+    artifacts: [],
+    usage,
+  };
+}
+
+function cancelledRun(
+  sessionRef: string | null,
+  baseRevision: string | null,
+  usage: ChildUsage | null,
+): ChildRun {
+  return {
+    session_ref: sessionRef,
+    base_revision: baseRevision,
+    outcome: Promise.resolve(cancelledOutcome(usage)),
+    async cancel() {},
+  };
+}
+
+async function cancelledBeforeRuntime(
+  launch: ChildLaunch,
+  stateRoot: string,
+  baseRevision: string | null,
+): Promise<ChildRun> {
+  const sessionRef = launch.session_ref || null;
+  const usage = sessionRef
+    ? await usageFromJournal(sessionRef, stateRoot)
+    : zeroUsage;
+  return cancelledRun(sessionRef, baseRevision, usage);
+}
+
 export function createOhMyPiChildAdapter(
   options: OhMyPiAdapterOptions,
 ): ChildRuntimeAdapter {
   const runtimeFactory = options.runtimeFactory ?? openRuntimeSession;
   return {
     async start(launch, hooks) {
+      if (hooks.signal.aborted)
+        return cancelledBeforeRuntime(launch, options.stateRoot, null);
       const workspace = await options.workspaceFor(launch);
+      if (hooks.signal.aborted)
+        return cancelledBeforeRuntime(
+          launch,
+          options.stateRoot,
+          workspace.base_revision,
+        );
       const state = await childStateDirectory(
         options.stateRoot,
         workspace.cwd,
         launch,
       );
+      if (hooks.signal.aborted)
+        return cancelledBeforeRuntime(
+          launch,
+          options.stateRoot,
+          workspace.base_revision,
+        );
       const bindingPath = join(state.directory, "binding.json");
       const existing = await loadBinding(bindingPath);
-      const sessionFile = launch.session_ref
-        ? await realpath(launch.session_ref).catch(() => {
-            throw new CollaborationError(
-              "forbidden",
-              "Session journal is unavailable",
+      if (hooks.signal.aborted)
+        return cancelledBeforeRuntime(
+          launch,
+          options.stateRoot,
+          workspace.base_revision,
+        );
+      let sessionFile: string | undefined;
+      if (launch.session_ref) {
+        try {
+          sessionFile = await realpath(launch.session_ref);
+        } catch {
+          if (hooks.signal.aborted)
+            return cancelledBeforeRuntime(
+              launch,
+              options.stateRoot,
+              workspace.base_revision,
             );
-          })
-        : undefined;
+          throw new CollaborationError(
+            "forbidden",
+            "Session journal is unavailable",
+          );
+        }
+      }
+      if (hooks.signal.aborted)
+        return cancelledBeforeRuntime(
+          launch,
+          options.stateRoot,
+          workspace.base_revision,
+        );
       if (sessionFile && !inside(state.directory, sessionFile))
         throw new CollaborationError(
           "forbidden",
@@ -250,7 +331,21 @@ export function createOhMyPiChildAdapter(
           "forbidden",
           "Persisted runtime binding does not match",
         );
-      if (!existing) await saveBinding(bindingPath, desired);
+      if (!existing) {
+        await saveBinding(bindingPath, desired);
+        if (hooks.signal.aborted)
+          return cancelledBeforeRuntime(
+            launch,
+            options.stateRoot,
+            workspace.base_revision,
+          );
+      }
+      if (hooks.signal.aborted)
+        return cancelledBeforeRuntime(
+          launch,
+          options.stateRoot,
+          workspace.base_revision,
+        );
       const task: Task = {
         schema_version: 1,
         task_id: launch.child_task_id,
@@ -287,7 +382,9 @@ export function createOhMyPiChildAdapter(
             await hooks.onProgress({
               steps,
               usage: null,
-              session_ref: observation.journal_path,
+              ...(observation.journal_path
+                ? { session_ref: observation.journal_path }
+                : {}),
               base_revision: workspace.base_revision,
             });
             if (steps > launch.max_steps)
@@ -302,20 +399,39 @@ export function createOhMyPiChildAdapter(
           "Runtime session could not be opened",
         );
       }
-      const sessionRef = session.journalPath;
+      const sessionRef = session.journalPath || launch.session_ref || null;
+      const abort = () => {
+        if (runStarted) void session.cancel().catch(() => undefined);
+      };
+      let runStarted = false;
+      hooks.signal.addEventListener("abort", abort, { once: true });
+      if (hooks.signal.aborted) {
+        hooks.signal.removeEventListener("abort", abort);
+        await session.dispose().catch(() => undefined);
+        const usage = launch.session_ref
+          ? sessionRef
+            ? await usageFromJournal(sessionRef, state.root)
+            : null
+          : zeroUsage;
+        return cancelledRun(sessionRef, workspace.base_revision, usage);
+      }
       if (!sessionRef) {
+        hooks.signal.removeEventListener("abort", abort);
         await session.dispose();
         throw new CollaborationError(
           "forbidden",
           "Runtime journal is unavailable",
         );
       }
-      const abort = () => {
-        void session.cancel().catch(() => undefined);
-      };
-      hooks.signal.addEventListener("abort", abort, { once: true });
       const outcome: Promise<ChildOutcome> = (async () => {
         try {
+          if (hooks.signal.aborted) {
+            const usage = launch.session_ref
+              ? await usageFromJournal(sessionRef, state.root)
+              : zeroUsage;
+            return cancelledOutcome(usage);
+          }
+          runStarted = true;
           const result = await session.run(launch.instruction);
           const usage: ChildUsage = {
             input_tokens: result.usage.input_tokens,
@@ -346,7 +462,7 @@ export function createOhMyPiChildAdapter(
         base_revision: workspace.base_revision,
         outcome,
         async cancel() {
-          await session.cancel();
+          if (runStarted) await session.cancel();
         },
       };
     },

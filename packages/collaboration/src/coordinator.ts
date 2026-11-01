@@ -2665,6 +2665,13 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
           throw new CollaborationError("not_found", "Child job not found");
         const room = store.getRoomRow(job.room_id);
         const member = store.getMemberRow(job.agent_id);
+        const parentModelId = member.parent_agent_id
+          ? store.db
+              .query<{ model_id: string | null }, [string]>(
+                "SELECT model_id FROM jobs WHERE agent_id = ?",
+              )
+              .get(member.parent_agent_id)?.model_id
+          : null;
         const criteria = decodeJson<string[]>(member.acceptance_json);
         const now = store.now();
         const delivered = store.db
@@ -2726,7 +2733,7 @@ function createJobsApi(store: CollaborationStore): CollaborationJobs {
           solution_space: member.solution_space,
           complexity: member.complexity as "light" | "medium" | "heavy" | null,
           paid_models: Boolean(member.paid_models),
-          parent_model_id: room.model_id,
+          parent_model_id: parentModelId ?? room.model_id,
           session_ref: job.session_ref,
           attempt: job.attempt,
           job_id: job.job_id,

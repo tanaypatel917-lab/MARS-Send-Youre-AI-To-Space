@@ -12,6 +12,7 @@ import {
   createChildRunner,
   createCollaboration,
 } from "./index";
+import { armDeadline, type ChildLaunch } from "./runner";
 
 const scope = {
   owner_id: "collaboration-test",
@@ -52,7 +53,12 @@ function task(taskId = "task-1"): Task {
 }
 
 async function fixture(
-  options: { leaseMs?: number; limits?: Partial<CollaborationLimits> } = {},
+  options: {
+    leaseMs?: number;
+    limits?: Partial<CollaborationLimits>;
+    taskDurationMs?: number;
+    roomModelId?: string;
+  } = {},
 ) {
   const rootDir = await mkdtemp(join(tmpdir(), "mars-collaboration-test-"));
   cleanup.push(() => rm(rootDir, { recursive: true, force: true }));
@@ -71,10 +77,14 @@ async function fixture(
     },
   });
   cleanup.push(() => collaboration.close());
+  const roomTask = task();
+  if (options.taskDurationMs !== undefined)
+    roomTask.budget.max_duration_ms = options.taskDurationMs;
   const opened = await collaboration.host.openRoom(context, {
-    task: task(),
+    task: roomTask,
     idempotency_key: "open-1",
     delegation_pool: { max_tokens: 800 },
+    ...(options.roomModelId ? { model_id: options.roomModelId } : {}),
     authority: {
       approvals: { read: true, write: false, execute: false },
       allow_delegation: true,
@@ -91,6 +101,44 @@ async function fixture(
     },
   };
 }
+
+test("armDeadline re-arms long chunks and expires once at the deadline", () => {
+  let clock = 0;
+  let expired = 0;
+  const delays: number[] = [];
+  const callbacks: (() => void)[] = [];
+  const timers: ReturnType<typeof setTimeout>[] = [];
+  const setTimer = (callback: () => void, delay: number) => {
+    delays.push(delay);
+    callbacks.push(callback);
+    const timer = setTimeout(() => undefined, 60_000);
+    timers.push(timer);
+    return timer;
+  };
+  const disarm = armDeadline(
+    3_000_000_000,
+    () => clock,
+    () => {
+      expired += 1;
+    },
+    setTimer,
+  );
+  expect(delays).toEqual([2_147_483_647]);
+  const firstChunk = callbacks.shift();
+  if (!firstChunk) throw new Error("The first deadline chunk was not armed");
+  clock = 2_147_483_647;
+  firstChunk();
+  expect(expired).toBe(0);
+  expect(delays).toEqual([2_147_483_647, 852_516_353]);
+  const lastChunk = callbacks.shift();
+  if (!lastChunk) throw new Error("The second deadline chunk was not armed");
+  clock = 3_000_000_000;
+  lastChunk();
+  lastChunk();
+  expect(expired).toBe(1);
+  disarm();
+  for (const timer of timers) clearTimeout(timer);
+});
 
 function delegation(
   key: string,
@@ -123,6 +171,186 @@ async function expectCode(
   expect(error).toBeInstanceOf(CollaborationError);
   expect(error).toMatchObject({ code });
 }
+
+test("long child deadlines do not expire after a clamped timer chunk", async () => {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const f = await fixture({ taskDurationMs: 60 * dayMs });
+  const child = await f.collaboration.agents.delegate(
+    context,
+    f.coordinator,
+    delegation("long-deadline", {
+      budget: {
+        max_tokens: 100,
+        max_duration_ms: 30 * dayMs,
+        max_steps: 10,
+        max_messages: 10,
+      },
+    }),
+  );
+  const runner = createChildRunner({
+    collaboration: f.collaboration,
+    runnerId: "long-deadline-runner",
+    adapter: {
+      async start() {
+        const outcome = new Promise<ChildOutcome>((resolve) => {
+          setTimeout(
+            () =>
+              resolve({
+                status: "completed",
+                summary: "Completed within the long budget.",
+                artifacts: [],
+                usage: {
+                  input_tokens: 1,
+                  output_tokens: 1,
+                  usd: 0,
+                  steps: 1,
+                },
+              }),
+            20,
+          );
+        });
+        return {
+          session_ref: "long-deadline-session",
+          base_revision: null,
+          outcome,
+          async cancel() {},
+        };
+      },
+    },
+  });
+  expect(await runner.tick()).toBe(1);
+  await runner.idle();
+  const children = await f.collaboration.agents.children(
+    context,
+    f.coordinator,
+  );
+  expect(
+    children.children.find((member) => member.agent_id === child.agent_id),
+  ).toMatchObject({ state: "completed" });
+  const stats = await f.collaboration.host.stats(context, f.room.room_id);
+  expect(stats.children_completed).toBe(1);
+  expect(stats.over_budget).toBe(0);
+});
+
+test("grandchildren inherit the parent's effective model selection", async () => {
+  const f = await fixture({ roomModelId: "m-room" });
+  const child = await f.collaboration.agents.delegate(
+    context,
+    f.coordinator,
+    delegation("model-parent", {
+      may_delegate: true,
+      budget: {
+        max_tokens: 100,
+        max_duration_ms: 20_000,
+        max_steps: 10,
+        max_messages: 10,
+        delegation_pool_tokens: 20,
+      },
+    }),
+  );
+  const childCapability = child.capability;
+  if (!childCapability) throw new Error("Child capability was not issued");
+  const runs: {
+    launch: ChildLaunch;
+    finish: (outcome: ChildOutcome) => void;
+  }[] = [];
+  const runner = createChildRunner({
+    collaboration: f.collaboration,
+    runnerId: "model-inheritance-runner",
+    modelPolicy: async ({ depth }) => ({
+      model_id: depth === 1 ? "m-child" : null,
+      reason: "policy-selection",
+    }),
+    adapter: {
+      async start(launch) {
+        let finish!: (outcome: ChildOutcome) => void;
+        const outcome = new Promise<ChildOutcome>((resolve) => {
+          finish = resolve;
+        });
+        runs.push({ launch, finish });
+        return {
+          session_ref: `model-session-${launch.agent_id}`,
+          base_revision: null,
+          outcome,
+          async cancel() {},
+        };
+      },
+    },
+  });
+  expect(await runner.tick()).toBe(1);
+  expect(runs[0]?.launch.model_id).toBe("m-child");
+  await f.collaboration.agents.delegate(
+    context,
+    childCapability,
+    delegation("model-grandchild", {
+      budget: {
+        max_tokens: 10,
+        max_duration_ms: 10_000,
+        max_steps: 5,
+        max_messages: 5,
+      },
+    }),
+  );
+  expect(await runner.tick()).toBe(1);
+  expect(runs[1]?.launch.model_id).toBe("m-child");
+  for (const run of runs)
+    run.finish({
+      status: "completed",
+      summary: "Model inheritance verified.",
+      artifacts: [],
+      usage: { input_tokens: 1, output_tokens: 1, usd: 0, steps: 1 },
+    });
+  await runner.idle();
+});
+
+test("a null depth-one model policy inherits the room model", async () => {
+  const f = await fixture({ roomModelId: "m-room" });
+  await f.collaboration.agents.delegate(
+    context,
+    f.coordinator,
+    delegation("room-model-fallback"),
+  );
+  const launchModels: (string | null)[] = [];
+  const runner = createChildRunner({
+    collaboration: f.collaboration,
+    runnerId: "room-model-fallback-runner",
+    modelPolicy: async () => ({ model_id: null, reason: "inherit" }),
+    adapter: {
+      async start(launch) {
+        launchModels.push(launch.model_id);
+        return {
+          session_ref: "room-model-session",
+          base_revision: null,
+          outcome: Promise.resolve({
+            status: "completed",
+            summary: "Room model inherited.",
+            artifacts: [],
+            usage: { input_tokens: 1, output_tokens: 1, usd: 0, steps: 1 },
+          }),
+          async cancel() {},
+        };
+      },
+    },
+  });
+  expect(await runner.tick()).toBe(1);
+  await runner.idle();
+  expect(launchModels[0]).toBe("m-room");
+});
+
+test("runner rejects heartbeat intervals above the timer limit", async () => {
+  const f = await fixture();
+  expect(() =>
+    createChildRunner({
+      collaboration: f.collaboration,
+      adapter: {
+        async start() {
+          throw new Error("No job should be started");
+        },
+      },
+      heartbeatMs: 2_147_483_648,
+    }),
+  ).toThrow();
+});
 
 test("directed delivery, idempotency, redelivery, acknowledgement and capability fencing", async () => {
   const f = await fixture();
@@ -2223,6 +2451,55 @@ test("runner shutdown cancels local work and accounts the reported usage", async
   expect(stats.children_cancelled).toBe(1);
   expect(stats.tokens).toEqual({ input: 4, output: 2 });
   expect(child.agent_id).toBeTruthy();
+});
+
+test("runner cancellation before runtime start releases reservation without usage", async () => {
+  const f = await fixture();
+  const child = await f.collaboration.agents.delegate(
+    context,
+    f.coordinator,
+    delegation("cancel-before-runtime"),
+  );
+  let runner!: ReturnType<typeof createChildRunner>;
+  let shutdown: Promise<void> | undefined;
+  runner = createChildRunner({
+    collaboration: f.collaboration,
+    runnerId: "cancel-before-runtime-runner",
+    adapter: {
+      async start(_launch, hooks) {
+        shutdown = runner.shutdown();
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        expect(hooks.signal.aborted).toBe(true);
+        return {
+          session_ref: null,
+          base_revision: null,
+          outcome: Promise.resolve({
+            status: "cancelled",
+            summary: "Cancelled before the runtime started.",
+            artifacts: [],
+            usage: { input_tokens: 0, output_tokens: 0, usd: 0, steps: 0 },
+          }),
+          async cancel() {},
+        };
+      },
+    },
+  });
+  expect(await runner.tick()).toBe(1);
+  await runner.idle();
+  if (!shutdown) throw new Error("Runner shutdown was not requested");
+  await shutdown;
+  const children = await f.collaboration.agents.children(
+    context,
+    f.coordinator,
+  );
+  expect(
+    children.children.find((member) => member.agent_id === child.agent_id),
+  ).toMatchObject({ state: "cancelled" });
+  const stats = await f.collaboration.host.stats(context, f.room.room_id);
+  expect(stats.reserved).toEqual({ tokens: 0, usd: 0 });
+  expect(stats.tokens).toEqual({ input: 0, output: 0 });
+  expect(stats.children_cancelled).toBe(1);
+  expect(stats.discarded_results).toBe(1);
 });
 
 test("queued cancellation releases its reservation and expires descendants", async () => {

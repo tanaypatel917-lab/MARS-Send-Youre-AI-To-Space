@@ -124,17 +124,28 @@ async function fixture() {
         return sse({ content: "Hello from the offline fixture." });
       },
     });
+  const workspaceFor = async (_launch: ChildLaunch) => ({
+    cwd,
+    tools,
+    base_revision: "fixture-base",
+  });
   const adapter = createOhMyPiChildAdapter({
     registry,
     stateRoot,
-    workspaceFor: async () => ({
-      cwd,
-      tools,
-      base_revision: "fixture-base",
-    }),
+    workspaceFor,
     runtimeFactory,
   });
-  return { root, cwd, stateRoot, registry, launch, adapter, fetchCalls };
+  return {
+    root,
+    cwd,
+    stateRoot,
+    registry,
+    launch,
+    adapter,
+    fetchCalls,
+    runtimeFactory,
+    workspaceFor,
+  };
 }
 
 test("OMP adapter uses the runtime journal, persists only its binding, and reconciles its ledger", async () => {
@@ -150,6 +161,8 @@ test("OMP adapter uses the runtime journal, persists only its binding, and recon
     },
   });
   const outcome = await run.outcome;
+  const sessionRef = run.session_ref;
+  if (!sessionRef) throw new Error("Runtime journal was not returned");
   expect(outcome).toMatchObject({
     status: "completed",
     summary: "Hello from the offline fixture.",
@@ -159,14 +172,12 @@ test("OMP adapter uses the runtime journal, persists only its binding, and recon
     },
   });
   expect(JSON.stringify(outcome)).not.toContain(f.stateRoot);
-  expect(JSON.stringify(outcome)).not.toContain(run.session_ref);
+  expect(JSON.stringify(outcome)).not.toContain(sessionRef);
   expect(outcome.usage?.steps).toBeGreaterThanOrEqual(1);
   expect(f.fetchCalls).toHaveLength(1);
   expect(progress.some((value) => value.steps >= 1)).toBe(true);
-  expect(progress.some((value) => value.session_ref === run.session_ref)).toBe(
-    true,
-  );
-  expect(await f.adapter.reconcile?.(run.session_ref)).toMatchObject({
+  expect(progress.some((value) => value.session_ref === sessionRef)).toBe(true);
+  expect(await f.adapter.reconcile?.(sessionRef)).toMatchObject({
     input_tokens: 50,
     output_tokens: 12,
   });
@@ -178,6 +189,88 @@ test("OMP adapter uses the runtime journal, persists only its binding, and recon
   for await (const path of stateFiles) paths.push(path);
   expect(paths.some((path) => path.endsWith("binding.json"))).toBe(true);
   expect(paths.some((path) => path.includes("transcript"))).toBe(false);
+});
+
+test("pre-aborted starts return cancelled without opening a runtime", async () => {
+  const f = await fixture();
+  const controller = new AbortController();
+  controller.abort();
+  let runtimeOpens = 0;
+  const adapter = createOhMyPiChildAdapter({
+    registry: f.registry,
+    stateRoot: f.stateRoot,
+    workspaceFor: f.workspaceFor,
+    runtimeFactory: async (options) => {
+      runtimeOpens += 1;
+      return f.runtimeFactory(options);
+    },
+  });
+  const run = await adapter.start(f.launch, {
+    signal: controller.signal,
+    async onProgress() {},
+  });
+  expect(await run.outcome).toMatchObject({
+    status: "cancelled",
+    summary: "Cancelled before the runtime started.",
+    usage: { input_tokens: 0, output_tokens: 0, usd: 0, steps: 0 },
+  });
+  expect(f.fetchCalls).toHaveLength(0);
+  expect(runtimeOpens).toBe(0);
+});
+
+test("aborting during workspace setup skips runtime startup", async () => {
+  const f = await fixture();
+  const controller = new AbortController();
+  let runtimeOpens = 0;
+  const adapter = createOhMyPiChildAdapter({
+    registry: f.registry,
+    stateRoot: f.stateRoot,
+    workspaceFor: async (launch) => {
+      controller.abort();
+      return f.workspaceFor(launch);
+    },
+    runtimeFactory: async (options) => {
+      runtimeOpens += 1;
+      return f.runtimeFactory(options);
+    },
+  });
+  const run = await adapter.start(f.launch, {
+    signal: controller.signal,
+    async onProgress() {},
+  });
+  expect(await run.outcome).toMatchObject({
+    status: "cancelled",
+    usage: { input_tokens: 0, output_tokens: 0, usd: 0, steps: 0 },
+  });
+  expect(f.fetchCalls).toHaveLength(0);
+  expect(runtimeOpens).toBe(0);
+});
+
+test("abort after runtime opening disposes without a model request", async () => {
+  const f = await fixture();
+  const controller = new AbortController();
+  let runtimeOpens = 0;
+  const adapter = createOhMyPiChildAdapter({
+    registry: f.registry,
+    stateRoot: f.stateRoot,
+    workspaceFor: f.workspaceFor,
+    runtimeFactory: async (options) => {
+      runtimeOpens += 1;
+      const session = await f.runtimeFactory(options);
+      controller.abort();
+      return session;
+    },
+  });
+  const run = await adapter.start(f.launch, {
+    signal: controller.signal,
+    async onProgress() {},
+  });
+  expect(await run.outcome).toMatchObject({
+    status: "cancelled",
+    usage: { input_tokens: 0, output_tokens: 0, usd: 0, steps: 0 },
+  });
+  expect(runtimeOpens).toBe(1);
+  expect(f.fetchCalls).toHaveLength(0);
 });
 
 test("paid model rejection happens before runtime or fetch", async () => {

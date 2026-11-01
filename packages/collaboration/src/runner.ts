@@ -33,7 +33,7 @@ export interface ChildProgress {
 }
 
 export interface ChildRun {
-  session_ref: string;
+  session_ref: string | null;
   base_revision: string | null;
   outcome: Promise<ChildOutcome>;
   cancel(): Promise<void>;
@@ -100,6 +100,42 @@ interface LocalRun {
 
 function tokenUse(usage: ChildUsage): number {
   return usage.input_tokens + usage.output_tokens;
+}
+
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+type DeadlineTimerSetter = (
+  callback: () => void,
+  delay: number,
+) => ReturnType<typeof setTimeout>;
+
+export function armDeadline(
+  deadlineAt: number,
+  now: () => number,
+  onExpire: () => void,
+  setTimer: DeadlineTimerSetter = setTimeout,
+): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let disarmed = false;
+  const arm = () => {
+    if (disarmed) return;
+    const delay = Math.min(Math.max(deadlineAt - now(), 0), MAX_TIMER_DELAY_MS);
+    timer = setTimer(() => {
+      if (disarmed) return;
+      if (now() >= deadlineAt) {
+        disarmed = true;
+        onExpire();
+        return;
+      }
+      arm();
+    }, delay);
+    timer.unref();
+  };
+  arm();
+  return () => {
+    disarmed = true;
+    if (timer) clearTimeout(timer);
+  };
 }
 
 function launchBudget(context: LaunchContext, now: number): Budget {
@@ -173,7 +209,11 @@ export function createChildRunner(options: ChildRunnerOptions): ChildRunner {
   const heartbeatMs =
     options.heartbeatMs ??
     Math.floor(options.collaboration.host.jobs.leaseMs / 3);
-  if (!Number.isSafeInteger(heartbeatMs) || heartbeatMs <= 0)
+  if (
+    !Number.isSafeInteger(heartbeatMs) ||
+    heartbeatMs <= 0 ||
+    heartbeatMs > MAX_TIMER_DELAY_MS
+  )
     throw new CollaborationError("invalid_input", "Invalid heartbeat interval");
   const localRuns = new Map<string, LocalRun>();
   let stopped = false;
@@ -193,7 +233,7 @@ export function createChildRunner(options: ChildRunnerOptions): ChildRunner {
     let adapterCalled = false;
     let heartbeatBusy = false;
     let timer: ReturnType<typeof setInterval> | undefined;
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let disarmDeadline: (() => void) | undefined;
     let contextDeadline: number | undefined;
     let usageBaseline: ChildUsage = {
       input_tokens: 0,
@@ -207,15 +247,21 @@ export function createChildRunner(options: ChildRunnerOptions): ChildRunner {
       await childRun?.cancel().catch(() => undefined);
     };
     const onProgress = async (progress: ChildProgress) => {
-      const sessionRef = progress.session_ref ?? latest.session_ref;
+      const { session_ref: reportedSessionRef, ...progressWithoutSessionRef } =
+        progress;
+      const sessionRef = reportedSessionRef || latest.session_ref;
       const baseRevision =
         progress.base_revision !== undefined
           ? progress.base_revision
           : latest.base_revision;
+      const normalizedProgress: ChildProgress = {
+        ...progressWithoutSessionRef,
+        ...(sessionRef ? { session_ref: sessionRef } : {}),
+      };
       latest = {
         ...latest,
-        ...progress,
-        ...(sessionRef !== undefined ? { session_ref: sessionRef } : {}),
+        ...normalizedProgress,
+        ...(sessionRef ? { session_ref: sessionRef } : {}),
         ...(baseRevision !== undefined ? { base_revision: baseRevision } : {}),
       };
       const observedDelta = progress.usage
@@ -245,7 +291,7 @@ export function createChildRunner(options: ChildRunnerOptions): ChildRunner {
           jobId,
           runnerId,
           claimed.lease_epoch,
-          progress,
+          normalizedProgress,
         );
         if (isBudgetStop) await cancelRun("budget");
         else if (result.stop) await cancelRun("cancelled");
@@ -296,20 +342,20 @@ export function createChildRunner(options: ChildRunnerOptions): ChildRunner {
             "invalid_input",
             "Model policy returned invalid selection",
           );
+        const modelId = selected.model_id ?? context.parent_model_id;
         await options.collaboration.host.jobs.setModelSelection(
           jobId,
           runnerId,
           claimed.lease_epoch,
-          selected.model_id,
+          modelId,
           selected.reason,
         );
-        const modelId = selected.model_id ?? context.parent_model_id;
         launch = makeLaunch(context, modelId, context.now);
-        const timeout = launch.budget.max_duration_ms;
-        deadlineTimer = setTimeout(() => {
-          void cancelRun("budget");
-        }, timeout);
-        deadlineTimer.unref();
+        disarmDeadline = armDeadline(
+          context.member.budget.deadline,
+          () => options.collaboration.host.jobs.currentTime(),
+          () => void cancelRun("budget"),
+        );
         adapterCalled = true;
         childRun = await options.adapter.start(launch, {
           signal: controller.signal,
@@ -317,7 +363,9 @@ export function createChildRunner(options: ChildRunnerOptions): ChildRunner {
         });
         latest = {
           ...latest,
-          session_ref: childRun.session_ref,
+          ...(childRun.session_ref
+            ? { session_ref: childRun.session_ref }
+            : {}),
           base_revision: childRun.base_revision,
         };
         if (controller.signal.aborted)
@@ -423,7 +471,7 @@ export function createChildRunner(options: ChildRunnerOptions): ChildRunner {
         }
       } finally {
         if (timer) clearInterval(timer);
-        if (deadlineTimer) clearTimeout(deadlineTimer);
+        disarmDeadline?.();
         if (controller.signal.aborted)
           await childRun?.cancel().catch(() => undefined);
         markReady();

@@ -71,7 +71,7 @@ export const CollaborationLimitsSchema = z
     default_ttl_ms: z.number().int().positive(),
     max_ttl_ms: z.number().int().positive(),
     page_limit: z.number().int().positive().max(500),
-    lease_ms: z.number().int().positive(),
+    lease_ms: z.number().int().positive().max(2_147_483_647),
     max_attempts: z.number().int().positive(),
   })
   .strict();
