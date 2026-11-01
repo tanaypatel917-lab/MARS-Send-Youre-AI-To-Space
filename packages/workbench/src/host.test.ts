@@ -1678,3 +1678,57 @@ test("room sessions require a tool-capable model even without file approvals", a
   expect(f.sessions).toHaveLength(1);
   await api.close();
 });
+
+test("interrupted room sessions come back paused with their room still open", async () => {
+  const f = await fixture();
+  const collaboration = await createCollaboration({
+    rootDir: join(f.root, "collaboration"),
+    hostPrivateRoots: [join(f.root, "private")],
+  });
+  const first = await f.makeHost(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    collaboration,
+  );
+  await first.create(context(), task());
+  await first.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: false, write: false, execute: false },
+  });
+  const launch = JSON.parse(
+    await readFile(
+      join(required(f.sessions[0]).options.stateDir, "launch.json"),
+      "utf8",
+    ),
+  );
+  await first.close();
+  const second = await f.makeHost(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    collaboration,
+  );
+  expect((await second.inspect(context(), "task")).status).toBe("paused");
+  expect(
+    (
+      await collaboration.host.inspectRoom(
+        context(),
+        launch.collaboration.room_id,
+      )
+    ).status,
+  ).toBe("open");
+  await second.cancel(context(), "task");
+  expect(
+    (
+      await collaboration.host.inspectRoom(
+        context(),
+        launch.collaboration.room_id,
+      )
+    ).status,
+  ).toBe("closed");
+  await second.close();
+});

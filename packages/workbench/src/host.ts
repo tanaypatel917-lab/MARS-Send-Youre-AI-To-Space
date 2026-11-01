@@ -614,11 +614,10 @@ export async function createWorkbenchHost(
     };
   };
 
-  const interrupted = await options.store.recoverInterrupted(
-    internalContext(options.scope),
-    { reason: "Workbench process interrupted." },
-  );
-  for (const task of interrupted) await closeRecordedRoom(task, "cancel");
+  // Interrupted tasks come back paused and resumable, so their rooms stay open.
+  await options.store.recoverInterrupted(internalContext(options.scope), {
+    reason: "Workbench process interrupted.",
+  });
 
   const api: WorkbenchOperations = {
     scope: options.scope,
@@ -667,6 +666,7 @@ export async function createWorkbenchHost(
             initialRequestAllowance({
               approvals: params.approvals,
               recall: Boolean(options.memory),
+              collaboration: Boolean(options.collaboration),
               instruction: baseInstruction,
             }) + MIN_INITIAL_OUTPUT_RESERVE,
           );
