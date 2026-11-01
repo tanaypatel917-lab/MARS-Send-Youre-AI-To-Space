@@ -111,3 +111,18 @@ bun test packages/workbench/src/service.test.ts packages/workspaces
 The service tests send authenticated HTTP through the actual VS Code typed client and actual Oh My Pi SDK, using injected model HTTP responses and dummy keys. They cover private file writes, progress/artifact/diff retrieval, checkpoint/restore, source immutability, shutdown/restart with the same journal/workspace, steering, cancellation and token rotation. The optional Docker flow has the SDK write a file and invoke a real sandbox command that verifies its contents and non-root identity. CLI tests cover private connection credentials, no-credential startup, sanitized failures and signal cleanup releasing the provider lock. These tests demonstrate harness integration, **not model quality**.
 
 No live model request, paid service or real VS Code window is used for this verification. Live-model task quality and the complete master-spec Milestone 1 acceptance evidence remain outstanding. Frozen memory, journal recall, repository maps, evidence-gated specialist routing and single-agent collaboration rooms are connected; live research, specialist routing for child models, learned skills, independent evaluation and training are not connected by this increment. Delegation is verified only with a fixture child adapter; no child Oh My Pi session ran against a live model. A normal agent completion status does not claim independent acceptance tests passed.
+
+## Background research
+
+When the host is created with a parent-owned \`research\` service (the
+\`@mars/research\` control plane; no production worker ships yet, so this is
+test-injected only), every session is given two host-bound tools:
+\`mars_research\` queues a sourced question scoped to the task's current
+durable revision, with the task budget as its ceiling and a deadline no later
+than ten minutes or the task's remaining duration, whichever is shorter;
+\`mars_findings\` renders a request's findings as clearly labelled untrusted,
+cited evidence (bounded fields, at most twenty findings). The model never
+sees request internals, service paths or the stored scope. The research tools
+count toward model tool requirements, specialist routing and first-request
+capacity. The host calls \`reconcileTask\` after steering, cancellation and
+every terminal outcome so findings from a superseded revision go stale.

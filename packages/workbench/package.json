@@ -11,6 +11,7 @@
     "@mars/execution": "workspace:*",
     "@mars/memory": "workspace:*",
     "@mars/providers": "workspace:*",
+    "@mars/research": "workspace:*",
     "@mars/specialists": "workspace:*",
     "@mars/tasks": "workspace:*",
     "@mars/workspaces": "workspace:*",

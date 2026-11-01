@@ -76,6 +76,7 @@ import {
   validateFrozenRepositoryMap,
   withFrozenRepositoryMap,
 } from "./repository-context";
+import { researchTools, type WorkbenchResearch } from "./research-context";
 import { WorkbenchError, type WorkbenchOperations } from "./server";
 import {
   type FrozenRouting,
@@ -126,6 +127,7 @@ export interface WorkbenchHostOptions {
   repositoryMap?: Pick<RepositoryMapProvider, "map">;
   specialists?: WorkbenchSpecialists;
   collaboration?: WorkbenchCollaboration;
+  research?: WorkbenchResearch;
   hostPrivateRoots?: string[];
   runtimeFactory?: (options: RuntimeSessionOptions) => Promise<RuntimeSession>;
 }
@@ -240,7 +242,27 @@ export async function createWorkbenchHost(
   // Room tools are always declared for a collaboration session, so the model
   // must support tools even when no file approval is granted.
   const toolsRequired = (approvals: Approvals, collaboration: boolean) =>
-    collaboration || Object.values(approvals).some(Boolean);
+    collaboration ||
+    Boolean(options.research) ||
+    Object.values(approvals).some(Boolean);
+  // Research tools are host-bound: requests carry the task's current durable
+  // revision and budget, and findings return as rendered untrusted text.
+  const researchFor = (taskId: string) => {
+    const research = options.research;
+    if (!research) return {};
+    const context = () => internalContext(options.scope);
+    return {
+      research: researchTools(research, context, () =>
+        options.store.inspect(context(), taskId),
+      ),
+    };
+  };
+  const reconcileResearch = async (taskId: string) => {
+    if (!options.research) return;
+    await options.research
+      .reconcileTask(internalContext(options.scope), taskId)
+      .catch(() => undefined);
+  };
   const selectModel = (modelId: string | undefined, needsTools: boolean) => {
     try {
       return selectExecutionModel(options.registry, modelId, needsTools);
@@ -848,8 +870,10 @@ export async function createWorkbenchHost(
             ).values(),
           ],
         });
-        if (status !== "paused")
+        if (status !== "paused") {
           await closeRoom(status === "cancelled" ? "cancel" : "drain");
+          await reconcileResearch(task.task_id);
+        }
       } catch {
         await closeRoom("cancel");
         const context = internalContext(options.scope);
@@ -1219,6 +1243,7 @@ export async function createWorkbenchHost(
               recall: Boolean(options.memory),
               collaboration: Boolean(options.collaboration),
               delegation: Boolean(delegation),
+              research: Boolean(options.research),
               instruction: baseInstruction,
             }) + MIN_INITIAL_OUTPUT_RESERVE,
           );
@@ -1237,6 +1262,7 @@ export async function createWorkbenchHost(
         recall: Boolean(options.memory),
         collaboration: Boolean(options.collaboration),
         delegation: Boolean(delegation),
+        research: Boolean(options.research),
         instruction: baseInstruction,
       });
       let memory: z.infer<typeof FrozenMemorySchema> | undefined;
@@ -1383,6 +1409,7 @@ export async function createWorkbenchHost(
               )
             : {}),
           ...(params.approvals.read ? historyFor(context) : {}),
+          ...researchFor(task.task_id),
           onEvent: async (event) => {
             if (!bound) {
               if (initialObservations.length >= 1000)
@@ -1506,6 +1533,7 @@ export async function createWorkbenchHost(
               )
             : {}),
           ...(launch.approvals.read ? historyFor(context) : {}),
+          ...researchFor(task.task_id),
           onEvent: observe(taskId),
         });
         if (closing) throw new WorkbenchError("unavailable");
@@ -1546,6 +1574,7 @@ export async function createWorkbenchHost(
         throw new WorkbenchError("conflict");
       await options.store.steer(context, taskId, instruction);
       await reviseRecordedRoom(await options.store.inspect(context, taskId));
+      await reconcileResearch(taskId);
       if (task.status === "running") await runtime?.steer(instruction);
     },
     async cancel(context, taskId) {
@@ -1556,6 +1585,7 @@ export async function createWorkbenchHost(
       await options.store.cancel(context, taskId);
       await active.get(taskId)?.cancel();
       await closeRecordedRoom(task, "cancel");
+      await reconcileResearch(taskId);
     },
     async events(context, taskId, cursor) {
       checkContext(context);
