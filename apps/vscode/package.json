@@ -105,7 +105,7 @@
           "type": "boolean",
           "default": false,
           "scope": "application",
-          "markdownDescription": "Allow an HTTPS non-loopback server. Each window still asks for explicit trust before sending the token."
+          "markdownDescription": "Allow an HTTPS non-loopback server. Each window still asks for explicit trust, per exact RPC URL, before sending the token."
         },
         "mars.modelId": {
           "type": "string",
