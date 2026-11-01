@@ -13,6 +13,7 @@ import type {
 import { ScopeSchema } from "@mars/contracts";
 import {
   EXECUTION_PACKAGE_VERSION,
+  MAX_RUNTIME_INSTRUCTION_LENGTH,
   openRuntimeSession,
   type RuntimeObservation,
   type RuntimeOutcome,
@@ -360,6 +361,7 @@ export async function createWorkbenchHost(
     runtime: RuntimeSession,
     instruction: string,
     steeringEventIds: string[] = [],
+    remainingSteering = false,
   ) => {
     active.set(task.task_id, runtime);
     const job = (async () => {
@@ -383,7 +385,10 @@ export async function createWorkbenchHost(
         current = await options.store.inspect(context, task.task_id);
         if (current.status !== "running") return;
         await options.store.update(context, task.task_id, current.revision, {
-          status: outcome.status,
+          status:
+            outcome.status === "completed" && remainingSteering
+              ? "paused"
+              : outcome.status,
           artifacts: [
             ...new Map(
               [...current.artifacts, ...collected, artifact].map((ref) => [
@@ -612,6 +617,21 @@ export async function createWorkbenchHost(
       const launch = await readLaunch(task);
       if (launch.approvals.execute && !options.canExecute)
         throw new WorkbenchError("forbidden");
+      const { queued } = await runtimeResults(context, taskId);
+      let instruction = "Continue the task from the saved session.";
+      const steeringEventIds: string[] = [];
+      for (const [eventId, text] of queued) {
+        const addition = `${steeringEventIds.length ? "\n\n" : "\n\nQueued steering instructions:\n"}${text}`;
+        if (
+          instruction.length + addition.length >
+          MAX_RUNTIME_INSTRUCTION_LENGTH
+        )
+          break;
+        instruction += addition;
+        steeringEventIds.push(eventId);
+      }
+      if (queued.length && !steeringEventIds.length)
+        throw new WorkbenchError("too_large");
       const workspace = await options.workspace.reopen(context, taskId);
       if (
         workspace.workspace_id !== launch.workspace.workspace_id ||
@@ -641,13 +661,13 @@ export async function createWorkbenchHost(
           runtime.modelId !== launch.model_id
         )
           throw new WorkbenchError("conflict");
-        const { queued } = await runtimeResults(context, taskId);
         run(
           running,
           workspace,
           runtime,
-          `Continue the task. Request: ${task.request}${queued.length ? `\n\nQueued steering instructions:\n${queued.map(([, instruction]) => instruction).join("\n\n")}` : ""}`,
-          queued.map(([id]) => id),
+          instruction,
+          steeringEventIds,
+          steeringEventIds.length < queued.length,
         );
         return running;
       } catch (error) {

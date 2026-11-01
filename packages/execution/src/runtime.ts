@@ -20,6 +20,8 @@ import {
   selectExecutionModel,
 } from "./model-bridge";
 
+export const MAX_RUNTIME_INSTRUCTION_LENGTH = 128 * 1024;
+
 const ledgerSchema = z
   .object({
     deadline: z.number().int().positive(),
@@ -420,7 +422,10 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
     async run(instruction: string): Promise<RuntimeOutcome> {
       if (disposed || running || controller.signal.aborted)
         throw new Error("Runtime is stopped or already running.");
-      if (!instruction.trim() || instruction.length > 128 * 1024)
+      if (
+        !instruction.trim() ||
+        instruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH
+      )
         throw new Error("Invalid task instruction.");
       running = true;
       try {
@@ -470,7 +475,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
         disposed ||
         controller.signal.aborted ||
         !instruction.trim() ||
-        instruction.length > 128 * 1024
+        instruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH
       )
         throw new Error("Cannot steer this task.");
       await session.steer(instruction);

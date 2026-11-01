@@ -88,7 +88,7 @@ function task(): Task {
     artifacts: [],
   };
 }
-async function fixture() {
+async function fixture(contextWindow = 32000) {
   const base = await mkdtemp(join(tmpdir(), "mars-service-"));
   cleanup.push(() => rm(base, { recursive: true, force: true }));
   const source = join(base, "source");
@@ -114,7 +114,7 @@ async function fixture() {
           id: "fixture/free",
           providerId: "fixture",
           model: "stub",
-          capabilities: { tools: true, vision: false, contextWindow: 32000 },
+          capabilities: { tools: true, vision: false, contextWindow },
           pricing: { free: true },
         },
       ],
@@ -342,6 +342,82 @@ test("HTTP shutdown/restart resumes the actual SDK journal and exact workspace; 
     "cancelled",
   );
   expect(requests).toBe(2);
+}, 30_000);
+
+test("HTTP + actual SDK resumes an overflowing steering queue in bounded batches across restart", async () => {
+  const f = await fixture(512 * 1024);
+  const entered = deferred();
+  const never = deferred();
+  const first = await f.start(async (_url, init) => {
+    entered.resolve();
+    await waitGate(never.promise, init?.signal);
+    return sse({ content: "unreachable" });
+  });
+  const request = task();
+  request.budget.max_tokens = 512 * 1024;
+  const created = await first.client.create(request);
+  await first.client.start(created.task_id, {
+    expectedRevision: created.revision,
+    approvals: { read: true, write: false, execute: false },
+  });
+  await entered.promise;
+  await first.service.close();
+  const batches: string[] = [];
+  const respond: NonNullable<RuntimeSessionOptions["fetch"]> = async (
+    _url,
+    init,
+  ) => {
+    const body = JSON.parse(String(init?.body));
+    const users = body.messages.filter(
+      (message: { role: string }) => message.role === "user",
+    );
+    expect(JSON.stringify(users).includes(request.request)).toBe(true);
+    batches.push(JSON.stringify(users.at(-1).content));
+    return sse({ content: "Processed the supplied steering batch." });
+  };
+  const second = await f.start(respond);
+  const instructions = Array.from({ length: 8 }, (_, index) =>
+    `instruction-${index}:`.padEnd(16 * 1024, "x"),
+  );
+  for (const instruction of instructions)
+    await second.client.steer(created.task_id, instruction);
+  await second.client.resume(
+    created.task_id,
+    (await second.client.inspect(created.task_id)).revision,
+  );
+  const paused = await eventually(
+    () => second.client.inspect(created.task_id),
+    (value) => value.status !== "running",
+  );
+  expect(paused.status).toBe("paused");
+  expect(batches).toHaveLength(1);
+  for (const instruction of instructions.slice(0, 7))
+    expect(batches[0]?.includes(instruction)).toBe(true);
+  expect(batches[0]?.includes(instructions[7] ?? "")).toBe(false);
+  await second.service.close();
+  const third = await f.start(respond);
+  await third.client.resume(
+    created.task_id,
+    (await third.client.inspect(created.task_id)).revision,
+  );
+  const completed = await eventually(
+    () => third.client.inspect(created.task_id),
+    (value) => value.status !== "running",
+  );
+  expect(completed.status).toBe("completed");
+  expect(batches).toHaveLength(2);
+  expect(batches[1]?.includes(instructions[7] ?? "")).toBe(true);
+  for (const instruction of instructions.slice(0, 7))
+    expect(batches[1]?.includes(instruction)).toBe(false);
+  expect(f.launches.map((launch) => launch.journal)).toEqual(
+    Array(3).fill(f.launches[0]?.journal),
+  );
+  expect(f.launches.map((launch) => launch.cwd)).toEqual(
+    Array(3).fill(f.launches[0]?.cwd),
+  );
+  expect(await readFile(join(f.source, "baseline.txt"), "utf8")).toBe(
+    "untouched\n",
+  );
 }, 30_000);
 
 test("service refuses overlapping state/source roots and never advertises unsandboxed execution", async () => {
