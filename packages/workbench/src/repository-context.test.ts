@@ -31,7 +31,7 @@ const map = {
 };
 
 test("repository maps freeze exact scope, source revision and integrity", () => {
-  const frozen = freezeRepositoryMap(context, workspace, map, "task");
+  const frozen = freezeRepositoryMap(context, workspace, map, "task", 1e6);
   expect(frozen).toMatchObject({
     scope: context.scope,
     workspace,
@@ -58,6 +58,7 @@ test("repository maps reject mismatched workspace identities and source revision
       workspace,
       { ...map, workspace: { ...map.workspace, revision: "r2" } },
       "task",
+      1e6,
     ),
   ).toThrow();
   expect(() =>
@@ -66,6 +67,7 @@ test("repository maps reject mismatched workspace identities and source revision
       workspace,
       { ...map, workspace: { ...map.workspace, workspace_id: "other" } },
       "task",
+      1e6,
     ),
   ).toThrow();
   expect(() =>
@@ -74,27 +76,36 @@ test("repository maps reject mismatched workspace identities and source revision
       workspace,
       map,
       "task",
+      1e6,
     ),
   ).toThrow();
 });
 
 test("repository map packing respects the remaining prompt budget without truncating text", () => {
-  expect(repositoryMapTokenBudget("task")).toBe(4096);
+  expect(repositoryMapTokenBudget("task", 1e6)).toBe(4096);
   const full = "x".repeat(MAX_RUNTIME_INSTRUCTION_LENGTH);
-  expect(repositoryMapTokenBudget(full)).toBe(0);
-  expect(() => freezeRepositoryMap(context, workspace, map, full)).toThrow();
+  expect(repositoryMapTokenBudget(full, 1e6)).toBe(0);
+  expect(() =>
+    freezeRepositoryMap(context, workspace, map, full, 1e6),
+  ).toThrow();
   expect(() =>
     freezeRepositoryMap(
       context,
       workspace,
       { ...map, text: "x".repeat(16_385) },
       "task",
+      1e6,
     ),
   ).toThrow();
+  expect(repositoryMapTokenBudget("task", 0)).toBe(0);
+  expect(repositoryMapTokenBudget("task", 3000)).toBeLessThan(1000);
+  expect(() =>
+    freezeRepositoryMap(context, workspace, map, "task", map.text.length),
+  ).toThrow();
   const nearlyFull = "x".repeat(MAX_RUNTIME_INSTRUCTION_LENGTH - 200);
-  expect(repositoryMapTokenBudget(nearlyFull)).toBeGreaterThan(0);
-  expect(repositoryMapTokenBudget(nearlyFull)).toBeLessThan(4096);
-  const frozen = freezeRepositoryMap(context, workspace, map, nearlyFull);
+  expect(repositoryMapTokenBudget(nearlyFull, 1e6)).toBeGreaterThan(0);
+  expect(repositoryMapTokenBudget(nearlyFull, 1e6)).toBeLessThan(4096);
+  const frozen = freezeRepositoryMap(context, workspace, map, nearlyFull, 1e6);
   expect(
     withFrozenRepositoryMap(nearlyFull, frozen).length,
   ).toBeLessThanOrEqual(MAX_RUNTIME_INSTRUCTION_LENGTH);

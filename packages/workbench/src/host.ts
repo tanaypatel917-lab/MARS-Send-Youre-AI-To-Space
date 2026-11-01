@@ -31,6 +31,7 @@ import {
   FrozenMemorySchema,
   freezeMemory,
   recallHistory,
+  serializedBytes,
   validateFrozenMemory,
   type WorkbenchMemory,
   withFrozenMemory,
@@ -623,6 +624,9 @@ export async function createWorkbenchHost(
         }
       }
       let instruction = withFrozenMemory(baseInstruction, memory);
+      const remainingCapacity =
+        capacity -
+        (serializedBytes(instruction) - serializedBytes(baseInstruction));
       const running = await options.store.update(
         context,
         task.task_id,
@@ -641,7 +645,10 @@ export async function createWorkbenchHost(
         let repositoryMap:
           | z.infer<typeof FrozenRepositoryMapSchema>
           | undefined;
-        const maxOutputTokens = repositoryMapTokenBudget(instruction);
+        const maxOutputTokens = repositoryMapTokenBudget(
+          instruction,
+          remainingCapacity,
+        );
         if (options.repositoryMap && params.approvals.read && maxOutputTokens) {
           try {
             repositoryMap = freezeRepositoryMap(
@@ -653,6 +660,7 @@ export async function createWorkbenchHost(
                 max_output_tokens: maxOutputTokens,
               }),
               instruction,
+              remainingCapacity,
             );
             assertPublicBytes(
               new TextEncoder().encode(repositoryMap.text),

@@ -73,7 +73,7 @@ Missing-model start/resume failures return the stable `model_unavailable` RPC co
 
 ## Frozen repository context
 
-Read-approved tasks receive a bounded repository map from their private workspace at launch, after frozen memory context. `@mars/context` supplies definitions and relative paths; this is untrusted evidence, not instructions or permission to use tools. The request is capped at 4,096 conservative tokens and reduced to fit the remaining runtime character budget. Full prompts and read-denied tasks do not request a map. Secret/ignored/private/generated files are excluded by the provider; host-private paths in returned text cause the entire map to be omitted.
+Read-approved tasks receive a bounded repository map from their private workspace at launch, after frozen memory context. `@mars/context` supplies definitions and relative paths; this is untrusted evidence, not instructions or permission to use tools. The request is capped at 4,096 conservative tokens and reduced to fit both the remaining runtime character budget and the model-context capacity left after frozen memory (the same selected-model/task-budget reservation that bounds saved facts). Full prompts and read-denied tasks do not request a map. Secret/ignored/private/generated files are excluded by the provider; host-private paths in returned text cause the entire map to be omitted.
 
 The service uses fd-anchored Linux confinement only, with root/revision revalidation after scanning. It never falls back to the weaker best-effort mode. If confinement is unavailable or mapping fails, execution proceeds without a map and emits only a sanitized best-effort diagnostic. No error details or paths reach the model or RPC.
 

@@ -4,6 +4,7 @@ import type { RequestContext, WorkspaceRef } from "@mars/contracts";
 import { ScopeSchema } from "@mars/contracts";
 import { MAX_RUNTIME_INSTRUCTION_LENGTH } from "@mars/execution";
 import { z } from "zod";
+import { serializedBytes } from "./memory-context";
 import { WorkspaceRefSchema } from "./protocol";
 
 const MAX_MAP_LENGTH = 16_384;
@@ -23,14 +24,23 @@ export const FrozenRepositoryMapSchema = z
   .strict();
 export type FrozenRepositoryMap = z.infer<typeof FrozenRepositoryMapSchema>;
 
-export function repositoryMapTokenBudget(instruction: string): number {
+/**
+ * Conservative map request size: the smaller of the remaining runtime character
+ * room and the remaining model-context byte capacity, at three bytes per token.
+ */
+export function repositoryMapTokenBudget(
+  instruction: string,
+  capacityBytes: number,
+): number {
   return Math.max(
     0,
     Math.min(
       4096,
       Math.floor(
-        (MAX_RUNTIME_INSTRUCTION_LENGTH - instruction.length - PREFIX.length) /
-          3,
+        Math.min(
+          MAX_RUNTIME_INSTRUCTION_LENGTH - instruction.length - PREFIX.length,
+          capacityBytes - serializedBytes(PREFIX),
+        ) / 3,
       ),
     ),
   );
@@ -44,6 +54,7 @@ export function freezeRepositoryMap(
     "workspace" | "text" | "content_digest" | "complete" | "truncated"
   >,
   instruction: string,
+  capacityBytes: number,
 ): FrozenRepositoryMap {
   if (
     map.workspace.workspace_id !== workspace.workspace_id ||
@@ -51,7 +62,8 @@ export function freezeRepositoryMap(
     (context.scope.workspace_id !== undefined &&
       context.scope.workspace_id !== workspace.workspace_id) ||
     instruction.length + PREFIX.length + map.text.length >
-      MAX_RUNTIME_INSTRUCTION_LENGTH
+      MAX_RUNTIME_INSTRUCTION_LENGTH ||
+    serializedBytes(PREFIX + map.text) > capacityBytes
   )
     throw new Error("Invalid repository map binding or budget.");
   return FrozenRepositoryMapSchema.parse({

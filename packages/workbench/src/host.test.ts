@@ -237,6 +237,37 @@ async function fixture() {
         };
       },
     });
+  const smallRegistry = async () => {
+    await writeFile(
+      join(root, ".mars", "models.json"),
+      JSON.stringify({
+        version: 1,
+        providers: [
+          {
+            id: "fixture",
+            kind: "openai-compatible",
+            baseUrl: "https://fixture.invalid/v1",
+            apiKeyEnv: "FIXTURE_KEY",
+          },
+        ],
+        models: [
+          {
+            id: "fixture/small",
+            providerId: "fixture",
+            model: "fixture",
+            capabilities: { tools: true, vision: false, contextWindow: 8192 },
+            pricing: { free: true },
+          },
+        ],
+        routes: { default: ["fixture/small"] },
+      }),
+    );
+    return loadModelRegistry({
+      cwd: root,
+      home: root,
+      env: { FIXTURE_KEY: "dummy-not-live" },
+    });
+  };
   return {
     root,
     store,
@@ -244,6 +275,7 @@ async function fixture() {
     workspace,
     sessions,
     makeHost,
+    smallRegistry,
     get prepareCalls() {
       return prepareCalls;
     },
@@ -321,18 +353,23 @@ test.skipIf(process.platform !== "linux")(
   },
 );
 
-test.each(["read denied", "prompt full"])(
+test.each(["read denied", "prompt full", "model context full"])(
   "repository map is not requested when %s",
   async (reason) => {
     const f = await fixture();
     let calls = 0;
-    const api = await f.makeHost(undefined, undefined, {
-      async map() {
-        calls++;
-        throw new Error("Unexpected map request");
+    const api = await f.makeHost(
+      reason === "model context full" ? await f.smallRegistry() : undefined,
+      undefined,
+      {
+        async map() {
+          calls++;
+          throw new Error("Unexpected map request");
+        },
       },
-    });
+    );
     const input = task();
+    if (reason === "model context full") input.request = "x".repeat(6000);
     if (reason === "prompt full") {
       const suffix = `\n\nAcceptance criteria:\n${input.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
       input.request = "x".repeat(
@@ -561,35 +598,7 @@ test("memory is frozen privately once; resume does not replace it with later fac
 
 test("saved facts are omitted rather than exhausting a small model context", async () => {
   const f = await fixture();
-  await writeFile(
-    join(f.root, ".mars", "models.json"),
-    JSON.stringify({
-      version: 1,
-      providers: [
-        {
-          id: "fixture",
-          kind: "openai-compatible",
-          baseUrl: "https://fixture.invalid/v1",
-          apiKeyEnv: "FIXTURE_KEY",
-        },
-      ],
-      models: [
-        {
-          id: "fixture/small",
-          providerId: "fixture",
-          model: "fixture",
-          capabilities: { tools: true, vision: false, contextWindow: 8192 },
-          pricing: { free: true },
-        },
-      ],
-      routes: { default: ["fixture/small"] },
-    }),
-  );
-  const small = await loadModelRegistry({
-    cwd: f.root,
-    home: f.root,
-    env: { FIXTURE_KEY: "dummy-not-live" },
-  });
+  const small = await f.smallRegistry();
   const memory = createMemoryStore({ rootDir: join(f.root, "memory") });
   cleanup.push(() => memory.close());
   await memory.batch(context(), 0, [
