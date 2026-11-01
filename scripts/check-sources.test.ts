@@ -6,7 +6,7 @@ const manifest = validateManifest(raw);
 
 describe("source manifest validation", () => {
   test("validates the complete manifest and installed artifact/lock pins", async () => {
-    expect((await checkSources()).components).toHaveLength(24);
+    expect((await checkSources()).components).toHaveLength(25);
   });
   test("rejects floating revisions and mutable source references", () => {
     const changed = structuredClone(manifest);
