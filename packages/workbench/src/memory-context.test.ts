@@ -121,6 +121,12 @@ test("history excerpts stay centred on the matched term with truncation on each 
     truncated_before: true,
     truncated_after: true,
   });
+  const stop = `the ${"f".repeat(3000)} verifier failed`;
+  const filtered = excerptAround(stop, "the verifier");
+  expect(filtered.text).toContain("verifier failed");
+  expect(filtered.truncated_before).toBe(true);
+  const partial = `xverifierx ${"g".repeat(3000)} Verifier failed`;
+  expect(excerptAround(partial, "verifier").text).toContain("Verifier failed");
   expect(excerptAround("short", "missing")).toEqual({
     text: "short",
     truncated_before: false,

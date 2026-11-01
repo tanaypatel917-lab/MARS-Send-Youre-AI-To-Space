@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { MemoryService, RequestContext } from "@mars/contracts";
 import { ScopeSchema } from "@mars/contracts";
 import { MAX_RUNTIME_INSTRUCTION_LENGTH } from "@mars/execution";
-import type { DurableMemoryStore } from "@mars/memory";
+import { type DurableMemoryStore, searchTerms } from "@mars/memory";
 import { z } from "zod";
 
 export type WorkbenchMemory = Pick<MemoryService, "snapshot"> &
@@ -77,19 +77,20 @@ export function serializedBytes(text: string): number {
 
 const EXCERPT_LENGTH = 2048;
 
-/** Bounded excerpt around the earliest query term so the cited match stays visible. */
+/** Bounded excerpt around the earliest whole token the journal search required, so the cited match stays visible. */
 export function excerptAround(
   text: string,
   query: string,
 ): { text: string; truncated_before: boolean; truncated_after: boolean } {
   if (text.length <= EXCERPT_LENGTH)
     return { text, truncated_before: false, truncated_after: false };
-  const lower = text.toLowerCase();
-  const haystack = lower.length === text.length ? lower : text;
+  const terms = new Set(searchTerms(query));
   let first = -1;
-  for (const term of query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []) {
-    const at = haystack.indexOf(term);
-    if (at >= 0 && (first < 0 || at < first)) first = at;
+  for (const token of text.matchAll(/[\p{L}\p{N}_]+/gu)) {
+    if (terms.has(token[0].toLowerCase())) {
+      first = token.index;
+      break;
+    }
   }
   const start = Math.max(
     0,
