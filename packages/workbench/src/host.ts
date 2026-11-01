@@ -6,6 +6,7 @@ import {
   readFile,
   realpath,
   rename,
+  rm,
   stat,
   writeFile,
 } from "node:fs/promises";
@@ -539,6 +540,43 @@ export async function createWorkbenchHost(
     return recorded;
   };
   const childRouting = new Map<string, FrozenRouting>();
+  /** Routing decisions survive a host restart in a private per-child record. */
+  const childRoutingPath = (childTaskId: string) =>
+    join(
+      options.stateRoot,
+      "children",
+      "routing",
+      childWorkspaceTaskId(childTaskId) + ".json",
+    );
+  const rememberChildRouting = async (
+    childTaskId: string,
+    routing: FrozenRouting,
+  ) => {
+    childRouting.set(childTaskId, routing);
+    const path = childRoutingPath(childTaskId);
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    const temporary = path + "." + randomUUID() + ".tmp";
+    await writeFile(temporary, JSON.stringify(routing), { mode: 0o600 });
+    await rename(temporary, path);
+  };
+  const recallChildRouting = async (
+    childTaskId: string,
+  ): Promise<FrozenRouting | null> => {
+    const known = childRouting.get(childTaskId);
+    if (known) return known;
+    const parsed = await readFile(childRoutingPath(childTaskId), "utf8")
+      .then((text) => FrozenRoutingSchema.safeParse(JSON.parse(text)))
+      .catch(() => null);
+    if (!parsed?.success) return null;
+    childRouting.set(childTaskId, parsed.data);
+    return parsed.data;
+  };
+  const forgetChildRouting = async (childTaskId: string) => {
+    childRouting.delete(childTaskId);
+    await rm(childRoutingPath(childTaskId), { force: true }).catch(
+      () => undefined,
+    );
+  };
   const childLaunches = new Map<string, ChildLaunch>();
   const childSweeps = new Map<string, Promise<void>>();
   /** Room capabilities kept for sweeping after the coordinator has exited. */
@@ -620,13 +658,13 @@ export async function createWorkbenchHost(
               attempt: launch?.attempt ?? null,
               status: child.state,
               model_id: launch?.model_id ?? null,
-              routing: childRouting.get(childTaskId) ?? null,
+              routing: await recallChildRouting(childTaskId),
             },
             usage: delta,
           });
           if (final) {
             childLaunches.delete(childTaskId);
-            childRouting.delete(childTaskId);
+            await forgetChildRouting(childTaskId);
           }
         }
         cursor = page.next_cursor;
@@ -1082,7 +1120,8 @@ export async function createWorkbenchHost(
             initialRequestAllowance({
               approvals: request.approvals,
               recall: false,
-              collaboration: true,
+              // Children get only workspace tools from the child adapter.
+              collaboration: false,
               instruction: request.instruction,
             }) + MIN_INITIAL_OUTPUT_RESERVE,
           );
@@ -1092,7 +1131,9 @@ export async function createWorkbenchHost(
             reason: "workbench free default (routing unavailable)",
           };
         }
-        childRouting.set(request.child_task_id, routing);
+        await rememberChildRouting(request.child_task_id, routing).catch(
+          () => undefined,
+        );
         const specialist = routing.model_id
           ? options.registry.getModel(routing.model_id)
           : undefined;

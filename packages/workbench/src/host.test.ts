@@ -2280,7 +2280,7 @@ test("children route through the specialist registry and mirror usage into task 
     initialRequestAllowance({
       approvals: { read: true, write: false, execute: false },
       recall: false,
-      collaboration: true,
+      collaboration: false,
       instruction: launch.instruction,
     }) + MIN_INITIAL_OUTPUT_RESERVE,
   );
