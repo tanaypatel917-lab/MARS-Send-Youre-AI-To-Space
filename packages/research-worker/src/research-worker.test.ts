@@ -93,6 +93,12 @@ const PAGES: Record<string, FixturePage> = {
     body: "%PDF-1.4",
   },
   "https://leak.example/robots.txt": { status: 404, body: "" },
+  "https://leak.example/encoded": {
+    body: html(
+      "Encoded leak",
+      "Entity form &#47;srv&#47;mars&#45;private&#47;keys and percent form %2Fsrv%2Fmars-private%2Fkeys are both here. The deployment key lives under [redacted]/keys and nowhere else.",
+    ),
+  },
   "https://leak.example/p": {
     body: html(
       "Leak",
@@ -964,10 +970,13 @@ describe("review regressions", () => {
     expect((error as ResearchError).code).toBe("lease_lost");
   });
 
-  test("journal entries never retain private roots", async () => {
+  test("journal entries never retain private roots, even encoded", async () => {
     const journal = createRecordingJournal();
     const search = fakeSearch({
-      "mars distance from sun": [result("https://leak.example/p")],
+      "mars distance from sun": [
+        result("https://leak.example/p"),
+        result("https://leak.example/encoded"),
+      ],
     });
     const model = fakeModel({ plan: PLAN.slice(0, 1), extracts: EXTRACTS });
     const { instance } = worker({
@@ -990,7 +999,15 @@ describe("review regressions", () => {
         ),
     );
     expect(serialized).not.toContain("/srv/mars-private");
+    expect(serialized).not.toContain("mars&#45;private");
+    expect(serialized).not.toContain("mars-private%2F");
     expect(serialized).toContain("[redacted]");
+    const replies = journal
+      .entries()
+      .filter((entry) => entry.kind === "model")
+      .map((entry) => (entry.value as { text: string }).text)
+      .join("\n");
+    expect(replies).not.toContain("mars-private");
   });
 });
 

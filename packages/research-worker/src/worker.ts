@@ -15,6 +15,7 @@ import {
 import {
   acceptsMediaType,
   decodeDocument,
+  decodeEntities,
   MAX_QUOTE_CHARS,
   MIN_QUOTE_CHARS,
   normalizeForMatch,
@@ -210,6 +211,15 @@ async function runLimited<T>(
   await Promise.all(workers);
 }
 
+function decodeObfuscation(text: string): string {
+  const unescaped = decodeEntities(text);
+  try {
+    return decodeURIComponent(unescaped.replace(/%(?![0-9a-f]{2})/gi, "%25"));
+  } catch {
+    return unescaped;
+  }
+}
+
 function isAbort(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
@@ -289,10 +299,12 @@ export function createResearchWorker(
 
     const fetchKey = (url: string, maxBytes: number) =>
       journalKey({ url, maxBytes });
+    // Needles may be hidden behind HTML entities or percent-encoding, so the
+    // journal keeps the decoded form when anything had to be redacted.
     const redactBytes = (data: Uint8Array): Uint8Array => {
-      const text = new TextDecoder().decode(data);
-      const cleaned = clean(text);
-      return cleaned === text ? data : new TextEncoder().encode(cleaned);
+      const decoded = decodeObfuscation(new TextDecoder().decode(data));
+      const cleaned = clean(decoded);
+      return cleaned === decoded ? data : new TextEncoder().encode(cleaned);
     };
 
     const journaledFetch = async (
@@ -603,7 +615,7 @@ export function createResearchWorker(
           continue;
         }
         const document = decodeDocument(page.data, page.media_type);
-        const text = clean(document.text);
+        const text = clean(decodeObfuscation(document.text));
         if (!text) continue;
         const fingerprint = textFingerprint(text);
         if (fingerprints.has(fingerprint)) {
