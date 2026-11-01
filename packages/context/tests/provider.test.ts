@@ -40,15 +40,26 @@ describe("repository map provider", () => {
       "b.ts",
       "import { one } from './a'; export const two = one();\n",
     );
-    const provider = providerFor(root);
+    let tokenCountCalls = 0;
+    const provider = providerFor(root, {
+      tokenCounter: {
+        id: "tracked-token-counter",
+        count(text) {
+          tokenCountCalls += 1;
+          return conservativeTokenCounter.count(text);
+        },
+      },
+    });
     const cold = await provider.map(context, {
       workspace,
       max_output_tokens: 200,
     });
+    const coldCountCalls = tokenCountCalls;
     const warm = await provider.map(context, {
       workspace,
       max_output_tokens: 200,
     });
+    expect(tokenCountCalls).toBe(coldCountCalls);
     const changedQuery = await provider.map(context, {
       workspace,
       query: "two",
@@ -62,6 +73,28 @@ describe("repository map provider", () => {
     expect(changedQuery.stats.map_cache_hit).toBe(false);
     expect(changedQuery.stats.files_reused).toBe(2);
   });
+
+  test("packs 1,500 TypeScript files with five exported functions within budget", async () => {
+    const root = await tempRoot();
+    await Promise.all(
+      Array.from({ length: 1_500 }, (_, index) =>
+        writeFile(
+          join(root, `module-${String(index).padStart(4, "0")}.ts`),
+          Array.from(
+            { length: 5 },
+            (_, functionIndex) =>
+              `export function module${index}Function${functionIndex}(value: number) { return value + ${index + functionIndex}; }`,
+          ).join("\n"),
+        ),
+      ),
+    );
+    const result = await providerFor(root).map(context, {
+      workspace,
+      max_output_tokens: 65_536,
+    });
+    expect(result.token_count).toBeLessThanOrEqual(65_536);
+    expect(result.stats.files_inventoried).toBe(1_500);
+  }, 30_000);
 
   test("detects same-size content edits and add/delete invalidation", async () => {
     const root = await tempRoot();

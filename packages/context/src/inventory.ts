@@ -101,7 +101,7 @@ export async function inventory(
           stopForLimit();
           return;
         } else {
-          const contents = await readNoFollow(ignorePath);
+          const contents = await readNoFollow(ignorePath, stat);
           totalBytes += contents.length;
           rules.push({
             prefix: relativeDirectory,
@@ -110,7 +110,11 @@ export async function inventory(
         }
       }
     } catch (error) {
-      if (!isMissing(error)) throw asIoError(error);
+      if (isSymlinkRace(error)) {
+        skip("symlink");
+      } else if (!isMissing(error)) {
+        throw asIoError(error);
+      }
     }
 
     let names: string[];
@@ -183,7 +187,7 @@ export async function inventory(
       }
       let bytes: Buffer;
       try {
-        bytes = await readNoFollow(absolute);
+        bytes = await readNoFollow(absolute, stat);
       } catch (error) {
         if (isMissing(error)) continue;
         if (isSymlinkRace(error)) {
@@ -275,15 +279,32 @@ export async function inventory(
   };
 }
 
-async function readNoFollow(path: string): Promise<Buffer> {
+async function readNoFollow(
+  path: string,
+  expectedStat: Awaited<ReturnType<typeof lstat>>,
+): Promise<Buffer> {
   const handle = await open(
     path,
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
   );
   try {
+    const openedStat = await handle.stat();
+    if (
+      !openedStat.isFile() ||
+      openedStat.dev !== expectedStat.dev ||
+      openedStat.ino !== expectedStat.ino
+    ) {
+      throw new FileIdentityMismatchError();
+    }
     return await handle.readFile();
   } finally {
     await handle.close();
+  }
+}
+
+class FileIdentityMismatchError extends Error {
+  constructor() {
+    super("Opened file identity changed during inventory");
   }
 }
 
@@ -292,6 +313,7 @@ function isMissing(error: unknown): boolean {
 }
 
 function isSymlinkRace(error: unknown): boolean {
+  if (error instanceof FileIdentityMismatchError) return true;
   const code = (error as NodeJS.ErrnoException).code;
   return code === "ELOOP" || code === "EMLINK";
 }

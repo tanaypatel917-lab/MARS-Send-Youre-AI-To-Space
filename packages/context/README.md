@@ -35,8 +35,18 @@ The default `mars-conservative-v1` counter estimates tokens as `ceil(UTF-8 bytes
 for typical code tokenizers, not a guarantee for every tokenizer; typical code BPE tokenization is often around 3.5–4.5
 bytes per token. Supply the model's tokenizer through `tokenCounter` for an exact cap, or use the exported
 `utf8ByteTokenCounter` for a strict upper bound on byte-level BPE tokenizers. Candidate symbols are added atomically;
-the provider renders and counts the whole map after each tentative addition and never returns more than the requested
-budget.
+the provider estimates each symbol line and newly introduced file header additively, then renders and counts the full
+map once. If a custom non-additive counter exceeds the budget, the provider removes the most recently selected whole
+units and rechecks until the rendered map fits. Line-number width is fixed from all candidate definitions per file so
+adding a symbol never changes another line's cost.
+
+## Query relevance
+
+Queries are lowercased, and a trailing `s` is stripped from terms longer than three characters. Identifiers are split
+into subwords at camelCase/PascalCase boundaries and on digits, `_`, `-`, and `$`; normalized subwords shorter than
+three characters are ignored. Exact identifier matches retain the ×10 ranking multiplier. A non-exact identifier that
+shares a query subword receives ×3, and a file receives an additional half-base personalization when any definition
+shares a query subword. Existing path personalization also matches query subwords in path segments and filename stems.
 
 ## Inventory and exclusions
 

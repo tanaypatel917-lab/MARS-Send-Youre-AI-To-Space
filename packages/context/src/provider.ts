@@ -175,6 +175,28 @@ export function createRepositoryMapProvider(
       });
       check();
       const currentFiles = result.cacheEntries;
+      const mapKey = createHash("sha256")
+        .update(
+          JSON.stringify([
+            result.digest,
+            tokenCounter.id,
+            limits,
+            normalizedRequest,
+            request.workspace.revision,
+          ]),
+        )
+        .digest("hex");
+      const cachedMap = workspaceCache.maps.get(mapKey);
+      if (cachedMap) {
+        workspaceCache.files = currentFiles;
+        touchWorkspace(workspaces, key, workspaceCache, maxCachedWorkspaces);
+        touchMap(workspaceCache.maps, mapKey, cachedMap, maxCachedMaps);
+        const cloned = cloneMap(cachedMap);
+        cloned.stats.map_cache_hit = true;
+        cloned.stats.files_parsed = 0;
+        cloned.stats.files_reused = result.files.length;
+        return cloned;
+      }
       const normalizedMentions = new Set(mentionedSymbols);
       for (const symbol of mentionedSymbols)
         normalizedMentions.add(symbol.toLowerCase());
@@ -210,28 +232,6 @@ export function createRepositoryMapProvider(
         tokenCounter,
       );
       check();
-      const mapKey = createHash("sha256")
-        .update(
-          JSON.stringify([
-            result.digest,
-            tokenCounter.id,
-            limits,
-            normalizedRequest,
-            request.workspace.revision,
-          ]),
-        )
-        .digest("hex");
-      const cachedMap = workspaceCache.maps.get(mapKey);
-      if (cachedMap) {
-        workspaceCache.files = currentFiles;
-        touchWorkspace(workspaces, key, workspaceCache, maxCachedWorkspaces);
-        touchMap(workspaceCache.maps, mapKey, cachedMap, maxCachedMaps);
-        const cloned = cloneMap(cachedMap);
-        cloned.stats.map_cache_hit = true;
-        cloned.stats.files_parsed = 0;
-        cloned.stats.files_reused = result.files.length;
-        return cloned;
-      }
       const baseMap: RepositoryMap = {
         schema_version: 1,
         workspace: {

@@ -95,6 +95,55 @@ export const acceptsValidCredentials = () => validateSessionToken("token");
 `,
 };
 
+export function createScaledFixtureFiles(): Readonly<Record<string, string>> {
+  const words = [
+    "amber",
+    "birch",
+    "cedar",
+    "delta",
+    "ember",
+    "frost",
+    "grove",
+    "harbor",
+    "indigo",
+    "juniper",
+    "kestrel",
+    "lumen",
+  ];
+  const files: Record<string, string> = { ...FIXTURE_FILES };
+  const distractorCount = 300;
+  for (let index = 0; index < distractorCount; index += 1) {
+    const word = words[index % words.length] as string;
+    const targetIndices = [
+      (index + 1) % distractorCount,
+      ...(index % 2 === 0 ? [(index + 17) % distractorCount] : []),
+    ];
+    const imports = targetIndices.map((targetIndex, importIndex) => {
+      const targetWord = words[targetIndex % words.length] as string;
+      const relativePath =
+        targetWord === word
+          ? `./${targetWord}-${targetIndex}`
+          : `../${targetWord}/${targetWord}-${targetIndex}`;
+      return `import { ${targetWord}Module${targetIndex}Function0 as dependency${importIndex} } from "${relativePath}";`;
+    });
+    const functions = Array.from(
+      { length: 3 + (index % 3) },
+      (_, functionIndex) => {
+        const calls = targetIndices
+          .map((_, importIndex) => `dependency${importIndex}(value)`)
+          .join(" + ");
+        return `export function ${word}Module${index}Function${functionIndex}(value: number) { return value + ${calls}; }`;
+      },
+    );
+    files[`src/modules/${word}/${word}-${index}.ts`] = [
+      ...imports,
+      ...functions,
+      "",
+    ].join("\n");
+  }
+  return files;
+}
+
 export interface NavigationTask {
   id: string;
   query: string;

@@ -14,8 +14,13 @@ export function rankFiles(
   );
   const queryTerms = new Set(
     (query.match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? [])
-      .filter((term) => term.length >= 3)
-      .map((term) => term.toLowerCase()),
+      .map(normalizeQueryTerm)
+      .filter((term) => term.length >= 3),
+  );
+  const querySubwords = new Set(
+    [...(query.match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? [])].flatMap(
+      identifierSubwords,
+    ),
   );
   const normalizedMentions = new Set(
     [...mentionedIdents].map((ident) => ident.toLowerCase()),
@@ -54,18 +59,30 @@ export function rankFiles(
     const basename = pathParts.at(-1) ?? "";
     const basenameWithoutExtension = basename.replace(/\.[^.]*$/, "");
     if (
-      [...pathParts, basename, basenameWithoutExtension].some(
-        (part) => normalizedMentions.has(part) || queryTerms.has(part),
+      [...pathParts, basename, basenameWithoutExtension].some((part) => {
+        return normalizedMentions.has(part) || queryTerms.has(part);
+      }) ||
+      [...pathParts, basename, basenameWithoutExtension].some((part) =>
+        sharesSubword(part, querySubwords),
+      )
+    ) {
+      amount += base;
+    }
+    if (
+      file.defs.some(
+        (definition) =>
+          normalizedMentions.has(definition.name.toLowerCase()) ||
+          queryTerms.has(definition.name.toLowerCase()),
       )
     ) {
       amount += base;
     }
     if (
       file.defs.some((definition) =>
-        normalizedMentions.has(definition.name.toLowerCase()),
+        sharesSubword(definition.name, querySubwords),
       )
     ) {
-      amount += base;
+      amount += 0.5 * base;
     }
     if (amount > 0) personalization.set(file.path, amount);
   }
@@ -88,7 +105,11 @@ export function rankFiles(
       continue;
     }
     let multiplier = 1;
-    if (normalizedMentions.has(ident.toLowerCase())) multiplier *= 10;
+    const exactMention =
+      normalizedMentions.has(ident.toLowerCase()) ||
+      queryTerms.has(ident.toLowerCase());
+    if (exactMention) multiplier *= 10;
+    else if (sharesSubword(ident, querySubwords)) multiplier *= 3;
     const hasCaseShape =
       (ident.includes("_") && /[A-Za-z]/.test(ident)) ||
       (ident.includes("-") && /[A-Za-z]/.test(ident)) ||
@@ -222,6 +243,24 @@ function pageRank(
     const source = key.slice(0, key.indexOf("\0"));
     outgoing.set(source, (outgoing.get(source) ?? 0) + weight);
   }
+  const incomingEdges = new Map<
+    string,
+    Array<{ source: string; normalizedWeight: number }>
+  >();
+  for (const [key, weight] of weights) {
+    const separator = key.indexOf("\0");
+    const source = key.slice(0, separator);
+    const target = key.slice(separator + 1);
+    const edges = incomingEdges.get(target) ?? [];
+    edges.push({
+      source,
+      normalizedWeight: weight / (outgoing.get(source) ?? 1),
+    });
+    incomingEdges.set(target, edges);
+  }
+  for (const edges of incomingEdges.values()) {
+    edges.sort((left, right) => compare(left.source, right.source));
+  }
   let rank = new Map(vector);
   for (let iteration = 0; iteration < 100; iteration += 1) {
     let dangling = 0;
@@ -233,12 +272,8 @@ function pageRank(
     let index = 0;
     for (const node of nodes) {
       let incoming = 0;
-      for (const [key, weight] of weights) {
-        const separator = key.indexOf("\0");
-        if (key.slice(separator + 1) !== node) continue;
-        const source = key.slice(0, separator);
-        incoming +=
-          ((rank.get(source) ?? 0) * weight) / (outgoing.get(source) ?? 1);
+      for (const edge of incomingEdges.get(node) ?? []) {
+        incoming += (rank.get(edge.source) ?? 0) * edge.normalizedWeight;
       }
       next.set(
         node,
@@ -256,6 +291,29 @@ function pageRank(
     if (difference < nodes.length * 1e-6) break;
   }
   return rank;
+}
+
+function normalizeQueryTerm(term: string): string {
+  const normalized = term.toLowerCase();
+  return normalized.length > 3 && normalized.endsWith("s")
+    ? normalized.slice(0, -1)
+    : normalized;
+}
+
+function identifierSubwords(identifier: string): string[] {
+  return identifier
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+    .split(/[^A-Za-z]+/)
+    .map(normalizeQueryTerm)
+    .filter((part) => part.length >= 3);
+}
+
+function sharesSubword(
+  identifier: string,
+  querySubwords: ReadonlySet<string>,
+): boolean {
+  return identifierSubwords(identifier).some((part) => querySubwords.has(part));
 }
 
 function compare(left: string, right: string): number {

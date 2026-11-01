@@ -41,6 +41,29 @@ describe("extractors and ranking", () => {
     ).toBeGreaterThan(0);
   });
 
+  test("ranks a session-token implementation from query subwords", async () => {
+    const root = await tempRoot();
+    await putFile(
+      root,
+      "src/auth/session.ts",
+      "export function validateSessionToken(token: string): boolean { return token.length > 0; }\n",
+    );
+    for (let index = 0; index < 10; index += 1) {
+      await putFile(
+        root,
+        `src/modules/unrelated-${index}.ts`,
+        `export function unrelatedModule${index}() { return ${index}; }\n`,
+      );
+    }
+    const result = await providerFor(root).map(context, {
+      workspace,
+      query: "how is the session token validated",
+      max_output_tokens: 1_000,
+    });
+    expect(result.files[0]?.path).toBe("src/auth/session.ts");
+    expect(result.files[0]?.symbols[0]?.name).toBe("validateSessionToken");
+  });
+
   test("mentioned files receive personalization and Python definitions are ranked", async () => {
     const root = await tempRoot();
     await putFile(
@@ -146,6 +169,34 @@ describe("budget packing", () => {
     });
     expect(tiny.text).toBe("");
     expect(tiny.truncated).toBe(true);
+  });
+
+  test("trims whole units when a custom counter is non-additive", async () => {
+    const root = await tempRoot();
+    await putFile(
+      root,
+      "src/custom-counter.ts",
+      [
+        "export function firstSymbol() { return 1; }",
+        "export function secondSymbol() { return 2; }",
+        "export function thirdSymbol() { return 3; }",
+        "export function fourthSymbol() { return 4; }",
+      ].join("\n"),
+    );
+    const counter = {
+      id: "line-count-squared",
+      count(text: string) {
+        const lines = text.split("\n").filter(Boolean).length;
+        return lines * lines;
+      },
+    };
+    const result = await providerFor(root, { tokenCounter: counter }).map(
+      context,
+      { workspace, max_output_tokens: 9 },
+    );
+    expect(result.token_count).toBe(counter.count(result.text));
+    expect(result.token_count).toBeLessThanOrEqual(9);
+    expect(result.truncated).toBe(true);
   });
 
   test("uses the supplied token counter and retains a full name in truncated signatures", async () => {

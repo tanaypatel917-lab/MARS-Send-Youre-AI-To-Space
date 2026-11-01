@@ -8,10 +8,15 @@ import { inventory } from "../src/inventory";
 import { DEFAULT_REPOSITORY_MAP_LIMITS } from "../src/provider";
 import type { RepositoryMap, TokenCounter } from "../src/types";
 import type { NavigationTask } from "./fixture";
-import { FIXTURE_FILES, NAVIGATION_TASKS } from "./fixture";
+import {
+  createScaledFixtureFiles,
+  FIXTURE_FILES,
+  NAVIGATION_TASKS,
+} from "./fixture";
 
 export interface Metrics {
   id: string;
+  fixture: "small" | "scaled";
   budget: number;
   mode: "enabled" | "disabled";
   target_file_recall: number;
@@ -36,6 +41,7 @@ export interface ComparisonReport {
 }
 
 export interface TimingSample {
+  fixture: "small" | "scaled";
   cold_ms: number;
   warm_ms: number;
   cold_files_parsed: number;
@@ -48,116 +54,147 @@ interface FixtureEnvironment {
 }
 
 export async function runComparison(): Promise<ComparisonReport> {
-  const fixture = await materializeFixture();
-  try {
-    const context = {
-      schema_version: 1 as const,
-      scope: {
-        owner_id: "bench-owner",
-        project_id: "fixture",
+  const metrics: Metrics[] = [];
+  const fixtures = [
+    { id: "small" as const, files: FIXTURE_FILES },
+    { id: "scaled" as const, files: createScaledFixtureFiles() },
+  ];
+  for (const definition of fixtures) {
+    const fixture = await materializeFixture(definition.files);
+    try {
+      const context = {
+        schema_version: 1 as const,
+        scope: {
+          owner_id: "bench-owner",
+          project_id: "fixture",
+          workspace_id: "fixture-workspace",
+        },
+        request_id: "fixture-navigation-benchmark",
+      };
+      const workspace = {
         workspace_id: "fixture-workspace",
-      },
-      request_id: "fixture-navigation-benchmark",
-    };
-    const workspace = {
-      workspace_id: "fixture-workspace",
-      provider: "fixture",
-      revision: "fixture-revision",
-    };
-    const provider = createRepositoryMapProvider({
-      resolveRoot: async () => ({
-        root: fixture.root,
-        revision: workspace.revision,
-      }),
-    });
-    const scanned = await inventory({
-      root: fixture.root,
-      limits: DEFAULT_REPOSITORY_MAP_LIMITS,
-      previous: new Map(),
-      check: () => {},
-    });
-    const paths = scanned.files.map((file) => file.path).sort(compare);
-    const metrics: Metrics[] = [];
-    for (const budget of [256, 512, 1024]) {
-      for (const task of NAVIGATION_TASKS) {
-        const map = await provider.map(context, {
-          workspace,
-          query: task.query,
-          ...(task.mentioned_symbols
-            ? { mentioned_symbols: task.mentioned_symbols }
-            : {}),
-          max_output_tokens: budget,
+        provider: "fixture",
+        revision: "fixture-revision",
+      };
+      const createProvider = () =>
+        createRepositoryMapProvider({
+          resolveRoot: async () => ({
+            root: fixture.root,
+            revision: workspace.revision,
+          }),
         });
-        const repeated = await provider.map(context, {
-          workspace,
-          query: task.query,
-          ...(task.mentioned_symbols
-            ? { mentioned_symbols: task.mentioned_symbols }
-            : {}),
-          max_output_tokens: budget,
+      const provider = createProvider();
+      try {
+        const scanned = await inventory({
+          root: fixture.root,
+          limits: DEFAULT_REPOSITORY_MAP_LIMITS,
+          previous: new Map(),
+          check: () => {},
         });
-        metrics.push(measureEnabled(task, budget, map, repeated));
-        metrics.push(
-          measureDisabled(task, budget, paths, conservativeTokenCounter),
-        );
+        const paths = scanned.files.map((file) => file.path).sort(compare);
+        for (const budget of [256, 512, 1024]) {
+          for (const task of NAVIGATION_TASKS) {
+            const request = {
+              workspace,
+              query: task.query,
+              ...(task.mentioned_symbols
+                ? { mentioned_symbols: task.mentioned_symbols }
+                : {}),
+              max_output_tokens: budget,
+            };
+            const map = await provider.map(context, request);
+            const repeatedProvider = createProvider();
+            let repeated: RepositoryMap;
+            try {
+              repeated = await repeatedProvider.map(context, request);
+            } finally {
+              repeatedProvider.close();
+            }
+            metrics.push(
+              measureEnabled(definition.id, task, budget, map, repeated),
+            );
+            metrics.push(
+              measureDisabled(
+                definition.id,
+                task,
+                budget,
+                paths,
+                conservativeTokenCounter,
+              ),
+            );
+          }
+        }
+      } finally {
+        provider.close();
       }
+    } finally {
+      await fixture.dispose();
     }
-    return {
-      metrics,
-      means: aggregate(metrics),
-      table: renderTable(aggregate(metrics)),
-    };
-  } finally {
-    await fixture.dispose();
   }
+  const means = aggregate(metrics);
+  return { metrics, means, table: renderTable(means) };
 }
 
-export async function runTimingSample(): Promise<TimingSample> {
-  const fixture = await materializeFixture();
-  try {
-    const workspace = {
-      workspace_id: "fixture-workspace",
-      provider: "fixture",
-      revision: "fixture-revision",
-    };
-    const context = {
-      schema_version: 1 as const,
-      scope: {
-        owner_id: "bench-owner",
-        project_id: "fixture",
-        workspace_id: workspace.workspace_id,
-      },
-      request_id: "fixture-timing-sample",
-    };
-    const provider = createRepositoryMapProvider({
-      resolveRoot: async () => ({
-        root: fixture.root,
-        revision: workspace.revision,
-      }),
-    });
-    const request = {
-      workspace,
-      query: NAVIGATION_TASKS[0]?.query ?? "",
-      max_output_tokens: 512,
-    };
-    const coldStarted = performance.now();
-    const cold = await provider.map(context, request);
-    const cold_ms = performance.now() - coldStarted;
-    const warmStarted = performance.now();
-    const warm = await provider.map(context, request);
-    const warm_ms = performance.now() - warmStarted;
-    return {
-      cold_ms: round(cold_ms),
-      warm_ms: round(warm_ms),
-      cold_files_parsed: cold.stats.files_parsed,
-      warm_files_parsed: warm.stats.files_parsed,
-    };
-  } finally {
-    await fixture.dispose();
+export async function runTimingSample(): Promise<TimingSample[]> {
+  const samples: TimingSample[] = [];
+  const fixtures = [
+    { id: "small" as const, files: FIXTURE_FILES },
+    { id: "scaled" as const, files: createScaledFixtureFiles() },
+  ];
+  for (const definition of fixtures) {
+    const fixture = await materializeFixture(definition.files);
+    try {
+      const workspace = {
+        workspace_id: "fixture-workspace",
+        provider: "fixture",
+        revision: "fixture-revision",
+      };
+      const context = {
+        schema_version: 1 as const,
+        scope: {
+          owner_id: "bench-owner",
+          project_id: "fixture",
+          workspace_id: workspace.workspace_id,
+        },
+        request_id: "fixture-timing-sample",
+      };
+      const provider = createRepositoryMapProvider({
+        resolveRoot: async () => ({
+          root: fixture.root,
+          revision: workspace.revision,
+        }),
+      });
+      try {
+        const request = {
+          workspace,
+          query: NAVIGATION_TASKS[0]?.query ?? "",
+          max_output_tokens: 512,
+        };
+        const coldStarted = performance.now();
+        const cold = await provider.map(context, request);
+        const cold_ms = performance.now() - coldStarted;
+        const warmStarted = performance.now();
+        const warm = await provider.map(context, request);
+        const warm_ms = performance.now() - warmStarted;
+        samples.push({
+          fixture: definition.id,
+          cold_ms: round(cold_ms),
+          warm_ms: round(warm_ms),
+          cold_files_parsed: cold.stats.files_parsed,
+          warm_files_parsed: warm.stats.files_parsed,
+        });
+      } finally {
+        provider.close();
+      }
+    } finally {
+      await fixture.dispose();
+    }
   }
+  return samples;
 }
 
 function measureEnabled(
+  fixture: Metrics["fixture"],
   task: NavigationTask,
   budget: number,
   map: RepositoryMap,
@@ -190,6 +227,7 @@ function measureEnabled(
   );
   return {
     id: task.id,
+    fixture,
     budget,
     mode: "enabled",
     target_file_recall: ratio(
@@ -209,6 +247,7 @@ function measureEnabled(
 }
 
 function measureDisabled(
+  fixture: Metrics["fixture"],
   task: NavigationTask,
   budget: number,
   paths: readonly string[],
@@ -231,6 +270,7 @@ function measureDisabled(
   const tokens_used = counter.count(text);
   return {
     id: task.id,
+    fixture,
     budget,
     mode: "disabled",
     target_file_recall: ratio(targetCount, targetFiles.size),
@@ -245,43 +285,51 @@ function measureDisabled(
 }
 
 function aggregate(metrics: readonly Metrics[]): ComparisonReport["means"] {
-  return [256, 512, 1024].flatMap((budget) =>
-    (["enabled", "disabled"] as const).map((mode) => {
-      const rows = metrics.filter(
-        (row) => row.budget === budget && row.mode === mode,
-      );
-      const mean = (selector: (row: Metrics) => number) =>
-        round(rows.reduce((sum, row) => sum + selector(row), 0) / rows.length);
-      const positions = rows
-        .map((row) => row.first_target_position)
-        .filter((position): position is number => position !== null);
-      return {
-        budget,
-        mode,
-        target_file_recall: mean((row) => row.target_file_recall),
-        target_symbol_recall: mean((row) => row.target_symbol_recall),
-        target_line_provenance: mean((row) => row.target_line_provenance),
-        tokens_used: mean((row) => row.tokens_used),
-        budget_utilization: mean((row) => row.budget_utilization),
-        target_token_share: mean((row) => row.target_token_share),
-        first_target_position:
-          positions.length > 0
-            ? round(positions.reduce((a, b) => a + b, 0) / positions.length)
-            : null,
-        tasks: rows.length,
-        deterministic: rows.every((row) => row.deterministic),
-      };
-    }),
+  return (["small", "scaled"] as const).flatMap((fixture) =>
+    [256, 512, 1024].flatMap((budget) =>
+      (["enabled", "disabled"] as const).map((mode) => {
+        const rows = metrics.filter(
+          (row) =>
+            row.fixture === fixture &&
+            row.budget === budget &&
+            row.mode === mode,
+        );
+        const mean = (selector: (row: Metrics) => number) =>
+          round(
+            rows.reduce((sum, row) => sum + selector(row), 0) / rows.length,
+          );
+        const positions = rows
+          .map((row) => row.first_target_position)
+          .filter((position): position is number => position !== null);
+        return {
+          fixture,
+          budget,
+          mode,
+          target_file_recall: mean((row) => row.target_file_recall),
+          target_symbol_recall: mean((row) => row.target_symbol_recall),
+          target_line_provenance: mean((row) => row.target_line_provenance),
+          tokens_used: mean((row) => row.tokens_used),
+          budget_utilization: mean((row) => row.budget_utilization),
+          target_token_share: mean((row) => row.target_token_share),
+          first_target_position:
+            positions.length > 0
+              ? round(positions.reduce((a, b) => a + b, 0) / positions.length)
+              : null,
+          tasks: rows.length,
+          deterministic: rows.every((row) => row.deterministic),
+        };
+      }),
+    ),
   );
 }
 
 function renderTable(means: ComparisonReport["means"]): string {
   const rows = [
-    "| Budget | Mode | File recall | Symbol recall | Line provenance | Tokens used | Utilization | Target token share | First target |",
-    "| ---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| Fixture | Budget | Mode | File recall | Symbol recall | Line provenance | Tokens used | Utilization | Target token share | First target |",
+    "| :--- | ---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...means.map(
       (row) =>
-        `| ${row.budget} | ${row.mode} | ${percent(row.target_file_recall)} | ${percent(row.target_symbol_recall)} | ${percent(row.target_line_provenance)} | ${row.tokens_used} | ${percent(row.budget_utilization)} | ${percent(row.target_token_share)} | ${row.first_target_position ?? "—"} |`,
+        `| ${row.fixture} | ${row.budget} | ${row.mode} | ${percent(row.target_file_recall)} | ${percent(row.target_symbol_recall)} | ${percent(row.target_line_provenance)} | ${row.tokens_used} | ${percent(row.budget_utilization)} | ${percent(row.target_token_share)} | ${row.first_target_position ?? "—"} |`,
     ),
   ];
   return rows.join("\n");
@@ -309,9 +357,11 @@ function definitionLine(path: string, source: string, symbol: string): number {
   );
 }
 
-async function materializeFixture(): Promise<FixtureEnvironment> {
+async function materializeFixture(
+  files: Readonly<Record<string, string>>,
+): Promise<FixtureEnvironment> {
   const root = await mkdtemp(join(tmpdir(), "mars-context-bench-"));
-  for (const [path, source] of Object.entries(FIXTURE_FILES)) {
+  for (const [path, source] of Object.entries(files)) {
     const target = join(root, path);
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, source, "utf8");

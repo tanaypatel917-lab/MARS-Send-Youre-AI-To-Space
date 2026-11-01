@@ -18,72 +18,81 @@ type RenderSymbol = RepositoryMapSymbol & { depth: number };
 type RenderFile = Omit<RepositoryMapFile, "symbols"> & {
   symbols: RenderSymbol[];
 };
+type Candidate = RankedCandidates["candidates"][number];
+type ChosenFile = { rank: number; units: Candidate[] };
 
 export function packCandidates(
   candidates: RankedCandidates["candidates"],
   budget: number,
   tokenCounter: TokenCounter,
 ): PackedMap {
-  const chosen = new Map<string, { rank: number; symbols: RenderSymbol[] }>();
+  const chosen = new Map<string, ChosenFile>();
+  const accepted: Array<{ candidate: Candidate; cost: number }> = [];
+  const lineWidths = new Map<string, number>();
+  for (const candidate of candidates) {
+    if (candidate.type !== "symbol") continue;
+    lineWidths.set(
+      candidate.path,
+      Math.max(
+        lineWidths.get(candidate.path) ?? 0,
+        String(candidate.definition.line).length,
+      ),
+    );
+  }
+  let runningSum = 0;
   let rejected = 0;
   let considered = 0;
   let truncated = false;
   for (const candidate of candidates) {
     considered += 1;
     const previous = chosen.get(candidate.path);
-    if (candidate.type === "symbol") {
-      const symbols = [
-        ...(previous?.symbols ?? []),
-        {
-          name: candidate.definition.name,
-          kind: candidate.definition.kind,
-          line: candidate.definition.line,
-          signature: candidate.definition.signature,
-          rank: candidate.rank,
-          depth: candidate.definition.depth,
-        },
-      ];
-      chosen.set(candidate.path, {
-        rank: Math.max(previous?.rank ?? 0, candidate.rank),
-        symbols,
-      });
-    } else {
-      chosen.set(candidate.path, {
-        rank: Math.max(previous?.rank ?? 0, candidate.rank),
-        symbols: previous?.symbols ?? [],
-      });
-    }
-    const rendered = renderChosen(chosen);
-    if (tokenCounter.count(rendered) <= budget) {
+    const cost =
+      candidate.type === "symbol"
+        ? tokenCounter.count(
+            `${renderSymbolLine(
+              candidate.definition,
+              lineWidths.get(candidate.path) ?? 1,
+            )}\n`,
+          ) + (previous ? 0 : tokenCounter.count(`${candidate.path}:\n`))
+        : previous
+          ? 0
+          : tokenCounter.count(`${candidate.path}\n`);
+    if (runningSum + cost <= budget) {
+      const selected = previous ?? { rank: candidate.rank, units: [] };
+      selected.rank = Math.max(selected.rank, candidate.rank);
+      selected.units.push(candidate);
+      chosen.set(candidate.path, selected);
+      accepted.push({ candidate, cost });
+      runningSum += cost;
       rejected = 0;
       continue;
-    }
-    if (previous) {
-      if (candidate.type === "symbol") previous.symbols.pop();
-      if (candidate.type === "file" && previous.symbols.length === 0) {
-        chosen.delete(candidate.path);
-      } else {
-        chosen.set(candidate.path, previous);
-      }
-    } else {
-      chosen.delete(candidate.path);
     }
     rejected += 1;
     truncated = true;
     if (rejected >= 64) break;
   }
   if (considered < candidates.length) truncated = true;
-  const renderFiles = [...chosen]
-    .map(([path, item]) => ({
-      path,
-      rank: item.rank,
-      symbols: item.symbols.sort((a, b) => a.line - b.line),
-    }))
-    .sort(
-      (left, right) => right.rank - left.rank || compare(left.path, right.path),
-    );
-  const text = renderFilesText(renderFiles);
-  const token_count = tokenCounter.count(text);
+  let renderFiles = chosenFiles(chosen);
+  let text = renderFilesText(renderFiles, lineWidths);
+  let token_count = tokenCounter.count(text);
+  while (token_count > budget && accepted.length > 0) {
+    const removed = accepted.pop();
+    if (!removed) break;
+    runningSum -= removed.cost;
+    const file = chosen.get(removed.candidate.path);
+    if (file) {
+      file.units.pop();
+      if (file.units.length === 0) {
+        chosen.delete(removed.candidate.path);
+      } else {
+        file.rank = Math.max(...file.units.map((unit) => unit.rank));
+      }
+    }
+    truncated = true;
+    renderFiles = chosenFiles(chosen);
+    text = renderFilesText(renderFiles, lineWidths);
+    token_count = tokenCounter.count(text);
+  }
   if (token_count > budget)
     throw new Error("Repository map budget invariant failed");
   const files: RepositoryMapFile[] = renderFiles.map((file) => ({
@@ -114,18 +123,18 @@ export function renderFiles(files: readonly RepositoryMapFile[]): string {
   );
 }
 
-function renderFilesText(files: readonly RenderFile[]): string {
+function renderFilesText(
+  files: readonly RenderFile[],
+  lineWidths?: ReadonlyMap<string, number>,
+): string {
   return files
     .map((file) => {
       if (file.symbols.length === 0) return file.path;
-      const width = Math.max(
-        ...file.symbols.map((symbol) => String(symbol.line).length),
-      );
+      const width =
+        lineWidths?.get(file.path) ??
+        Math.max(...file.symbols.map((symbol) => String(symbol.line).length));
       const lines = file.symbols
-        .map(
-          (symbol) =>
-            `  ${String(symbol.line).padStart(width, " ")}│ ${"  ".repeat(symbol.depth)}${symbol.signature}`,
-        )
+        .map((symbol) => renderSymbolLine(symbol, width))
         .join("\n");
       return `${file.path}:\n${lines}`;
     })
@@ -133,19 +142,36 @@ function renderFilesText(files: readonly RenderFile[]): string {
     .concat(files.length > 0 ? "\n" : "");
 }
 
-function renderChosen(
-  chosen: ReadonlyMap<string, { rank: number; symbols: RenderSymbol[] }>,
-): string {
-  const files: RenderFile[] = [...chosen]
+function chosenFiles(chosen: ReadonlyMap<string, ChosenFile>): RenderFile[] {
+  return [...chosen]
     .map(([path, value]) => ({
       path,
       rank: value.rank,
-      symbols: value.symbols,
+      symbols: value.units
+        .filter(
+          (unit): unit is Extract<Candidate, { type: "symbol" }> =>
+            unit.type === "symbol",
+        )
+        .map((unit) => ({
+          name: unit.definition.name,
+          kind: unit.definition.kind,
+          line: unit.definition.line,
+          signature: unit.definition.signature,
+          rank: unit.rank,
+          depth: unit.definition.depth,
+        }))
+        .sort((left, right) => left.line - right.line),
     }))
     .sort(
       (left, right) => right.rank - left.rank || compare(left.path, right.path),
     );
-  return renderFilesText(files);
+}
+
+function renderSymbolLine(
+  symbol: Pick<RenderSymbol, "line" | "depth" | "signature">,
+  width: number,
+): string {
+  return `  ${String(symbol.line).padStart(width, " ")}│ ${"  ".repeat(symbol.depth)}${symbol.signature}`;
 }
 
 function compare(left: string, right: string): number {
