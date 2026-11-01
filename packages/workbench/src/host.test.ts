@@ -299,6 +299,42 @@ test("missing-model setup fails before reserving a task, so it can start after c
   await configured.close();
 });
 
+test("missing-model resume returns actionable setup guidance without failing the saved paused task", async () => {
+  const f = await fixture();
+  const api = await f.makeHost();
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: true, execute: false },
+  });
+  required(f.sessions[0]).finish("paused");
+  await required(f.sessions[0]).disposed;
+  const paused = await api.inspect(context(), "task");
+  await api.close();
+  const unavailable = await loadModelRegistry({
+    cwd: f.root,
+    home: f.root,
+    env: {},
+  });
+  const missing = await f.makeHost(unavailable);
+  await expect(
+    missing.resume(context(), "task", paused.revision),
+  ).rejects.toMatchObject({ code: "model_unavailable" });
+  expect(await missing.inspect(context(), "task")).toEqual(paused);
+  expect(f.sessions).toHaveLength(1);
+  await missing.close();
+  const configured = await f.makeHost();
+  await configured.resume(context(), "task", paused.revision);
+  expect(f.sessions).toHaveLength(2);
+  required(f.sessions[1]).finish("completed");
+  await required(f.sessions[1]).disposed;
+  expect((await configured.inspect(context(), "task")).status).toBe(
+    "completed",
+  );
+  await configured.close();
+});
+
 test.each(["request", "criteria"])(
   "oversized initial %s is rejected before reserving a task or preparing execution",
   async (field) => {
