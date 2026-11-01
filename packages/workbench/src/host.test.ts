@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  createRepositoryMapProvider,
+  type RepositoryMapProvider,
+} from "@mars/context";
 import type { RequestContext, Task, WorkspaceRef } from "@mars/contracts";
 import {
   MAX_RUNTIME_INSTRUCTION_LENGTH,
@@ -165,6 +169,7 @@ async function fixture() {
   const makeHost = (
     modelRegistry: ModelProviderRegistry = registry,
     memory?: WorkbenchMemory,
+    repositoryMap?: Pick<RepositoryMapProvider, "map">,
   ) =>
     createWorkbenchHost({
       scope,
@@ -175,6 +180,7 @@ async function fixture() {
       registry: modelRegistry,
       canExecute: false,
       ...(memory ? { memory } : {}),
+      ...(repositoryMap ? { repositoryMap } : {}),
       async runtimeFactory(options) {
         const outcome = deferred<RuntimeOutcome>();
         const disposed = deferred<void>();
@@ -245,6 +251,228 @@ async function fixture() {
     },
   };
 }
+
+async function repositoryFixture(root: string) {
+  const cwd = join(root, "isolated");
+  await mkdir(cwd);
+  await writeFile(
+    join(cwd, "verifier.ts"),
+    "export function OriginalMapVerifier() {}\n",
+  );
+  const provider = createRepositoryMapProvider({
+    async resolveRoot(_context, workspace) {
+      return { root: cwd, revision: workspace.revision };
+    },
+  });
+  cleanup.push(() => provider.close());
+  return provider;
+}
+
+test.skipIf(process.platform !== "linux")(
+  "repository map is frozen privately at launch and not rebuilt on resume",
+  async () => {
+    const f = await fixture();
+    const provider = await repositoryFixture(f.root);
+    let calls = 0;
+    const api = await f.makeHost(undefined, undefined, {
+      async map(ctx, request) {
+        calls++;
+        expect(ctx.scope).toEqual(scope);
+        expect(request.max_output_tokens).toBeLessThanOrEqual(4096);
+        return provider.map(ctx, request);
+      },
+    });
+    await api.create(context(), task());
+    await api.start(context(), {
+      task_id: "task",
+      expected_revision: 0,
+      approvals: { read: true, write: false, execute: false },
+    });
+    const first = required(f.sessions[0]);
+    expect(first.instructions[0]).toContain("OriginalMapVerifier");
+    expect(first.instructions[0]).toContain("untrusted evidence");
+    expect(first.instructions[0]).not.toContain(f.root);
+    const file = join(first.options.stateDir, "launch.json");
+    const frozen = JSON.parse(await readFile(file, "utf8")).repository_map;
+    expect(frozen.scope).toEqual(scope);
+    expect(frozen.workspace).toMatchObject({
+      revision: "r1",
+      workspace_id: "workspace",
+    });
+    first.finish("paused");
+    await first.disposed;
+    await writeFile(
+      join(f.root, "isolated", "verifier.ts"),
+      "export function LaterReplacement() {}\n",
+    );
+    const paused = await api.inspect(context(), "task");
+    await api.resume(context(), "task", paused.revision);
+    expect(calls).toBe(1);
+    expect(JSON.parse(await readFile(file, "utf8")).repository_map).toEqual(
+      frozen,
+    );
+    expect(required(f.sessions[1]).instructions[0]).not.toContain(
+      "LaterReplacement",
+    );
+    required(f.sessions[1]).finish("completed");
+    await required(f.sessions[1]).disposed;
+    await api.close();
+  },
+);
+
+test.each(["read denied", "prompt full"])(
+  "repository map is not requested when %s",
+  async (reason) => {
+    const f = await fixture();
+    let calls = 0;
+    const api = await f.makeHost(undefined, undefined, {
+      async map() {
+        calls++;
+        throw new Error("Unexpected map request");
+      },
+    });
+    const input = task();
+    if (reason === "prompt full") {
+      const suffix = `\n\nAcceptance criteria:\n${input.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
+      input.request = "x".repeat(
+        MAX_RUNTIME_INSTRUCTION_LENGTH - suffix.length,
+      );
+    }
+    await api.create(context(), input);
+    await api.start(context(), {
+      task_id: "task",
+      expected_revision: 0,
+      approvals: {
+        read: reason !== "read denied",
+        write: false,
+        execute: false,
+      },
+    });
+    expect(calls).toBe(0);
+    const session = required(f.sessions[0]);
+    expect(
+      JSON.parse(
+        await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+      ).repository_map,
+    ).toBeUndefined();
+    session.finish("completed");
+    await session.disposed;
+    await api.close();
+  },
+);
+
+test.each([false, true])(
+  "repository-map failures and diagnostic-sink failures are non-fatal (sink fails: %s)",
+  async (sinkFails) => {
+    const f = await fixture();
+    const append = f.store.appendEvent.bind(f.store);
+    f.store.appendEvent = async (ctx, id, event) => {
+      if (
+        sinkFails &&
+        event.payload &&
+        typeof event.payload === "object" &&
+        "operation" in event.payload &&
+        event.payload.operation === "context.map"
+      )
+        throw new Error("Unavailable diagnostic sink");
+      return append(ctx, id, event);
+    };
+    const api = await f.makeHost(undefined, undefined, {
+      async map() {
+        throw new Error(`private ${f.root}/state`);
+      },
+    });
+    await api.create(context(), task());
+    await api.start(context(), {
+      task_id: "task",
+      expected_revision: 0,
+      approvals: { read: true, write: false, execute: false },
+    });
+    const session = required(f.sessions[0]);
+    expect(session.instructions[0]).not.toContain(f.root);
+    session.finish("completed");
+    await session.disposed;
+    expect((await api.inspect(context(), "task")).status).toBe("completed");
+    const payloads = await Promise.all(
+      (await api.events(context(), "task")).map(async (event) =>
+        new TextDecoder().decode(
+          await f.store.artifacts.get(context(), event.payload),
+        ),
+      ),
+    );
+    expect(payloads.join("\n")).not.toContain(f.root);
+    if (!sinkFails)
+      expect(payloads.join("\n")).toContain('"operation":"context.map"');
+    await api.close();
+  },
+);
+
+test.skipIf(process.platform !== "linux")(
+  "repository map containing host-private paths is omitted rather than sent to a model",
+  async () => {
+    const f = await fixture();
+    const provider = await repositoryFixture(f.root);
+    const api = await f.makeHost(undefined, undefined, {
+      async map(ctx, request) {
+        return {
+          ...(await provider.map(ctx, request)),
+          text: `${f.root}/private`,
+        };
+      },
+    });
+    await api.create(context(), task());
+    await api.start(context(), {
+      task_id: "task",
+      expected_revision: 0,
+      approvals: { read: true, write: false, execute: false },
+    });
+    const session = required(f.sessions[0]);
+    expect(session.instructions[0]).not.toContain(f.root);
+    expect(
+      JSON.parse(
+        await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+      ).repository_map,
+    ).toBeUndefined();
+    session.finish("completed");
+    await session.disposed;
+    await api.close();
+  },
+);
+
+test
+  .skipIf(process.platform !== "linux")
+  .each(["scope", "workspace", "digest", "read approval"])(
+  "corrupt frozen repository map rejects resume before task mutation (%s)",
+  async (field) => {
+    const f = await fixture();
+    const provider = await repositoryFixture(f.root);
+    const api = await f.makeHost(undefined, undefined, provider);
+    await api.create(context(), task());
+    await api.start(context(), {
+      task_id: "task",
+      expected_revision: 0,
+      approvals: { read: true, write: false, execute: false },
+    });
+    const session = required(f.sessions[0]);
+    const file = join(session.options.stateDir, "launch.json");
+    const launch = JSON.parse(await readFile(file, "utf8"));
+    if (field === "scope") launch.repository_map.scope.owner_id = "other";
+    if (field === "workspace")
+      launch.repository_map.workspace.provider = "other";
+    if (field === "digest") launch.repository_map.text += "tampered";
+    if (field === "read approval") launch.approvals.read = false;
+    await writeFile(file, JSON.stringify(launch));
+    session.finish("paused");
+    await session.disposed;
+    const paused = await api.inspect(context(), "task");
+    await expect(
+      api.resume(context(), "task", paused.revision),
+    ).rejects.toThrow();
+    expect(await api.inspect(context(), "task")).toEqual(paused);
+    expect(f.sessions).toHaveLength(1);
+    await api.close();
+  },
+);
 
 test("host persists launch metadata, runs only through the runtime and publishes output", async () => {
   const f = await fixture();

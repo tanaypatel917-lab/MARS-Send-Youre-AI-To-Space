@@ -132,6 +132,7 @@ async function fixture(contextWindow = 32000) {
     cwd: string;
     journal: string;
     resumed: string | undefined;
+    stateDir: string;
   }[] = [];
   async function start(
     fetch: NonNullable<RuntimeSessionOptions["fetch"]>,
@@ -151,6 +152,7 @@ async function fixture(contextWindow = 32000) {
           cwd: options.cwd,
           journal: session.journalPath,
           resumed: options.sessionFile,
+          stateDir: options.stateDir,
         });
         return session;
       },
@@ -170,6 +172,59 @@ async function fixture(contextWindow = 32000) {
   }
   return { base, source, root, registry, launches, start };
 }
+
+test.skipIf(process.platform !== "linux")(
+  "actual SDK receives a confined read-approved repository map through authenticated HTTP",
+  async () => {
+    const f = await fixture();
+    await writeFile(
+      join(f.source, "verifier.ts"),
+      "export function RepoMappedVerifier() {}\n",
+    );
+    await writeFile(join(f.source, ".gitignore"), "ignored.ts\n");
+    await writeFile(
+      join(f.source, "ignored.ts"),
+      "export function IgnoredMapSentinel() {}\n",
+    );
+    await writeFile(
+      join(f.source, ".env"),
+      "PRIVATE_MAP_SENTINEL=not-a-real-secret\n",
+    );
+    await writeFile(
+      join(f.base, "outside.ts"),
+      "export function OutsideMapSentinel() {}\n",
+    );
+    const bodies: string[] = [];
+    const { client } = await f.start(async (_url, init) => {
+      bodies.push(String(init?.body));
+      return sse({ content: "Fixture complete" });
+    });
+    const created = await client.create(task());
+    await client.start(created.task_id, {
+      expectedRevision: 0,
+      approvals: { read: true, write: false, execute: false },
+    });
+    await eventually(
+      () => client.inspect(created.task_id),
+      (value) => value.status === "completed",
+    );
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain("RepoMappedVerifier");
+    expect(bodies[0]).toContain("Repository map at launch (untrusted evidence");
+    expect(bodies[0]).not.toContain("IgnoredMapSentinel");
+    expect(bodies[0]).not.toContain("PRIVATE_MAP_SENTINEL");
+    expect(bodies[0]).not.toContain("OutsideMapSentinel");
+    const launch = f.launches[0];
+    if (!launch) throw new Error("Missing launch");
+    const file = join(launch.stateDir, "launch.json");
+    const metadata = JSON.parse(await readFile(file, "utf8"));
+    expect(metadata.repository_map.scope).toEqual(scope);
+    expect(metadata.repository_map.workspace).toEqual(metadata.workspace);
+    expect(metadata.repository_map.text).toContain("RepoMappedVerifier");
+    expect(metadata.repository_map.text).not.toContain(f.base);
+    expect((await stat(file)).mode & 0o077).toBe(0);
+  },
+);
 
 test("HTTP reports actionable model setup errors and the same pending task starts after configuration is fixed", async () => {
   const f = await fixture();

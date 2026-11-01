@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { mkdir, open, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import type { RepositoryMapProvider } from "@mars/context";
 import type {
   ArtifactRef,
   ExecutionProvider,
@@ -40,6 +41,13 @@ import {
   type DiffResult,
   WorkspaceRefSchema,
 } from "./protocol";
+import {
+  FrozenRepositoryMapSchema,
+  freezeRepositoryMap,
+  repositoryMapTokenBudget,
+  validateFrozenRepositoryMap,
+  withFrozenRepositoryMap,
+} from "./repository-context";
 import { WorkbenchError, type WorkbenchOperations } from "./server";
 
 const launchSchema = z
@@ -52,6 +60,7 @@ const launchSchema = z
     workspace: WorkspaceRefSchema,
     cwd: z.string().min(1).refine(isAbsolute),
     memory: FrozenMemorySchema.optional(),
+    repository_map: FrozenRepositoryMapSchema.optional(),
   })
   .strict();
 type Launch = z.infer<typeof launchSchema>;
@@ -71,6 +80,7 @@ export interface WorkbenchHostOptions {
   registry: ModelProviderRegistry;
   canExecute: boolean;
   memory?: WorkbenchMemory;
+  repositoryMap?: Pick<RepositoryMapProvider, "map">;
   hostPrivateRoots?: string[];
   runtimeFactory?: (options: RuntimeSessionOptions) => Promise<RuntimeSession>;
 }
@@ -166,6 +176,20 @@ export async function createWorkbenchHost(
       if (!info.isFile() || (info.mode & 0o077) !== 0 || info.size > 128 * 1024)
         throw new WorkbenchError("internal_error");
       const value = launchSchema.parse(JSON.parse(await file.readFile("utf8")));
+      if (value.repository_map) {
+        const map = value.repository_map;
+        validateFrozenRepositoryMap(map);
+        if (
+          !value.approvals.read ||
+          map.scope.owner_id !== task.scope.owner_id ||
+          map.scope.project_id !== task.scope.project_id ||
+          map.scope.workspace_id !== task.scope.workspace_id ||
+          map.workspace.workspace_id !== value.workspace.workspace_id ||
+          map.workspace.provider !== value.workspace.provider ||
+          map.workspace.revision !== value.workspace.revision
+        )
+          throw new WorkbenchError("internal_error");
+      }
       if (value.memory) {
         validateFrozenMemory(value.memory);
         if (
@@ -589,7 +613,7 @@ export async function createWorkbenchHost(
           throw new WorkbenchError("unavailable");
         }
       }
-      const instruction = withFrozenMemory(baseInstruction, memory);
+      let instruction = withFrozenMemory(baseInstruction, memory);
       const running = await options.store.update(
         context,
         task.task_id,
@@ -605,6 +629,40 @@ export async function createWorkbenchHost(
           context,
           task.task_id,
         );
+        let repositoryMap:
+          | z.infer<typeof FrozenRepositoryMapSchema>
+          | undefined;
+        const maxOutputTokens = repositoryMapTokenBudget(instruction);
+        if (options.repositoryMap && params.approvals.read && maxOutputTokens) {
+          try {
+            repositoryMap = freezeRepositoryMap(
+              context,
+              workspace,
+              await options.repositoryMap.map(context, {
+                workspace: WorkspaceRefSchema.parse(workspace),
+                query: task.request.slice(0, 4096),
+                max_output_tokens: maxOutputTokens,
+              }),
+              instruction,
+            );
+            assertPublicBytes(
+              new TextEncoder().encode(repositoryMap.text),
+              await privatePatterns(context, task.task_id),
+            );
+            instruction = withFrozenRepositoryMap(instruction, repositoryMap);
+          } catch {
+            repositoryMap = undefined;
+            await options.store
+              .appendEvent(internalContext(options.scope), task.task_id, {
+                event_type: "tool.completed",
+                producer: "@mars/workbench",
+                run_id: randomUUID(),
+                versions: [{ component: "@mars/workbench", revision: "0.0.1" }],
+                payload: { operation: "context.map", status: "unavailable" },
+              })
+              .catch(() => undefined);
+          }
+        }
         const stateDir = taskState(task);
         await mkdir(stateDir, { mode: 0o700 });
         const cwd = await options.workspace.cwd(context, workspace);
@@ -637,6 +695,7 @@ export async function createWorkbenchHost(
           approvals: params.approvals,
           workspace: WorkspaceRefSchema.parse(workspace),
           ...(memory ? { memory } : {}),
+          ...(repositoryMap ? { repository_map: repositoryMap } : {}),
         });
         await options.store.bindUpstreamSession(
           internalContext(options.scope),

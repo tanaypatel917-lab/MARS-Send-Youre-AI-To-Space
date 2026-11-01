@@ -1419,9 +1419,9 @@
         }
       ],
       "runtime_requirements": "Python >=3.10,<3.15. RepoMap needs readable file paths, an IO.read_text/output adapter, main_model.token_count, Tree-sitter grammar/query resources, diskcache, NetworkX/SciPy/NumPy, Pygments, grep-ast, rich/tqdm/packaging. Model generation is not required by the map path.",
-      "integration_owner": "Proposed MARS context-selection adapter owner; MARS core owns task/context decisions, worker owns rebuildable parse/map cache. No human owner assigned by specification.",
+      "integration_owner": "MARS workbench owns read-approved frozen launch context; @mars/context owns rebuildable parse/map caches. Oh My Pi remains the sole execution owner. No human owner assigned by specification.",
       "target_milestone": "Milestone 0 source/contract baseline; Milestone 2 Aider context delivery.",
-      "adaptation_decision": "Conditional ADAPT: narrow, separately locked Python context worker, not Aider's coder/CLI loop. MARS supplies filtered file inventory and tokenizer; store revision/content-digest-keyed map state outside source worktrees or in per-task scratch. Add path/symlink and secret/binary/large-file filtering, dirty-buffer materialization, exact final tokenizer check and strict cap. Retain upstream Apache attribution, license and modification notices if copying; no root NOTICE file was present in inspected tree.",
+      "adaptation_decision": "ADAPT: pinned PageRank ranking ported to TypeScript in @mars/context, not Aider's coder/CLI loop. MARS workbench injects read-approved launch maps from fd-confined private workspaces; it freezes scope, source revision, exact text and digest in private launch metadata and resumes through the original Oh My Pi journal. Output is capped at 4096 conservative tokens (ceil(UTF-8 bytes/3)) and the remaining runtime character budget; unavailable confinement/maps are omitted with sanitized diagnostics, never best-effort fallback. Secret/binary/generated/private files and host-private paths are filtered. Dirty-editor-buffer materialization and an exact target-model tokenizer remain unimplemented. Apache attribution, license and modification notices are retained.",
       "dependencies": [
         "requirements.txt: diskcache==5.6.3, grep-ast==0.9.0, networkx==3.4.2, tree-sitter-language-pack==0.13.0; Python>=3.10 selects tree-sitter==0.25.2.",
         "Python>=3.11: numpy>=2.3,<2.5; scipy>=1.16.1,<1.18. Python3.10: numpy<2, scipy<1.16.",
@@ -1456,7 +1456,7 @@
         "Full installation includes unrelated LLM/telemetry/audio/image dependencies. Source dependency pins are not a minimal independently packaged map library.",
         "Root Apache license verified, but redistributed grammar/runtime dependency licenses were not audited; do not claim a single-license composed bundle."
       ],
-      "integration_status": "not-integrated",
+      "integration_status": "workbench-context-only",
       "background_references": []
     },
     {

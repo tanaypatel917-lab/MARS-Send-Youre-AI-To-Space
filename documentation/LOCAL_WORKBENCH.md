@@ -66,6 +66,14 @@ Initial startup also checks the complete request plus formatted acceptance crite
 
 Missing-model start/resume failures return the stable `model_unavailable` RPC code with credential/model configuration guidance, never provider details or host paths. Startup remains pending; a saved session remains paused until the same configured model is available again. Automatic selection remains free-only; this error does not authorize paid fallback.
 
+## Frozen repository context
+
+Read-approved tasks receive a bounded repository map from their private workspace at launch, after frozen memory context. `@mars/context` supplies definitions and relative paths; this is untrusted evidence, not instructions or permission to use tools. The request is capped at 4,096 conservative tokens and reduced to fit the remaining runtime character budget. Full prompts and read-denied tasks do not request a map. Secret/ignored/private/generated files are excluded by the provider; host-private paths in returned text cause the entire map to be omitted.
+
+The service uses fd-anchored Linux confinement only, with root/revision revalidation after scanning. It never falls back to the weaker best-effort mode. If confinement is unavailable or mapping fails, execution proceeds without a map and emits only a sanitized best-effort diagnostic. No error details or paths reach the model or RPC.
+
+The exact text, digest, scope and initial workspace revision are persisted in private launch metadata. Resume validates that binding and uses the original Oh My Pi journal; it neither rebuilds the map nor silently injects changed repository content. The launch map may be stale after edits. Models can read current files through approved tools; there is no repository-map tool, unsaved-editor-buffer capture, or claim of semantic completeness/quality improvement.
+
 ## Reproducible verification and limits
 
 ```sh
@@ -81,4 +89,4 @@ bun test packages/workbench/src/service.test.ts packages/workspaces
 
 The service tests send authenticated HTTP through the actual VS Code typed client and actual Oh My Pi SDK, using injected model HTTP responses and dummy keys. They cover private file writes, progress/artifact/diff retrieval, checkpoint/restore, source immutability, shutdown/restart with the same journal/workspace, steering, cancellation and token rotation. The optional Docker flow has the SDK write a file and invoke a real sandbox command that verifies its contents and non-root identity. CLI tests cover private connection credentials, no-credential startup, sanitized failures and signal cleanup releasing the provider lock. These tests demonstrate harness integration, **not model quality**.
 
-No live model request, paid service or real VS Code window is used for this verification. Real IDE interaction, live-model task quality and the complete master-spec Milestone 1 acceptance evidence remain outstanding. Memory, research, skills, independent evaluation and training are outside this increment. A normal agent completion status does not claim independent acceptance tests passed.
+No live model request, paid service or real VS Code window is used for this verification. Live-model task quality and the complete master-spec Milestone 1 acceptance evidence remain outstanding. Frozen memory, journal recall and repository maps are connected; live research, collaboration tools, specialist routing, learned skills, independent evaluation and training are not connected by this increment. A normal agent completion status does not claim independent acceptance tests passed.
