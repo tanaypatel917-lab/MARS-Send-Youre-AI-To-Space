@@ -1,6 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -1982,6 +1989,181 @@ test("coordinators delegate bounded children that run in private workspaces and 
       .map((record) => record.reviewer_independent),
   ).toEqual(expect.arrayContaining([null]));
   await api.close();
+});
+
+test("a reviewer after pause, host restart and resume skips every model used before the pause", async () => {
+  const f = await fixture();
+  const dir = join(f.root, "three-models");
+  await mkdir(join(dir, ".mars"), { recursive: true });
+  await writeFile(
+    join(dir, ".mars", "models.json"),
+    JSON.stringify({
+      version: 1,
+      providers: [
+        {
+          id: "fixture",
+          kind: "openai-compatible",
+          baseUrl: "https://fixture.invalid/v1",
+          apiKeyEnv: "FIXTURE_KEY",
+        },
+      ],
+      models: ["free", "alt", "third"].map((name) => ({
+        id: `fixture/${name}`,
+        providerId: "fixture",
+        model: name,
+        capabilities: { tools: true, vision: false, contextWindow: 32768 },
+        pricing: { free: true },
+      })),
+      routes: { default: ["fixture/free", "fixture/alt", "fixture/third"] },
+    }),
+  );
+  const registry = await loadModelRegistry({
+    cwd: dir,
+    home: dir,
+    env: { FIXTURE_KEY: "dummy-not-live" },
+  });
+  const collaboration = await createCollaboration({
+    rootDir: join(f.root, "collaboration"),
+    hostPrivateRoots: [join(f.root, "private")],
+  });
+  const launches: ChildLaunch[] = [];
+  const finishers: ((outcome: ChildOutcome) => void)[] = [];
+  const rooms: WorkbenchCollaboration = {
+    host: collaboration.host,
+    agents: collaboration.agents,
+    delegation: {
+      pool: { max_tokens: 400 },
+      tickMs: 10,
+      adapter: ({ workspaceFor }) => ({
+        async start(launch) {
+          launches.push(launch);
+          const binding = await workspaceFor(launch);
+          const outcome = new Promise<ChildOutcome>((resolve) => {
+            finishers.push(resolve);
+          });
+          return {
+            session_ref: null,
+            base_revision: binding.base_revision,
+            outcome,
+            async cancel() {},
+          };
+        },
+      }),
+    },
+  };
+  const delegationOf = (index: number) =>
+    required(
+      required(required(f.sessions[index]).options.collaboration).delegation,
+    );
+  const untilResults = async (index: number, needle: string) => {
+    for (let attempt = 0; attempt < 500; attempt++) {
+      if ((await delegationOf(index).results()).includes(needle)) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`child result ${needle} never arrived`);
+  };
+  const request = {
+    instruction: "Inspect the fixture.",
+    max_tokens: 100,
+    max_duration_ms: 30_000,
+    max_steps: 5,
+    max_messages: 4,
+    read: true,
+  };
+  const finish = (index: number, summary: string) =>
+    required(finishers[index])({
+      status: "completed",
+      summary,
+      artifacts: [],
+      usage: { input_tokens: 2, output_tokens: 1, usd: 0, steps: 1 },
+    });
+
+  const api = await f.makeHost(
+    registry,
+    undefined,
+    undefined,
+    undefined,
+    rooms,
+  );
+  const base = task();
+  await api.create(context(), {
+    ...base,
+    budget: { ...base.budget, max_duration_ms: 60_000, max_concurrency: 3 },
+  });
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    model_id: "fixture/alt",
+    approvals: { read: true, write: false, execute: false },
+  });
+  const first = required(f.sessions[0]);
+  expect(first.options.modelId).toBe("fixture/alt");
+  // The worker takes the first free default, which differs from the
+  // coordinator's model, so only the history can tell a reviewer about it.
+  await delegationOf(0).delegate({ ...request, role_label: "worker" });
+  expect(required(launches[0]).model_id).toBe("fixture/free");
+  finish(0, "Worker proposal.");
+  await untilResults(0, "Worker proposal.");
+  first.finish("paused");
+  await first.disposed;
+  await api.close();
+
+  const replacement = await f.makeHost(
+    registry,
+    undefined,
+    undefined,
+    undefined,
+    rooms,
+  );
+  const paused = await replacement.inspect(context(), "task");
+  expect(paused.status).toBe("paused");
+  await replacement.resume(context(), "task", paused.revision);
+  const resumed = required(f.sessions[1]);
+  await delegationOf(1).delegate({ ...request, role_label: "reviewer" });
+  // Coordinator (alt) and the pre-pause worker (free) are both excluded, so
+  // the reviewer lands on the third model rather than grading free's work.
+  expect(required(launches[1]).model_id).toBe("fixture/third");
+  finish(1, "Independent review.");
+  await untilResults(1, "Independent review.");
+  resumed.finish("completed");
+  await resumed.disposed;
+
+  const childRecords: {
+    role_label: string;
+    model_id: string;
+    reviewer_independent: unknown;
+  }[] = [];
+  for await (const event of f.store.events(context(), "task")) {
+    if (
+      event.event_type !== "tool.completed" ||
+      event.producer !== "@mars/workbench"
+    )
+      continue;
+    const payload = JSON.parse(
+      new TextDecoder().decode(
+        await f.store.artifacts.get(context(), event.payload),
+      ),
+    );
+    if (payload.operation === "child.result") childRecords.push(payload);
+  }
+  expect(
+    childRecords.map((record) => [
+      record.role_label,
+      record.model_id,
+      record.reviewer_independent,
+    ]),
+  ).toEqual(
+    expect.arrayContaining([
+      ["worker", "fixture/free", null],
+      ["reviewer", "fixture/third", true],
+    ]),
+  );
+  // A completed task with settled children releases its durable history
+  // (the final re-sweep is awaited by host shutdown).
+  await replacement.close();
+  expect(
+    await readdir(join(f.root, "children", "models")).catch(() => []),
+  ).toEqual([]);
 });
 
 test("path-scoped writable children write only inside their claim and never execute", async () => {
