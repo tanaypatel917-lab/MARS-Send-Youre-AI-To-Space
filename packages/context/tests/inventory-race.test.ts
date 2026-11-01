@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  renameSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +13,7 @@ import {
   ContextConfinementUnavailableError,
   createRepositoryMapProvider,
 } from "../src";
-import { inventory } from "../src/inventory";
+import { inventory, inventoryWithProcFdRootForTest } from "../src/inventory";
 import { DEFAULT_REPOSITORY_MAP_LIMITS } from "../src/provider";
 import { context, workspace } from "./helpers";
 
@@ -169,27 +175,38 @@ test("inventory stays contained when a directory is swapped at any check callbac
   }
 }, 30_000);
 
-test("anchored confinement fails before traversal when fd anchoring is unavailable", async () => {
+test("rejects a fake proc-fd root before traversal", async () => {
   const base = await mkdtemp(join(tmpdir(), "mars-context-no-proc-"));
   const root = join(base, "root");
+  const fakeProcFdRoot = join(base, "fake-fd");
   try {
     mkdirSync(join(root, "src"), { recursive: true });
+    mkdirSync(fakeProcFdRoot);
     writeFileSync(join(root, "src", "inside.ts"), source);
     let checks = 0;
-    const error = await inventory({
-      root,
-      confinement: "anchored",
-      procFdRoot: join(base, "missing-proc"),
-      limits: DEFAULT_REPOSITORY_MAP_LIMITS,
-      previous: new Map(),
-      check: () => {
-        checks += 1;
+    let fakeFdLinkIsSymlink = false;
+    const error = await inventoryWithProcFdRootForTest(
+      {
+        root,
+        confinement: "anchored",
+        limits: DEFAULT_REPOSITORY_MAP_LIMITS,
+        previous: new Map(),
+        check: () => {
+          checks += 1;
+        },
       },
-    }).then(
+      (rootFd) => {
+        const fakeFdLink = join(fakeProcFdRoot, String(rootFd));
+        symlinkSync(root, fakeFdLink);
+        fakeFdLinkIsSymlink = lstatSync(fakeFdLink).isSymbolicLink();
+        return fakeProcFdRoot;
+      },
+    ).then(
       () => undefined,
       (caught: unknown) => caught,
     );
     expect(error).toBeInstanceOf(ContextConfinementUnavailableError);
+    expect(fakeFdLinkIsSymlink).toBe(true);
     expect(checks).toBe(0);
     const message = error instanceof Error ? error.message : "";
     expect(!message.includes("InsideOnly") && !message.includes(root)).toBe(

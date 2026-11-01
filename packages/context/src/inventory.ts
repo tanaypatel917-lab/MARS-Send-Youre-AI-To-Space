@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import {
   type FileHandle,
   lstat,
@@ -45,12 +46,13 @@ export interface InventoryResult {
 export interface InventoryOptions {
   root: string;
   confinement?: ConfinementMode;
-  procFdRoot?: string;
   limits: RepositoryMapLimits;
   previous: ReadonlyMap<string, ParseCacheEntry>;
   signal?: AbortSignal;
   check: () => void;
 }
+
+type ProcFdRootResolverForTest = (rootFd: number) => string | Promise<string>;
 
 interface WalkDirectory {
   relativePath: string;
@@ -72,8 +74,21 @@ const reasons: SkippedReason[] = [
   "invalid_name",
   "limit",
 ];
-export async function inventory(
+
+export function inventory(options: InventoryOptions): Promise<InventoryResult> {
+  return inventoryInternal(options);
+}
+
+export function inventoryWithProcFdRootForTest(
   options: InventoryOptions,
+  resolveProcFdRoot: ProcFdRootResolverForTest,
+): Promise<InventoryResult> {
+  return inventoryInternal(options, resolveProcFdRoot);
+}
+
+async function inventoryInternal(
+  options: InventoryOptions,
+  resolveProcFdRootForTest?: ProcFdRootResolverForTest,
 ): Promise<InventoryResult> {
   const files: InventoryFile[] = [];
   const skipped = Object.fromEntries(
@@ -103,7 +118,7 @@ export async function inventory(
   };
   const realRoot = options.root;
   const confinement = options.confinement ?? "anchored";
-  const procFdRoot = options.procFdRoot ?? "/proc/self/fd";
+  let procFdRoot = "/proc/self/fd";
   let rootStat: Awaited<ReturnType<typeof lstat>>;
   try {
     rootStat = await lstat(realRoot);
@@ -117,7 +132,13 @@ export async function inventory(
   let rootHandle: FileHandle | undefined;
   let rootDirectory: WalkDirectory;
   if (confinement === "anchored") {
-    rootHandle = await openAnchoredRoot(realRoot, rootStat, procFdRoot);
+    const anchoredRoot = await openAnchoredRoot(
+      realRoot,
+      rootStat,
+      resolveProcFdRootForTest,
+    );
+    rootHandle = anchoredRoot.handle;
+    procFdRoot = anchoredRoot.procFdRoot;
     rootDirectory = {
       relativePath: "",
       expectedStat: rootStat,
@@ -443,8 +464,8 @@ async function readNoFollow(
 async function openAnchoredRoot(
   realRoot: string,
   expectedStat: Awaited<ReturnType<typeof lstat>>,
-  procFdRoot: string,
-): Promise<FileHandle> {
+  resolveProcFdRootForTest?: ProcFdRootResolverForTest,
+): Promise<{ handle: FileHandle; procFdRoot: string }> {
   if (
     typeof constants.O_DIRECTORY !== "number" ||
     typeof constants.O_NOFOLLOW !== "number"
@@ -471,12 +492,36 @@ async function openAnchoredRoot(
   }
   if (!handle) throw new ContextIoError();
 
+  let procFdRoot: string;
   try {
+    procFdRoot = resolveProcFdRootForTest
+      ? await resolveProcFdRootForTest(handle.fd)
+      : "/proc/self/fd";
+    const expectedProcFdRoot = `/proc/${process.pid}/fd`;
+    if (
+      (await realpath("/proc/self/fd")) !== expectedProcFdRoot ||
+      (await realpath(procFdRoot)) !== expectedProcFdRoot
+    ) {
+      throw new Error();
+    }
+    const statfs = (
+      fsPromises as unknown as {
+        statfs?: (path: string) => Promise<{ type: number | bigint }>;
+      }
+    ).statfs;
+    if (typeof statfs === "function") {
+      const filesystem = await statfs(procFdRoot);
+      if (Number(filesystem.type) !== 0x9fa0) throw new Error();
+    } else {
+      // Realpath and fd-link identity are the fallback when statfs is unavailable.
+    }
     const procPath = procFdPath(handle, procFdRoot);
+    const fdLinkStat = await lstat(procPath);
     await readdir(procPath);
     const procStat = await stat(procPath);
     const openedStat = await handle.stat();
     if (
+      !fdLinkStat.isSymbolicLink() ||
       !procStat.isDirectory() ||
       procStat.dev !== openedStat.dev ||
       procStat.ino !== openedStat.ino
@@ -487,7 +532,7 @@ async function openAnchoredRoot(
     await handle.close().catch(() => undefined);
     throw new ContextConfinementUnavailableError();
   }
-  return handle;
+  return { handle, procFdRoot };
 }
 
 async function openAnchoredDirectory(

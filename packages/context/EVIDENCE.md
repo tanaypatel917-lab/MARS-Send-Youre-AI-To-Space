@@ -7,17 +7,18 @@ a measurement or claim of live coding quality.
 
 - Environment: Linux 6.8.0-1061-aws, x86_64 GNU/Linux.
 - Bun: `1.4.4`.
-- `bun test packages/context` → 39 pass, 0 fail, 1,475 expectations; 39 tests across 5 files.
-- The 1,500-file packing test completed in **370.47 ms** in that package test run. It asserts the 65,536-token cap.
+- `bun test packages/context` → 39 pass, 0 fail, 1,476 expectations; 39 tests across 5 files.
+- The 1,500-file packing test completed in **906.72 ms** in that package test run. It asserts the 65,536-token cap.
 - `bun run lint` → pass; Biome checked 130 files with no fixes.
 - `bun run typecheck` → pass; `tsc --noEmit`.
 - `bun packages/context/bench/compare.ts` → pass; all repeated maps were deterministic using a fresh provider.
 - `bun run check` → pass. The offline source audit validated 25 entries. Root tests: 414 pass, 7 skip, 0 fail,
-  3,854 expectations; 421 tests across 29 files. The seven skipped tests require real containers or the
+  3,855 expectations; 421 tests across 29 files. The seven skipped tests require real containers or the
   container/model integration environment. Execution smoke reported `model_requests: 0`; build bundled 27 modules.
 - The dynamic directory-swap sweep on the pre-fix inventory leaked at callback 6. After fd-anchored traversal, both
   the provider `now()` sweep and direct inventory check-callback sweep passed at every dynamically measured point.
-  The unsupported-anchoring fail-closed and normal best-effort tests also passed.
+  A fake proc-fd directory with a root-fd-named symlink was rejected before traversal; the default anchored and normal
+  best-effort tests also passed.
 - No dependency or `bun.lock` changes were made in this follow-up.
 
 ## Fixture comparison
