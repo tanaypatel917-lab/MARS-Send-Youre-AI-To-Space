@@ -8,6 +8,7 @@ import {
   createResearchService,
   type DurableResearchService,
   type FindingProposal,
+  ResearchError,
   type ResearchFinding,
   type ResearchWorkerContext,
   type ResearchWorkerInput,
@@ -31,6 +32,7 @@ import {
   robotsDecision,
   type SearchProvider,
   type SearchResult,
+  UsageLedger,
   type WorkerLogEvent,
 } from "./index";
 
@@ -63,6 +65,11 @@ const PAGES: Record<string, FixturePage> = {
   },
   "https://example.org/private/secret": { body: html("Private", MOONS) },
   "https://example.org/d": { body: html("More Mars", MOONS) },
+  "https://example.org/moved": {
+    status: 302,
+    headers: { location: "/private/secret" },
+    body: "",
+  },
   "https://data.example.com/robots.txt": { status: 404, body: "" },
   "https://data.example.com/b": {
     body: html("Mars data sheet", `Orbital summary. ${DISTANCE_A} End.`),
@@ -272,6 +279,7 @@ function makeInput(
       max_depth: 1,
       max_concurrency: 2,
     },
+    usage: { input_tokens: 0, output_tokens: 0, cost_usd: 0, reported: false },
     published_finding_keys: [],
     ...overrides,
   };
@@ -317,8 +325,7 @@ const EXTRACTS: Record<string, Claim[]> = {
   "https://leak.example/p": [
     {
       claim: "The deployment key lives under /srv/mars-private/keys.",
-      quote:
-        "The deployment key lives under /srv/mars-private/keys and nowhere else.",
+      quote: "The deployment key lives under [redacted]/keys and nowhere else.",
       recommendation: "Look in /srv/mars-private/keys.",
     },
   ],
@@ -824,6 +831,166 @@ describe("research worker", () => {
       }));
     expect(strip(env2.published)).toEqual(strip(env1.published));
     expect(env2.usage.reports).toBe(0);
+  });
+});
+
+describe("review regressions", () => {
+  test("redirects are re-checked against robots.txt", async () => {
+    const search = fakeSearch({
+      "mars distance from sun": [result("https://example.org/moved")],
+    });
+    const model = fakeModel({ plan: PLAN.slice(0, 1), extracts: EXTRACTS });
+    const { instance, net, logs } = worker({
+      search: search.provider,
+      model: model.gateway,
+    });
+    const env = fakeContext();
+    await instance.run(makeInput(), env.context);
+    expect(net.calls).toEqual([
+      "https://example.org/robots.txt",
+      "https://example.org/moved",
+    ]);
+    expect(env.captured).toHaveLength(0);
+    expect(logs.find((e) => e.event === "fetch_blocked")?.detail.reason).toBe(
+      "robots_disallowed",
+    );
+  });
+
+  test("ledger reserves atomically and refuses paid calls on a zero budget", async () => {
+    const reported: number[] = [];
+    const ledger = new UsageLedger(
+      {
+        max_tokens: 2500,
+        max_usd: 0,
+        max_duration_ms: 60_000,
+        max_depth: 1,
+        max_concurrency: 2,
+      },
+      Date.now() + 60_000,
+      0,
+      Date.now,
+      async (delta) => {
+        reported.push(delta.input_tokens + delta.output_tokens);
+      },
+      new AbortController().signal,
+    );
+    const first = ledger.reserve(500, 1000, 0);
+    expect(first).toBeDefined();
+    expect(ledger.reserve(500, 1000, 0)).toBeUndefined();
+    expect(ledger.reserve(100, 100, 0.01)).toBeUndefined();
+    expect(ledger.reserve(100, 100, null)).toBeUndefined();
+    if (!first) throw new Error("unreachable");
+    await ledger.settle(first, {
+      input_tokens: 400,
+      output_tokens: 200,
+      cost_usd: 0,
+    });
+    expect(ledger.reserved_tokens).toBe(0);
+    expect(ledger.reserve(500, 1000, 0)).toBeDefined();
+    expect(reported).toEqual([600]);
+  });
+
+  test("retries start from the usage already reported to the control plane", async () => {
+    const model = fakeModel({ plan: PLAN, extracts: EXTRACTS });
+    const { instance, net, logs } = worker({ model: model.gateway });
+    const env = fakeContext();
+    await instance.run(
+      makeInput({
+        attempt: 2,
+        budget: {
+          max_tokens: 1300,
+          max_usd: 1,
+          max_duration_ms: 60_000,
+          max_depth: 1,
+          max_concurrency: 2,
+        },
+        usage: {
+          input_tokens: 1000,
+          output_tokens: 300,
+          cost_usd: 0,
+          reported: true,
+        },
+      }),
+      env.context,
+    );
+    expect(model.purposes).toEqual([]);
+    expect(env.usage.reports).toBe(0);
+    expect(net.calls).toHaveLength(0);
+    expect(logs.find((e) => e.event === "stop")?.detail.reason).toBe(
+      "budget_tokens",
+    );
+  });
+
+  test("a rejected capture is page-local and journaled as rejected", async () => {
+    const journal = createRecordingJournal();
+    const { instance, logs } = worker({ journal });
+    const env = fakeContext();
+    const capture = env.context.captureEvidence;
+    env.context.captureEvidence = async (input) => {
+      if (input.url === "https://example.org/a") {
+        throw new ResearchError("citation_rejected", "Private text");
+      }
+      return capture(input);
+    };
+    await instance.run(makeInput(), env.context);
+    expect(env.captured.map((c) => c.url)).toEqual([
+      "https://data.example.com/b",
+    ]);
+    expect(env.published).toHaveLength(1);
+    expect(env.published[0]?.sources.map((s) => s.url)).toEqual([
+      "https://data.example.com/b",
+    ]);
+    expect(logs.some((e) => e.event === "capture_rejected")).toBe(true);
+    const rejected = journal
+      .entries()
+      .find(
+        (entry) =>
+          entry.kind === "fetch" &&
+          (entry.value as { reason?: string }).reason === "capture_rejected",
+      );
+    expect(rejected).toBeDefined();
+  });
+
+  test("lease-level control-plane errors still abort the run", async () => {
+    const { instance } = worker();
+    const env = fakeContext();
+    env.context.captureEvidence = async () => {
+      throw new ResearchError("lease_lost", "Lease lost");
+    };
+    const error = await instance
+      .run(makeInput(), env.context)
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ResearchError);
+    expect((error as ResearchError).code).toBe("lease_lost");
+  });
+
+  test("journal entries never retain private roots", async () => {
+    const journal = createRecordingJournal();
+    const search = fakeSearch({
+      "mars distance from sun": [result("https://leak.example/p")],
+    });
+    const model = fakeModel({ plan: PLAN.slice(0, 1), extracts: EXTRACTS });
+    const { instance } = worker({
+      search: search.provider,
+      model: model.gateway,
+      journal,
+      hostPrivateRoots: ["/srv/mars-private"],
+    });
+    await instance.run(makeInput(), fakeContext().context);
+    const serialized = JSON.stringify(
+      journal
+        .entries()
+        .map((entry) =>
+          entry.kind === "fetch" && (entry.value as { data?: string }).data
+            ? Buffer.from(
+                (entry.value as { data: string }).data,
+                "base64",
+              ).toString("utf8")
+            : entry.value,
+        ),
+    );
+    expect(serialized).not.toContain("/srv/mars-private");
+    expect(serialized).toContain("[redacted]");
   });
 });
 

@@ -35,13 +35,13 @@ Improvements over the surveyed open-source agents:
 | Evidence first | `captureEvidence` runs on the raw bytes before the page is decoded or shown to a model; findings cite only returned `ArtifactRef`s (`worker.ts`). |
 | Per-claim verification | Each extracted claim carries a verbatim quote; `quoteSupported` checks it against the normalised page text and drops claims that fail (`extract.ts`). The quote is published inside the claim. |
 | Contradiction detection | Numeric-disagreement heuristic between groups from different hosts plus one bounded model pass; conflicts set `confidence: "low"` and are listed in `remaining_uncertainty`. |
-| Budget and deadline | `UsageLedger` mirrors every `reportUsage` delta, reserves input + output tokens before each model call, and stops cleanly at `deadline - deadline_margin_ms`; verified work is still published (`ledger.ts`). |
+| Budget and deadline | `UsageLedger` starts from the usage the control plane already holds for the request (`ResearchWorkerInput.usage`, so retried leases never spend the allowance twice), reserves estimated input + max output tokens and the gateway's worst-case USD **synchronously before each model call is awaited** (concurrent queries cannot admit against the same balance; a paid call against a zero-dollar budget is refused before dispatch), settles reservations with actual usage, and stops cleanly at `deadline - deadline_margin_ms`; verified work is still published (`ledger.ts`). |
 | Truthful usage | Provider-reported token counts are forwarded; if a provider omits usage the gateway estimates (`usage_estimated: true`) and USD is derived from registry pricing (0 for free models). |
-| Deterministic replay | A `ResearchJournal` records search results, fetched bytes and model exchanges keyed by a canonical SHA-256 of the input; a replay journal reproduces findings with no network, DNS or model access and reports zero new usage (`journal.ts`). |
+| Deterministic replay | A `ResearchJournal` records search results, fetched bytes and model exchanges keyed by a canonical SHA-256 of the input; a replay journal reproduces findings with no network, DNS or model access and reports zero new usage (`journal.ts`). Journaled bodies and prompts are redacted with the same needles as findings, and a page the control plane refused to capture is journaled as `capture_rejected`; treat persisted journals as containing public web content and protect them like the research store. |
 | SSRF guard | Every hop (initial URL and each redirect) rejects credentials, non-HTTP(S) schemes, `localhost`/`.local`/`.internal`, IP literals and DNS answers in private, loopback, link-local, CGNAT, multicast, documentation, NAT64, 6to4-private and unspecified ranges (`net.ts`). |
-| Robots / politeness | `robots.txt` per origin with longest-match rules and `Crawl-delay`; 4xx means allow, other failures deny; per-host minimum interval via `HostRateLimiter`. |
+| Robots / politeness | `robots.txt` per origin with longest-match rules and `Crawl-delay`, evaluated for the first URL **and every redirect target**; 4xx means allow, other failures deny; per-host minimum interval via `HostRateLimiter`. A page the control plane rejects at `captureEvidence` (private text) is skipped and logged; only lease-level errors abort the run. |
 | Bounded pages | Content-type allow-list, `content-length` pre-check and streamed byte cap (`max_page_bytes`), redirect cap, request timeout bounded by the deadline. |
-| Untrusted content | Page text reaches the model only inside `<<<UNTRUSTED_WEB_CONTENT … >>>` fences with instructions to ignore it as commands; model output is parsed with zod; the worker holds no tools. |
+| Untrusted content | Page text is redacted before it reaches the model or the journal and enters prompts only inside `<<<UNTRUSTED_WEB_CONTENT … >>>` fences with instructions to ignore it as commands; model output is parsed with zod; the worker holds no tools. |
 | Privacy | `redact` strips host private roots, `private_needles` and common secret shapes from claims, quotes, recommendations and log events; logs carry hostnames and counts only. |
 | Idempotent retries | `finding_key = sha256(task_id, question, normalised claim)[:40]`; keys in `published_finding_keys` are skipped so a retried lease never duplicates findings. |
 | Model ownership | `createRegistryModelGateway` uses `selectExecutionModel` and `ModelRouter` from the existing registry — the same primitives as the Oh My Pi model bridge — with free models by default and a `PaidModelConsentError` unless `paid_consent` is set. |
@@ -144,6 +144,10 @@ public/private answers), allow/deny lists, `robots.txt` rules, crawl delay and
 finding keys, deterministic replay, the registry model gateway (free model via
 injected fetch, paid refusal), and an end-to-end run through the real
 `@mars/research` service and `@mars/tasks` artifact store.
+
+## Contract change
+
+`ResearchWorkerInput` gained one additive field, `usage: ResearchUsage` (the request's accumulated reported usage), so a worker can enforce the remaining ceiling on a retried lease. No other `@mars/research` contract changed.
 
 ## Known gaps
 

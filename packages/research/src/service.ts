@@ -92,6 +92,7 @@ export interface ResearchWorkerInput {
   source_requirements: string[];
   deadline: string;
   budget: Budget;
+  usage: ResearchUsage;
   published_finding_keys: string[];
 }
 
@@ -1631,6 +1632,7 @@ export async function createResearchService(
       source_requirements: claim.request.source_requirements,
       deadline: claim.row.deadline,
       budget: claim.request.budget,
+      usage: usageFromJson(claim.row.usage_json),
       published_finding_keys: findingKeys.map((finding) => finding.finding_key),
     };
     const task = Promise.resolve().then(() =>

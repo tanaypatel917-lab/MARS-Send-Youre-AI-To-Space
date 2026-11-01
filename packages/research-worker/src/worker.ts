@@ -1,9 +1,10 @@
 import type { ArtifactRef } from "@mars/contracts";
-import type {
-  FindingProposal,
-  ResearchWorker,
-  ResearchWorkerContext,
-  ResearchWorkerInput,
+import {
+  type FindingProposal,
+  ResearchError,
+  type ResearchWorker,
+  type ResearchWorkerContext,
+  type ResearchWorkerInput,
 } from "@mars/research";
 import { z } from "zod";
 import {
@@ -32,6 +33,7 @@ import type { ModelGateway, ModelReply } from "./model";
 import {
   classifyHost,
   defaultHostResolver,
+  type FetchBlockReason,
   type FetchLike,
   type GuardedFetchResult,
   guardedFetch,
@@ -212,6 +214,18 @@ function isAbort(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
+const PAGE_LOCAL_CAPTURE_CODES = new Set([
+  "citation_rejected",
+  "unsafe_path",
+  "invalid_input",
+]);
+
+function isPageLocalCaptureError(error: unknown): error is ResearchError {
+  return (
+    error instanceof ResearchError && PAGE_LOCAL_CAPTURE_CODES.has(error.code)
+  );
+}
+
 export function createResearchWorker(
   options: ResearchWorkerOptions,
 ): ResearchWorker & { readonly config: ResearchWorkerConfig } {
@@ -256,6 +270,7 @@ export function createResearchWorker(
       now,
       (delta) => context.reportUsage(delta),
       signal,
+      input.usage,
     );
     const limiter = new HostRateLimiter(
       config.per_host_min_interval_ms,
@@ -272,12 +287,21 @@ export function createResearchWorker(
     const allowHost = (hostname: string) =>
       hostAllowed(hostname, config.allow_hosts, config.deny_hosts);
 
+    const fetchKey = (url: string, maxBytes: number) =>
+      journalKey({ url, maxBytes });
+    const redactBytes = (data: Uint8Array): Uint8Array => {
+      const text = new TextDecoder().decode(data);
+      const cleaned = clean(text);
+      return cleaned === text ? data : new TextEncoder().encode(cleaned);
+    };
+
     const journaledFetch = async (
       url: string,
       maxBytes: number,
       acceptMediaType: (mediaType: string) => boolean,
+      beforeHop: (hop: URL) => Promise<FetchBlockReason | undefined>,
     ): Promise<GuardedFetchResult> => {
-      const key = journalKey({ url, maxBytes });
+      const key = fetchKey(url, maxBytes);
       const recorded = journal?.lookup("fetch", key) as
         | RecordedFetch
         | undefined;
@@ -297,9 +321,10 @@ export function createResearchWorker(
         userAgent: config.user_agent,
         allowHost,
         acceptMediaType,
+        beforeHop,
       });
       const record: RecordedFetch = result.ok
-        ? { ...result, data: bytesToBase64(result.data) }
+        ? { ...result, data: bytesToBase64(redactBytes(result.data)) }
         : result;
       journal?.record("fetch", key, record);
       return result;
@@ -309,11 +334,14 @@ export function createResearchWorker(
       let pending = robotsCache.get(origin);
       if (!pending) {
         pending = (async () => {
-          await limiter.acquire(new URL(origin).hostname, 0, signal);
           const result = await journaledFetch(
             `${origin}/robots.txt`,
             512 * 1024,
             () => true,
+            async (hop) => {
+              await limiter.acquire(hop.hostname, 0, signal);
+              return undefined;
+            },
           );
           if (result.ok) {
             return parseRobots(new TextDecoder().decode(result.data));
@@ -337,12 +365,24 @@ export function createResearchWorker(
       return pending;
     };
 
-    const fetchPage = async (
-      url: string,
-    ): Promise<
-      | GuardedFetchResult
-      | { ok: false; url: string; reason: "robots_disallowed" }
-    > => {
+    const politeHop = async (
+      hop: URL,
+    ): Promise<FetchBlockReason | undefined> => {
+      let crawlDelayMs = 0;
+      if (config.respect_robots) {
+        const decision = robotsDecision(
+          await robotsFor(hop.origin),
+          config.user_agent,
+          `${hop.pathname}${hop.search}`,
+        );
+        if (!decision.allowed) return "robots_disallowed";
+        crawlDelayMs = decision.crawlDelayMs;
+      }
+      await limiter.acquire(hop.hostname, crawlDelayMs, signal);
+      return undefined;
+    };
+
+    const fetchPage = async (url: string): Promise<GuardedFetchResult> => {
       const parsed = new URL(url);
       // Replayed fetches were guarded when recorded; no DNS exists offline.
       const verdict = replaying
@@ -356,19 +396,12 @@ export function createResearchWorker(
             verdict === "private" ? "private_address" : "unresolvable_host",
         };
       }
-      let crawlDelayMs = 0;
-      if (config.respect_robots) {
-        const decision = robotsDecision(
-          await robotsFor(parsed.origin),
-          config.user_agent,
-          `${parsed.pathname}${parsed.search}`,
-        );
-        if (!decision.allowed)
-          return { ok: false, url, reason: "robots_disallowed" };
-        crawlDelayMs = decision.crawlDelayMs;
-      }
-      await limiter.acquire(parsed.hostname, crawlDelayMs, signal);
-      return journaledFetch(url, config.max_page_bytes, acceptsMediaType);
+      return journaledFetch(
+        url,
+        config.max_page_bytes,
+        acceptsMediaType,
+        politeHop,
+      );
     };
 
     const journaledSearch = async (query: string): Promise<SearchResult[]> => {
@@ -391,17 +424,24 @@ export function createResearchWorker(
       maxTokens = config.max_model_output_tokens,
     ): Promise<T | undefined> => {
       const estimate = estimateTokens(SYSTEM_PROMPT) + estimateTokens(user);
-      if (!ledger.canAfford(estimate, maxTokens)) {
+      const cost = options.model.estimateCostUsd?.(estimate, maxTokens) ?? 0;
+      const reservation = ledger.reserve(estimate, maxTokens, cost);
+      if (!reservation) {
         log("model_skipped", {
           purpose,
-          reason: ledger.stopReason() ?? "budget_tokens",
+          reason:
+            ledger.stopReason() ??
+            (cost === null ? "unknown_cost" : "budget_reservation"),
         });
         return undefined;
       }
       const key = journalKey({ system: SYSTEM_PROMPT, user, maxTokens });
       let reply = journal?.lookup("model", key) as ModelReply | undefined;
       if (!reply) {
-        if (replaying) throw new ReplayMissError("model");
+        if (replaying) {
+          ledger.release(reservation);
+          throw new ReplayMissError("model");
+        }
         try {
           reply = await options.model.complete({
             system: SYSTEM_PROMPT,
@@ -411,13 +451,15 @@ export function createResearchWorker(
             signal,
           });
         } catch (error) {
+          ledger.release(reservation);
           if (isAbort(error) || signal.aborted) throw error;
           log("model_failed", { purpose });
           return undefined;
         }
+        reply = { ...reply, text: clean(reply.text) };
         journal?.record("model", key, reply);
       }
-      await ledger.record(reply.usage, !replaying);
+      await ledger.settle(reservation, reply.usage, !replaying);
       const parsed = parseJson(reply.text, schema);
       if (parsed === undefined) log("model_unparseable", { purpose });
       return parsed;
@@ -542,21 +584,34 @@ export function createResearchWorker(
         }
         visited.add(page.url);
         const retrieved_at = new Date(now()).toISOString();
-        const evidence = await context.captureEvidence({
-          url: page.url,
-          retrieved_at,
-          media_type: page.media_type,
-          data: page.data,
-        });
+        let evidence: ArtifactRef;
+        try {
+          evidence = await context.captureEvidence({
+            url: page.url,
+            retrieved_at,
+            media_type: page.media_type,
+            data: page.data,
+          });
+        } catch (error) {
+          if (signal.aborted || !isPageLocalCaptureError(error)) throw error;
+          log("capture_rejected", { host, code: error.code });
+          journal?.record("fetch", fetchKey(url, config.max_page_bytes), {
+            ok: false,
+            url: page.url,
+            reason: "capture_rejected",
+          } satisfies RecordedFetch);
+          continue;
+        }
         const document = decodeDocument(page.data, page.media_type);
-        if (!document.text) continue;
-        const fingerprint = textFingerprint(document.text);
+        const text = clean(document.text);
+        if (!text) continue;
+        const fingerprint = textFingerprint(text);
         if (fingerprints.has(fingerprint)) {
           log("duplicate_content", { host });
           continue;
         }
         fingerprints.add(fingerprint);
-        await extractClaims(query, document.title, page.url, document.text, {
+        await extractClaims(query, clean(document.title), page.url, text, {
           host: new URL(page.url).hostname,
           retrieved_at,
           evidence,

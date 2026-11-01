@@ -127,6 +127,8 @@ export type FetchBlockReason =
   | "private_address"
   | "unresolvable_host"
   | "too_many_redirects"
+  | "robots_disallowed"
+  | "capture_rejected"
   | "http_status"
   | "unsupported_media_type"
   | "too_large"
@@ -152,6 +154,8 @@ export interface GuardedFetchOptions {
   userAgent: string;
   allowHost: (hostname: string) => boolean;
   acceptMediaType: (mediaType: string) => boolean;
+  /** Runs for the first URL and every redirect target before the request. */
+  beforeHop?: (url: URL) => Promise<FetchBlockReason | undefined>;
 }
 
 export function mediaTypeOf(contentType: string | null): string {
@@ -239,6 +243,8 @@ export async function guardedFetch(
         reason: verdict === "private" ? "private_address" : "unresolvable_host",
       };
     }
+    const blocked = await options.beforeHop?.(new URL(url));
+    if (blocked) return { ok: false, url, reason: blocked };
     options.signal.throwIfAborted();
     const signal = AbortSignal.any([
       options.signal,
