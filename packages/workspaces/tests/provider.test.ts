@@ -13,6 +13,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import {
   type ArtifactRef,
@@ -34,6 +35,7 @@ import {
   WorkspacePolicyError,
 } from "../src";
 import { isIgnored, isSecret } from "../src/paths";
+import { DEFAULT_WORKSPACE_LIMITS, snapshotTree } from "../src/tree";
 import {
   artifactText,
   budget,
@@ -57,6 +59,281 @@ test("path filters compare ignore and secret names case-insensitively", () => {
   expect(isSecret(".ENV.EXAMPLE")).toBe(false);
   expect(isSecret(".ENV.SAMPLE")).toBe(false);
   expect(isSecret(".ENV.TEMPLATE")).toBe(false);
+});
+
+test("close holds the provider lock until in-flight prepare drains [stub runner — not isolation evidence]", async () => {
+  const base = await mkdtemp(join(tmpdir(), "mars-workspaces-close-"));
+  const sourceRoot = join(base, "source");
+  const rootDir = join(base, "provider");
+  await mkdir(sourceRoot, { recursive: true });
+  await writeFile(join(sourceRoot, "file.txt"), "content\n");
+  const backing = createInMemoryArtifactStore();
+  let release!: () => void;
+  let signalPut!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const putStarted = new Promise<void>((resolve) => {
+    signalPut = resolve;
+  });
+  const artifacts = {
+    async put(ctx: RequestContext, data: Uint8Array, mediaType: string) {
+      signalPut();
+      await blocked;
+      return backing.put(ctx, data, mediaType);
+    },
+    get: (ctx: RequestContext, ref: ArtifactRef) => backing.get(ctx, ref),
+  };
+  const options = {
+    rootDir,
+    sourceRoot,
+    artifacts,
+    sandbox: createStubRunner(),
+    approveCommand: () => true,
+  };
+  const provider = await createLocalWorkspaceProvider(options);
+  try {
+    const workspacePromise = provider.prepare(context, "close-drain");
+    await putStarted;
+    let closeResolved = false;
+    const closing = provider.close().then(() => {
+      closeResolved = true;
+    });
+    await Promise.resolve();
+    expect(closeResolved).toBe(false);
+    await expect(createLocalWorkspaceProvider(options)).rejects.toBeInstanceOf(
+      ProviderLockedError,
+    );
+    await expect(
+      provider.discover(context, "close-drain"),
+    ).rejects.toBeInstanceOf(SandboxUnavailableError);
+    release();
+    const [workspace] = await Promise.all([workspacePromise, closing]);
+    expect(workspace.workspace_id).toMatch(/^ws_[a-f0-9]{32}$/);
+    const reopened = await createLocalWorkspaceProvider(options);
+    try {
+      expect(await readdir(join(rootDir, "staging"))).toEqual([]);
+      expect(await readdir(join(rootDir, "workspaces"))).toContain(
+        workspace.workspace_id,
+      );
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    release();
+    await provider.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("workspace writes clean up staged files and roll back failed commits [stub runner — not isolation evidence]", async () => {
+  let failPhase: "before-sync" | "after-rename" | undefined;
+  const fixture = await makeFixture({
+    testHooks: {
+      writePhase(phase) {
+        if (phase === failPhase) throw new Error(`failed at ${phase}`);
+      },
+    },
+  });
+  try {
+    const original = fixture.workspace;
+    const baseline = (await fixture.provider.checkpoints(context, original))[0];
+    if (!baseline) throw new Error("baseline checkpoint missing");
+    const initialRevision = (
+      await fixture.provider.inspect(context, original.workspace_id)
+    ).revision;
+    const value = await fixture.artifacts.put(
+      context,
+      new TextEncoder().encode("replacement\n"),
+      "application/octet-stream",
+    );
+
+    failPhase = "before-sync";
+    await expect(
+      fixture.provider.write(context, original, "new-before-sync.txt", value),
+    ).rejects.toThrow("failed at before-sync");
+    expect(
+      (await fixture.provider.inspect(context, original.workspace_id)).revision,
+    ).toBe(initialRevision);
+    expect(
+      await readdir(
+        join(fixture.rootDir, "workspaces", original.workspace_id, "tree"),
+      ),
+    ).not.toContain("new-before-sync.txt");
+    expect(await readdir(join(fixture.rootDir, "staging"))).toEqual([]);
+
+    failPhase = "after-rename";
+    for (const [path, expected] of [
+      ["tracked.txt", "dirty tracked\n"],
+      ["new-after-rename.txt", undefined],
+    ] as const) {
+      const before = await fixture.provider.inspect(
+        context,
+        original.workspace_id,
+      );
+      await expect(
+        fixture.provider.write(context, original, path, value),
+      ).rejects.toThrow("failed at after-rename");
+      const current = await fixture.provider.inspect(
+        context,
+        original.workspace_id,
+      );
+      expect(current.revision).toBe(before.revision);
+      if (expected === undefined) {
+        await expect(
+          fixture.provider.read(context, current, path),
+        ).rejects.toBeInstanceOf(WorkspaceNotFoundError);
+      } else {
+        const artifact = await fixture.provider.read(context, current, path);
+        expect(
+          new TextDecoder().decode(
+            await fixture.artifacts.get(context, artifact),
+          ),
+        ).toBe(expected);
+      }
+      await fixture.provider.restore(context, baseline, current.revision);
+    }
+    expect(await readdir(join(fixture.rootDir, "staging"))).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("interrupted writes reconcile their revision and digest on reopen [stub runner — not isolation evidence]", async () => {
+  const fixture = await makeFixture();
+  const workspace = fixture.workspace;
+  const metadataPath = join(
+    fixture.rootDir,
+    "meta",
+    workspace.workspace_id,
+    "workspace.json",
+  );
+  const treePath = join(
+    fixture.rootDir,
+    "workspaces",
+    workspace.workspace_id,
+    "tree",
+  );
+  await fixture.provider.close();
+  await writeFile(join(treePath, "tracked.txt"), "interrupted write\n");
+  await writeFile(join(treePath, "bad\nwrite"), "unsupported during recovery");
+  const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  metadata.write_in_progress = { started_at: new Date().toISOString() };
+  await writeFile(metadataPath, JSON.stringify(metadata));
+  const reopened = await createLocalWorkspaceProvider({
+    rootDir: fixture.rootDir,
+    sourceRoot: fixture.sourceRoot,
+    artifacts: fixture.artifacts,
+    sandbox: createStubRunner(),
+    approveCommand: () => true,
+  });
+  try {
+    const recovered = await reopened.inspect(context, workspace.workspace_id);
+    expect(recovered.revision).not.toBe(workspace.revision);
+    const after = await readFile(join(treePath, "tracked.txt"), "utf8");
+    expect(after).toBe("interrupted write\n");
+    const saved = JSON.parse(await readFile(metadataPath, "utf8")) as {
+      tree_digest: string;
+      write_in_progress?: unknown;
+    };
+    const actual = await snapshotTree(treePath, {
+      limits: DEFAULT_WORKSPACE_LIMITS,
+      enforceLimits: false,
+      includeData: false,
+      tolerateUnsupportedNames: true,
+      skipped: [],
+    });
+    expect(saved.tree_digest).toBe(actual.digest);
+    expect(saved.write_in_progress).toBeUndefined();
+    const skipped = await reopened.skipped(context, recovered);
+    expect(skipped).toContainEqual({
+      path: "bad\nwrite",
+      reason: "unsupported-name",
+    });
+    expect(skipped).toContainEqual({
+      path: ".env",
+      reason: "ignored-secret",
+    });
+  } finally {
+    await reopened.close();
+    await fixture.close();
+  }
+});
+
+test("unsupported command-created names are skipped throughout workspace operations [stub runner — not isolation evidence]", async () => {
+  const fixture = await makeFixture({
+    runner: createStubRunner(async ({ workspaceDir }) => {
+      await writeFile(join(workspaceDir, "bad\\name"), "backslash");
+      await writeFile(join(workspaceDir, "bad\nname"), "newline");
+      await mkdir(join(workspaceDir, "x\ny"));
+      await writeFile(join(workspaceDir, "x\ny", "z"), "nested");
+      return undefined;
+    }),
+  });
+  try {
+    const baseline = (
+      await fixture.provider.checkpoints(context, fixture.workspace)
+    )[0];
+    if (!baseline) throw new Error("baseline checkpoint missing");
+    const result = await fixture.provider.execute(
+      context,
+      fixture.workspace,
+      ["stub"],
+      budget,
+    );
+    expect(result.workspace.revision).not.toBe(fixture.workspace.revision);
+    const skipped = await fixture.provider.skipped(context, result.workspace);
+    expect(
+      skipped
+        .filter((entry) => entry.reason === "unsupported-name")
+        .map((entry) => entry.path),
+    ).toEqual(["bad\nname", "bad\\name", "x\ny"]);
+    const diff = await fixture.provider.diff(context, result.workspace);
+    expect(diff.files.some((file) => file.path.includes("bad"))).toBe(false);
+    expect(diff.files.some((file) => file.path.startsWith("x\n"))).toBe(false);
+    const checkpoint = await fixture.provider.checkpoint(
+      context,
+      result.workspace,
+    );
+    const manifest = JSON.parse(
+      new TextDecoder().decode(
+        await fixture.artifacts.get(context, checkpoint.artifact),
+      ),
+    ) as { files: Array<{ path: string }>; directories: string[] };
+    expect(manifest.files.some((file) => file.path.includes("bad"))).toBe(
+      false,
+    );
+    expect(manifest.directories.some((path) => path.startsWith("x\n"))).toBe(
+      false,
+    );
+    await fixture.provider.close();
+    const reopened = await createLocalWorkspaceProvider({
+      rootDir: fixture.rootDir,
+      sourceRoot: fixture.sourceRoot,
+      artifacts: fixture.artifacts,
+      sandbox: createStubRunner(),
+      approveCommand: () => true,
+    });
+    try {
+      const current = await reopened.inspect(
+        context,
+        result.workspace.workspace_id,
+      );
+      await reopened.restore(context, baseline, current.revision);
+      expect(
+        (await reopened.skipped(context, current)).some(
+          (entry) => entry.reason === "unsupported-name",
+        ),
+      ).toBe(false);
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    await fixture.close();
+  }
 });
 
 test("workspacePath is host-only, scoped, and resolves only the real workspace tree [stub runner — not isolation evidence]", async () => {

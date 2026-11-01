@@ -51,6 +51,10 @@ export interface TreeSnapshot {
   directories: string[];
   digest: string;
   totalBytes: number;
+  skipped?: Array<{
+    path: string;
+    reason: "symlink" | "special" | "ignored-secret" | "unsupported-name";
+  }>;
 }
 
 export interface TreeOptions {
@@ -58,9 +62,10 @@ export interface TreeOptions {
   extraIgnores?: readonly string[];
   enforceLimits?: boolean;
   includeData?: boolean;
+  tolerateUnsupportedNames?: boolean;
   skipped?: Array<{
     path: string;
-    reason: "symlink" | "special" | "ignored-secret";
+    reason: "symlink" | "special" | "ignored-secret" | "unsupported-name";
   }>;
 }
 
@@ -87,6 +92,10 @@ export async function snapshotTree(
       const path = parent ? `${parent}/${entry.name}` : entry.name;
       if (isIgnored(path, options.extraIgnores)) continue;
       if (path.includes("\\") || hasUnsupportedPathCharacters(path)) {
+        if (options.tolerateUnsupportedNames) {
+          options.skipped?.push({ path, reason: "unsupported-name" });
+          continue;
+        }
         throw new WorkspacePolicyError(
           "Workspace path contains unsupported characters",
         );
@@ -159,6 +168,7 @@ export async function snapshotTree(
     directories,
     digest: sha256(lines.join("")),
     totalBytes,
+    ...(options.skipped ? { skipped: options.skipped } : {}),
   };
 }
 
