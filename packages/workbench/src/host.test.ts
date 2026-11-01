@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { RequestContext, Task, WorkspaceRef } from "@mars/contracts";
 import {
   MAX_RUNTIME_INSTRUCTION_LENGTH,
+  optionalInstructionCapacity,
   type RuntimeOutcome,
   type RuntimeSessionOptions,
 } from "@mars/execution";
@@ -35,7 +36,7 @@ const task = (taskId = "task"): Task => ({
   request: "Write a fixture",
   acceptance_criteria: ["Source checkout remains unchanged"],
   budget: {
-    max_tokens: 1000,
+    max_tokens: 64_000,
     max_usd: 0,
     max_duration_ms: 1000,
     max_depth: 1,
@@ -327,6 +328,88 @@ test("memory is frozen privately once; resume does not replace it with later fac
   );
   required(f.sessions[1]).finish("completed");
   await required(f.sessions[1]).disposed;
+  await api.close();
+});
+
+test("saved facts are omitted rather than exhausting a small model context", async () => {
+  const f = await fixture();
+  await writeFile(
+    join(f.root, ".mars", "models.json"),
+    JSON.stringify({
+      version: 1,
+      providers: [
+        {
+          id: "fixture",
+          kind: "openai-compatible",
+          baseUrl: "https://fixture.invalid/v1",
+          apiKeyEnv: "FIXTURE_KEY",
+        },
+      ],
+      models: [
+        {
+          id: "fixture/small",
+          providerId: "fixture",
+          model: "fixture",
+          capabilities: { tools: true, vision: false, contextWindow: 8192 },
+          pricing: { free: true },
+        },
+      ],
+      routes: { default: ["fixture/small"] },
+    }),
+  );
+  const small = await loadModelRegistry({
+    cwd: f.root,
+    home: f.root,
+    env: { FIXTURE_KEY: "dummy-not-live" },
+  });
+  const memory = createMemoryStore({ rootDir: join(f.root, "memory") });
+  cleanup.push(() => memory.close());
+  await memory.batch(context(), 0, [
+    {
+      operation: "add",
+      entry: {
+        entry_id: "fact",
+        scope,
+        target: "project",
+        fact: `verifier note ${"m".repeat(1500)}`,
+        revision: 0,
+        source_event_ids: [],
+        observed_at: "2026-01-01T00:00:00Z",
+        verified_at: null,
+        supersedes: null,
+        deleted: false,
+      },
+    },
+  ]);
+  const api = await f.makeHost(small, memory);
+  const input = task();
+  input.request = "r".repeat(4000);
+  await api.create(context(), input);
+  const running = await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  expect(running.status).toBe("running");
+  const session = required(f.sessions[0]);
+  const instruction = required(session.instructions[0]);
+  expect(instruction).not.toContain("verifier note");
+  const capacity = optionalInstructionCapacity({
+    model: required(small.getModel("fixture/small")),
+    budget: input.budget,
+    approvals: { read: true, write: false, execute: false },
+    recall: true,
+    instruction,
+  });
+  expect(capacity).toBeGreaterThan(0);
+  expect(capacity).toBeLessThan(1700);
+  const launch = JSON.parse(
+    await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+  );
+  expect(launch.memory.text).toBe("");
+  expect(launch.memory.omitted_entries).toBe(1);
+  session.finish("completed");
+  await session.disposed;
   await api.close();
 });
 

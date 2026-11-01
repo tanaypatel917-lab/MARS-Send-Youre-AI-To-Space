@@ -6,14 +6,19 @@ The local service owns one `@mars/memory` store under its private state director
 It does not add a model loop, transcript writer, or third-party integration.
 With read approval, new sessions receive a bounded, scope-checked snapshot of
 saved facts, labeled as untrusted evidence. Whole entries are omitted rather than
-truncating the user's request or exceeding the runtime instruction limit. The
+truncating the user's request, exceeding the runtime instruction limit, or
+consuming the serialized-request room the model bridge reserves against the
+selected model's context window and the task token budget (system prompt,
+declared tools, instruction, slack and a minimum output reserve). The
 exact scope, revision, frozen text and digest are saved privately with the launch;
 resume retains the original Oh My Pi conversation, not a fresh memory snapshot.
 
 After a runtime outcome, the host projects records supplied by the authoritative
 Oh My Pi SessionManager into the derived journal index. The memory adapter never
 receives a journal path. The read-only `mars_history` tool returns up to five
-bounded snippets with session/entry citations from the authenticated scope.
+bounded excerpts with session/entry citations from the authenticated scope; each
+excerpt is positioned around the earliest matched query term and reports
+whether text was cut before or after it.
 Results are live keyword matches, not semantic search or verified facts. Without
 read approval, neither saved facts nor the history tool are provided. Projection
 failures produce a sanitized task event without changing a completed coding
