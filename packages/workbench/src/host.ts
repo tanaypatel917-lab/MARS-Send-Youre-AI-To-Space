@@ -830,6 +830,10 @@ export async function createWorkbenchHost(
           active.delete(task.task_id);
           liveRooms.delete(task.task_id);
           jobs.delete(task.task_id);
+          // Re-sweep after the live entry is gone so a room whose children
+          // have all settled releases its retained capability.
+          if (sweepRooms.has(task.task_id))
+            void sweepChildren(task.task_id).catch(() => undefined);
         }
       }
     })();
