@@ -575,11 +575,24 @@ test("reopening a store created before unsafe_artifacts migrates the results tab
   const { results } = await reopened.agents.results(context, f.coordinator);
   expect(results).toHaveLength(1);
   expect(results[0]?.unsafe_artifacts).toBe(0);
-  const again = await createCollaboration({
-    rootDir: f.rootDir,
-    hostPrivateRoots: [join(f.rootDir, "private")],
-  });
+  const second = new Database(join(f.rootDir, "collaboration.sqlite"));
+  second.exec("ALTER TABLE results DROP COLUMN unsafe_artifacts");
+  second.close();
+  const [again, parallel] = await Promise.all([
+    createCollaboration({
+      rootDir: f.rootDir,
+      hostPrivateRoots: [join(f.rootDir, "private")],
+    }),
+    createCollaboration({
+      rootDir: f.rootDir,
+      hostPrivateRoots: [join(f.rootDir, "private")],
+    }),
+  ]);
   cleanup.push(() => again.close());
+  cleanup.push(() => parallel.close());
+  expect(
+    (await parallel.agents.results(context, f.coordinator)).results,
+  ).toHaveLength(1);
   expect(
     (await again.agents.results(context, f.coordinator)).results,
   ).toHaveLength(1);
