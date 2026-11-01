@@ -541,6 +541,8 @@ export async function createWorkbenchHost(
   const childRouting = new Map<string, FrozenRouting>();
   const childLaunches = new Map<string, ChildLaunch>();
   const childSweeps = new Map<string, Promise<void>>();
+  /** Room capabilities kept for sweeping after the coordinator has exited. */
+  const sweepRooms = new Map<string, FrozenCollaboration>();
   const TERMINAL_CHILD_STATES = new Set([
     "completed",
     "failed",
@@ -555,13 +557,18 @@ export async function createWorkbenchHost(
    * sweep records only the delta over what earlier events already carry, and
    * a terminal state once.
    */
-  const sweepChildren = (taskId: string): Promise<void> => {
+  const sweepChildren = (
+    taskId: string,
+    room?: FrozenCollaboration,
+  ): Promise<void> => {
     const collaboration = options.collaboration;
-    const frozen = liveRooms.get(taskId);
+    const frozen = room ?? liveRooms.get(taskId) ?? sweepRooms.get(taskId);
     if (!collaboration || !frozen) return Promise.resolve();
+    sweepRooms.set(taskId, frozen);
     const run = async () => {
       const context = internalContext(options.scope);
       const recorded = await childResults(context, taskId);
+      let settled = true;
       let cursor: string | null = null;
       do {
         const page = await collaboration.agents.children(
@@ -587,9 +594,9 @@ export async function createWorkbenchHost(
             ),
             cost_usd: Math.max(0, child.usage.usd - previous.usd),
           };
-          const terminal =
-            TERMINAL_CHILD_STATES.has(child.state) &&
-            previous.state !== child.state;
+          const final = TERMINAL_CHILD_STATES.has(child.state);
+          if (!final) settled = false;
+          const terminal = final && previous.state !== child.state;
           if (
             !terminal &&
             delta.input_tokens === 0 &&
@@ -617,16 +624,25 @@ export async function createWorkbenchHost(
             },
             usage: delta,
           });
+          if (final) {
+            childLaunches.delete(childTaskId);
+            childRouting.delete(childTaskId);
+          }
         }
         cursor = page.next_cursor;
       } while (cursor);
+      if (settled && !liveRooms.has(taskId)) sweepRooms.delete(taskId);
     };
     const queued = (childSweeps.get(taskId) ?? Promise.resolve()).then(
       run,
       run,
     );
-    const settled = queued.catch(() => undefined);
-    childSweeps.set(taskId, settled);
+    const pending = queued
+      .catch(() => undefined)
+      .then(() => {
+        if (childSweeps.get(taskId) === pending) childSweeps.delete(taskId);
+      });
+    childSweeps.set(taskId, pending);
     return queued;
   };
   const observeChildren = (
@@ -650,19 +666,20 @@ export async function createWorkbenchHost(
       : {}),
   });
   const closeFrozenRoom = (
+    taskId: string,
     frozen: FrozenCollaboration,
     mode: "drain" | "cancel",
   ) =>
     options.collaboration
       ? options.collaboration.host
           .closeRoom(internalContext(options.scope), frozen.room_id, mode)
-          .then(() => sweepChildren(taskIdOfRoom(frozen)))
+          .then(() => sweepChildren(taskId, frozen))
           .catch(() => undefined)
       : Promise.resolve();
   const closeRecordedRoom = async (task: Task, mode: "drain" | "cancel") => {
     const launch = await readLaunch(task).catch(() => null);
     if (launch?.collaboration)
-      await closeFrozenRoom(launch.collaboration, mode);
+      await closeFrozenRoom(task.task_id, launch.collaboration, mode);
   };
   // Steering advances the task revision; the room marks pending child
   // proposals stale so the coordinator reviews them against current intent.
@@ -735,7 +752,9 @@ export async function createWorkbenchHost(
     collaboration?: FrozenCollaboration,
   ) => {
     const closeRoom = (mode: "drain" | "cancel") =>
-      collaboration ? closeFrozenRoom(collaboration, mode) : Promise.resolve();
+      collaboration
+        ? closeFrozenRoom(task.task_id, collaboration, mode)
+        : Promise.resolve();
     active.set(task.task_id, runtime);
     const job = (async () => {
       try {
@@ -821,9 +840,6 @@ export async function createWorkbenchHost(
     frozen ? { ...task, budget: frozen.budget } : task;
   /** Live frozen room records, mutated in place when a revision swaps capabilities. */
   const liveRooms = new Map<string, FrozenCollaboration>();
-  const taskIdOfRoom = (frozen: FrozenCollaboration): string =>
-    [...liveRooms].find(([, live]) => live.room_id === frozen.room_id)?.[0] ??
-    "";
   const roomToolsFor = (
     taskId: string,
     frozen: FrozenCollaboration,
@@ -1364,7 +1380,8 @@ export async function createWorkbenchHost(
         return running;
       } catch (error) {
         await runtime?.dispose().catch(() => undefined);
-        if (collaboration) await closeFrozenRoom(collaboration, "cancel");
+        if (collaboration)
+          await closeFrozenRoom(task.task_id, collaboration, "cancel");
         const current = await options.store
           .inspect(context, task.task_id)
           .catch(() => null);
@@ -1633,6 +1650,7 @@ export async function createWorkbenchHost(
       closing = true;
       if (runnerTimer) clearInterval(runnerTimer);
       await runner?.shutdown().catch(() => undefined);
+      await Promise.allSettled([...childSweeps.values()]);
       await Promise.allSettled([...operations]);
       let cleanupFailed = false;
       await Promise.all(
