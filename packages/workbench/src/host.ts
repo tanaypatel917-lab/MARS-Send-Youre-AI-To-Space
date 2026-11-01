@@ -143,6 +143,17 @@ function normalizeClaimedPath(path: string): string | null {
 }
 
 /** A write is inside the child's claim when it equals or sits under a claimed path. */
+/**
+ * The workspace id a child's tree is prepared under. The runner derives child
+ * task ids by suffixing the parent's, which can exceed the provider's 128
+ * character limit for a valid parent; such ids map to a stable digest alias.
+ */
+function childWorkspaceTaskId(childTaskId: string): string {
+  if (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(childTaskId))
+    return childTaskId;
+  return "child." + createHash("sha256").update(childTaskId).digest("hex");
+}
+
 /** The executable bit a workspace diff patch records for the file's new state. */
 function seededExecutable(patch: string): boolean | undefined {
   const match = /^new (?:file )?mode (\d{6})$/m.exec(patch);
@@ -790,7 +801,7 @@ export async function createWorkbenchHost(
     const context = internalContext(options.scope);
     const workspace = await options.workspace.prepare(
       context,
-      launch.child_task_id,
+      childWorkspaceTaskId(launch.child_task_id),
     );
     // The child starts from the coordinator's current tree, not the source
     // checkout: its proposal base is the coordinator revision it was seeded
@@ -926,6 +937,18 @@ export async function createWorkbenchHost(
       const baseInstruction = `${task.request}\n\nAcceptance criteria:\n${task.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
       if (baseInstruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH)
         throw new WorkbenchError("too_large");
+      // The coordinator runs under the room budget minus the delegation pool
+      // and carries the delegation tools, so optional evidence is sized the
+      // way the runtime will actually be constrained.
+      const coordinatorBudget: Budget = delegation
+        ? {
+            ...task.budget,
+            max_tokens: Math.max(
+              0,
+              task.budget.max_tokens - delegation.pool.max_tokens,
+            ),
+          }
+        : task.budget;
       let routing: FrozenRouting | undefined;
       if (options.specialists && params.model_id === undefined) {
         try {
@@ -938,6 +961,7 @@ export async function createWorkbenchHost(
               approvals: params.approvals,
               recall: Boolean(options.memory),
               collaboration: Boolean(options.collaboration),
+              delegation: Boolean(delegation),
               instruction: baseInstruction,
             }) + MIN_INITIAL_OUTPUT_RESERVE,
           );
@@ -951,10 +975,11 @@ export async function createWorkbenchHost(
       );
       const capacity = optionalInstructionCapacity({
         model,
-        budget: task.budget,
+        budget: coordinatorBudget,
         approvals: params.approvals,
         recall: Boolean(options.memory),
         collaboration: Boolean(options.collaboration),
+        delegation: Boolean(delegation),
         instruction: baseInstruction,
       });
       let memory: z.infer<typeof FrozenMemorySchema> | undefined;
@@ -1004,6 +1029,16 @@ export async function createWorkbenchHost(
               : {}),
             model_id: model.id,
           });
+          if (
+            opened.room.coordinator_runtime_budget.max_tokens <
+            coordinatorBudget.max_tokens
+          ) {
+            // Evidence was sized for a larger runtime than the room grants.
+            await options.collaboration.host
+              .closeRoom(context, opened.room.room_id, "cancel")
+              .catch(() => undefined);
+            throw new Error("Room budget below the sized coordinator budget");
+          }
           collaboration = {
             room_id: opened.room.room_id,
             capability: opened.coordinator,

@@ -103,6 +103,7 @@ async function fixture() {
     revision: "r1",
   };
   let prepareCalls = 0;
+  const prepareIds: string[] = [];
   let failPrepare = false;
   let restoreCalls = 0;
   let diffFiles: DiffResult["files"] = [];
@@ -114,8 +115,9 @@ async function fixture() {
     "text/plain",
   );
   const workspace: WorkspaceHost = {
-    async prepare() {
+    async prepare(_context, taskId) {
       prepareCalls++;
+      prepareIds.push(taskId);
       if (failPrepare) throw new Error("fixture: prepare failed");
       return { ...ref };
     },
@@ -383,6 +385,7 @@ async function fixture() {
     },
     writes,
     writeModes,
+    prepareIds,
     set diffFiles(files: DiffResult["files"]) {
       diffFiles = files;
     },
@@ -2071,6 +2074,74 @@ test("path-scoped writable children write only inside their claim and never exec
       break;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  session.finish("completed");
+  await api.close();
+});
+
+test("children of maximal-length task ids get provider-valid workspace ids", async () => {
+  const f = await fixture();
+  const collaboration = await createCollaboration({
+    rootDir: join(f.root, "collaboration"),
+    hostPrivateRoots: [join(f.root, "private")],
+  });
+  const launches: ChildLaunch[] = [];
+  const api = await f.makeHost(undefined, undefined, undefined, undefined, {
+    host: collaboration.host,
+    agents: collaboration.agents,
+    delegation: {
+      pool: { max_tokens: 400 },
+      tickMs: 10,
+      adapter: ({ workspaceFor }) => ({
+        async start(launch) {
+          launches.push(launch);
+          const binding = await workspaceFor(launch);
+          return {
+            session_ref: null,
+            base_revision: binding.base_revision,
+            outcome: Promise.resolve({
+              status: "completed" as const,
+              summary: "Done.",
+              artifacts: [],
+              usage: { input_tokens: 1, output_tokens: 1, usd: 0, steps: 1 },
+            }),
+            async cancel() {},
+          };
+        },
+      }),
+    },
+  });
+  const taskId = "t".repeat(128);
+  const base = task();
+  await api.create(context(), {
+    ...base,
+    task_id: taskId,
+    budget: { ...base.budget, max_duration_ms: 60_000, max_concurrency: 3 },
+  });
+  await api.start(context(), {
+    task_id: taskId,
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  const delegation = required(
+    required(session.options.collaboration).delegation,
+  );
+  await delegation.delegate({
+    role_label: "reader",
+    instruction: "Look only.",
+    max_tokens: 50,
+    max_duration_ms: 30_000,
+    max_steps: 2,
+    max_messages: 2,
+  });
+  const deadline = Date.now() + 5_000;
+  while (f.prepareIds.length < 2 && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(required(launches[0]).child_task_id.length).toBeGreaterThan(128);
+  const providerId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+  expect(f.prepareIds).toHaveLength(2);
+  for (const id of f.prepareIds) expect(id).toMatch(providerId);
+  expect(required(f.prepareIds[1]).startsWith("child.")).toBe(true);
   session.finish("completed");
   await api.close();
 });
