@@ -405,6 +405,7 @@ describe("@mars/tasks durable store", () => {
     expect(steerPayload).toEqual({
       change: "steered",
       instruction: "Continue with the accepted plan.",
+      task_status: "pending",
       task_revision: 0,
     });
     const running = await store.update(context("running"), task.task_id, 0, {

@@ -28,6 +28,10 @@ Start/resume require exact revisions and saved task/workspace/model/approval ide
 
 SIGINT/SIGTERM shutdown joins the upstream SDK cleanup registry, which waits for the host to pause active tasks, abort requests, drain jobs and close the provider/store. Oh My Pi retains its standard signal exit codes (130/143), including after clean shutdown. A process crash is recovered on the next open. Restart does not refill runtime budgets or extend their saved deadline.
 
+Starting without an eligible configured model leaves the task pending, with no workspace or runtime created. Configure the model/credential and retry. Steering while paused is stored in durable task events, included in the next resume prompt, and acknowledged after that runtime returns. Pending steering survives a service restart; an interrupted delivery can be replayed (at-least-once delivery). Running steering still goes directly to the live runtime. Lifecycle requests for one task are serialized so paused steering cannot slip past a concurrent resume.
+
+Runtime-result events publish token deltas against previously reported journal totals, preventing double counting after resume, including cancellation outcomes. Cost is zero for a configured free model and unknown otherwise: reserved budget dollars are not measured billing and are never presented as actual cost.
+
 Session journal paths and launch metadata are host-only. Public events, artifacts and diffs are checked for private paths; unsafe legacy stored data is refused on reads, not rewritten or deleted. RPC authenticates every request, requires exact scope, rejects browser Origins, bounds payloads and sanitizes errors. This local endpoint is not a deployment-grade remote gateway.
 
 ## Reproducible verification and limits

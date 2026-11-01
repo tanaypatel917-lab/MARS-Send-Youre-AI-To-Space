@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RequestContext, Task, WorkspaceRef } from "@mars/contracts";
 import type { RuntimeOutcome, RuntimeSessionOptions } from "@mars/execution";
+import type { ModelProviderRegistry } from "@mars/providers";
 import { loadModelRegistry } from "@mars/providers";
 import { createTaskStore } from "@mars/tasks";
 import { createWorkbenchHost, type WorkspaceHost } from "./host";
@@ -117,23 +118,62 @@ async function fixture() {
   };
   const sessions: {
     options: RuntimeSessionOptions;
-    finish(status: RuntimeOutcome["status"]): void;
+    finish(
+      status: RuntimeOutcome["status"],
+      usage?: Partial<RuntimeOutcome["usage"]>,
+    ): void;
+    instructions: string[];
+    steering: string[];
     disposed: Promise<void>;
   }[] = [];
-  const registry = await loadModelRegistry({ cwd: root, home: root, env: {} });
-  const makeHost = () =>
+  await mkdir(join(root, ".mars"));
+  await writeFile(
+    join(root, ".mars", "models.json"),
+    JSON.stringify({
+      version: 1,
+      providers: [
+        {
+          id: "fixture",
+          kind: "openai-compatible",
+          baseUrl: "https://fixture.invalid/v1",
+          apiKeyEnv: "FIXTURE_KEY",
+        },
+      ],
+      models: [
+        {
+          id: "fixture/free",
+          providerId: "fixture",
+          model: "fixture",
+          capabilities: { tools: true, vision: false, contextWindow: 32768 },
+          pricing: { free: true },
+        },
+      ],
+      routes: { default: ["fixture/free"] },
+    }),
+  );
+  const registry = await loadModelRegistry({
+    cwd: root,
+    home: root,
+    env: { FIXTURE_KEY: "dummy-not-live" },
+  });
+  const makeHost = (modelRegistry: ModelProviderRegistry = registry) =>
     createWorkbenchHost({
       scope,
       workspaceLabel: "fixture",
       stateRoot: root,
       store,
       workspace,
-      registry,
+      registry: modelRegistry,
       canExecute: false,
       async runtimeFactory(options) {
         const outcome = deferred<RuntimeOutcome>();
         const disposed = deferred<void>();
-        const finish = (status: RuntimeOutcome["status"]) =>
+        const instructions: string[] = [];
+        const steering: string[] = [];
+        const finish = (
+          status: RuntimeOutcome["status"],
+          usage: Partial<RuntimeOutcome["usage"]> = {},
+        ) =>
           outcome.resolve({
             status,
             content: "fixture result",
@@ -143,16 +183,28 @@ async function fixture() {
               reserved_usd: 0,
               reserved_tokens: 0,
               deadline: Date.now() + 1000,
+              ...usage,
             },
           });
-        sessions.push({ options, finish, disposed: disposed.promise });
+        sessions.push({
+          options,
+          finish,
+          disposed: disposed.promise,
+          instructions,
+          steering,
+        });
         return {
           sessionId: "upstream",
           modelId: options.modelId ?? "fixture/free",
           journalPath:
             options.sessionFile ?? join(options.stateDir, "session.jsonl"),
-          run: () => outcome.promise,
-          async steer() {},
+          run: (instruction: string) => {
+            instructions.push(instruction);
+            return outcome.promise;
+          },
+          async steer(instruction: string) {
+            steering.push(instruction);
+          },
           async cancel() {
             finish("cancelled");
           },
@@ -205,6 +257,160 @@ test("host persists launch metadata, runs only through the runtime and publishes
     (await api.artifact(context(), "task", required(completed.artifacts[0])))
       .data_base64,
   ).toBe(Buffer.from("fixture result").toString("base64"));
+});
+
+test("missing-model setup fails before reserving a task, so it can start after configuration is fixed", async () => {
+  const f = await fixture();
+  const unavailable = await loadModelRegistry({
+    cwd: f.root,
+    home: f.root,
+    env: {},
+  });
+  const api = await f.makeHost(unavailable);
+  await api.create(context(), task());
+  await expect(
+    api.start(context(), {
+      task_id: "task",
+      expected_revision: 0,
+      approvals: { read: true, write: true, execute: false },
+    }),
+  ).rejects.toThrow("No eligible configured model");
+  expect((await api.inspect(context(), "task")).status).toBe("pending");
+  expect((await api.inspect(context(), "task")).revision).toBe(0);
+  expect(f.prepareCalls).toBe(0);
+  expect(f.sessions).toHaveLength(0);
+  const configured = await f.makeHost();
+  await configured.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: true, execute: false },
+  });
+  expect(f.sessions).toHaveLength(1);
+  await configured.cancel(context(), "task");
+  await configured.close();
+});
+
+test("paused steering survives host restart, is consumed on resume, and usage counts only new tokens", async () => {
+  const f = await fixture();
+  const api = await f.makeHost();
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: true, execute: false },
+  });
+  await api.steer(context(), "task", "Live instruction");
+  expect(required(f.sessions[0]).steering).toEqual(["Live instruction"]);
+  required(f.sessions[0]).finish("paused", {
+    input_tokens: 50,
+    output_tokens: 10,
+  });
+  await required(f.sessions[0]).disposed;
+  await api.steer(context(), "task", "Use the requested checkpoint");
+  await api.close();
+  const replacement = await f.makeHost();
+  const paused = await replacement.inspect(context(), "task");
+  await Promise.all([
+    replacement.steer(context(), "task", "Then run verification"),
+    replacement.resume(context(), "task", paused.revision),
+  ]);
+  const resumed = required(f.sessions[1]);
+  expect(resumed.instructions[0]).toContain("Use the requested checkpoint");
+  expect(resumed.instructions[0]).toContain("Then run verification");
+  expect(resumed.instructions[0]).not.toContain("Live instruction");
+  resumed.finish("paused", { input_tokens: 80, output_tokens: 15 });
+  await resumed.disposed;
+  const again = await replacement.inspect(context(), "task");
+  await replacement.resume(context(), "task", again.revision);
+  const last = required(f.sessions[2]);
+  expect(last.instructions[0]).not.toContain("Use the requested checkpoint");
+  expect(last.instructions[0]).not.toContain("Then run verification");
+  last.finish("completed", { input_tokens: 80, output_tokens: 15 });
+  await last.disposed;
+  const usages = [];
+  for await (const event of f.store.events(context(), "task"))
+    if (event.usage) usages.push(event.usage);
+  expect(usages).toEqual([
+    { input_tokens: 50, output_tokens: 10, cost_usd: 0 },
+    { input_tokens: 30, output_tokens: 5, cost_usd: 0 },
+    { input_tokens: 0, output_tokens: 0, cost_usd: 0 },
+  ]);
+});
+
+test("shutdown during queued steering delivery leaves the instruction available for the next resume", async () => {
+  const f = await fixture();
+  const api = await f.makeHost();
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  required(f.sessions[0]).finish("paused");
+  await required(f.sessions[0]).disposed;
+  await api.steer(context(), "task", "Keep this after interruption");
+  await api.resume(
+    context(),
+    "task",
+    (await api.inspect(context(), "task")).revision,
+  );
+  expect(required(f.sessions[1]).instructions[0]).toContain(
+    "Keep this after interruption",
+  );
+  await api.close();
+  const replacement = await f.makeHost();
+  await replacement.resume(
+    context(),
+    "task",
+    (await replacement.inspect(context(), "task")).revision,
+  );
+  expect(required(f.sessions[2]).instructions[0]).toContain(
+    "Keep this after interruption",
+  );
+  required(f.sessions[2]).finish("completed");
+  await required(f.sessions[2]).disposed;
+  await replacement.close();
+});
+
+test("usage never misrepresents a paid budget reservation as measured billing", async () => {
+  const f = await fixture();
+  const file = join(f.root, ".mars", "models.json");
+  const config = JSON.parse(await Bun.file(file).text());
+  config.models[0].pricing = {
+    free: false,
+    inputPerMTokUsd: 1,
+    outputPerMTokUsd: 2,
+  };
+  config.policy = { allowPaid: true };
+  await writeFile(file, JSON.stringify(config));
+  const registry = await loadModelRegistry({
+    cwd: f.root,
+    home: f.root,
+    env: { FIXTURE_KEY: "dummy-not-live" },
+  });
+  const api = await f.makeHost(registry);
+  const paid = task();
+  paid.budget.max_usd = 1;
+  await api.create(context(), paid);
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    model_id: "fixture/free",
+    approvals: { read: true, write: false, execute: false },
+  });
+  required(f.sessions[0]).finish("completed", {
+    input_tokens: 50,
+    output_tokens: 10,
+    reserved_usd: 0.001,
+  });
+  await required(f.sessions[0]).disposed;
+  const usage = [];
+  for await (const event of f.store.events(context(), "task"))
+    if (event.usage) usage.push(event.usage);
+  expect(usage).toEqual([
+    { input_tokens: 50, output_tokens: 10, cost_usd: null },
+  ]);
+  await api.close();
 });
 
 test("host resumes the same journal/model/approvals and never prepares a replacement workspace", async () => {

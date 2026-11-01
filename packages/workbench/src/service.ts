@@ -79,6 +79,7 @@ export async function createWorkbenchService(
   const store = await createTaskStore({
     rootDir: join(root, "tasks"),
     workspaceRoots: [source],
+    hostPrivateRoots: [root],
   });
   let workspace:
     | Awaited<ReturnType<typeof createLocalWorkspaceProvider>>

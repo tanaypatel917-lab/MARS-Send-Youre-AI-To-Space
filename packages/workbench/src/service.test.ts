@@ -203,6 +203,9 @@ test("HTTP + actual Oh My Pi + real private workspace writes, progress, artifact
     });
   });
   const created = await client.create(task());
+  await expect(
+    client.create({ ...task(), request: `Read ${f.root}/sessions/secret` }),
+  ).rejects.toThrow();
   expect(
     (
       await client.start(created.task_id, {
@@ -236,6 +239,11 @@ test("HTTP + actual Oh My Pi + real private workspace writes, progress, artifact
     expect.objectContaining({ path: "greet.txt", status: "added" }),
   );
   const events = await client.events(created.task_id, undefined);
+  const usageEvents = events.filter((event) => event.usage);
+  expect(usageEvents).toHaveLength(1);
+  expect(usageEvents[0]?.usage?.input_tokens).toBeGreaterThan(0);
+  expect(usageEvents[0]?.usage?.output_tokens).toBeGreaterThan(0);
+  expect(usageEvents[0]?.usage?.cost_usd).toBe(0);
   expect(
     events.some((event) => event.event_type === "execution.observed"),
   ).toBe(true);

@@ -15,9 +15,11 @@ import {
   EXECUTION_PACKAGE_VERSION,
   openRuntimeSession,
   type RuntimeObservation,
+  type RuntimeOutcome,
   type RuntimeSession,
   type RuntimeSessionOptions,
   type RuntimeTools,
+  selectExecutionModel,
 } from "@mars/execution";
 import type { ModelProviderRegistry } from "@mars/providers";
 import type { DurableTaskStore } from "@mars/tasks";
@@ -280,16 +282,95 @@ export async function createWorkbenchHost(
         },
       });
     };
+  const runtimeResults = async (context: RequestContext, taskId: string) => {
+    const queued = new Map<string, string>();
+    const applied = new Set<string>();
+    let input = 0;
+    let output = 0;
+    for await (const event of options.store.events(context, taskId)) {
+      if (
+        event.event_type !== "task.updated" &&
+        event.producer !== "@mars/workbench"
+      )
+        continue;
+      const bytes = await options.store.artifacts.get(context, event.payload);
+      const payload = JSON.parse(new TextDecoder().decode(bytes));
+      const steering = z
+        .object({
+          change: z.literal("steered"),
+          task_status: z.literal("paused"),
+          instruction: z.string(),
+        })
+        .safeParse(payload);
+      if (steering.success)
+        queued.set(event.event_id, steering.data.instruction);
+      const result = z
+        .object({
+          operation: z.literal("runtime.result"),
+          steering_event_ids: z.array(z.string()),
+        })
+        .safeParse(payload);
+      if (event.producer === "@mars/workbench" && result.success) {
+        for (const id of result.data.steering_event_ids) applied.add(id);
+        input += event.usage?.input_tokens ?? 0;
+        output += event.usage?.output_tokens ?? 0;
+      }
+    }
+    return {
+      queued: [...queued].filter(([id]) => !applied.has(id)),
+      input,
+      output,
+    };
+  };
+  const publishResult = async (
+    task: Task,
+    runtime: RuntimeSession,
+    outcome: RuntimeOutcome,
+    steeringEventIds: string[],
+  ) => {
+    const context = internalContext(options.scope);
+    const previous = await runtimeResults(context, task.task_id);
+    await options.store.appendEvent(context, task.task_id, {
+      event_type: "tool.completed",
+      producer: "@mars/workbench",
+      run_id: randomUUID(),
+      versions: [{ component: "@mars/workbench", revision: "0.0.1" }],
+      source_event_ids: steeringEventIds,
+      payload: {
+        operation: "runtime.result",
+        status: outcome.status,
+        steering_event_ids: steeringEventIds,
+      },
+      usage: {
+        input_tokens: Math.max(0, outcome.usage.input_tokens - previous.input),
+        output_tokens: Math.max(
+          0,
+          outcome.usage.output_tokens - previous.output,
+        ),
+        cost_usd:
+          options.registry.getModel(runtime.modelId)?.pricing.free === true
+            ? 0
+            : null,
+      },
+    });
+  };
   const run = (
     task: Task,
     workspace: WorkspaceRef,
     runtime: RuntimeSession,
     instruction: string,
+    steeringEventIds: string[] = [],
   ) => {
     active.set(task.task_id, runtime);
     const job = (async () => {
       try {
         const outcome = await runtime.run(instruction);
+        await publishResult(
+          task,
+          runtime,
+          outcome,
+          outcome.status === "cancelled" ? [] : steeringEventIds,
+        );
         const context = internalContext(options.scope);
         let current = await options.store.inspect(context, task.task_id);
         if (current.status !== "running") return;
@@ -431,6 +512,11 @@ export async function createWorkbenchHost(
         throw new WorkbenchError("conflict");
       if (params.approvals.execute && !options.canExecute)
         throw new WorkbenchError("forbidden");
+      const model = selectExecutionModel(
+        options.registry,
+        params.model_id,
+        Object.values(params.approvals).some(Boolean),
+      );
       const running = await options.store.update(
         context,
         task.task_id,
@@ -454,7 +540,7 @@ export async function createWorkbenchHost(
           cwd,
           stateDir,
           registry: options.registry,
-          ...(params.model_id ? { modelId: params.model_id } : {}),
+          modelId: model.id,
           approvals: params.approvals,
           tools: toolsFor(running, workspace, params.approvals),
           onEvent: async (event) => {
@@ -555,11 +641,13 @@ export async function createWorkbenchHost(
           runtime.modelId !== launch.model_id
         )
           throw new WorkbenchError("conflict");
+        const { queued } = await runtimeResults(context, taskId);
         run(
           running,
           workspace,
           runtime,
-          `Continue the task. Request: ${task.request}`,
+          `Continue the task. Request: ${task.request}${queued.length ? `\n\nQueued steering instructions:\n${queued.map(([, instruction]) => instruction).join("\n\n")}` : ""}`,
+          queued.map(([id]) => id),
         );
         return running;
       } catch (error) {
@@ -577,10 +665,12 @@ export async function createWorkbenchHost(
     },
     async steer(context, taskId, instruction) {
       checkContext(context);
+      const task = await options.store.inspect(context, taskId);
       const runtime = active.get(taskId);
-      if (!runtime) throw new WorkbenchError("conflict");
+      if (task.status !== "paused" && (task.status !== "running" || !runtime))
+        throw new WorkbenchError("conflict");
       await options.store.steer(context, taskId, instruction);
-      await runtime.steer(instruction);
+      if (task.status === "running") await runtime?.steer(instruction);
     },
     async cancel(context, taskId) {
       checkContext(context);
@@ -691,21 +781,39 @@ export async function createWorkbenchHost(
       );
       return promise;
     };
+  const lifecycle = new Map<string, Promise<unknown>>();
+  const serialize = <A extends unknown[], R>(
+    key: (...args: A) => string,
+    operation: (...args: A) => Promise<R>,
+  ) =>
+    track((...args: A): Promise<R> => {
+      const taskId = key(...args);
+      const previous = lifecycle.get(taskId) ?? Promise.resolve();
+      const promise = previous
+        .catch(() => undefined)
+        .then(() => operation(...args));
+      lifecycle.set(taskId, promise);
+      const remove = () => {
+        if (lifecycle.get(taskId) === promise) lifecycle.delete(taskId);
+      };
+      void promise.then(remove, remove);
+      return promise;
+    });
   return {
     scope: api.scope,
     describe: track(api.describe),
     create: track(api.create),
     list: track(api.list),
     inspect: track(api.inspect),
-    start: track(api.start),
-    resume: track(api.resume),
-    steer: track(api.steer),
-    cancel: track(api.cancel),
+    start: serialize((_, params) => params.task_id, api.start),
+    resume: serialize((_, taskId) => taskId, api.resume),
+    steer: serialize((_, taskId) => taskId, api.steer),
+    cancel: serialize((_, taskId) => taskId, api.cancel),
     events: track(api.events),
     artifact: track(api.artifact),
     diff: track(api.diff),
     checkpoint: track(api.checkpoint),
-    restore: track(api.restore),
+    restore: serialize((_, taskId) => taskId, api.restore),
     async close() {
       closing = true;
       await Promise.allSettled([...operations]);
