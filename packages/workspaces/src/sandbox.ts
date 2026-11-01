@@ -303,6 +303,7 @@ export function createDockerSandbox(
           stderrPromise,
         ]);
         if (terminating) await terminating;
+        await waitForContainerGone(resolved, name);
         return {
           exitCode: timedOut ? 124 : cancelled ? 130 : exitCode,
           stdout: stdout.bytes,

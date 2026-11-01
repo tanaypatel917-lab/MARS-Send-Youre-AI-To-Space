@@ -40,19 +40,21 @@ export function isIgnored(
   extraIgnores: readonly string[] = [],
 ): boolean {
   return path.split("/").some((segment) => {
-    if (ignoredNames.has(segment)) return true;
-    return extraIgnores.some((pattern) =>
-      pattern.includes("*")
+    const normalizedSegment = segment.toLowerCase();
+    if (ignoredNames.has(normalizedSegment)) return true;
+    return extraIgnores.some((pattern) => {
+      const normalizedPattern = pattern.toLowerCase();
+      return normalizedPattern.includes("*")
         ? new RegExp(
-            `^${pattern.split("*").map(escapeRegex).join(".*")}$`,
-          ).test(segment)
-        : pattern === segment,
-    );
+            `^${normalizedPattern.split("*").map(escapeRegex).join(".*")}$`,
+          ).test(normalizedSegment)
+        : normalizedPattern === normalizedSegment;
+    });
   });
 }
 
 export function isSecret(path: string): boolean {
-  const segments = path.split("/");
+  const segments = path.split("/").map((segment) => segment.toLowerCase());
   const basename = segments.at(-1) ?? "";
   if (
     segments.some((segment) =>
@@ -93,19 +95,20 @@ export function hasUnsupportedPathCharacters(path: string): boolean {
 }
 
 function isSecretName(name: string, allowExamples: boolean): boolean {
+  const normalizedName = name.toLowerCase();
   if (
-    secretNames.has(name) ||
-    privateKeyPrefixes.some((prefix) => name.startsWith(prefix))
+    secretNames.has(normalizedName) ||
+    privateKeyPrefixes.some((prefix) => normalizedName.startsWith(prefix))
   ) {
     return true;
   }
-  if (name === ".env" || name.startsWith(".env.")) {
+  if (normalizedName === ".env" || normalizedName.startsWith(".env.")) {
     return !(
       allowExamples &&
-      [".env.example", ".env.sample", ".env.template"].includes(name)
+      [".env.example", ".env.sample", ".env.template"].includes(normalizedName)
     );
   }
-  const extension = name.slice(name.lastIndexOf(".")).toLowerCase();
+  const extension = normalizedName.slice(normalizedName.lastIndexOf("."));
   return secretExtensions.has(extension);
 }
 
@@ -151,7 +154,10 @@ export async function resolveSafePath(
   const segments = relativePath.split("/");
   let current = root;
   for (let i = 0; i < segments.length; i += 1) {
-    current = join(current, segments[i]!);
+    const segment = segments[i];
+    if (segment === undefined)
+      throw new WorkspacePolicyError("Invalid relative workspace path");
+    current = join(current, segment);
     try {
       const stat = await lstat(current);
       if (stat.isSymbolicLink())

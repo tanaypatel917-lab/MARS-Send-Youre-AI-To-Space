@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test";
 import {
   chmod,
+  cp,
   lstat,
   mkdir,
   mkdtemp,
   readdir,
   readFile,
   realpath,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -31,11 +33,13 @@ import {
   WorkspaceNotFoundError,
   WorkspacePolicyError,
 } from "../src";
+import { isIgnored, isSecret } from "../src/paths";
 import {
   artifactText,
   budget,
   context,
   createStubRunner,
+  first,
   gitStatus,
   hashDirectory,
   makeFixture,
@@ -43,6 +47,17 @@ import {
 } from "./helpers";
 
 const digest = "a".repeat(64);
+
+test("path filters compare ignore and secret names case-insensitively", () => {
+  expect(isIgnored(".Git")).toBe(true);
+  expect(isIgnored("Node_Modules")).toBe(true);
+  expect(isSecret(".ENV")).toBe(true);
+  expect(isSecret("ID_RSA")).toBe(true);
+  expect(isSecret(".SSH/ID_RSA")).toBe(true);
+  expect(isSecret(".ENV.EXAMPLE")).toBe(false);
+  expect(isSecret(".ENV.SAMPLE")).toBe(false);
+  expect(isSecret(".ENV.TEMPLATE")).toBe(false);
+});
 
 test("workspacePath is host-only, scoped, and resolves only the real workspace tree [stub runner — not isolation evidence]", async () => {
   const fixture = await makeFixture();
@@ -146,6 +161,203 @@ test("lost workspace trees and corrupt metadata fail closed after provider reope
   }
 });
 
+test("lost workspace recovery is isolated and healthy workspaces recover journals and interrupted execution [stub runner — not isolation evidence]", async () => {
+  const fixture = await makeFixture();
+  const workspaceB = await fixture.provider.prepare(context, "task-second");
+  const treeA = join(
+    fixture.rootDir,
+    "workspaces",
+    fixture.workspace.workspace_id,
+    "tree",
+  );
+  const treeB = await fixture.provider.workspacePath(context, workspaceB);
+  const metadataPathB = join(
+    fixture.rootDir,
+    "meta",
+    workspaceB.workspace_id,
+    "workspace.json",
+  );
+  const metadataB = JSON.parse(await readFile(metadataPathB, "utf8")) as {
+    counter: number;
+    revision: string;
+    tree_digest: string;
+    exec_in_progress?: unknown;
+    restore_journal?: unknown;
+  };
+  const stageName = `${workspaceB.workspace_id}-${"a".repeat(32)}`;
+  const backupName = `${workspaceB.workspace_id}-${"b".repeat(32)}`;
+  const backupPath = join(fixture.rootDir, "trash", backupName);
+  const stagingPath = join(fixture.rootDir, "staging", stageName);
+  await mkdir(stagingPath);
+  await writeFile(join(treeB, "interrupted.txt"), "recovered output\n");
+  await rename(treeB, backupPath);
+  metadataB.exec_in_progress = {
+    run_id: "interrupted-run",
+    started_at: new Date().toISOString(),
+  };
+  metadataB.restore_journal = {
+    phase: "backed-up",
+    staging: stageName,
+    backup: backupName,
+    previous: {
+      counter: metadataB.counter,
+      revision: metadataB.revision,
+      tree_digest: metadataB.tree_digest,
+    },
+    target: {
+      counter: metadataB.counter + 1,
+      revision: `${metadataB.counter + 1}.${"c".repeat(16)}`,
+      tree_digest: "c".repeat(64),
+    },
+  };
+  await writeFile(metadataPathB, `${JSON.stringify(metadataB)}\n`);
+  await rm(treeA, { recursive: true, force: true });
+  await fixture.provider.close();
+
+  const reopened = await createLocalWorkspaceProvider({
+    rootDir: fixture.rootDir,
+    sourceRoot: fixture.sourceRoot,
+    artifacts: fixture.artifacts,
+  });
+  try {
+    await expect(
+      reopened.inspect(context, fixture.workspace.workspace_id),
+    ).rejects.toBeInstanceOf(IntegrityError);
+    await expect(
+      reopened.workspacePath(context, fixture.workspace),
+    ).rejects.toBeInstanceOf(IntegrityError);
+    await expect(
+      reopened.read(context, fixture.workspace, "tracked.txt"),
+    ).rejects.toBeInstanceOf(IntegrityError);
+    await expect(
+      reopened.discover(context, "task-test"),
+    ).rejects.toBeInstanceOf(IntegrityError);
+    await expect(reopened.prepare(context, "task-test")).rejects.toBeInstanceOf(
+      IntegrityError,
+    );
+    await expect(lstat(treeA)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const healthy = await reopened.inspect(context, workspaceB.workspace_id);
+    expect(await reopened.discover(context, "task-second")).toEqual(healthy);
+    const healthyTree = await reopened.workspacePath(context, healthy);
+    expect(healthyTree).toBe(await realpath(healthyTree));
+    const recoveredText = await reopened.read(
+      context,
+      healthy,
+      "interrupted.txt",
+    );
+    expect(await artifactText(fixture.artifacts, recoveredText)).toBe(
+      "recovered output\n",
+    );
+    const recoveredMeta = JSON.parse(await readFile(metadataPathB, "utf8")) as {
+      counter: number;
+      exec_in_progress?: unknown;
+      restore_journal?: unknown;
+    };
+    expect(recoveredMeta.counter).toBeGreaterThan(metadataB.counter);
+    expect(recoveredMeta.exec_in_progress).toBeUndefined();
+    expect(recoveredMeta.restore_journal).toBeUndefined();
+    expect(await readdir(join(fixture.rootDir, "staging"))).toEqual([]);
+    expect(await readdir(join(fixture.rootDir, "trash"))).toEqual([]);
+
+    const firstValue = await putText(fixture, "checkpoint value\n");
+    await reopened.write(context, healthy, "after.txt", firstValue);
+    const afterWrite = await reopened.inspect(context, healthy.workspace_id);
+    const checkpoint = await reopened.checkpoint(context, afterWrite);
+    const changedValue = await putText(fixture, "changed value\n");
+    await reopened.write(context, afterWrite, "after.txt", changedValue);
+    const beforeRestore = await reopened.inspect(context, healthy.workspace_id);
+    const restored = await reopened.restore(
+      context,
+      checkpoint,
+      beforeRestore.revision,
+    );
+    const restoredValue = await reopened.read(context, restored, "after.txt");
+    expect(await artifactText(fixture.artifacts, restoredValue)).toBe(
+      "checkpoint value\n",
+    );
+  } finally {
+    await reopened.close();
+    await fixture.close();
+  }
+});
+
+test("unreadable metadata isolates id-based operations but blocks prepare and discover [stub runner — not isolation evidence]", async () => {
+  const fixture = await makeFixture();
+  const workspaceB = await fixture.provider.prepare(context, "task-second");
+  const metadataPathA = join(
+    fixture.rootDir,
+    "meta",
+    fixture.workspace.workspace_id,
+    "workspace.json",
+  );
+  await fixture.provider.close();
+  await writeFile(metadataPathA, "{ invalid json");
+  const reopened = await createLocalWorkspaceProvider({
+    rootDir: fixture.rootDir,
+    sourceRoot: fixture.sourceRoot,
+    artifacts: fixture.artifacts,
+  });
+  try {
+    await expect(
+      reopened.inspect(context, fixture.workspace.workspace_id),
+    ).rejects.toBeInstanceOf(IntegrityError);
+    await expect(
+      reopened.workspacePath(context, fixture.workspace),
+    ).rejects.toBeInstanceOf(IntegrityError);
+    const healthy = await reopened.inspect(context, workspaceB.workspace_id);
+    const artifact = await reopened.read(context, healthy, "tracked.txt");
+    expect(await artifactText(fixture.artifacts, artifact)).toBe(
+      "dirty tracked\n",
+    );
+    expect(await reopened.workspacePath(context, healthy)).toBe(
+      await realpath(
+        join(fixture.rootDir, "workspaces", workspaceB.workspace_id, "tree"),
+      ),
+    );
+    await expect(
+      reopened.discover(context, "task-second"),
+    ).rejects.toBeInstanceOf(IntegrityError);
+    await expect(
+      reopened.prepare(context, "task-second"),
+    ).rejects.toBeInstanceOf(IntegrityError);
+    await expect(reopened.prepare(context, "new-task")).rejects.toBeInstanceOf(
+      IntegrityError,
+    );
+  } finally {
+    await reopened.close();
+    await fixture.close();
+  }
+});
+
+test("uncommitted prepare metadata without a tree is removed during recovery [stub runner — not isolation evidence]", async () => {
+  const fixture = await makeFixture();
+  const leftoverId = `ws_${"d".repeat(32)}`;
+  const leftoverMetadata = join(fixture.rootDir, "meta", leftoverId);
+  await mkdir(leftoverMetadata);
+  await fixture.provider.close();
+  const reopened = await createLocalWorkspaceProvider({
+    rootDir: fixture.rootDir,
+    sourceRoot: fixture.sourceRoot,
+    artifacts: fixture.artifacts,
+  });
+  try {
+    await expect(lstat(leftoverMetadata)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await reopened.discover(context, "task-test")).toEqual(
+      fixture.workspace,
+    );
+    expect(await reopened.discover(context, "task-new")).toBeNull();
+    await expect(reopened.prepare(context, "task-new")).resolves.toMatchObject({
+      provider: fixture.workspace.provider,
+    });
+  } finally {
+    await reopened.close();
+    await fixture.close();
+  }
+});
+
 async function putText(
   fixture: Awaited<ReturnType<typeof makeFixture>>,
   text: string,
@@ -189,7 +401,10 @@ test("prepare preserves the source tree and copies only the filtered dirty snaps
     expect(skipped).toEqual(
       expect.arrayContaining([
         { path: ".env", reason: "ignored-secret" },
+        { path: ".ENV", reason: "ignored-secret" },
+        { path: "ID_RSA", reason: "ignored-secret" },
         { path: ".ssh", reason: "ignored-secret" },
+        { path: ".SSH", reason: "ignored-secret" },
         { path: ".config/gcloud", reason: "ignored-secret" },
         { path: "passwd-link", reason: "symlink" },
         { path: "sibling-link", reason: "symlink" },
@@ -202,17 +417,25 @@ test("prepare preserves the source tree and copies only the filtered dirty snaps
       "tree",
     );
     await expect(readFile(join(tree, ".env"))).rejects.toThrow();
+    expect(await readFile(join(tree, ".ENV.EXAMPLE"), "utf8")).toBe(
+      "DUMMY=example\n",
+    );
+    await expect(readFile(join(tree, "ID_RSA"))).rejects.toThrow();
     await expect(readFile(join(tree, ".ssh", "id_ed25519"))).rejects.toThrow();
+    await expect(readFile(join(tree, ".SSH", "ID_RSA"))).rejects.toThrow();
     await expect(
       readFile(join(tree, ".config", "gcloud", "credentials.json")),
     ).rejects.toThrow();
     await expect(
       readFile(join(tree, "node_modules", "dep", "index.js")),
     ).rejects.toThrow();
+    await expect(
+      readFile(join(tree, "Node_Modules", "dep", "index.js")),
+    ).rejects.toThrow();
     await expect(readFile(join(tree, ".git", "config"))).rejects.toThrow();
     expect((await lstat(join(tree, "run.sh"))).mode & 0o111).not.toBe(0);
 
-    const baseline = (await fixture.provider.checkpoints(context, again))[0]!;
+    const baseline = first(await fixture.provider.checkpoints(context, again));
     const result = await fixture.provider.execute(
       context,
       again,
@@ -270,11 +493,13 @@ test("prepare preserves the source tree and copies only the filtered dirty snaps
       mutated.workspace,
     );
     expect(collected).toHaveLength(4);
-    expect(await artifactText(fixture.artifacts, collected[0]!)).toContain(
+    expect(await artifactText(fixture.artifacts, first(collected))).toContain(
       "diff --git",
     );
     expect(
-      new Uint8Array(await fixture.artifacts.get(context, collected[1]!)),
+      new Uint8Array(
+        await fixture.artifacts.get(context, first(collected.slice(1))),
+      ),
     ).toEqual(new Uint8Array([0, 255, 1]));
 
     const restored = await fixture.provider.restore(
@@ -305,6 +530,108 @@ test("prepare preserves the source tree and copies only the filtered dirty snaps
     expect(await hashDirectory(fixture.sourceRoot)).toBe(
       fixture.initialSourceHash,
     );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("text diff patches apply to a baseline and reproduce file contents and modes [stub runner — not isolation evidence]", async () => {
+  const fixture = await makeFixture();
+  try {
+    const tree = await fixture.provider.workspacePath(
+      context,
+      fixture.workspace,
+    );
+    await writeFile(
+      join(tree, "middle.txt"),
+      "line one\nline two\nline three\nline four\nline five\n",
+    );
+    await writeFile(join(tree, "deleted.txt"), "delete me\n");
+    await writeFile(join(tree, "mode.sh"), "echo mode\n", { mode: 0o644 });
+    await writeFile(join(tree, "no-newline.txt"), "old without newline");
+    await writeFile(join(tree, "gain-newline.txt"), "gain newline");
+    await writeFile(join(tree, "lose-newline.txt"), "lose newline\n");
+
+    const baselineCheckpoint = await fixture.provider.checkpoint(
+      context,
+      fixture.workspace,
+    );
+    const baselineWorkspace = await fixture.provider.inspect(
+      context,
+      fixture.workspace.workspace_id,
+    );
+    const baselineCopyParent = await mkdtemp(
+      join(fixture.base, "apply-baseline-"),
+    );
+    const baselineCopy = join(baselineCopyParent, "tree");
+    await cp(tree, baselineCopy, { recursive: true });
+
+    await writeFile(
+      join(tree, "middle.txt"),
+      "line one\nline two\nchanged middle\nline four\nline five\n",
+    );
+    await mkdir(join(tree, "new-dir"), { recursive: true });
+    await writeFile(join(tree, "new-dir", "added.txt"), "new file\n");
+    await rm(join(tree, "deleted.txt"));
+    await chmod(join(tree, "mode.sh"), 0o755);
+    await writeFile(join(tree, "no-newline.txt"), "new without newline");
+    await writeFile(join(tree, "gain-newline.txt"), "gain newline\n");
+    await writeFile(join(tree, "lose-newline.txt"), "lose newline");
+
+    const difference = await fixture.provider.diff(context, baselineWorkspace, {
+      base: baselineCheckpoint,
+    });
+    const patch = difference.files.map((file) => file.patch).join("");
+    expect(patch).not.toContain("Binary files");
+    const patchPath = join(fixture.base, "workspace.patch");
+    await writeFile(patchPath, patch);
+    const apply = Bun.spawn(
+      ["git", "apply", "-p1", "--whitespace=nowarn", patchPath],
+      {
+        cwd: baselineCopy,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [exitCode, stdout, stderr] = await Promise.all([
+      apply.exited,
+      new Response(apply.stdout).text(),
+      new Response(apply.stderr).text(),
+    ]);
+    if (exitCode !== 0)
+      throw new Error(`git apply failed: ${stdout}\n${stderr}`);
+
+    const collectFiles = async (
+      root: string,
+      directory = root,
+      files = new Map<string, { data: Buffer; executable: boolean }>(),
+    ): Promise<Map<string, { data: Buffer; executable: boolean }>> => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) {
+          await collectFiles(root, path, files);
+        } else if (entry.isFile()) {
+          const info = await lstat(path);
+          files.set(relative(root, path), {
+            data: await readFile(path),
+            executable: (info.mode & 0o111) !== 0,
+          });
+        }
+      }
+      return files;
+    };
+    const appliedFiles = await collectFiles(baselineCopy);
+    const workspaceFiles = await collectFiles(tree);
+    expect([...appliedFiles.keys()].sort()).toEqual(
+      [...workspaceFiles.keys()].sort(),
+    );
+    for (const [path, expected] of workspaceFiles) {
+      const applied = appliedFiles.get(path);
+      if (!applied) throw new Error(`Applied file is missing: ${path}`);
+      expect(applied.data.equals(expected.data)).toBe(true);
+      expect(applied.executable).toBe(expected.executable);
+    }
   } finally {
     await fixture.close();
   }
@@ -403,9 +730,9 @@ test("scope, workspace ids, checkpoint ownership, and relative paths fail closed
     await expect(
       fixture.provider.prepare(scoped, "task-test"),
     ).rejects.toBeInstanceOf(WorkspaceNotFoundError);
-    const checkpoint = (
-      await fixture.provider.checkpoints(context, workspace)
-    )[0]!;
+    const checkpoint = first(
+      await fixture.provider.checkpoints(context, workspace),
+    );
     const second = await fixture.provider.prepare(context, "second-task");
     const substituted = { ...checkpoint, workspace: second };
     await expect(
@@ -453,9 +780,9 @@ test("host-side resolution rejects workspace symlinks and restored trees remove 
   });
   const fixture = await makeFixture({ runner });
   try {
-    const baseline = (
-      await fixture.provider.checkpoints(context, fixture.workspace)
-    )[0]!;
+    const baseline = first(
+      await fixture.provider.checkpoints(context, fixture.workspace),
+    );
     mutate = true;
     const executed = await fixture.provider.execute(
       context,
@@ -490,9 +817,9 @@ test("host-side resolution rejects workspace symlinks and restored trees remove 
 test("restore checks revision conflicts and detects out-of-band workspace edits [stub runner — not isolation evidence]", async () => {
   const fixture = await makeFixture();
   try {
-    const baseline = (
-      await fixture.provider.checkpoints(context, fixture.workspace)
-    )[0]!;
+    const baseline = first(
+      await fixture.provider.checkpoints(context, fixture.workspace),
+    );
     await expect(
       fixture.provider.restore(context, baseline, "stale.revision"),
     ).rejects.toBeInstanceOf(RevisionConflictError);
@@ -526,9 +853,9 @@ test("failed artifact retrieval leaves the tree and revision untouched [stub run
   };
   const fixture = await makeFixture({ artifactStore: artifacts });
   try {
-    const baseline = (
-      await fixture.provider.checkpoints(context, fixture.workspace)
-    )[0]!;
+    const baseline = first(
+      await fixture.provider.checkpoints(context, fixture.workspace),
+    );
     const updated = await fixture.provider.execute(
       context,
       fixture.workspace,
@@ -562,7 +889,7 @@ test("write verifies artifacts, preserves executable mode, and updates diff and 
   const fixture = await makeFixture();
   try {
     const before = fixture.workspace;
-    const baseline = (await fixture.provider.checkpoints(context, before))[0]!;
+    const baseline = first(await fixture.provider.checkpoints(context, before));
     const artifact = await putText(fixture, "written file\n");
     await fixture.provider.write(
       context,
@@ -610,9 +937,9 @@ test("write verifies artifacts, preserves executable mode, and updates diff and 
 test("restore rejects forged checkpoint paths, modes, and duplicate entries before mutation [stub runner — not isolation evidence]", async () => {
   const fixture = await makeFixture();
   try {
-    const checkpoint = (
-      await fixture.provider.checkpoints(context, fixture.workspace)
-    )[0]!;
+    const checkpoint = first(
+      await fixture.provider.checkpoints(context, fixture.workspace),
+    );
     const tree = join(
       fixture.rootDir,
       "workspaces",
@@ -631,7 +958,8 @@ test("restore rejects forged checkpoint paths, modes, and duplicate entries befo
     };
     const record = metadata.checkpoints.find(
       (item) => item.checkpoint_id === checkpoint.checkpoint_id,
-    )!;
+    );
+    if (!record) throw new Error("Checkpoint metadata record is missing");
     const original = JSON.parse(
       new TextDecoder().decode(
         await fixture.artifacts.get(context, checkpoint.artifact),
@@ -642,13 +970,13 @@ test("restore rejects forged checkpoint paths, modes, and duplicate entries befo
     };
     const corruptions = [
       (manifest: typeof original) => {
-        manifest.files[0]!.path = "../escape";
+        first(manifest.files).path = "../escape";
       },
       (manifest: typeof original) => {
-        manifest.files[0]!.mode = 0o4755;
+        first(manifest.files).mode = 0o4755;
       },
       (manifest: typeof original) => {
-        manifest.files.push({ ...manifest.files[0]! });
+        manifest.files.push({ ...first(manifest.files) });
       },
     ];
     for (const corrupt of corruptions) {
@@ -683,6 +1011,7 @@ test("restore hook failures roll back while simulated process death recovers on 
       join(request.workspaceDir, "tracked.txt"),
       "pre-restore modified\n",
     );
+    return undefined;
   });
   const base = await mkdtemp(
     join(Bun.env.TMPDIR ?? "/tmp", "mars-ws-recovery-"),
@@ -710,7 +1039,7 @@ test("restore hook failures roll back while simulated process death recovers on 
   });
   try {
     const workspace = await provider.prepare(context, "restore-task");
-    const baseline = (await provider.checkpoints(context, workspace))[0]!;
+    const baseline = first(await provider.checkpoints(context, workspace));
     const changed = await provider.execute(
       context,
       workspace,
@@ -758,6 +1087,7 @@ test("ordinary restore hook errors recover in-process [stub runner — not isola
     artifacts,
     sandbox: createStubRunner(async (request) => {
       await writeFile(join(request.workspaceDir, "file.txt"), "changed\n");
+      return undefined;
     }),
     approveCommand: () => true,
     testHooks: {
@@ -768,7 +1098,7 @@ test("ordinary restore hook errors recover in-process [stub runner — not isola
   });
   try {
     const workspace = await provider.prepare(context, "rollback-task");
-    const baseline = (await provider.checkpoints(context, workspace))[0]!;
+    const baseline = first(await provider.checkpoints(context, workspace));
     const changed = await provider.execute(
       context,
       workspace,
@@ -885,7 +1215,7 @@ test("metadata and workspaces survive restart while a second provider is rejecte
         (
           await reopened.restore(
             context,
-            checkpoints[0]!,
+            first(checkpoints),
             fixture.workspace.revision,
           )
         ).workspace_id,
@@ -955,6 +1285,7 @@ test("execute fails closed without isolation or approval and validates argv [stu
   let runnerStarted = false;
   const unavailableRunner = createStubRunner(async () => {
     runnerStarted = true;
+    return undefined;
   });
   unavailableRunner.verify = async () => {
     throw new SandboxUnavailableError("simulated unavailable sandbox");
@@ -979,7 +1310,7 @@ test("stub execute clamps deadlines, supports stop and external cancellation, an
   let timeoutMs = 0;
   let outputLimit = 0;
   let signalSeen: AbortSignal | undefined;
-  let begin!: () => void;
+  let begin: (() => void) | undefined;
   const began = new Promise<void>((resolvePromise) => {
     begin = resolvePromise;
   });
@@ -989,6 +1320,7 @@ test("stub execute clamps deadlines, supports stop and external cancellation, an
     outputLimit = request.maxOutputBytes;
     signalSeen = request.signal;
     if (waitForAbort) {
+      if (!begin) throw new Error("Start signal was not initialized");
       begin();
       if (request.signal.aborted) return { exitCode: 130, cancelled: true };
       await new Promise<void>((resolvePromise) => {

@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { createDockerSandbox, type LocalWorkspaceProvider } from "../src";
-import { artifactText, budget, context, makeFixture } from "./helpers";
+import { artifactText, budget, context, first, makeFixture } from "./helpers";
 
 const defaultImage =
   "mirror.gcr.io/library/busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec";
@@ -140,9 +140,9 @@ test.skipIf(!dockerAvailable)(
   async () => {
     const fixture = await makeDockerFixture();
     try {
-      const baseline = (
-        await fixture.provider.checkpoints(context, fixture.workspace)
-      )[0]!;
+      const baseline = first(
+        await fixture.provider.checkpoints(context, fixture.workspace),
+      );
       const wrote = await execute(fixture.provider, fixture.workspace, [
         "sh",
         "-c",
