@@ -309,7 +309,7 @@ export const RoutingRequestSchema = z
     independence: z
       .object({
         policy: z.enum(["none", "distinct_model", "distinct_lineage"]),
-        from: z.array(z.unknown()),
+        from_decision_ids: uniqueArray(IdSchema),
       })
       .strict()
       .optional(),

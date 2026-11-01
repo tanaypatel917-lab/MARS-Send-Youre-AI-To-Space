@@ -26,6 +26,10 @@ The source package does not import `@mars/providers`; a
 Evidence keys and serving attestations remain host-owned. The optional
 `EvaluationService` integration only submits an immutable comparison request
 and records the returned job reference; it does not run an evaluator.
+Contract `register` accepts plain `SpecialistManifest` values when the host
+provides `contractProfiles`; the resolver supplies the profile fields needed
+by the evidence gate (roles, serving bindings, and acceptance policy), which
+the contract manifest does not carry.
 
 The registry exposes the contract adapter (`register`, `evaluate`, `deploy`,
 `select`, `retire`, `rollback`, and `verifyCompatibility`) as well as typed
@@ -34,6 +38,9 @@ inspection, routing, audit, dependency invalidation, archive, and close.
 `route` and `routeTeam` return selections and durable decisions only. The host
 remains responsible for execution and for recording a selected specialist
 revision on its task.
+For independent routing, provide `independence.from_decision_ids`; the
+registry loads and verifies those decisions in the caller's scope and checks
+that they belong to the same task.
 
 ## Lifecycle and evidence gates
 

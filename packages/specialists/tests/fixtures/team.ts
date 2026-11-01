@@ -14,6 +14,20 @@ export async function makeSyntheticTeamFixture(artifacts: MemoryArtifacts) {
     roles: ["reviewer"],
     modelId: "specialist-model",
     providerModel: "specialist-upstream",
+    serving: [
+      {
+        model_id: "specialist-model",
+        provider_id: "local",
+        provider_model: "specialist-upstream",
+        adapter_format: null,
+      },
+      {
+        model_id: "specialist-model-2",
+        provider_id: "local",
+        provider_model: "specialist-upstream-2",
+        adapter_format: null,
+      },
+    ],
   });
   return {
     label: SYNTHETIC_FIXTURE_NOTICE,

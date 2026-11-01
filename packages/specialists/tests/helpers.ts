@@ -224,6 +224,9 @@ export function createRegistry(
     ...(otherOptions.taskRouting
       ? { taskRouting: otherOptions.taskRouting }
       : {}),
+    ...(otherOptions.contractProfiles
+      ? { contractProfiles: otherOptions.contractProfiles }
+      : {}),
   });
 }
 
@@ -254,6 +257,7 @@ export interface SpecialistFixtureOptions {
   modelId?: string;
   providerId?: string;
   providerModel?: string;
+  serving?: SpecialistRegistration["profile"]["serving"];
   fallbackRef?: string;
   roles?: SpecialistRegistration["profile"]["roles"];
   complexity?: SpecialistRegistration["profile"]["complexity"];
@@ -317,7 +321,7 @@ export async function makeSpecialistFixture(
       display_name: "Synthetic evaluated specialist",
       roles,
       complexity,
-      serving: [
+      serving: options.serving ?? [
         {
           model_id: options.modelId ?? "specialist-model",
           provider_id: options.providerId ?? "local",

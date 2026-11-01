@@ -24,6 +24,7 @@ import {
   type BindingCompatibility,
   baselineCompatibility,
   type CompatibilityOptions,
+  checkServingReadiness,
   checkSpecialistBindings,
   compatibleBase,
   firstPassingBinding,
@@ -55,6 +56,7 @@ import {
   type RoutingRequest,
   RoutingRequestSchema,
   type SelectedTarget,
+  type SpecialistProfile,
   type SpecialistRegistration,
   SpecialistRegistrationSchema,
 } from "./schemas";
@@ -90,6 +92,10 @@ export interface SpecialistRegistryOptions {
   allowSyntheticFixtures?: boolean;
   evaluation?: SpecialistEvaluationOptions;
   taskRouting?: (task: Task) => RoutingRequest;
+  contractProfiles?: (
+    context: RequestContext,
+    manifest: SpecialistManifest,
+  ) => SpecialistProfile | undefined | Promise<SpecialistProfile | undefined>;
 }
 
 export interface SpecialistPointerView {
@@ -243,7 +249,7 @@ function noReasonDuplicates(reasons: ReasonCode[]): ReasonCode[] {
 function makeSelectedSpecialist(
   registration: SpecialistRegistration,
   revisionRow: {
-    candidate_sha256: string;
+    record_sha256: string;
   },
   verdict: EvidenceVerdict,
   binding: BindingCompatibility,
@@ -264,7 +270,7 @@ function makeSelectedSpecialist(
     provider_model: binding.binding.provider_model,
     base_model: registration.base_model,
     adapter_sha256: registration.adapter?.sha256 ?? null,
-    manifest_sha256: revisionRow.candidate_sha256,
+    manifest_sha256: revisionRow.record_sha256,
     evidence:
       verdict.report_id === null || verdict.report_sha256 === null
         ? null
@@ -287,6 +293,7 @@ function makeSelectedSpecialist(
 function makeSelectedBaseline(
   baseline: BaselineProfile,
   binding: BindingCompatibility,
+  recordSha: string,
 ): SelectedTarget {
   return {
     kind: "baseline",
@@ -299,7 +306,7 @@ function makeSelectedBaseline(
     provider_model: baseline.provider_model,
     base_model: null,
     adapter_sha256: null,
-    manifest_sha256: null,
+    manifest_sha256: recordSha,
     evidence: null,
     cost_basis: binding.cost_basis,
     serving_attestation: "absent",
@@ -469,6 +476,142 @@ export class SpecialistRegistry implements ModelRegistry {
       }
     }
     throw new SpecialistRegistryError("not_found");
+  }
+
+  private visibleSpecialistByTarget(
+    context: RequestContext,
+    target: SelectedTarget,
+  ) {
+    if (
+      target.kind !== "specialist" ||
+      !target.specialist_id ||
+      !target.manifest_sha256
+    ) {
+      throw new SpecialistRegistryError("corrupt_record");
+    }
+    const keys = [
+      ...new Set([
+        scopeKey(context.scope),
+        scopeKey({
+          owner_id: context.scope.owner_id,
+          project_id: context.scope.project_id,
+        }),
+      ]),
+    ];
+    const rows = this.store.db
+      .query(
+        `SELECT scope_key, specialist_id, revision, record_json, record_sha256,
+          candidate_sha256, status, verdict_json, invalidated_reason,
+          rolled_back_at, created_at, updated_at
+         FROM specialist_revisions WHERE specialist_id = ? AND revision = ?
+          AND scope_key IN (${keys.map(() => "?").join(", ")})`,
+      )
+      .all(
+        target.specialist_id,
+        target.revision,
+        ...keys,
+      ) as SpecialistRevisionRow[];
+    const row = rows.find(
+      (candidate) =>
+        candidate.record_sha256 === target.manifest_sha256 &&
+        visible(this.verifiedRegistration(candidate).scope, context),
+    );
+    if (!row) throw new SpecialistRegistryError("corrupt_record");
+    return { row, registration: this.verifiedRegistration(row) };
+  }
+
+  private assertSpecialistScope(
+    context: RequestContext,
+    specialistId: string,
+  ): void {
+    const projectKey = scopeKey({
+      owner_id: context.scope.owner_id,
+      project_id: context.scope.project_id,
+    });
+    if (context.scope.workspace_id !== undefined) {
+      const found = this.store.db
+        .query(
+          "SELECT 1 FROM specialist_revisions WHERE specialist_id = ? AND scope_key = ? LIMIT 1",
+        )
+        .get(specialistId, projectKey);
+      if (found)
+        throw new SpecialistRegistryError(
+          "conflict",
+          "shadows_project_specialist",
+        );
+      return;
+    }
+    const rows = this.store.db
+      .query(
+        "SELECT record_json, record_sha256 FROM specialist_revisions WHERE specialist_id = ?",
+      )
+      .all(specialistId) as Array<
+      Pick<SpecialistRevisionRow, "record_json" | "record_sha256">
+    >;
+    if (
+      rows.some((row) => {
+        const scope = this.verifiedRegistration(row).scope;
+        return (
+          scope.owner_id === context.scope.owner_id &&
+          scope.project_id === context.scope.project_id &&
+          scope.workspace_id !== undefined
+        );
+      })
+    ) {
+      throw new SpecialistRegistryError(
+        "conflict",
+        "shadowed_by_workspace_specialist",
+      );
+    }
+  }
+
+  private assertBaselineScope(
+    context: RequestContext,
+    baselineId: string,
+  ): void {
+    const projectKey = scopeKey({
+      owner_id: context.scope.owner_id,
+      project_id: context.scope.project_id,
+    });
+    if (context.scope.workspace_id !== undefined) {
+      const found = this.store.db
+        .query(
+          "SELECT 1 FROM baselines WHERE baseline_id = ? AND scope_key = ? LIMIT 1",
+        )
+        .get(baselineId, projectKey);
+      if (found)
+        throw new SpecialistRegistryError(
+          "conflict",
+          "shadows_project_baseline",
+        );
+      return;
+    }
+    const rows = this.store.db
+      .query(
+        "SELECT record_json, record_sha256 FROM baselines WHERE baseline_id = ?",
+      )
+      .all(baselineId) as Array<
+      Pick<BaselineRow, "record_json" | "record_sha256">
+    >;
+    if (
+      rows.some((row) => {
+        const scope = this.store.parseRecord(
+          row.record_json,
+          row.record_sha256,
+          parseBaseline,
+        ).scope;
+        return (
+          scope.owner_id === context.scope.owner_id &&
+          scope.project_id === context.scope.project_id &&
+          scope.workspace_id !== undefined
+        );
+      })
+    ) {
+      throw new SpecialistRegistryError(
+        "conflict",
+        "shadowed_by_workspace_baseline",
+      );
+    }
   }
 
   private visibleBaseline(
@@ -691,6 +834,7 @@ export class SpecialistRegistry implements ModelRegistry {
         );
         return;
       }
+      this.assertSpecialistScope(ctx, registration.specialist_id);
       this.store.db
         .query(
           `INSERT INTO specialist_revisions
@@ -745,13 +889,26 @@ export class SpecialistRegistry implements ModelRegistry {
     context: RequestContext,
     manifest: SpecialistManifest,
   ): Promise<void> {
+    const ctx = this.checkContext(context);
     const candidate = manifest as SpecialistManifest & {
-      profile?: unknown;
+      profile?: SpecialistProfile;
     };
-    if (candidate.profile === undefined) {
+    const resolved = await this.options.contractProfiles?.(ctx, manifest);
+    if (
+      candidate.profile !== undefined &&
+      resolved !== undefined &&
+      canonicalJson(candidate.profile) !== canonicalJson(resolved)
+    ) {
+      throw new SpecialistRegistryError("invalid_input", "profile_conflict");
+    }
+    const profile = candidate.profile ?? resolved;
+    if (profile === undefined) {
       throw new SpecialistRegistryError("invalid_input", "profile_required");
     }
-    await this.registerSpecialist(context, manifest);
+    await this.registerSpecialist(ctx, {
+      ...manifest,
+      profile,
+    } as SpecialistRegistration);
   }
 
   async registerBaseline(
@@ -809,6 +966,7 @@ export class SpecialistRegistry implements ModelRegistry {
         };
         return;
       }
+      this.assertBaselineScope(ctx, profile.baseline_id);
       this.store.db
         .query(
           `INSERT INTO baselines
@@ -872,25 +1030,43 @@ export class SpecialistRegistry implements ModelRegistry {
     );
     this.publish({ registration, verdict });
     this.store.transaction(() => {
-      this.store.db
-        .query(
-          `UPDATE specialist_revisions SET status = ?, verdict_json = ?,
-           updated_at = ? WHERE scope_key = ? AND specialist_id = ? AND revision = ?`,
-        )
-        .run(
-          verdict.status,
-          canonicalJson(verdict),
-          new Date().toISOString(),
-          row.scope_key,
-          id,
-          revision,
-        );
+      const latest = this.store.readSpecialist(row.scope_key, id, revision);
+      if (!latest) throw new SpecialistRegistryError("not_found");
+      const updatedAt = new Date().toISOString();
+      if (latest.status === "archived" || latest.status === "invalidated") {
+        this.store.db
+          .query(
+            `UPDATE specialist_revisions SET verdict_json = ?, updated_at = ?
+             WHERE scope_key = ? AND specialist_id = ? AND revision = ?`,
+          )
+          .run(canonicalJson(verdict), updatedAt, row.scope_key, id, revision);
+      } else {
+        this.store.db
+          .query(
+            `UPDATE specialist_revisions SET status = ?, verdict_json = ?,
+             updated_at = ? WHERE scope_key = ? AND specialist_id = ? AND revision = ?`,
+          )
+          .run(
+            verdict.status,
+            canonicalJson(verdict),
+            updatedAt,
+            row.scope_key,
+            id,
+            revision,
+          );
+      }
       this.store.writeAudit({
         context: ctx,
         scope_key: row.scope_key,
         action: "specialist.verified",
         subject: formatRef("specialist", id, revision),
-        detail: { codes: verdict.codes, status: verdict.status },
+        detail: {
+          codes: verdict.codes,
+          status:
+            latest.status === "archived" || latest.status === "invalidated"
+              ? latest.status
+              : verdict.status,
+        },
       });
     });
     const updated = this.store.readSpecialist(row.scope_key, id, revision);
@@ -1104,27 +1280,15 @@ export class SpecialistRegistry implements ModelRegistry {
     if (fallbackCheck.error) {
       throw new SpecialistRegistryError("invalid_state", fallbackCheck.error);
     }
-    const bindingChecks = registration.profile.serving.map((binding) => {
-      const model = this.options.catalog.getModel(binding.model_id);
-      return { model, binding };
-    });
-    const configured = bindingChecks.filter(({ model }) => model !== undefined);
-    if (configured.length === 0) {
+    const readiness = await checkServingReadiness(
+      ctx,
+      registration,
+      this.compatibilityOptions,
+    );
+    if (!readiness.some((item) => item.reasons.length === 0)) {
       throw new SpecialistRegistryError(
         "invalid_state",
-        "model_not_configured",
-      );
-    }
-    if (
-      !configured.some(
-        ({ model, binding }) =>
-          model?.providerId === binding.provider_id &&
-          model.model === binding.provider_model,
-      )
-    ) {
-      throw new SpecialistRegistryError(
-        "invalid_state",
-        "model_binding_mismatch",
+        readiness[0]?.reasons[0] ?? "model_not_configured",
       );
     }
     const now = new Date().toISOString();
@@ -1644,9 +1808,11 @@ export class SpecialistRegistry implements ModelRegistry {
     context: RequestContext,
     registration: SpecialistRegistration,
     candidateSha: string,
+    recordSha: string,
     storedStatus: string,
     storedVerdict: EvidenceVerdict,
     request: RoutingRequest,
+    independenceTargets: SelectedTarget[],
   ): Promise<{
     reasons: ReasonCode[];
     target: SelectedTarget | null;
@@ -1703,45 +1869,43 @@ export class SpecialistRegistry implements ModelRegistry {
         },
         this.compatibilityOptions,
       );
-      const passing = firstPassingBinding(bindings);
-      if (!passing) {
-        for (const binding of bindings) {
-          binding.reasons.forEach((reason) => {
-            reasons.add(reason);
-          });
-        }
-      } else if (request.independence?.policy !== "none") {
-        const independent = this.checkIndependence(
-          context,
-          registration,
-          passing.binding.model_id,
-          request.independence?.from ?? [],
-          request.independence?.policy ?? "none",
-        );
-        independent.forEach((reason) => {
-          reasons.add(reason);
-        });
-        if (independent.size === 0 && reasons.size === 0) {
-          const target = makeSelectedSpecialist(
+      let passing: BindingCompatibility | undefined;
+      if (request.independence && request.independence.policy !== "none") {
+        const independenceReasons = new Set<ReasonCode>();
+        for (const binding of bindings.filter(
+          (item) => item.reasons.length === 0,
+        )) {
+          const checked = this.checkIndependence(
+            context,
             registration,
-            { candidate_sha256: candidateSha },
-            storedVerdict,
-            passing,
-            triple,
+            binding.binding.model_id,
+            independenceTargets,
+            request.independence.policy,
           );
-          return {
-            reasons: normalizeReasons(reasons),
-            target,
-            triple,
-            pass_rate: triple.pass_rate,
-            cost_usd_per_task: triple.cost_usd_per_task,
-            runtime_ms_p95: triple.runtime_ms_p95,
-          };
+          if (checked.size === 0) {
+            passing = binding;
+            break;
+          }
+          for (const reason of checked) independenceReasons.add(reason);
         }
-      } else if (reasons.size === 0) {
+        if (!passing) {
+          for (const binding of bindings) {
+            for (const reason of binding.reasons) reasons.add(reason);
+          }
+          for (const reason of independenceReasons) reasons.add(reason);
+        }
+      } else {
+        passing = firstPassingBinding(bindings);
+        if (!passing) {
+          for (const binding of bindings) {
+            for (const reason of binding.reasons) reasons.add(reason);
+          }
+        }
+      }
+      if (passing && reasons.size === 0) {
         const target = makeSelectedSpecialist(
           registration,
-          { candidate_sha256: candidateSha },
+          { record_sha256: recordSha },
           storedVerdict,
           passing,
           triple,
@@ -1770,14 +1934,14 @@ export class SpecialistRegistry implements ModelRegistry {
     context: RequestContext,
     registration: SpecialistRegistration,
     modelId: string,
-    from: unknown[],
+    from: SelectedTarget[],
     policy: "none" | "distinct_model" | "distinct_lineage",
   ): Set<ReasonCode> {
     const reasons = new Set<ReasonCode>();
     if (policy === "none") return reasons;
     for (const item of from) {
       if (!item || typeof item !== "object") continue;
-      const target = item as Partial<SelectedTarget>;
+      const target = item;
       if (target.model_id === modelId) reasons.add("independence_same_model");
       if (policy === "distinct_lineage") {
         const sameBase =
@@ -1791,21 +1955,9 @@ export class SpecialistRegistry implements ModelRegistry {
           typeof target.specialist_id === "string" &&
           target.revision
         ) {
-          try {
-            targetLineage =
-              this.visibleSpecialist(
-                context,
-                target.specialist_id,
-                target.revision,
-              ).registration.dataset_lineage?.sha256 ?? null;
-          } catch (error) {
-            if (
-              !(error instanceof SpecialistRegistryError) ||
-              error.code !== "not_found"
-            ) {
-              throw error;
-            }
-          }
+          targetLineage =
+            this.visibleSpecialistByTarget(context, target).registration
+              .dataset_lineage?.sha256 ?? null;
         }
         const baselineIdentity =
           target.kind === "baseline" &&
@@ -1829,7 +1981,9 @@ export class SpecialistRegistry implements ModelRegistry {
   private async tryBaseline(
     _context: RequestContext,
     profile: BaselineProfile,
+    recordSha: string,
     request: RoutingRequest,
+    independenceTargets: SelectedTarget[],
   ): Promise<{ target: SelectedTarget | null; reasons: ReasonCode[] }> {
     if (!profile.roles.includes(request.role)) {
       return { target: null, reasons: ["role_not_covered"] };
@@ -1847,8 +2001,7 @@ export class SpecialistRegistry implements ModelRegistry {
       request,
     );
     if (request.independence?.policy !== "none") {
-      for (const item of request.independence?.from ?? []) {
-        const prior = item as Partial<SelectedTarget>;
+      for (const prior of independenceTargets) {
         if (prior.model_id === profile.model_id) {
           binding.reasons.push("independence_same_model");
         }
@@ -1868,7 +2021,10 @@ export class SpecialistRegistry implements ModelRegistry {
     if (binding.reasons.length > 0) {
       return { target: null, reasons: normalizeReasons(binding.reasons) };
     }
-    return { target: makeSelectedBaseline(profile, binding), reasons: [] };
+    return {
+      target: makeSelectedBaseline(profile, binding, recordSha),
+      reasons: [],
+    };
   }
 
   async route(
@@ -1893,6 +2049,31 @@ export class SpecialistRegistry implements ModelRegistry {
       );
     }
     const request = parsedRequest.data;
+    const independenceTargets: SelectedTarget[] = [];
+    for (const decisionId of request.independence?.from_decision_ids ?? []) {
+      let prior: RoutingDecision;
+      try {
+        prior = await this.decision(context, decisionId);
+      } catch (error) {
+        if (
+          error instanceof SpecialistRegistryError &&
+          error.code === "not_found"
+        ) {
+          throw new SpecialistRegistryError(
+            "invalid_input",
+            "independence_decision_not_found",
+          );
+        }
+        throw error;
+      }
+      if (prior.task_id !== request.task_id) {
+        throw new SpecialistRegistryError(
+          "invalid_input",
+          "independence_task_mismatch",
+        );
+      }
+      if (prior.selected) independenceTargets.push(prior.selected);
+    }
     this.publish(request);
     const scope = scopeKey(context.scope);
     const rejected: Array<{ ref: string; reasons: ReasonCode[] }> = [];
@@ -2017,9 +2198,11 @@ export class SpecialistRegistry implements ModelRegistry {
           context,
           registration,
           row.candidate_sha256,
+          row.record_sha256,
           row.status,
           verdict,
           request,
+          independenceTargets,
         );
         if (gate.target) {
           const explanation = [
@@ -2086,7 +2269,13 @@ export class SpecialistRegistry implements ModelRegistry {
           true,
         );
       }
-      const result = await this.tryBaseline(context, profile, request);
+      const result = await this.tryBaseline(
+        context,
+        profile,
+        visibleBaseline.row.record_sha256,
+        request,
+        independenceTargets,
+      );
       if (!result.target) {
         rejected.push({
           ref: request.override.ref,
@@ -2160,9 +2349,11 @@ export class SpecialistRegistry implements ModelRegistry {
         context,
         registration,
         row.candidate_sha256,
+        row.record_sha256,
         row.status,
         verdict,
         request,
+        independenceTargets,
       );
       const exactCoverage = verdict.covered_triples.some(
         (item) =>
@@ -2334,9 +2525,11 @@ export class SpecialistRegistry implements ModelRegistry {
               context,
               registration,
               row.candidate_sha256,
+              row.record_sha256,
               row.status,
               verdict,
               request,
+              independenceTargets,
             );
             chainRecords.push({ ref, reasons: gate.reasons });
             if (gate.target) {
@@ -2375,7 +2568,9 @@ export class SpecialistRegistry implements ModelRegistry {
             const baselineResult = await this.tryBaseline(
               context,
               profile,
+              row.record_sha256,
               request,
+              independenceTargets,
             );
             chainRecords.push({ ref, reasons: baselineResult.reasons });
             if (baselineResult.target) {
@@ -2433,7 +2628,7 @@ export class SpecialistRegistry implements ModelRegistry {
             left.profile.revision.localeCompare(right.profile.revision)
           );
         });
-      for (const { profile } of baselines) {
+      for (const { row, profile } of baselines) {
         const ref = formatRef(
           "baseline",
           profile.baseline_id,
@@ -2444,7 +2639,13 @@ export class SpecialistRegistry implements ModelRegistry {
           rejected.push({ ref, reasons: ["excluded"] });
           continue;
         }
-        const result = await this.tryBaseline(context, profile, request);
+        const result = await this.tryBaseline(
+          context,
+          profile,
+          row.record_sha256,
+          request,
+          independenceTargets,
+        );
         chainRecords.push({ ref, reasons: result.reasons });
         if (result.target) {
           selectedFallback = result.target;
@@ -2470,10 +2671,9 @@ export class SpecialistRegistry implements ModelRegistry {
         selectedFallback.kind === "specialist" &&
         selectedFallback.specialist_id !== null
           ? (() => {
-              const { row } = this.visibleSpecialist(
+              const { row } = this.visibleSpecialistByTarget(
                 context,
-                selectedFallback.specialist_id as string,
-                selectedFallback.revision,
+                selectedFallback,
               );
               return parseVerdict(row.verdict_json);
             })()
@@ -2719,9 +2919,6 @@ export class SpecialistRegistry implements ModelRegistry {
       });
     }
     if (input.reviewer) {
-      const from = [result.lead?.selected, result.worker?.selected].filter(
-        (item): item is SelectedTarget => item !== null && item !== undefined,
-      );
       result.reviewer = await this.route(ctx, {
         ...shared,
         role: "reviewer",
@@ -2731,7 +2928,10 @@ export class SpecialistRegistry implements ModelRegistry {
           : {}),
         independence: {
           policy: input.reviewer.independence ?? "distinct_model",
-          from,
+          from_decision_ids: [
+            result.lead?.decision_id,
+            result.worker?.decision_id,
+          ].filter((id): id is string => id !== undefined),
         },
       });
     }
@@ -2751,10 +2951,9 @@ export class SpecialistRegistry implements ModelRegistry {
     const request = this.options.taskRouting(task);
     const decision = await this.route(context, request);
     if (decision.outcome === "specialist" && decision.selected?.specialist_id) {
-      const registration = this.visibleSpecialist(
+      const registration = this.visibleSpecialistByTarget(
         context,
-        decision.selected.specialist_id,
-        decision.selected.revision,
+        decision.selected,
       ).registration;
       return {
         manifest: registration,

@@ -808,6 +808,12 @@ describe("specialist evidence and persistence", () => {
       (await registry.inspect(context, "specialist-1")).pointer
         .production_revision,
     ).toBe("1");
+    const reverification = await registry.reverify(
+      context,
+      "specialist-1",
+      "1",
+    );
+    expect(reverification.status).toBe("invalidated");
     const route = await registry.route(context, routingRequest());
     expect(route.outcome).toBe("baseline");
     expect(route.rejected[0]?.reasons).toContain("invalidated");
@@ -816,6 +822,135 @@ describe("specialist evidence and persistence", () => {
       "invalid_state",
       "not_evaluated",
     );
+  });
+
+  test("reverification preserves an archived revision", async () => {
+    const { registry, artifacts } = await setupRegistry();
+    const fixture = await makeSpecialistFixture(artifacts);
+    await registry.registerSpecialist(context, fixture.registration);
+    await registry.archive(context, "specialist-1", "1");
+    const revision = await registry.reverify(context, "specialist-1", "1");
+    expect(revision.status).toBe("archived");
+  });
+
+  test("rejects project/workspace specialist and baseline ID shadowing", async () => {
+    const { registry, artifacts } = await setupRegistry();
+    const workspace: RequestContext = {
+      ...context,
+      scope: { ...context.scope, workspace_id: "workspace-1" },
+      request_id: "workspace-request",
+    };
+    await registry.registerBaseline(context, makeBaseline());
+    await expectCode(
+      () =>
+        registry.registerBaseline(
+          workspace,
+          makeBaseline(workspace.scope, { baseline_id: "baseline" }),
+        ),
+      "conflict",
+      "shadows_project_baseline",
+    );
+    await registry.registerBaseline(
+      workspace,
+      makeBaseline(workspace.scope, { baseline_id: "workspace-base" }),
+    );
+    await expectCode(
+      () =>
+        registry.registerBaseline(
+          context,
+          makeBaseline(context.scope, { baseline_id: "workspace-base" }),
+        ),
+      "conflict",
+      "shadowed_by_workspace_baseline",
+    );
+    const projectSpecialist = await makeSpecialistFixture(artifacts);
+    await registry.registerSpecialist(context, projectSpecialist.registration);
+    const shadow = await makeSpecialistFixture(artifacts, {
+      specialistId: "specialist-1",
+      scope: workspace.scope,
+      fallbackRef: "baseline:workspace-base@1",
+    });
+    await expectCode(
+      () => registry.registerSpecialist(workspace, shadow.registration),
+      "conflict",
+      "shadows_project_specialist",
+    );
+    const workspaceSpecialist = await makeSpecialistFixture(artifacts, {
+      specialistId: "workspace-specialist",
+      scope: workspace.scope,
+      fallbackRef: "baseline:workspace-base@1",
+    });
+    await registry.registerSpecialist(
+      workspace,
+      workspaceSpecialist.registration,
+    );
+    const projectShadow = await makeSpecialistFixture(artifacts, {
+      specialistId: "workspace-specialist",
+    });
+    await expectCode(
+      () => registry.registerSpecialist(context, projectShadow.registration),
+      "conflict",
+      "shadowed_by_workspace_specialist",
+    );
+  });
+
+  test("select resolves a selected project record by its record digest", async () => {
+    const { root, registry, artifacts } = await setupRegistry();
+    const project = await makeSpecialistFixture(artifacts);
+    await registry.registerSpecialist(context, project.registration);
+    await registry.promote(context, "specialist-1", "1", null);
+    const workspace: RequestContext = {
+      ...context,
+      scope: { ...context.scope, workspace_id: "workspace-shadow" },
+      request_id: "workspace-shadow-request",
+    };
+    await registry.registerBaseline(
+      workspace,
+      makeBaseline(workspace.scope, { baseline_id: "workspace-base" }),
+    );
+    const shadow = await makeSpecialistFixture(artifacts, {
+      specialistId: "specialist-1",
+      scope: workspace.scope,
+      modelId: "specialist-model-2",
+      providerModel: "specialist-upstream-2",
+      fallbackRef: "baseline:workspace-base@1",
+    });
+    const recordJson = canonicalJson(shadow.registration);
+    const recordSha = sha256(recordJson);
+    const projectRevision = (await registry.inspect(context, "specialist-1"))
+      .revisions[0];
+    if (!projectRevision) throw new Error("project revision missing");
+    const timestamp = new Date().toISOString();
+    registry.store.db
+      .query(
+        `INSERT INTO specialist_revisions
+         (scope_key, specialist_id, revision, record_json, record_sha256,
+          candidate_sha256, status, verdict_json, invalidated_reason,
+          rolled_back_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'evaluated', ?, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        canonicalJson(workspace.scope),
+        shadow.registration.specialist_id,
+        shadow.registration.revision,
+        recordJson,
+        recordSha,
+        candidateDigest(shadow.registration),
+        canonicalJson(projectRevision.verdict),
+        timestamp,
+        timestamp,
+      );
+    const selector = createRegistry(root, artifacts, {
+      taskRouting: () => routingRequest(),
+    });
+    const selected = await selector.select(workspace, {} as Task);
+    expect(
+      (
+        selected.manifest as unknown as {
+          profile: { serving: Array<{ model_id: string }> };
+        }
+      ).profile.serving[0]?.model_id,
+    ).toBe("specialist-model");
   });
 
   test("invalidates tokenizer revisions and lineage dataset hashes", async () => {
@@ -869,6 +1004,11 @@ describe("specialist evidence and persistence", () => {
       datasetLineage: lineage,
     });
     await registry.registerSpecialist(context, fixture.registration);
+    await expectCode(
+      () => registry.promote(context, "adapter-specialist", "1", null),
+      "invalid_state",
+      "serving_unattested",
+    );
 
     const attestor = (
       revision: string,
@@ -902,6 +1042,7 @@ describe("specialist evidence and persistence", () => {
     const compatibleRegistry = createRegistry(root, artifacts, {
       servingAttestor: attestor("1"),
     });
+    await compatibleRegistry.promote(context, "adapter-specialist", "1", null);
     const compatible = await compatibleRegistry.route(
       context,
       routingRequest({
@@ -1459,6 +1600,14 @@ describe("specialist evidence and persistence", () => {
       "invalid_input",
       "profile_required",
     );
+    const profileRegistry = createRegistry(root, artifacts, {
+      contractProfiles: () => v1.registration.profile,
+    });
+    await profileRegistry.register(context, manifestWithoutProfile);
+    expect(
+      (await profileRegistry.inspect(context, "lifecycle")).revisions[0]
+        ?.status,
+    ).toBe("evaluated");
     await expectCode(
       () => createRegistry(root, artifacts).select(context, task),
       "invalid_input",
@@ -1733,17 +1882,52 @@ describe("specialist evidence and persistence", () => {
     expect(result.worker?.selected?.kind).toBe("specialist");
     expect(result.worker?.selected?.cost_basis).toBe("measured");
     expect(result.worker?.selected?.evidence?.synthetic_fixture).toBe(true);
-    expect(result.reviewer?.outcome).toBe("baseline");
+    expect(result.reviewer?.outcome).toBe("specialist");
+    expect(result.reviewer?.selected?.kind).toBe("specialist");
     expect(result.reviewer?.selected?.model_id).not.toBe(
       result.worker?.selected?.model_id,
     );
     expect(result.reviewer?.selected?.model_id).not.toBe(
       result.lead?.selected?.model_id,
     );
-    expect(result.reviewer?.rejected[0]?.reasons).toContain(
-      "independence_same_model",
-    );
     expect(fetchCalls).toBe(0);
+  });
+
+  test("independence only accepts same-task stored decision IDs", async () => {
+    const { registry } = await setupRegistry();
+    await expectCode(
+      () =>
+        registry.route(
+          context,
+          routingRequest({
+            independence: {
+              policy: "distinct_model",
+              from_decision_ids: ["unknown-decision"],
+            },
+          }),
+        ),
+      "invalid_input",
+      "independence_decision_not_found",
+    );
+    const prior = await registry.route(
+      context,
+      routingRequest({ task_id: "independence-task-a" }),
+    );
+    await expectCode(
+      () =>
+        registry.route(
+          context,
+          routingRequest({
+            task_id: "independence-task-b",
+            independence: {
+              policy: "distinct_model",
+              from_decision_ids: [prior.decision_id],
+            },
+          }),
+        ),
+      "invalid_input",
+      "independence_task_mismatch",
+    );
   });
 
   test("blocks private paths and secret-like strings from publication", async () => {

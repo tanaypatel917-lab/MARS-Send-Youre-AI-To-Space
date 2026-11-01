@@ -34,6 +34,10 @@ behavior.
    host-side. Pass environment variable names through host configuration;
    never put key values in source, reports, or documentation. A host may add a
    future serving attestor or an evaluation-service importer.
+   Contract `register` can receive a plain `SpecialistManifest` when the host
+   configures `contractProfiles`; the resolver provides roles, serving
+   bindings, and acceptance policy, which are required by the evidence gate
+   but absent from the contract manifest type.
 2. At a task/session boundary, call `route` or `routeTeam` and persist the
    returned `decision_id`. For a specialist outcome, write
    `Task.specialist_revision` via `taskStore.update(...)`.
@@ -41,16 +45,19 @@ behavior.
    `ModelRouter` through the execution/model-bridge, keeping the selected
    model pinned for that attempt. The specialist package does not perform
    provider calls or route hops.
-4. After a provider failure, a host may explicitly call
+4. For independent routing, requests use `independence.from_decision_ids`.
+   The registry loads hash-verified, caller-scope decisions and checks their
+   task IDs before comparing selected targets.
+5. After a provider failure, a host may explicitly call
    `fallbackAfterFailure` only if no output or tool side effect occurred. The
    call drops any override and re-routes automatically; otherwise surface the
    failure because the registry refuses a live retry.
-5. A memory deletion affecting training manifests can call
+6. A memory deletion affecting training manifests can call
    `invalidateDependency` with the affected artifact digest or component
    revision. It applies only to records in the exact caller scope.
-6. Workbench, CLI, and VS Code panels can read `inspect`, `list`, `audit`, and
+7. Workbench, CLI, and VS Code panels can read `inspect`, `list`, `audit`, and
    `decision`. Do not expose registry roots or session-private paths over RPC.
-7. A future coordinator can consume `routeTeam` output. `routeTeam` returns
+8. A future coordinator can consume `routeTeam` output. `routeTeam` returns
    selections only and never starts a team.
 
 ## Boundaries and limitations

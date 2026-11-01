@@ -48,6 +48,13 @@ export interface CompatibilityOptions {
   servingAttestor?: ServingAttestor;
 }
 
+export interface ServingReadiness {
+  binding: ServingBinding;
+  model?: ModelConfig;
+  reasons: ReasonCode[];
+  serving_attestation: "verified" | "absent";
+}
+
 function addCapabilityReasons(
   model: ModelConfig,
   request: RoutingRequest,
@@ -220,6 +227,57 @@ export async function checkSpecialistBindings(
       cost_basis: costBasis,
       cost_usd_per_task: gate.cost_usd_per_task,
       runtime_ms_p95: gate.runtime_ms_p95,
+    });
+  }
+  return output;
+}
+
+export async function checkServingReadiness(
+  context: RequestContext,
+  registration: SpecialistRegistration,
+  options: CompatibilityOptions,
+): Promise<ServingReadiness[]> {
+  const output: ServingReadiness[] = [];
+  for (const binding of registration.profile.serving) {
+    const reasons = new Set<ReasonCode>();
+    const model = options.catalog.getModel(binding.model_id);
+    let serving_attestation: ServingReadiness["serving_attestation"] = "absent";
+    if (!model) {
+      reasons.add("model_not_configured");
+    } else if (
+      model.providerId !== binding.provider_id ||
+      model.model !== binding.provider_model
+    ) {
+      reasons.add("model_binding_mismatch");
+    }
+    if (model && (registration.adapter || options.servingAttestor)) {
+      let attestation: ServingAttestation | null = null;
+      try {
+        attestation =
+          (await options.servingAttestor?.attest(context, binding)) ?? null;
+      } catch {
+        attestation = null;
+      }
+      if (!attestation) {
+        if (registration.adapter) reasons.add("serving_unattested");
+      } else {
+        serving_attestation = "verified";
+        addAttestationReasons(
+          attestation,
+          registration,
+          binding,
+          reasons,
+          true,
+        );
+      }
+    } else if (registration.adapter) {
+      reasons.add("serving_unattested");
+    }
+    output.push({
+      binding,
+      ...(model ? { model } : {}),
+      reasons: [...reasons].sort(),
+      serving_attestation,
     });
   }
   return output;
