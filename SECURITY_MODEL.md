@@ -58,7 +58,7 @@ Trust boundaries:
 
 ## Entry points and who can reach them
 
-- `POST /v1/rpc` on the workbench (today: any process on the same host that has the token; later: remote users). Methods: `tasks.create/start/resume/steer/cancel/events/artifact/diff/checkpoint/restore`, `workbench.describe`.
+- `POST /v1/rpc` on the workbench (today: any process on the same host that has the token; later: remote users). Methods (all dispatched in `packages/workbench/src/server.ts`): `workbench.describe`; task reads `tasks.list`, `tasks.inspect`, `tasks.events`, `tasks.artifact`, `tasks.diff`; task mutations `tasks.create`, `tasks.start`, `tasks.resume`, `tasks.steer`, `tasks.cancel`, `tasks.checkpoint`, `tasks.restore`. The read methods return task state, events, artifacts and diffs to any caller holding the token, so they are data-exposure entry points, not just the mutations.
 - `connection.json` import into VS Code (any local file the user picks; parsed strictly in `apps/vscode/src/connectionFile.ts`).
 - Files in the task workspace, task prompts, model and tool output (reach Execution, Workspaces, Tasks; indirectly the IDE via diffs/artifacts — `apps/vscode/src/pathSafety.ts`, `patch.ts`).
 - Project `.mars/models.json` and `~/.mars/models.json` (Providers).
