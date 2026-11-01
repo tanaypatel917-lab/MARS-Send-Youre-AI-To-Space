@@ -554,11 +554,6 @@ export async function createTaskStore(
     if (dbStat.isSymbolicLink() || !dbStat.isFile())
       throw unsafePath("tasks.sqlite must be a regular file");
   }
-  if (existsSync(dbPath)) {
-    const dbStat = lstatSync(dbPath);
-    if (dbStat.isSymbolicLink() || !dbStat.isFile())
-      throw unsafePath("tasks.sqlite must be a regular file");
-  }
   const db = new Database(dbPath, { create: true, strict: true });
   try {
     db.exec(
@@ -814,6 +809,50 @@ export async function createTaskStore(
     const ref = prepareArtifact(scope, bytes, "application/json");
     return { ref, bytes };
   };
+  const verifyEventRow = (
+    row: EventRow,
+    key: string,
+    taskId: string,
+  ): EventEnvelope => {
+    let value: unknown;
+    try {
+      value = JSON.parse(row.record_json);
+    } catch {
+      fail("corrupt_record", "Corrupt event record");
+    }
+    if (sha256(canonicalJson(value)) !== row.record_sha256)
+      fail("corrupt_record", "Corrupt event record");
+    const parsed = EventEnvelopeSchema.safeParse(value);
+    if (
+      !parsed.success ||
+      row.scope_key !== key ||
+      row.task_id !== taskId ||
+      scopeKey(parsed.data.scope) !== key ||
+      parsed.data.task_id !== taskId ||
+      parsed.data.event_id !== row.event_id
+    ) {
+      fail("corrupt_record", "Corrupt event record");
+    }
+    const artifact = db
+      .query(
+        "SELECT artifact_id, sha256, media_type, byte_length FROM artifacts WHERE scope_key = ? AND artifact_id = ?",
+      )
+      .get(key, parsed.data.payload.artifact_id) as Omit<
+      ArtifactRow,
+      "scope_key"
+    > | null;
+    if (
+      !artifact ||
+      artifact.sha256 !== parsed.data.payload.sha256 ||
+      artifact.media_type !== parsed.data.payload.media_type ||
+      artifact.byte_length !== parsed.data.payload.byte_length ||
+      artifactId(parsed.data.payload.media_type, parsed.data.payload.sha256) !==
+        parsed.data.payload.artifact_id
+    ) {
+      fail("corrupt_record", "Corrupt event payload reference");
+    }
+    return parsed.data;
+  };
   const verifiedEvents = (key: string, taskId: string): EventEnvelope[] => {
     const rows = db
       .query(
@@ -823,54 +862,51 @@ export async function createTaskStore(
     let previousId: string | null = null;
     let previousChain = "";
     return rows.map((row, index) => {
-      let value: unknown;
-      try {
-        value = JSON.parse(row.record_json);
-      } catch {
-        fail("corrupt_record", "Corrupt event record");
-      }
-      const canonical = canonicalJson(value);
-      if (sha256(canonical) !== row.record_sha256)
-        fail("corrupt_record", "Corrupt event record");
-      const parsed = EventEnvelopeSchema.safeParse(value);
+      const event = verifyEventRow(row, key, taskId);
       if (
-        !parsed.success ||
-        row.scope_key !== key ||
-        row.task_id !== taskId ||
-        parsed.data.scope === undefined ||
-        scopeKey(parsed.data.scope) !== key ||
-        parsed.data.task_id !== taskId ||
-        parsed.data.event_id !== row.event_id ||
         row.task_seq !== index + 1 ||
-        parsed.data.parent_event_id !== previousId ||
+        event.parent_event_id !== previousId ||
         sha256(`${previousChain}${row.record_sha256}`) !== row.chain_sha256
       ) {
         fail("corrupt_record", "Corrupt event chain");
       }
-      const artifact = db
-        .query(
-          "SELECT artifact_id, sha256, media_type, byte_length FROM artifacts WHERE scope_key = ? AND artifact_id = ?",
-        )
-        .get(key, parsed.data.payload.artifact_id) as Omit<
-        ArtifactRow,
-        "scope_key"
-      > | null;
-      if (
-        !artifact ||
-        artifact.sha256 !== parsed.data.payload.sha256 ||
-        artifact.media_type !== parsed.data.payload.media_type ||
-        artifact.byte_length !== parsed.data.payload.byte_length ||
-        artifactId(
-          parsed.data.payload.media_type,
-          parsed.data.payload.sha256,
-        ) !== parsed.data.payload.artifact_id
-      ) {
-        fail("corrupt_record", "Corrupt event payload reference");
-      }
-      previousId = parsed.data.event_id;
+      previousId = event.event_id;
       previousChain = row.chain_sha256;
-      return parsed.data;
+      return event;
     });
+  };
+  const verifiedEventTail = (
+    key: string,
+    taskId: string,
+  ): EventEnvelope | null => {
+    const rows = db
+      .query(
+        "SELECT scope_key, task_id, event_id, task_seq, record_json, record_sha256, chain_sha256 FROM events WHERE scope_key = ? AND task_id = ? ORDER BY task_seq DESC LIMIT 2",
+      )
+      .all(key, taskId) as EventRow[];
+    const tailRow = rows[0];
+    if (!tailRow) return null;
+    const tail = verifyEventRow(tailRow, key, taskId);
+    const previous = rows[1];
+    if (previous) {
+      if (
+        previous.scope_key !== key ||
+        previous.task_id !== taskId ||
+        tailRow.task_seq !== previous.task_seq + 1 ||
+        tail.parent_event_id !== previous.event_id ||
+        sha256(`${previous.chain_sha256}${tailRow.record_sha256}`) !==
+          tailRow.chain_sha256
+      ) {
+        fail("corrupt_record", "Corrupt event chain");
+      }
+    } else if (
+      tailRow.task_seq !== 1 ||
+      tail.parent_event_id !== null ||
+      sha256(tailRow.record_sha256) !== tailRow.chain_sha256
+    ) {
+      fail("corrupt_record", "Corrupt event chain");
+    }
+    return tail;
   };
   const insertTaskRecord = (key: string, task: Task): void => {
     const json = canonicalJson(task);
@@ -954,14 +990,14 @@ export async function createTaskStore(
     eventType: "task.created" | "task.updated",
     payloadRef: ArtifactRef,
   ): EventEnvelope => {
-    const events = verifiedEvents(scopeKey(task.scope), task.task_id);
+    const tail = verifiedEventTail(scopeKey(task.scope), task.task_id);
     return buildEvent(task, {
       event_type: eventType,
       run_id: context.request_id,
       producer: "mars.tasks",
       versions: [{ component: "@mars/tasks", revision: "format-1" }],
       payload: payloadRef,
-      parent_event_id: events.at(-1)?.event_id ?? null,
+      parent_event_id: tail?.event_id ?? null,
     });
   };
   const idemKeyInput = (value: unknown): string => sha256(canonicalJson(value));
@@ -1055,19 +1091,7 @@ export async function createTaskStore(
     .strict();
   const appendEventSchema = z
     .object({
-      event_type: z.enum([
-        "task.created",
-        "task.updated",
-        "execution.observed",
-        "tool.completed",
-        "research.proposed",
-        "research.stale",
-        "memory.revised",
-        "skill.revised",
-        "evaluation.completed",
-        "training.updated",
-        "promotion.decided",
-      ]),
+      event_type: EventEnvelopeSchema.shape.event_type,
       run_id: nonempty,
       producer: nonempty,
       versions: z.array(VersionRefSchema).min(1),
@@ -1228,6 +1252,8 @@ export async function createTaskStore(
         change: "status",
         from: snapshot.status,
         to: "running",
+        from_revision: snapshot.revision,
+        to_revision: snapshot.revision + 1,
       };
       const prepared = preparePayloadArtifact(snapshot.scope, payload);
       const transaction = db.transaction(() => {
@@ -1330,7 +1356,12 @@ export async function createTaskStore(
       }
       if (Object.keys(changed).length === 0)
         throw invalidInput("Task patch makes no changes");
-      const payload = { change: "updated", changes: changed };
+      const payload = {
+        change: "updated",
+        changes: changed,
+        from_revision: snapshot.revision,
+        to_revision: snapshot.revision + 1,
+      };
       const prepared = preparePayloadArtifact(snapshot.scope, payload);
       const transaction = db.transaction(() => {
         const replay = getIdempotent(
@@ -1417,6 +1448,8 @@ export async function createTaskStore(
                 change: "status",
                 from: snapshot.status,
                 to: "cancelled",
+                from_revision: snapshot.revision,
+                to_revision: snapshot.revision + 1,
               });
         const transaction = db.transaction(() => {
           const replay = getIdempotent(
@@ -1616,17 +1649,32 @@ export async function createTaskStore(
             z.string().min(1),
             "idempotency event result",
           );
-          const matches = verifiedEvents(key, taskId);
-          const prior = matches.find((event) => event.event_id === eventId);
+          const prior = db
+            .query(
+              "SELECT scope_key, task_id, event_id, task_seq, record_json, record_sha256, chain_sha256 FROM events WHERE scope_key = ? AND task_id = ? AND event_id = ?",
+            )
+            .get(key, taskId, eventId) as EventRow | null;
           if (!prior)
             fail("corrupt_record", "Idempotency event does not exist");
-          return prior;
+          return verifyEventRow(prior, key, taskId);
         }
         const task = readTask(key, taskId);
-        const allEvents = verifiedEvents(key, taskId);
-        const knownIds = new Set(allEvents.map((event) => event.event_id));
-        if (sourceIds.some((id) => !knownIds.has(id))) {
-          throw invalidInput("Source event id does not belong to this task");
+        if (sourceIds.length > 0) {
+          const uniqueSourceIds = [...new Set(sourceIds)];
+          const knownIds = new Set<string>();
+          for (let offset = 0; offset < uniqueSourceIds.length; offset += 900) {
+            const chunk = uniqueSourceIds.slice(offset, offset + 900);
+            const placeholders = chunk.map(() => "?").join(", ");
+            const rows = db
+              .query(
+                `SELECT event_id FROM events WHERE scope_key = ? AND task_id = ? AND event_id IN (${placeholders})`,
+              )
+              .all(key, taskId, ...chunk) as Array<{ event_id: string }>;
+            for (const { event_id } of rows) knownIds.add(event_id);
+          }
+          if (sourceIds.some((id) => !knownIds.has(id))) {
+            throw invalidInput("Source event id does not belong to this task");
+          }
         }
         if (input.event_type === "execution.observed") {
           const observed = payload as z.infer<
@@ -1647,6 +1695,7 @@ export async function createTaskStore(
             assertArtifactOwned(key, ref);
         }
         insertArtifactRow(key, prepared.ref);
+        const tail = verifiedEventTail(key, taskId);
         const event = buildEvent(task, {
           event_type: input.event_type,
           run_id: input.run_id,
@@ -1655,7 +1704,7 @@ export async function createTaskStore(
           payload: prepared.ref,
           source_event_ids: sourceIds,
           ...(input.usage === undefined ? {} : { usage: input.usage }),
-          parent_event_id: allEvents.at(-1)?.event_id ?? null,
+          parent_event_id: tail?.event_id ?? null,
         });
         insertEventRecord(key, task, event);
         saveIdempotent(
@@ -1796,6 +1845,8 @@ export async function createTaskStore(
           status: "paused",
           reason: optionsInput.reason,
           interrupted_instance_id: runner?.instance_id ?? null,
+          from_revision: candidate.revision,
+          to_revision: candidate.revision + 1,
         };
         const prepared = preparePayloadArtifact(candidate.scope, payload);
         const transaction = db.transaction(() => {
@@ -1862,7 +1913,7 @@ export async function createTaskStore(
       for (const event of snapshot) yield event;
     },
     async close() {
-      checkOpen();
+      if (closed) return;
       const transaction = db.transaction(() => {
         db.query(
           "UPDATE instances SET closed_at = ? WHERE instance_id = ?",

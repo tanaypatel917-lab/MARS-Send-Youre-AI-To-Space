@@ -36,6 +36,14 @@ if (operation === "create") {
     status: "running",
   });
   process.exit(0);
+} else if (operation === "run-and-hang") {
+  if (!input.taskId) throw new Error("Missing task id");
+  const task = await store.inspect(input.context, input.taskId);
+  await store.update(input.context, input.taskId, task.revision, {
+    status: "running",
+  });
+  process.stdout.write("ready\n");
+  await new Promise<void>(() => setInterval(() => {}, 60_000));
 } else {
   throw new Error(`Unknown worker operation: ${operation}`);
 }

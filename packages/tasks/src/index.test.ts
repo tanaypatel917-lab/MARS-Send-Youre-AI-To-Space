@@ -3,11 +3,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
   symlinkSync,
+  truncateSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -68,16 +71,24 @@ async function openStore(rootDir: string) {
   return createTaskStore({ rootDir, workspaceRoots: [] });
 }
 
+function spawnWorker(
+  operation: string,
+  rootDir: string,
+  input: { context: RequestContext; task?: Task; taskId?: string },
+) {
+  const workerPath = path.join(import.meta.dir, "test-fixtures", "worker.ts");
+  return Bun.spawn(
+    [process.execPath, workerPath, operation, rootDir, JSON.stringify(input)],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+}
+
 async function runWorker(
   operation: string,
   rootDir: string,
   input: { context: RequestContext; task?: Task; taskId?: string },
 ): Promise<void> {
-  const workerPath = path.join(import.meta.dir, "test-fixtures", "worker.ts");
-  const child = Bun.spawn(
-    [process.execPath, workerPath, operation, rootDir, JSON.stringify(input)],
-    { stdout: "pipe", stderr: "pipe" },
-  );
+  const child = spawnWorker(operation, rootDir, input);
   const [exitCode, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
@@ -150,6 +161,7 @@ describe("@mars/tasks durable store", () => {
     expect(await second.inspect(context(), childTask.task_id)).toEqual(
       childTask,
     );
+    await second.close();
     await second.close();
   }, 30_000);
 
@@ -262,6 +274,31 @@ describe("@mars/tasks durable store", () => {
     await store.close();
   }, 30_000);
 
+  test("appends 2000 events in order without quadratic write-path cost", async () => {
+    const rootDir = makeRoot();
+    const store = await openStore(rootDir);
+    const task = makeTask();
+    await store.create(context(), task);
+    const startedAt = performance.now();
+    for (let index = 0; index < 2000; index += 1) {
+      await store.appendEvent(context(`perf-${index}`), task.task_id, {
+        event_type: "tool.completed",
+        run_id: `run-${index}`,
+        producer: "perf-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: { index },
+      });
+    }
+    expect(performance.now() - startedAt).toBeLessThan(15_000);
+    const events = await collect(store.events(context(), task.task_id));
+    expect(events).toHaveLength(2001);
+    expect(events[0]?.event_type).toBe("task.created");
+    expect(events.slice(1).map((event) => event.run_id)).toEqual(
+      Array.from({ length: 2000 }, (_, index) => `run-${index}`),
+    );
+    await store.close();
+  }, 30_000);
+
   test("enforces creation, transition, cancellation, steering, and patch rules", async () => {
     const rootDir = makeRoot();
     const store = await openStore(rootDir);
@@ -360,7 +397,42 @@ describe("@mars/tasks durable store", () => {
       paused.revision,
     );
     expect(resumed.status).toBe("running");
+    const revisionEvents = await collect(store.events(context(), task.task_id));
+    const revisionPayloads = await Promise.all(
+      revisionEvents
+        .slice(2)
+        .map(async (event) =>
+          JSON.parse(
+            new TextDecoder().decode(
+              await store.artifacts.get(context(), event.payload),
+            ),
+          ),
+        ),
+    );
+    expect(
+      revisionPayloads.map(({ from_revision, to_revision }) => [
+        from_revision,
+        to_revision,
+      ]),
+    ).toEqual([
+      [0, 1],
+      [1, 2],
+      [2, 3],
+    ]);
     await store.cancel(context("cancel"), task.task_id);
+    const cancelledEvent = (
+      await collect(store.events(context(), task.task_id))
+    ).at(-1);
+    if (!cancelledEvent) throw new Error("Expected the cancellation event");
+    const cancelledPayload = JSON.parse(
+      new TextDecoder().decode(
+        await store.artifacts.get(context(), cancelledEvent.payload),
+      ),
+    );
+    expect(cancelledPayload).toMatchObject({
+      from_revision: 3,
+      to_revision: 4,
+    });
     const countBefore = (await collect(store.events(context(), task.task_id)))
       .length;
     await store.cancel(context("cancel-again"), task.task_id);
@@ -557,8 +629,12 @@ describe("@mars/tasks durable store", () => {
     await truncatedStore.create(context(), task);
     await truncatedStore.close();
     const dbPath = path.join(truncatedRoot, "tasks.sqlite");
+    for (const suffix of ["-wal", "-shm"]) {
+      const sidecarPath = `${dbPath}${suffix}`;
+      if (existsSync(sidecarPath)) unlinkSync(sidecarPath);
+    }
     const size = lstatSync(dbPath).size;
-    writeFileSync(dbPath, new Uint8Array(Math.floor(size / 2)));
+    truncateSync(dbPath, Math.floor(size / 2));
     let truncationRejected = false;
     try {
       const truncated = await openStore(truncatedRoot);
@@ -745,17 +821,48 @@ describe("@mars/tasks durable store", () => {
     const rootDir = makeRoot();
     const store = await openStore(rootDir);
     const deadTask = makeTask("dead");
+    const crashedTask = makeTask("crashed");
     const liveTask = makeTask("live");
     await store.create(context("create-dead"), deadTask);
+    await store.create(context("create-crashed"), crashedTask);
     await store.create(context("create-live"), liveTask);
     await runWorker("leave-running", rootDir, {
       context: context("child-running"),
       taskId: deadTask.task_id,
     });
+    const crashedWorker = spawnWorker("run-and-hang", rootDir, {
+      context: context("child-crashed"),
+      taskId: crashedTask.task_id,
+    });
+    const reader = crashedWorker.stdout.getReader();
+    const decoder = new TextDecoder();
+    let stdout = "";
+    let timedOut = false;
+    const readyTimeout = setTimeout(() => {
+      timedOut = true;
+      crashedWorker.kill("SIGKILL");
+    }, 10_000);
+    try {
+      while (!stdout.includes("ready")) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        stdout += decoder.decode(value);
+      }
+    } finally {
+      clearTimeout(readyTimeout);
+    }
+    if (!timedOut && stdout.includes("ready")) {
+      crashedWorker.kill("SIGKILL");
+    }
+    await crashedWorker.exited;
+    expect(stdout).toContain("ready");
     await store.update(context("live-running"), liveTask.task_id, 0, {
       status: "running",
     });
     expect((await store.inspect(context(), deadTask.task_id)).status).toBe(
+      "running",
+    );
+    expect((await store.inspect(context(), crashedTask.task_id)).status).toBe(
       "running",
     );
     const recovered = await store.recoverInterrupted(context("recover"), {
@@ -763,6 +870,7 @@ describe("@mars/tasks durable store", () => {
     });
     expect(recovered.map((task) => [task.task_id, task.status])).toEqual([
       ["dead", "paused"],
+      ["crashed", "paused"],
     ]);
     expect(
       await store.recoverInterrupted(context("recover-again"), {
@@ -780,6 +888,8 @@ describe("@mars/tasks durable store", () => {
     expect(recovery).toMatchObject({
       change: "recovered",
       reason: "worker exited",
+      from_revision: 1,
+      to_revision: 2,
     });
     expect((await store.inspect(context(), liveTask.task_id)).status).toBe(
       "running",
