@@ -1,0 +1,9 @@
+This product includes portions adapted from Aider's aider/repomap.py,
+get_ranked_tags and get_ranked_tags_map_uncached, at revision
+5dc9490bb35f9729ef2c95d00a19ccd30c26339c.
+
+The adapted material is licensed under the Apache License, Version 2.0.
+The license text is included at third_party/aider/LICENSE.txt.
+
+Modified by MARS: ported to TypeScript, own PageRank, deterministic tie-breaks,
+definer-personalization, budget policy.

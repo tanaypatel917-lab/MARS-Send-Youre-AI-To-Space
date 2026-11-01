@@ -123,6 +123,17 @@ export async function createWorkbenchHost(
       throw new WorkbenchError("forbidden");
   };
   const runtimeFactory = options.runtimeFactory ?? openRuntimeSession;
+  const selectModel = (approvals: Approvals, modelId?: string) => {
+    try {
+      return selectExecutionModel(
+        options.registry,
+        modelId,
+        Object.values(approvals).some(Boolean),
+      );
+    } catch {
+      throw new WorkbenchError("model_unavailable");
+    }
+  };
   const taskState = (task: Task) =>
     join(root, scopeKey(options.scope, task.task_id));
   const readLaunch = async (task: Task): Promise<Launch> => {
@@ -517,11 +528,10 @@ export async function createWorkbenchHost(
         throw new WorkbenchError("conflict");
       if (params.approvals.execute && !options.canExecute)
         throw new WorkbenchError("forbidden");
-      const model = selectExecutionModel(
-        options.registry,
-        params.model_id,
-        Object.values(params.approvals).some(Boolean),
-      );
+      const instruction = `${task.request}\n\nAcceptance criteria:\n${task.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
+      if (instruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH)
+        throw new WorkbenchError("too_large");
+      const model = selectModel(params.approvals, params.model_id);
       const running = await options.store.update(
         context,
         task.task_id,
@@ -582,12 +592,7 @@ export async function createWorkbenchHost(
         for (const observation of initialObservations)
           await persistObservation(observation);
         bound = true;
-        run(
-          running,
-          workspace,
-          runtime,
-          `${running.request}\n\nAcceptance criteria:\n${running.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`,
-        );
+        run(running, workspace, runtime, instruction);
         return running;
       } catch (error) {
         await runtime?.dispose().catch(() => undefined);
@@ -632,6 +637,7 @@ export async function createWorkbenchHost(
       }
       if (queued.length && !steeringEventIds.length)
         throw new WorkbenchError("too_large");
+      selectModel(launch.approvals, launch.model_id);
       const workspace = await options.workspace.reopen(context, taskId);
       if (
         workspace.workspace_id !== launch.workspace.workspace_id ||
