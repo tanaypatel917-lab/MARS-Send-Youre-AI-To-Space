@@ -2145,6 +2145,69 @@
           "notes": "Hosted documentation, not an immutable source pin. Versioned docs HTTP 200 (blueprint S31 uses /latest/)."
         }
       ]
+    },
+    {
+      "id": "m8ven-is-it-legit-mcp",
+      "group": "integration-trust",
+      "repository_url": "https://github.com/m8ven/is-it-legit-mcp",
+      "revision": "babd36e94734cf813d74d31e268ad755219fc185",
+      "version_note": "Mirror synced by m8ven-sync-bot; source inspection only, no execution.",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/m8ven/is-it-legit-mcp/blob/babd36e94734cf813d74d31e268ad755219fc185/LICENSE",
+        "additional_notices": [],
+        "notes": "MIT at pinned LICENSE; no upstream code adopted."
+      },
+      "sources": [
+        {
+          "path": "src/is-it-legit-server.ts",
+          "url": "https://github.com/m8ven/is-it-legit-mcp/blob/babd36e94734cf813d74d31e268ad755219fc185/src/is-it-legit-server.ts",
+          "purpose": "Offline source audit of advisory reputation service and its trust boundary."
+        },
+        {
+          "path": "src/lib/supabase.ts",
+          "url": "https://github.com/m8ven/is-it-legit-mcp/blob/babd36e94734cf813d74d31e268ad755219fc185/src/lib/supabase.ts",
+          "purpose": "Offline source audit of advisory reputation service and its trust boundary."
+        },
+        {
+          "path": "package.json",
+          "url": "https://github.com/m8ven/is-it-legit-mcp/blob/babd36e94734cf813d74d31e268ad755219fc185/package.json",
+          "purpose": "Offline source audit of advisory reputation service and its trust boundary."
+        },
+        {
+          "path": "README.md",
+          "url": "https://github.com/m8ven/is-it-legit-mcp/blob/babd36e94734cf813d74d31e268ad755219fc185/README.md",
+          "purpose": "Offline source audit of advisory reputation service and its trust boundary."
+        }
+      ],
+      "background_references": [],
+      "runtime_requirements": "Upstream requires SUPABASE_SERVICE_ROLE_KEY (service-role, bypasses RLS). Not installed or executed by MARS.",
+      "integration_owner": "packages/integration-trust (optional advisory scanner boundary only)",
+      "target_milestone": "Independent host-authorized integration trust gate",
+      "adaptation_decision": "Not adopted. Audited as an untrusted advisory reputation source; MARS builds an independent default-deny gate with an optional advisory scanner interface. No upstream code installed, executed, vendored or copied.",
+      "dependencies": [
+        "Upstream Supabase service role; no upstream dependency added to MARS"
+      ],
+      "acceptance_plan": "Independent strict evidence binding, signed host decisions, least-privilege gate, local-only security tests; advisory scans never authorize.",
+      "audit_checks": {
+        "source": "Mirror synced by m8ven-sync-bot. src imports ./lib/marketplace-seller.js which is absent from the tree; as-published source cannot build; tsc not executed.",
+        "writes": "check_brand/report_experience/suggest_brand write brand_checks, brand_signals, brand_requests, brands, brand_feedback including free-text context/details.",
+        "network": "check_brand fetches arbitrary user-supplied domains using HEAD + GET, redirect follow, no private-address filtering; also RDAP/DNS TXT.",
+        "model_control": "Server instructions and _instructions output steer the calling model. Error path fabricates a caution verdict with signals_analyzed 100+.",
+        "state": "Module-level mutable _mcpSource/_callerHash/_mcpClient globals shared across server instances.",
+        "purpose": "Consumer brand/shop reputation tool, NOT an MCP/code security scanner. README M8ven Verified MCP trust score is a remote service with no source in this repo.",
+        "unexecuted": ["install", "build", "tests", "remote endpoint"]
+      },
+      "risks": [
+        "Service-role key bypasses RLS; free-text context/details sent to Supabase.",
+        "Arbitrary domain HEAD/GET with redirects and no private-address filtering exposes SSRF boundary.",
+        "Model steering via server instructions and _instructions; fabricated caution fallback is not security evidence.",
+        "Shared mutable module globals risk cross-instance attribution leakage.",
+        "Missing marketplace-seller module prevents as-published build; mirror provenance is not scanner assurance.",
+        "Brand reputation and opaque remote M8ven Verified scores cannot approve code or MCP integrations."
+      ],
+      "integration_status": "not-integrated"
     }
   ],
   "group_findings": [

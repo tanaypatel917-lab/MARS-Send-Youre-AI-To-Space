@@ -10,6 +10,9 @@ import {
 } from "@oh-my-pi/pi-coding-agent";
 import { grep } from "@oh-my-pi/pi-natives";
 
+export { type BudgetLedger, ExecutionLimitError } from "./model-bridge";
+export * from "./runtime";
+
 export const EXECUTION_PACKAGE_VERSION = "18.14.0";
 
 export interface ExecutionProbe {

@@ -20,6 +20,18 @@
         "@mars/providers": "workspace:*",
       },
     },
+    "apps/vscode": {
+      "name": "@mars/vscode-client",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
+      },
+      "devDependencies": {
+        "@types/node": "26.6.6",
+        "@types/vscode": "1.96.0",
+      },
+    },
     "packages/contracts": {
       "name": "@mars/contracts",
       "version": "0.0.1",
@@ -31,8 +43,19 @@
       "name": "@mars/execution",
       "version": "0.0.1",
       "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "@mars/providers": "workspace:*",
+        "@oh-my-pi/pi-ai": "18.14.0",
         "@oh-my-pi/pi-coding-agent": "18.14.0",
         "@oh-my-pi/pi-natives": "18.14.0",
+        "zod": "3.25.76",
+      },
+    },
+    "packages/integration-trust": {
+      "name": "@mars/integration-trust",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
       },
     },
     "packages/providers": {
@@ -40,6 +63,14 @@
       "version": "0.0.1",
       "dependencies": {
         "@mars/contracts": "workspace:*",
+      },
+    },
+    "packages/tasks": {
+      "name": "@mars/tasks",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
       },
     },
     "packages/workspaces": {
@@ -146,7 +177,13 @@
 
     "@mars/execution": ["@mars/execution@workspace:packages/execution"],
 
+    "@mars/integration-trust": ["@mars/integration-trust@workspace:packages/integration-trust"],
+
     "@mars/providers": ["@mars/providers@workspace:packages/providers"],
+
+    "@mars/tasks": ["@mars/tasks@workspace:packages/tasks"],
+
+    "@mars/vscode-client": ["@mars/vscode-client@workspace:apps/vscode"],
 
     "@mars/workspaces": ["@mars/workspaces@workspace:packages/workspaces"],
 
@@ -243,6 +280,8 @@
     "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
 
     "@types/node": ["@types/node@26.6.6", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog=="],
+
+    "@types/vscode": ["@types/vscode@1.96.0", "", {}, "sha512-qvZbSZo+K4ZYmmDuaodMbAa67Pl6VDQzLKFka6rq+3WUTY4Kro7Bwoi0CuZLO/wema0ygcmpwow7zZfPJTs5jg=="],
 
     "adm-zip": ["adm-zip@0.6.1", "", {}, "sha512-Xwrja8nx9e5o2N1my4DsKCeKpdrnACyr1wtbPxBDgGzKzKyE9kRtBFA8mWldI+RVlD7CBZNWY/wQ2+ydwOR6kQ=="],
 

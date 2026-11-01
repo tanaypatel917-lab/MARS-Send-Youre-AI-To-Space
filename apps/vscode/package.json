@@ -1,0 +1,136 @@
+{
+  "name": "@mars/vscode-client",
+  "displayName": "MARS Workbench",
+  "description": "VS Code client for the MARS task API: create, approve, steer, cancel and resume tasks; inspect events, diffs, artifacts and checkpoints.",
+  "version": "0.0.1",
+  "private": true,
+  "publisher": "mars-local",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "main": "./dist/extension.js",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "MARS can request write and execute approvals for this workspace, so it requires a trusted workspace."
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mars",
+          "title": "MARS",
+          "icon": "media/mars.svg"
+        }
+      ]
+    },
+    "views": {
+      "mars": [
+        {
+          "type": "webview",
+          "id": "mars.workbench",
+          "name": "Tasks"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "mars.connect",
+        "title": "Connect to task server",
+        "category": "MARS"
+      },
+      {
+        "command": "mars.setToken",
+        "title": "Set server token",
+        "category": "MARS"
+      },
+      {
+        "command": "mars.clearToken",
+        "title": "Clear server token",
+        "category": "MARS"
+      },
+      {
+        "command": "mars.newTask",
+        "title": "New task",
+        "category": "MARS"
+      },
+      {
+        "command": "mars.refresh",
+        "title": "Refresh tasks",
+        "category": "MARS"
+      },
+      {
+        "command": "mars.cancelTask",
+        "title": "Cancel selected task",
+        "category": "MARS"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "mars.newTask",
+          "when": "view == mars.workbench",
+          "group": "navigation@1"
+        },
+        {
+          "command": "mars.refresh",
+          "when": "view == mars.workbench",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "MARS",
+      "properties": {
+        "mars.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:7331",
+          "scope": "application",
+          "markdownDescription": "Base URL of the MARS task server. Loopback only unless `#mars.allowNonLoopbackServer#` is enabled. User settings only; workspace settings cannot redirect your token."
+        },
+        "mars.allowNonLoopbackServer": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "Allow an HTTPS non-loopback server. Each window still asks for explicit trust before sending the token."
+        },
+        "mars.modelId": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "markdownDescription": "Model id requested when starting a task. Empty uses the server's default free-cloud route. Paid models remain governed by the server's paid-model policy."
+        },
+        "mars.requestTimeoutMs": {
+          "type": "number",
+          "default": 15000,
+          "minimum": 1000,
+          "maximum": 120000,
+          "scope": "application",
+          "description": "Per-request timeout for task server calls."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "bun build src/extension.ts --target=node --format=cjs --external vscode --outfile dist/extension.js && bun build src/webview/main.ts --target=browser --format=iife --outfile dist/webview.js",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.webview.json",
+    "test": "bun test test",
+    "smoke": "bun run build && node scripts/node-smoke.cjs"
+  },
+  "dependencies": {
+    "@mars/contracts": "workspace:*",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/vscode": "1.96.0"
+  }
+}
