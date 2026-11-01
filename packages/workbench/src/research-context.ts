@@ -18,6 +18,8 @@ export type WorkbenchResearch = Pick<
 export const RESEARCH_DEADLINE_MS = 10 * 60 * 1000;
 const MAX_RENDERED_FINDINGS = 20;
 const MAX_FIELD_CHARS = 2048;
+/** Keeps the rendered findings inside the runtime's 128 KiB tool-output bound. */
+const MAX_OUTPUT_CHARS = 96 * 1024;
 
 function clip(value: string): string {
   return value.length > MAX_FIELD_CHARS
@@ -103,12 +105,19 @@ export function researchTools(
       const findings = await service.readFindings(context(), requestId);
       const header = `Research request ${job.request_id}: ${job.status}${job.stale ? " (stale: the task changed since it was asked)" : ""}, ${job.finding_count} finding(s).`;
       if (findings.length === 0) return header;
+      const rendered: string[] = [];
+      let size = header.length;
+      for (const finding of findings.slice(0, MAX_RENDERED_FINDINGS)) {
+        const text = renderUntrustedFinding(finding);
+        if (size + text.length + 2 > MAX_OUTPUT_CHARS) break;
+        rendered.push(text);
+        size += text.length + 2;
+      }
+      const omitted = findings.length - rendered.length;
       return [
         header,
-        ...findings.slice(0, MAX_RENDERED_FINDINGS).map(renderUntrustedFinding),
-        findings.length > MAX_RENDERED_FINDINGS
-          ? `${findings.length - MAX_RENDERED_FINDINGS} more finding(s) not shown.`
-          : "",
+        ...rendered,
+        omitted > 0 ? String(omitted) + " more finding(s) not shown." : "",
       ]
         .filter(Boolean)
         .join("\n\n");

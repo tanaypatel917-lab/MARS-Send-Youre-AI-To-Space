@@ -2346,6 +2346,22 @@ test("research tools are host-bound to the task revision and budget, render untr
       } as Awaited<ReturnType<WorkbenchResearch["inspect"]>>;
     },
     async readFindings(_context, requestId) {
+      if (requestId === "rr_big")
+        return Array.from({ length: 20 }, (_, index) => ({
+          finding_id: "rf_big_" + String(index),
+          request_id: requestId,
+          task_revision: 1,
+          claim: "c".repeat(4096),
+          sources: [],
+          recommendation: "r".repeat(4096),
+          confidence: "low",
+          remaining_uncertainty: Array.from({ length: 8 }, () =>
+            "u".repeat(4096),
+          ),
+          status: "proposed",
+        })) as unknown as Awaited<
+          ReturnType<WorkbenchResearch["readFindings"]>
+        >;
       return [
         {
           finding_id: "rf_fixture",
@@ -2411,6 +2427,10 @@ test("research tools are host-bound to the task revision and budget, render untr
   await expect(tools.findings("rr_other")).rejects.toThrow(
     "Unknown research request for this task.",
   );
+  const big = await tools.findings("rr_big");
+  expect(big.length).toBeLessThanOrEqual(128 * 1024);
+  expect(big).toContain("rf_big_0");
+  expect(big).toMatch(/\d+ more finding\(s\) not shown\./);
   const rendered = await tools.findings("rr_fixture");
   expect(rendered).toContain("untrusted research finding rf_fixture");
   expect(rendered).toContain("confidence low");
@@ -2484,5 +2504,54 @@ test("research deadlines never exceed the task's remaining duration, also after 
   );
   second.finish("completed");
   await second.disposed;
+  await api.close();
+});
+
+test("a launch that fails before the runtime still reconciles the task's research", async () => {
+  const f = await fixture();
+  const reconciled: string[] = [];
+  const research = {
+    async submit() {
+      return "rr_unused";
+    },
+    async inspect() {
+      throw new Error("unused");
+    },
+    async readFindings() {
+      return [];
+    },
+    async list() {
+      return [];
+    },
+    async markStale() {},
+    async cancel() {},
+    async reconcileTask(_context: unknown, taskId: string) {
+      reconciled.push(taskId);
+      return { task_revision: 1, stale_request_ids: [] };
+    },
+  } as unknown as WorkbenchResearch;
+  const api = await f.makeHost(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    research,
+  );
+  await api.create(context(), task());
+  f.failPrepare = true;
+  try {
+    await expect(
+      api.start(context(), {
+        task_id: "task",
+        expected_revision: 0,
+        approvals: { read: false, write: false, execute: false },
+      }),
+    ).rejects.toThrow();
+  } finally {
+    f.failPrepare = false;
+  }
+  expect((await api.inspect(context(), "task")).status).toBe("failed");
+  expect(reconciled).toEqual(["task"]);
   await api.close();
 });

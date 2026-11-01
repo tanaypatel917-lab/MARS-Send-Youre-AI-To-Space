@@ -252,7 +252,7 @@ export async function createWorkbenchHost(
     Object.values(approvals).some(Boolean);
   // Research tools are host-bound: requests carry the task's current durable
   // revision and budget, and findings return as rendered untrusted text.
-  const researchFor = (taskId: string, deadline: number) => {
+  const researchFor = (taskId: string, deadline: () => number) => {
     const research = options.research;
     if (!research) return {};
     const context = () => internalContext(options.scope);
@@ -261,7 +261,7 @@ export async function createWorkbenchHost(
         research,
         context,
         () => options.store.inspect(context(), taskId),
-        () => deadline,
+        deadline,
       ),
     };
   };
@@ -901,6 +901,7 @@ export async function createWorkbenchHost(
               status: "failed",
             })
             .catch(() => undefined);
+        await reconcileResearch(task.task_id);
       } finally {
         await runtime.dispose().catch(() => undefined);
         if (active.get(task.task_id) === runtime) {
@@ -1308,7 +1309,9 @@ export async function createWorkbenchHost(
             : {}),
         },
       );
-      const launchDeadline = Date.now() + running.budget.max_duration_ms;
+      // Research deadlines follow the runtime ledger, whose clock starts when
+      // the session opens, not when the task was marked running.
+      let launchDeadline = Date.now() + running.budget.max_duration_ms;
       let collaboration: FrozenCollaboration | undefined;
       if (options.collaboration) {
         try {
@@ -1350,6 +1353,7 @@ export async function createWorkbenchHost(
               status: "failed",
             })
             .catch(() => undefined);
+          await reconcileResearch(task.task_id);
           throw new WorkbenchError("unavailable");
         }
       }
@@ -1425,7 +1429,7 @@ export async function createWorkbenchHost(
               )
             : {}),
           ...(params.approvals.read ? historyFor(context) : {}),
-          ...researchFor(task.task_id, launchDeadline),
+          ...researchFor(task.task_id, () => launchDeadline),
           onEvent: async (event) => {
             if (!bound) {
               if (initialObservations.length >= 1000)
@@ -1436,6 +1440,7 @@ export async function createWorkbenchHost(
             await persistObservation(event);
           },
         });
+        launchDeadline = Date.now() + running.budget.max_duration_ms;
         if (closing) throw new WorkbenchError("unavailable");
         await writeLaunch(task, {
           schema_version: 1,
@@ -1483,6 +1488,7 @@ export async function createWorkbenchHost(
               { status: "failed" },
             )
             .catch(() => undefined);
+        await reconcileResearch(task.task_id);
         throw error;
       }
     },
@@ -1552,7 +1558,7 @@ export async function createWorkbenchHost(
           ...(launch.approvals.read ? historyFor(context) : {}),
           ...researchFor(
             task.task_id,
-            launch.deadline ?? Date.now() + task.budget.max_duration_ms,
+            () => launch.deadline ?? Date.now() + task.budget.max_duration_ms,
           ),
           onEvent: observe(taskId),
         });
