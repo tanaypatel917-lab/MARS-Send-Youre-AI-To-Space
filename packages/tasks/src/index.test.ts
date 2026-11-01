@@ -1,12 +1,13 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   truncateSync,
@@ -814,6 +815,217 @@ describe("@mars/tasks durable store", () => {
         event_type: "task.updated",
       }),
     ).rejects.toMatchObject({ code: "invalid_input" });
+    await store.close();
+  });
+
+  test("never exposes the upstream journal path in public events or artifacts", async () => {
+    const rootDir = makeRoot();
+    const journalDirectory = path.join(
+      tmpdir(),
+      `secret-journal-${randomUUID()}`,
+    );
+    mkdirSync(journalDirectory, { mode: 0o700 });
+    roots.push(journalDirectory);
+    const journalPath = path.join(
+      journalDirectory,
+      `session-${randomUUID()}.jsonl`,
+    );
+    writeFileSync(journalPath, '{"entries":[]}\n');
+    const sessionFile = realpathSync(journalPath);
+    const store = await openStore(rootDir);
+    const task = makeTask("privacy-task");
+    const binding = {
+      runtime: "oh-my-pi" as const,
+      package_version: "18.14.0",
+      session_id: task.session_id,
+      session_file: sessionFile,
+    };
+    try {
+      await store.create(context("privacy-create"), task);
+      await store.bindUpstreamSession(
+        context("privacy-bind"),
+        task.task_id,
+        binding,
+      );
+      await store.appendEvent(context("privacy-observed"), task.task_id, {
+        event_type: "execution.observed",
+        run_id: "privacy-run",
+        producer: "privacy-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: {
+          upstream: {
+            runtime: binding.runtime,
+            package_version: binding.package_version,
+            session_id: binding.session_id,
+            entry_ids: ["entry-1"],
+          },
+          kind: "turn",
+        },
+      });
+      await store.steer(
+        context("privacy-steer"),
+        task.task_id,
+        "Continue without quoting the journal path.",
+      );
+      await store.update(context("privacy-update"), task.task_id, 0, {
+        specialist_revision: "privacy-v1",
+      });
+      await store.cancel(context("privacy-cancel"), task.task_id);
+
+      const events = await collect(store.events(context(), task.task_id));
+      const payloads = await Promise.all(
+        events.map(async (event) =>
+          JSON.parse(
+            new TextDecoder().decode(
+              await store.artifacts.get(context(), event.payload),
+            ),
+          ),
+        ),
+      );
+      const privateValues = [
+        sessionFile,
+        journalDirectory,
+        path.basename(sessionFile),
+        rootDir,
+        "session_file",
+        "journal_path",
+      ];
+      for (const [index, event] of events.entries()) {
+        const publicEnvelope = JSON.stringify(event);
+        const publicPayload = JSON.stringify(payloads[index]);
+        for (const privateValue of privateValues) {
+          expect(publicEnvelope).not.toContain(privateValue);
+          expect(publicPayload).not.toContain(privateValue);
+        }
+      }
+      expect(
+        payloads.find((payload) => payload.change === "upstream_session_bound"),
+      ).toEqual({
+        change: "upstream_session_bound",
+        runtime: binding.runtime,
+        package_version: binding.package_version,
+        session_id: binding.session_id,
+      });
+      await store.close();
+
+      const reopened = await openStore(rootDir);
+      try {
+        expect(await reopened.upstreamSession(context(), task.task_id)).toEqual(
+          binding,
+        );
+        const countBeforeRebind = (
+          await collect(reopened.events(context(), task.task_id))
+        ).length;
+        await reopened.bindUpstreamSession(
+          context("privacy-bind-again"),
+          task.task_id,
+          binding,
+        );
+        expect(
+          (await collect(reopened.events(context(), task.task_id))).length,
+        ).toBe(countBeforeRebind);
+        await expect(
+          reopened.bindUpstreamSession(
+            context("privacy-bind-conflict"),
+            task.task_id,
+            { ...binding, package_version: "18.14.1" },
+          ),
+        ).rejects.toMatchObject({ code: "conflict" });
+      } finally {
+        await reopened.close();
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("rejects caller payloads that expose the bound journal path", async () => {
+    const rootDir = makeRoot();
+    const journalDirectory = mkdtempSync(
+      path.join(tmpdir(), `secret-journal-${randomUUID()}-`),
+    );
+    roots.push(journalDirectory);
+    const journalPath = path.join(
+      journalDirectory,
+      `session-${randomUUID()}.jsonl`,
+    );
+    writeFileSync(journalPath, '{"entries":[]}\n');
+    const sessionFile = realpathSync(journalPath);
+    const store = await openStore(rootDir);
+    const task = makeTask("path-guard-task");
+    const binding = {
+      runtime: "oh-my-pi" as const,
+      package_version: "18.14.0",
+      session_id: task.session_id,
+      session_file: sessionFile,
+    };
+    await store.create(context("path-guard-create"), task);
+    await store.bindUpstreamSession(
+      context("path-guard-bind"),
+      task.task_id,
+      binding,
+    );
+    const countEvents = async () =>
+      (await collect(store.events(context(), task.task_id))).length;
+    const expectRejectedWithoutLeak = async (
+      operation: () => Promise<unknown>,
+    ) => {
+      const countBefore = await countEvents();
+      let error: unknown;
+      try {
+        await operation();
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toMatchObject({ code: "invalid_input" });
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).not.toContain(sessionFile);
+      expect(message).not.toContain(journalDirectory);
+      expect(await countEvents()).toBe(countBefore);
+    };
+    await expectRejectedWithoutLeak(() =>
+      store.appendEvent(context("path-key"), task.task_id, {
+        event_type: "tool.completed",
+        run_id: "path-key",
+        producer: "privacy-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: { journal_path: sessionFile },
+      }),
+    );
+    await expectRejectedWithoutLeak(() =>
+      store.appendEvent(context("path-nested"), task.task_id, {
+        event_type: "tool.completed",
+        run_id: "path-nested",
+        producer: "privacy-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: { details: { note: `Found ${sessionFile}` } },
+      }),
+    );
+    await expectRejectedWithoutLeak(() =>
+      store.appendEvent(context("path-summary"), task.task_id, {
+        event_type: "execution.observed",
+        run_id: "path-summary",
+        producer: "privacy-test",
+        versions: [{ component: "test", revision: "1" }],
+        payload: {
+          upstream: {
+            runtime: binding.runtime,
+            package_version: binding.package_version,
+            session_id: binding.session_id,
+            entry_ids: ["entry-1"],
+          },
+          kind: "turn",
+          summary: `Observed ${sessionFile}`,
+        },
+      }),
+    );
+    await expectRejectedWithoutLeak(() =>
+      store.steer(
+        context("path-steer"),
+        task.task_id,
+        `Continue from ${sessionFile}.`,
+      ),
+    );
     await store.close();
   });
 

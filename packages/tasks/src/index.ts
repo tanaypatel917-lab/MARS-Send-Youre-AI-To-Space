@@ -123,6 +123,10 @@ export interface DurableTaskStore extends TaskService {
     taskId: string,
     binding: UpstreamSessionBinding,
   ): Promise<void>;
+  /**
+   * Returns the host-private journal binding for in-process runtime resume.
+   * Do not expose this method over RPC.
+   */
   upstreamSession(
     context: RequestContext,
     taskId: string,
@@ -1081,6 +1085,57 @@ export async function createTaskStore(
       "upstream session binding",
     );
   };
+  const assertNoHostPathLeak = (
+    key: string,
+    taskId: string,
+    value: unknown,
+  ): void => {
+    const forbiddenKeys = new Set([
+      "session_file",
+      "sessionFile",
+      "journal_path",
+      "journalPath",
+    ]);
+    const forbiddenPaths = new Set<string>();
+    const binding = readBinding(key, taskId);
+    if (binding) {
+      const journalPath = binding.session_file;
+      const realJournalPath = resolveForSafety(journalPath);
+      for (const candidate of [journalPath, realJournalPath]) {
+        if (candidate.length > 1 && candidate !== path.parse(candidate).root) {
+          forbiddenPaths.add(candidate);
+        }
+        const directory = path.dirname(candidate);
+        if (directory.length > 1 && directory !== path.parse(directory).root) {
+          forbiddenPaths.add(directory);
+        }
+      }
+    }
+    const pending = [value];
+    const visited = new WeakSet<object>();
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (typeof current === "string") {
+        if ([...forbiddenPaths].some((secret) => current.includes(secret))) {
+          throw invalidInput(
+            "Event payload must not contain the upstream journal path",
+          );
+        }
+        continue;
+      }
+      if (current === null || typeof current !== "object") continue;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      for (const [property, child] of Object.entries(current)) {
+        if (forbiddenKeys.has(property)) {
+          throw invalidInput(
+            "Event payload must not contain the upstream journal path",
+          );
+        }
+        pending.push(child);
+      }
+    }
+  };
   const bindingSchema = z
     .object({
       runtime: z.literal("oh-my-pi"),
@@ -1508,6 +1563,7 @@ export async function createTaskStore(
       ) {
         throw invalidInput("Instruction must be non-empty and at most 16 KiB");
       }
+      assertNoHostPathLeak(key, taskId, instruction);
       const inputHash = idemKeyInput({ instruction });
       const replay = getIdempotent(
         key,
@@ -1542,6 +1598,7 @@ export async function createTaskStore(
           if (["completed", "cancelled", "failed"].includes(current.status)) {
             fail("invalid_transition", "Terminal tasks cannot be steered");
           }
+          assertNoHostPathLeak(key, taskId, instruction);
           insertArtifactRow(key, prepared.ref);
           const event = lifecycleEvent(
             parsedContext,
@@ -1580,6 +1637,7 @@ export async function createTaskStore(
       ) {
         throw invalidInput("Lifecycle event types are reserved");
       }
+      assertNoHostPathLeak(key, taskId, input);
       const versions = assertSchema(
         z.array(VersionRefSchema).min(1),
         input.versions,
@@ -1694,6 +1752,7 @@ export async function createTaskStore(
           for (const ref of observed.artifacts ?? [])
             assertArtifactOwned(key, ref);
         }
+        assertNoHostPathLeak(key, taskId, input);
         insertArtifactRow(key, prepared.ref);
         const tail = verifiedEventTail(key, taskId);
         const event = buildEvent(task, {
@@ -1739,7 +1798,9 @@ export async function createTaskStore(
       const snapshot = readTask(key, taskId);
       const prepared = preparePayloadArtifact(snapshot.scope, {
         change: "upstream_session_bound",
-        binding,
+        runtime: binding.runtime,
+        package_version: binding.package_version,
+        session_id: binding.session_id,
       });
       const transaction = db.transaction(() => {
         const replay = getIdempotent(
@@ -1751,12 +1812,6 @@ export async function createTaskStore(
         );
         if (replay !== null) return;
         const task = readTask(key, taskId);
-        if (["completed", "cancelled", "failed"].includes(task.status)) {
-          fail(
-            "invalid_transition",
-            "Terminal tasks cannot bind an upstream session",
-          );
-        }
         const existing = readBinding(key, taskId);
         if (existing) {
           if (canonicalJson(existing) !== canonicalJson(binding)) {
@@ -1771,6 +1826,12 @@ export async function createTaskStore(
             null,
           );
           return;
+        }
+        if (["completed", "cancelled", "failed"].includes(task.status)) {
+          fail(
+            "invalid_transition",
+            "Terminal tasks cannot bind an upstream session",
+          );
         }
         insertArtifactRow(key, prepared.ref);
         const bindingJson = canonicalJson(binding);
