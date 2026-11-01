@@ -1953,6 +1953,34 @@ test("coordinators delegate bounded children that run in private workspaces and 
       )
     ).status,
   ).toBe("closed");
+  // The fixture registry has a single free model, so the reviewer could not
+  // be routed away from the worker's model; the record says so.
+  expect(required(launches[1]).model_id).toBe("fixture/free");
+  const childRecords: { role_label: string; reviewer_independent: unknown }[] =
+    [];
+  for await (const event of f.store.events(context(), "task")) {
+    if (
+      event.event_type !== "tool.completed" ||
+      event.producer !== "@mars/workbench"
+    )
+      continue;
+    const payload = JSON.parse(
+      new TextDecoder().decode(
+        await f.store.artifacts.get(context(), event.payload),
+      ),
+    );
+    if (payload.operation === "child.result") childRecords.push(payload);
+  }
+  expect(
+    childRecords
+      .filter((record) => record.role_label === "reviewer")
+      .map((record) => record.reviewer_independent),
+  ).toContain(false);
+  expect(
+    childRecords
+      .filter((record) => record.role_label === "worker")
+      .map((record) => record.reviewer_independent),
+  ).toEqual(expect.arrayContaining([null]));
   await api.close();
 });
 

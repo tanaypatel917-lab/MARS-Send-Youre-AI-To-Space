@@ -59,11 +59,12 @@ export function routingRequest(
     "domain" | "complexity" | "paid_consent"
   >,
   minContextTokens: number,
+  role: RoutingRequest["role"] = "worker",
 ): RoutingRequest {
   return {
     schema_version: 1,
     task_id: routingTaskId(task.task_id),
-    role: "worker",
+    role,
     domain: specialists.domain,
     complexity: specialists.complexity ?? "medium",
     requires: {
@@ -89,10 +90,11 @@ export async function routeLaunch(
   toolsRequired: boolean,
   specialists: WorkbenchSpecialists,
   minContextTokens: number,
+  role: RoutingRequest["role"] = "worker",
 ): Promise<FrozenRouting> {
   const decision = await specialists.router.route(
     context,
-    routingRequest(task, toolsRequired, specialists, minContextTokens),
+    routingRequest(task, toolsRequired, specialists, minContextTokens, role),
   );
   const selected =
     decision.outcome === "specialist" || decision.outcome === "baseline"

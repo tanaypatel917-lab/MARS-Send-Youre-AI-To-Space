@@ -47,6 +47,7 @@ import {
 import type { ModelProviderRegistry } from "@mars/providers";
 import type { DurableTaskStore } from "@mars/tasks";
 import { z } from "zod";
+import { chooseChildModel, isReviewerRole } from "./child-model";
 import {
   collaborationTools,
   type FrozenCollaboration,
@@ -578,6 +579,11 @@ export async function createWorkbenchHost(
     return recorded;
   };
   const childRouting = new Map<string, FrozenRouting>();
+  // Models already used inside a task (coordinator and children) so a
+  // reviewer child can be routed to a different one; per child, whether its
+  // review was independent, mirrored into the child.result event.
+  const childModels = new Map<string, Set<string>>();
+  const reviewerIndependence = new Map<string, boolean>();
   /** Routing decisions survive a host restart in a private per-child record. */
   const childRoutingPath = (childTaskId: string) =>
     join(
@@ -697,11 +703,14 @@ export async function createWorkbenchHost(
               status: child.state,
               model_id: launch?.model_id ?? null,
               routing: await recallChildRouting(childTaskId),
+              reviewer_independent:
+                reviewerIndependence.get(childTaskId) ?? null,
             },
             usage: delta,
           });
           if (final) {
             childLaunches.delete(childTaskId);
+            reviewerIndependence.delete(childTaskId);
             await forgetChildRouting(childTaskId);
           }
         }
@@ -907,6 +916,7 @@ export async function createWorkbenchHost(
         if (active.get(task.task_id) === runtime) {
           active.delete(task.task_id);
           liveRooms.delete(task.task_id);
+          childModels.delete(task.task_id);
           jobs.delete(task.task_id);
           // Re-sweep after the live entry is gone so a room whose children
           // have all settled releases its retained capability.
@@ -1146,50 +1156,45 @@ export async function createWorkbenchHost(
       // With a specialist registry the child is routed like a launch, and a
       // verified specialist is pinned only when it is free and tool-capable.
       modelPolicy: async (request) => {
-        const fallback = () =>
-          selectExecutionModel(options.registry, undefined, true);
-        if (!options.specialists)
-          return { model_id: fallback().id, reason: "workbench free default" };
-        let routing: FrozenRouting;
-        try {
-          routing = await routeLaunch(
-            internalContext(options.scope),
-            { task_id: request.child_task_id, budget: request.budget },
-            true,
-            { ...options.specialists, paid_consent: false },
-            initialRequestAllowance({
-              approvals: request.approvals,
-              recall: false,
-              // Children get only workspace tools from the child adapter.
-              collaboration: false,
-              instruction: request.instruction,
-            }) + MIN_INITIAL_OUTPUT_RESERVE,
-          );
-        } catch {
-          return {
-            model_id: fallback().id,
-            reason: "workbench free default (routing unavailable)",
-          };
+        const reviewer = isReviewerRole(request.role_label);
+        const used = childModels.get(request.task_id) ?? new Set<string>();
+        childModels.set(request.task_id, used);
+        const excluded = new Set(used);
+        if (request.parent_model_id) excluded.add(request.parent_model_id);
+        let routing: FrozenRouting | null = null;
+        if (options.specialists) {
+          try {
+            routing = await routeLaunch(
+              internalContext(options.scope),
+              { task_id: request.child_task_id, budget: request.budget },
+              true,
+              { ...options.specialists, paid_consent: false },
+              initialRequestAllowance({
+                approvals: request.approvals,
+                recall: false,
+                // Children get only workspace tools from the child adapter.
+                collaboration: false,
+                instruction: request.instruction,
+              }) + MIN_INITIAL_OUTPUT_RESERVE,
+              reviewer ? "reviewer" : "worker",
+            );
+            await rememberChildRouting(request.child_task_id, routing).catch(
+              () => undefined,
+            );
+          } catch {
+            routing = null;
+          }
         }
-        await rememberChildRouting(request.child_task_id, routing).catch(
-          () => undefined,
+        const choice = chooseChildModel(
+          options.registry,
+          routing,
+          excluded,
+          reviewer,
         );
-        const specialist = routing.model_id
-          ? options.registry.getModel(routing.model_id)
-          : undefined;
-        if (
-          specialist &&
-          specialist.pricing.free === true &&
-          specialist.capabilities.tools
-        )
-          return {
-            model_id: specialist.id,
-            reason: `specialist ${routing.decision_id}`,
-          };
-        return {
-          model_id: fallback().id,
-          reason: `workbench free default (${routing.outcome})`,
-        };
+        used.add(choice.model_id);
+        if (choice.independent !== null)
+          reviewerIndependence.set(request.child_task_id, choice.independent);
+        return { model_id: choice.model_id, reason: choice.reason };
       },
     });
     await runner.recover();
