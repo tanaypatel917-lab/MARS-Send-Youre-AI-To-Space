@@ -53,6 +53,11 @@
         "category": "MARS"
       },
       {
+        "command": "mars.importConnection",
+        "title": "Import local connection file",
+        "category": "MARS"
+      },
+      {
         "command": "mars.clearToken",
         "title": "Clear server token",
         "category": "MARS"
