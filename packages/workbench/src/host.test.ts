@@ -2145,3 +2145,158 @@ test("children of maximal-length task ids get provider-valid workspace ids", asy
   session.finish("completed");
   await api.close();
 });
+
+test("children route through the specialist registry and mirror usage into task events", async () => {
+  const f = await fixture();
+  const routed = await f.routedRegistry();
+  const specialists = new MemoryArtifacts();
+  const registry = createSpecialistRegistry(
+    join(f.root, "specialists"),
+    specialists,
+    {
+      catalog: routed,
+      evidenceVerifier: evidenceVerifier({ ownerIds: [scope.owner_id] }),
+    },
+  );
+  await registry.registerBaseline(
+    context(),
+    makeBaseline(scope, {
+      model_id: "fixture/free",
+      provider_id: "fixture",
+      provider_model: "fixture",
+    }),
+  );
+  // Children of an unpaid coordinator carry a zero USD budget, so only a
+  // specialist whose measured cost is zero can be routed to them.
+  const promoted = await makeSpecialistFixture(specialists, {
+    scope,
+    modelId: "fixture/specialist",
+    providerId: "fixture",
+    providerModel: "specialist",
+    costUsdTotal: 0,
+    runtimeMsP95: 1_000,
+  });
+  await registry.registerSpecialist(context(), promoted.registration);
+  await registry.promote(context(), "specialist-1", "1", null);
+  const collaboration = await createCollaboration({
+    rootDir: join(f.root, "collaboration"),
+    hostPrivateRoots: [join(f.root, "private")],
+  });
+  const requests: RoutingRequest[] = [];
+  const launches: ChildLaunch[] = [];
+  const api = await f.makeHost(
+    routed,
+    undefined,
+    undefined,
+    {
+      router: {
+        route: (requestContext, request) => {
+          requests.push(request);
+          return registry.route(requestContext, request);
+        },
+      },
+      domain: "coding/mechanical-edit",
+    },
+    {
+      host: collaboration.host,
+      agents: collaboration.agents,
+      delegation: {
+        pool: { max_tokens: 400 },
+        tickMs: 10,
+        adapter: ({ workspaceFor }) => ({
+          async start(launch) {
+            launches.push(launch);
+            const binding = await workspaceFor(launch);
+            return {
+              session_ref: null,
+              base_revision: binding.base_revision,
+              outcome: Promise.resolve({
+                status: "completed" as const,
+                summary: "Done.",
+                artifacts: [],
+                usage: { input_tokens: 7, output_tokens: 3, usd: 0, steps: 1 },
+              }),
+              async cancel() {},
+            };
+          },
+        }),
+      },
+    },
+  );
+  const base = task();
+  await api.create(context(), {
+    ...base,
+    budget: {
+      ...base.budget,
+      max_usd: 1,
+      max_duration_ms: 60_000,
+      max_concurrency: 3,
+    },
+  });
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  const delegation = required(
+    required(session.options.collaboration).delegation,
+  );
+  await delegation.delegate({
+    role_label: "reader",
+    instruction: "Look only.",
+    max_tokens: 300,
+    max_duration_ms: 30_000,
+    max_steps: 2,
+    max_messages: 2,
+  });
+  const deadline = Date.now() + 5_000;
+  const childEvents = async () => {
+    const found: Array<{ payload: Record<string, unknown>; usage: unknown }> =
+      [];
+    for await (const event of f.store.events(context(), "task")) {
+      if (event.event_type !== "tool.completed") continue;
+      const bytes = await f.store.artifacts.get(context(), event.payload);
+      const payload = JSON.parse(new TextDecoder().decode(bytes));
+      if (payload.operation === "child.result")
+        found.push({ payload, usage: event.usage });
+    }
+    return found;
+  };
+  let events = await childEvents();
+  while (events.length === 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    events = await childEvents();
+  }
+  const launch = required(launches[0]);
+  expect(launch.model_id).toBe("fixture/specialist");
+  const request = required(requests[1]);
+  expect(request.role).toBe("worker");
+  expect(request.paid_consent).toBe(false);
+  expect(request.requires.tools).toBe(true);
+  expect(request.task_id).not.toBe(requests[0]?.task_id);
+  expect(request.budget.max_tokens).toBeLessThanOrEqual(300);
+  expect(request.requires.min_context_tokens).toBe(
+    initialRequestAllowance({
+      approvals: { read: true, write: false, execute: false },
+      recall: false,
+      collaboration: true,
+      instruction: launch.instruction,
+    }) + MIN_INITIAL_OUTPUT_RESERVE,
+  );
+  const event = required(events[0]);
+  expect(event.payload.child_task_id).toBe(launch.child_task_id);
+  expect(event.payload.status).toBe("completed");
+  expect(event.payload.model_id).toBe("fixture/specialist");
+  expect((event.payload.routing as { outcome: string }).outcome).toBe(
+    "specialist",
+  );
+  expect(event.usage).toEqual({
+    input_tokens: 7,
+    output_tokens: 3,
+    cost_usd: 0,
+  });
+  expect(JSON.stringify(event.payload)).not.toContain(f.root);
+  session.finish("completed");
+  await api.close();
+});

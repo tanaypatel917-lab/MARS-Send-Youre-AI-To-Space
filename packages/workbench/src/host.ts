@@ -12,7 +12,9 @@ import {
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
   type ChildLaunch,
+  type ChildOutcome,
   type ChildRunner,
+  type ChildRuntimeAdapter,
   CollaborationError,
   createChildRunner,
   createOhMyPiChildAdapter,
@@ -501,6 +503,95 @@ export async function createWorkbenchHost(
       },
     });
   };
+  /** Session usage already mirrored into task events for one child. */
+  const childResults = async (
+    context: RequestContext,
+    taskId: string,
+    childTaskId: string,
+  ) => {
+    let input = 0;
+    let output = 0;
+    let usd = 0;
+    for await (const event of options.store.events(context, taskId)) {
+      if (
+        event.event_type !== "tool.completed" ||
+        event.producer !== "@mars/workbench"
+      )
+        continue;
+      const bytes = await options.store.artifacts.get(context, event.payload);
+      const payload = z
+        .object({
+          operation: z.literal("child.result"),
+          child_task_id: z.string(),
+        })
+        .safeParse(JSON.parse(new TextDecoder().decode(bytes)));
+      if (!payload.success || payload.data.child_task_id !== childTaskId)
+        continue;
+      input += event.usage?.input_tokens ?? 0;
+      output += event.usage?.output_tokens ?? 0;
+      usd += event.usage?.cost_usd ?? 0;
+    }
+    return { input, output, usd };
+  };
+  const childRouting = new Map<string, FrozenRouting>();
+  /**
+   * Mirrors one child attempt into the parent task's durable timeline. The
+   * collaboration store stays authoritative for budgets; this records what
+   * each child ran, under which routing decision, and what it consumed.
+   */
+  const publishChildResult = async (
+    launch: ChildLaunch,
+    outcome: ChildOutcome,
+  ) => {
+    const context = internalContext(options.scope);
+    const previous = await childResults(
+      context,
+      launch.task_id,
+      launch.child_task_id,
+    );
+    const usage = outcome.usage;
+    await options.store.appendEvent(context, launch.task_id, {
+      event_type: "tool.completed",
+      producer: "@mars/workbench",
+      run_id: randomUUID(),
+      versions: [{ component: "@mars/workbench", revision: "0.0.1" }],
+      payload: {
+        operation: "child.result",
+        child_task_id: launch.child_task_id,
+        child_agent_id: launch.agent_id,
+        role_label: launch.role_label,
+        task_revision: launch.task_revision,
+        attempt: launch.attempt,
+        status: outcome.status,
+        model_id: launch.model_id,
+        routing: childRouting.get(launch.child_task_id) ?? null,
+      },
+      ...(usage
+        ? {
+            usage: {
+              input_tokens: Math.max(0, usage.input_tokens - previous.input),
+              output_tokens: Math.max(0, usage.output_tokens - previous.output),
+              cost_usd: Math.max(0, usage.usd - previous.usd),
+            },
+          }
+        : {}),
+    });
+  };
+  const observeChildren = (
+    adapter: ChildRuntimeAdapter,
+  ): ChildRuntimeAdapter => ({
+    async start(launch, hooks) {
+      const run = await adapter.start(launch, hooks);
+      void run.outcome.then(
+        (outcome) => publishChildResult(launch, outcome).catch(() => undefined),
+        () => undefined,
+      );
+      return run;
+    },
+    ...(adapter.reconcile
+      ? { reconcile: adapter.reconcile.bind(adapter) }
+      : {}),
+  });
   const closeFrozenRoom = (
     frozen: FrozenCollaboration,
     mode: "drain" | "cancel",
@@ -871,16 +962,18 @@ export async function createWorkbenchHost(
   };
   if (options.collaboration && delegation) {
     const collaboration = options.collaboration;
-    const adapter = delegation.adapter
-      ? delegation.adapter({ workspaceFor: childWorkspaceFor })
-      : createOhMyPiChildAdapter({
-          registry: options.registry,
-          stateRoot: join(options.stateRoot, "children"),
-          workspaceFor: childWorkspaceFor,
-          ...(options.runtimeFactory
-            ? { runtimeFactory: options.runtimeFactory }
-            : {}),
-        });
+    const adapter = observeChildren(
+      delegation.adapter
+        ? delegation.adapter({ workspaceFor: childWorkspaceFor })
+        : createOhMyPiChildAdapter({
+            registry: options.registry,
+            stateRoot: join(options.stateRoot, "children"),
+            workspaceFor: childWorkspaceFor,
+            ...(options.runtimeFactory
+              ? { runtimeFactory: options.runtimeFactory }
+              : {}),
+          }),
+    );
     runner = createChildRunner({
       collaboration: {
         host: collaboration.host,
@@ -890,10 +983,54 @@ export async function createWorkbenchHost(
       adapter,
       // Children never inherit the coordinator's model: a paid coordinator
       // would otherwise hand children a model they are not allowed to use.
-      modelPolicy: async () => ({
-        model_id: selectExecutionModel(options.registry, undefined, true).id,
-        reason: "workbench free default",
-      }),
+      // With a specialist registry the child is routed like a launch, and a
+      // verified specialist is pinned only when it is free and tool-capable.
+      modelPolicy: async (request) => {
+        const fallback = selectExecutionModel(
+          options.registry,
+          undefined,
+          true,
+        );
+        if (!options.specialists)
+          return { model_id: fallback.id, reason: "workbench free default" };
+        let routing: FrozenRouting;
+        try {
+          routing = await routeLaunch(
+            internalContext(options.scope),
+            { task_id: request.child_task_id, budget: request.budget },
+            true,
+            { ...options.specialists, paid_consent: false },
+            initialRequestAllowance({
+              approvals: request.approvals,
+              recall: false,
+              collaboration: true,
+              instruction: request.instruction,
+            }) + MIN_INITIAL_OUTPUT_RESERVE,
+          );
+        } catch {
+          return {
+            model_id: fallback.id,
+            reason: "workbench free default (routing unavailable)",
+          };
+        }
+        childRouting.set(request.child_task_id, routing);
+        const specialist = routing.model_id
+          ? options.registry.getModel(routing.model_id)
+          : undefined;
+        if (
+          specialist &&
+          specialist.pricing.free === true &&
+          specialist.capabilities.tools
+        )
+          return {
+            model_id: specialist.id,
+            reason: `specialist ${routing.decision_id}`,
+          };
+        return {
+          model_id: fallback.id,
+          reason: `workbench free default (${routing.outcome})`,
+        };
+      },
     });
     await runner.recover();
     const tick = () => void runner?.tick().catch(() => undefined);
