@@ -5,7 +5,13 @@ import type { DurableResearchService } from "@mars/research";
 /** The parent-owned research service surface the workbench uses. */
 export type WorkbenchResearch = Pick<
   DurableResearchService,
-  "submit" | "readFindings" | "inspect" | "reconcileTask"
+  | "submit"
+  | "readFindings"
+  | "inspect"
+  | "reconcileTask"
+  | "list"
+  | "markStale"
+  | "cancel"
 >;
 
 /** Default research deadline after submission, bounded by the task's max duration. */
@@ -34,6 +40,27 @@ export function renderUntrustedFinding(finding: ResearchFinding): string {
   ].join("\n");
 }
 
+/** Supersedes every research request of a task after its instructions change. */
+export async function staleTaskResearch(
+  service: WorkbenchResearch,
+  context: RequestContext,
+  taskId: string,
+): Promise<void> {
+  const jobs = await service.list(context, { task_id: taskId });
+  for (const job of jobs) {
+    if (job.task_id !== taskId || job.stale) continue;
+    await service.markStale(context, job.request_id).catch(() => undefined);
+    if (!TERMINAL_RESEARCH.has(job.status))
+      await service.cancel(context, job.request_id).catch(() => undefined);
+  }
+}
+const TERMINAL_RESEARCH = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "expired",
+]);
+
 /**
  * Binds the session's research tools to the parent-owned service host-side.
  * Requests are scoped to the task and its current durable revision and never
@@ -43,13 +70,19 @@ export function researchTools(
   service: WorkbenchResearch,
   context: () => RequestContext,
   currentTask: () => Promise<Task>,
+  taskDeadline: () => number,
   now: () => number = Date.now,
 ): RuntimeResearch {
   return {
     async submit(input) {
       const task = await currentTask();
+      const remaining = taskDeadline() - now();
+      if (remaining <= 0)
+        throw new Error(
+          "The task deadline has passed; research cannot be queued.",
+        );
       const deadline = new Date(
-        now() + Math.min(RESEARCH_DEADLINE_MS, task.budget.max_duration_ms),
+        now() + Math.min(RESEARCH_DEADLINE_MS, remaining),
       ).toISOString();
       const requestId = await service.submit(context(), {
         question: input.question,
@@ -63,7 +96,10 @@ export function researchTools(
       return `Queued research request ${requestId} (deadline ${deadline}). Read its findings later with mars_findings.`;
     },
     async findings(requestId) {
+      const task = await currentTask();
       const job = await service.inspect(context(), requestId);
+      if (job.task_id !== task.task_id)
+        throw new Error("Unknown research request for this task.");
       const findings = await service.readFindings(context(), requestId);
       const header = `Research request ${job.request_id}: ${job.status}${job.stale ? " (stale: the task changed since it was asked)" : ""}, ${job.finding_count} finding(s).`;
       if (findings.length === 0) return header;

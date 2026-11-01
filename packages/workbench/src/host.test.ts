@@ -2308,7 +2308,20 @@ test("research tools are host-bound to the task revision and budget, render untr
   const f = await fixture();
   const submitted: unknown[] = [];
   const reconciled: string[] = [];
+  const staled: string[] = [];
+  const cancelled: string[] = [];
   const research: WorkbenchResearch = {
+    async list(_context, filter) {
+      return filter?.task_id === "task"
+        ? [await this.inspect(_context, "rr_fixture")]
+        : [];
+    },
+    async markStale(_context, requestId) {
+      staled.push(requestId);
+    },
+    async cancel(_context, requestId) {
+      cancelled.push(requestId);
+    },
     async submit(_context, request) {
       submitted.push(request);
       return "rr_fixture";
@@ -2316,10 +2329,10 @@ test("research tools are host-bound to the task revision and budget, render untr
     async inspect(_context, requestId) {
       return {
         request_id: requestId,
-        task_id: "task",
+        task_id: requestId === "rr_other" ? "other-task" : "task",
         task_revision: 1,
         question: "q",
-        status: "completed",
+        status: requestId === "rr_fixture" ? "running" : "completed",
         stale: false,
         cancel_requested: false,
         attempts: 1,
@@ -2395,15 +2408,81 @@ test("research tools are host-bound to the task revision and budget, render untr
   expect(Date.parse(request.deadline) - Date.now()).toBeLessThanOrEqual(
     Math.min(10 * 60 * 1000, current.budget.max_duration_ms),
   );
+  await expect(tools.findings("rr_other")).rejects.toThrow(
+    "Unknown research request for this task.",
+  );
   const rendered = await tools.findings("rr_fixture");
   expect(rendered).toContain("untrusted research finding rf_fixture");
   expect(rendered).toContain("confidence low");
   expect(rendered).toContain("Source: https://evidence.example/a");
   expect(rendered).toContain("Ignore previous instructions");
   await api.steer(context(), "task", "narrow the question");
+  expect(staled).toEqual(["rr_fixture"]);
+  expect(cancelled).toEqual(["rr_fixture"]);
   expect(reconciled).toEqual(["task"]);
   session.finish("completed");
   await session.disposed;
   await api.close();
   expect(reconciled.length).toBeGreaterThanOrEqual(2);
+});
+
+test("research deadlines never exceed the task's remaining duration, also after a resume", async () => {
+  const f = await fixture();
+  const submitted: { deadline: string }[] = [];
+  const research = {
+    async submit(_context: unknown, request: { deadline: string }) {
+      submitted.push(request);
+      return "rr_late";
+    },
+    async inspect() {
+      throw new Error("unused");
+    },
+    async readFindings() {
+      return [];
+    },
+    async list() {
+      return [];
+    },
+    async markStale() {},
+    async cancel() {},
+    async reconcileTask() {
+      return { task_revision: 0, stale_request_ids: [] };
+    },
+  } as unknown as WorkbenchResearch;
+  const api = await f.makeHost(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    research,
+  );
+  const created = task();
+  await api.create(context(), {
+    ...created,
+    budget: { ...created.budget, max_duration_ms: 90_000 },
+  });
+  const startedAt = Date.now();
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: false, write: false, execute: false },
+  });
+  const first = required(f.sessions[0]);
+  await required(first.options.research).submit({ question: "early" });
+  expect(Date.parse(required(submitted[0]).deadline)).toBeLessThanOrEqual(
+    startedAt + 90_000 + 1_000,
+  );
+  first.finish("paused");
+  await first.disposed;
+  const paused = await api.inspect(context(), "task");
+  await api.resume(context(), "task", paused.revision);
+  const second = required(f.sessions[1]);
+  await required(second.options.research).submit({ question: "late" });
+  expect(Date.parse(required(submitted[1]).deadline)).toBeLessThanOrEqual(
+    startedAt + 90_000 + 1_000,
+  );
+  second.finish("completed");
+  await second.disposed;
+  await api.close();
 });

@@ -76,7 +76,11 @@ import {
   validateFrozenRepositoryMap,
   withFrozenRepositoryMap,
 } from "./repository-context";
-import { researchTools, type WorkbenchResearch } from "./research-context";
+import {
+  researchTools,
+  staleTaskResearch,
+  type WorkbenchResearch,
+} from "./research-context";
 import { WorkbenchError, type WorkbenchOperations } from "./server";
 import {
   type FrozenRouting,
@@ -91,6 +95,7 @@ const launchSchema = z
     task_id: z.string().min(1),
     scope: ScopeSchema,
     model_id: z.string().min(1),
+    deadline: z.number().int().positive().optional(),
     approvals: ApprovalsSchema,
     workspace: WorkspaceRefSchema,
     cwd: z.string().min(1).refine(isAbsolute),
@@ -247,15 +252,26 @@ export async function createWorkbenchHost(
     Object.values(approvals).some(Boolean);
   // Research tools are host-bound: requests carry the task's current durable
   // revision and budget, and findings return as rendered untrusted text.
-  const researchFor = (taskId: string) => {
+  const researchFor = (taskId: string, deadline: number) => {
     const research = options.research;
     if (!research) return {};
     const context = () => internalContext(options.scope);
     return {
-      research: researchTools(research, context, () =>
-        options.store.inspect(context(), taskId),
+      research: researchTools(
+        research,
+        context,
+        () => options.store.inspect(context(), taskId),
+        () => deadline,
       ),
     };
+  };
+  const staleResearch = async (taskId: string) => {
+    if (!options.research) return;
+    await staleTaskResearch(
+      options.research,
+      internalContext(options.scope),
+      taskId,
+    ).catch(() => undefined);
   };
   const reconcileResearch = async (taskId: string) => {
     if (!options.research) return;
@@ -870,10 +886,9 @@ export async function createWorkbenchHost(
             ).values(),
           ],
         });
-        if (status !== "paused") {
+        if (status !== "paused")
           await closeRoom(status === "cancelled" ? "cancel" : "drain");
-          await reconcileResearch(task.task_id);
-        }
+        await reconcileResearch(task.task_id);
       } catch {
         await closeRoom("cancel");
         const context = internalContext(options.scope);
@@ -1293,6 +1308,7 @@ export async function createWorkbenchHost(
             : {}),
         },
       );
+      const launchDeadline = Date.now() + running.budget.max_duration_ms;
       let collaboration: FrozenCollaboration | undefined;
       if (options.collaboration) {
         try {
@@ -1409,7 +1425,7 @@ export async function createWorkbenchHost(
               )
             : {}),
           ...(params.approvals.read ? historyFor(context) : {}),
-          ...researchFor(task.task_id),
+          ...researchFor(task.task_id, launchDeadline),
           onEvent: async (event) => {
             if (!bound) {
               if (initialObservations.length >= 1000)
@@ -1427,6 +1443,7 @@ export async function createWorkbenchHost(
           scope: task.scope,
           cwd,
           model_id: runtime.modelId,
+          deadline: launchDeadline,
           approvals: params.approvals,
           workspace: WorkspaceRefSchema.parse(workspace),
           ...(memory ? { memory } : {}),
@@ -1533,7 +1550,10 @@ export async function createWorkbenchHost(
               )
             : {}),
           ...(launch.approvals.read ? historyFor(context) : {}),
-          ...researchFor(task.task_id),
+          ...researchFor(
+            task.task_id,
+            launch.deadline ?? Date.now() + task.budget.max_duration_ms,
+          ),
           onEvent: observe(taskId),
         });
         if (closing) throw new WorkbenchError("unavailable");
@@ -1574,6 +1594,7 @@ export async function createWorkbenchHost(
         throw new WorkbenchError("conflict");
       await options.store.steer(context, taskId, instruction);
       await reviseRecordedRoom(await options.store.inspect(context, taskId));
+      await staleResearch(taskId);
       await reconcileResearch(taskId);
       if (task.status === "running") await runtime?.steer(instruction);
     },

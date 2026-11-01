@@ -114,15 +114,19 @@ No live model request, paid service or real VS Code window is used for this veri
 
 ## Background research
 
-When the host is created with a parent-owned \`research\` service (the
-\`@mars/research\` control plane; no production worker ships yet, so this is
+When the host is created with a parent-owned `research` service (the
+`@mars/research` control plane; no production worker ships yet, so this is
 test-injected only), every session is given two host-bound tools:
-\`mars_research\` queues a sourced question scoped to the task's current
+`mars_research` queues a sourced question scoped to the task's current
 durable revision, with the task budget as its ceiling and a deadline no later
-than ten minutes or the task's remaining duration, whichever is shorter;
-\`mars_findings\` renders a request's findings as clearly labelled untrusted,
-cited evidence (bounded fields, at most twenty findings). The model never
-sees request internals, service paths or the stored scope. The research tools
-count toward model tool requirements, specialist routing and first-request
-capacity. The host calls \`reconcileTask\` after steering, cancellation and
-every terminal outcome so findings from a superseded revision go stale.
+than ten minutes or the task's remaining duration (the launch deadline is
+frozen in `launch.json`, so a resumed task cannot restart that window);
+`mars_findings` renders a request's findings as clearly labelled untrusted,
+cited evidence (bounded fields, at most twenty findings) and refuses request
+ids that belong to another task. The model never sees request internals,
+service paths or the stored scope. The research tools count toward model tool
+requirements, specialist routing and first-request capacity. Steering marks
+every earlier request of the task stale and cancels the active ones, and the
+host calls `reconcileTask` after steering, cancellation and every outcome
+(including a pause, which advances the durable revision) so findings from a
+superseded revision go stale.
