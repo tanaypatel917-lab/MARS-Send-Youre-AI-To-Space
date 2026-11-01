@@ -56,7 +56,38 @@ export type FetchLike = (
   status: number;
   headers: { get(name: string): string | null };
   text(): Promise<string>;
+  body?: ReadableStream<Uint8Array> | null;
 }>;
+
+type FetchResponse = Awaited<ReturnType<FetchLike>>;
+
+/** Reads a response body, aborting as soon as it exceeds `maxBytes`. */
+async function readBounded(
+  response: FetchResponse,
+  maxBytes: number,
+): Promise<string> {
+  if (!response.body) {
+    const text = await response.text();
+    if (text.length > maxBytes)
+      throw new RpcError("protocol", "Server response is too large.");
+    return text;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new RpcError("protocol", "Server response is too large.");
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
 
 export interface HttpTransportOptions {
   rpcUrl: string;
@@ -145,7 +176,7 @@ export class HttpRpcTransport implements RpcTransport {
       const declared = Number(response.headers.get("content-length") ?? "0");
       if (declared > this.maxBytes)
         throw new RpcError("protocol", "Server response is too large.");
-      text = await response.text();
+      text = await readBounded(response, this.maxBytes);
     } catch (error) {
       if (error instanceof RpcError) throw error;
       if (signal?.aborted)
@@ -157,8 +188,6 @@ export class HttpRpcTransport implements RpcTransport {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
     }
-    if (text.length > this.maxBytes)
-      throw new RpcError("protocol", "Server response is too large.");
     return this.parse(status, contentType, text, token);
   }
 
