@@ -36,6 +36,10 @@ Runtime-result events publish token deltas against previously reported journal t
 
 Session journal paths and launch metadata are host-only. Public events, artifacts and diffs are checked for private paths; unsafe legacy stored data is refused on reads, not rewritten or deleted. RPC authenticates every request, requires exact scope, rejects browser Origins, bounds payloads and sanitizes errors. This local endpoint is not a deployment-grade remote gateway.
 
+Initial startup also checks the complete request plus formatted acceptance criteria against the same runtime limit (JavaScript string length). An oversized initial instruction returns `too_large` before selecting a model, changing the task revision/status, preparing a workspace, or opening a runtime. The pending task remains intact; neither its request nor its acceptance criteria are truncated.
+
+Missing-model start/resume failures return the stable `model_unavailable` RPC code with credential/model configuration guidance, never provider details or host paths. Startup remains pending; a saved session remains paused until the same configured model is available again. Automatic selection remains free-only; this error does not authorize paid fallback.
+
 ## Reproducible verification and limits
 
 ```sh

@@ -33,6 +33,14 @@
         "@types/vscode": "1.96.0",
       },
     },
+    "packages/context": {
+      "name": "@mars/context",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "typescript": "5.9.3",
+        "zod": "3.25.76",
+      },
+    },
     "packages/contracts": {
       "name": "@mars/contracts",
       "version": "0.0.1",
@@ -60,11 +68,31 @@
         "@mars/contracts": "workspace:*",
       },
     },
+    "packages/memory": {
+      "name": "@mars/memory",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
+      },
+      "devDependencies": {
+        "@oh-my-pi/pi-coding-agent": "18.14.0",
+      },
+    },
     "packages/providers": {
       "name": "@mars/providers",
       "version": "0.0.1",
       "dependencies": {
         "@mars/contracts": "workspace:*",
+      },
+    },
+    "packages/research": {
+      "name": "@mars/research",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "@mars/tasks": "workspace:*",
+        "zod": "3.25.76",
       },
     },
     "packages/specialists": {
@@ -198,13 +226,19 @@
 
     "@mars/cli": ["@mars/cli@workspace:apps/cli"],
 
+    "@mars/context": ["@mars/context@workspace:packages/context"],
+
     "@mars/contracts": ["@mars/contracts@workspace:packages/contracts"],
 
     "@mars/execution": ["@mars/execution@workspace:packages/execution"],
 
     "@mars/integration-trust": ["@mars/integration-trust@workspace:packages/integration-trust"],
 
+    "@mars/memory": ["@mars/memory@workspace:packages/memory"],
+
     "@mars/providers": ["@mars/providers@workspace:packages/providers"],
+
+    "@mars/research": ["@mars/research@workspace:packages/research"],
 
     "@mars/specialists": ["@mars/specialists@workspace:packages/specialists"],
 

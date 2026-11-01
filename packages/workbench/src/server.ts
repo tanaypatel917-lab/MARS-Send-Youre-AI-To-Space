@@ -78,6 +78,7 @@ export type RpcErrorCode =
   | "not_found"
   | "conflict"
   | "unavailable"
+  | "model_unavailable"
   | "too_large"
   | "internal_error";
 const errors: Record<RpcErrorCode, { status: number; message: string }> = {
@@ -96,6 +97,11 @@ const errors: Record<RpcErrorCode, { status: number; message: string }> = {
     message: "Workbench revision or execution conflict.",
   },
   unavailable: { status: 503, message: "Workbench execution is unavailable." },
+  model_unavailable: {
+    status: 503,
+    message:
+      "No eligible configured model. Configure a tool-capable free model and its credential, then retry. Paid models require explicit selection and authorization.",
+  },
   too_large: {
     status: 413,
     message: "Workbench payload exceeds the size limit.",

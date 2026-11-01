@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Task } from "@mars/contracts";
 import {
+  MAX_RUNTIME_INSTRUCTION_LENGTH,
   openRuntimeSession,
   type RuntimeSessionOptions,
 } from "@mars/execution";
@@ -134,12 +135,13 @@ async function fixture(contextWindow = 32000) {
   async function start(
     fetch: NonNullable<RuntimeSessionOptions["fetch"]>,
     image?: string,
+    registryOverride?: typeof registry,
   ) {
     const service = await createWorkbenchService({
       sourceRoot: source,
       stateRoot: root,
       scope,
-      registry,
+      registry: registryOverride ?? registry,
       port: 0,
       ...(image ? { image } : {}),
       runtimeFactory: async (options) => {
@@ -167,6 +169,82 @@ async function fixture(contextWindow = 32000) {
   }
   return { base, source, root, registry, launches, start };
 }
+
+test("HTTP reports actionable model setup errors and the same pending task starts after configuration is fixed", async () => {
+  const f = await fixture();
+  const unavailable = await loadModelRegistry({
+    cwd: f.source,
+    home: f.base,
+    env: {},
+  });
+  let requests = 0;
+  const fetch = async () => {
+    requests++;
+    return sse({ content: "Fixture complete" });
+  };
+  const { client, service } = await f.start(fetch, undefined, unavailable);
+  const created = await client.create(task());
+  await expect(
+    client.start(created.task_id, {
+      expectedRevision: 0,
+      approvals: { read: true, write: false, execute: false },
+    }),
+  ).rejects.toMatchObject({
+    code: "model_unavailable",
+    status: 503,
+    message:
+      "No eligible configured model. Configure a tool-capable free model and its credential, then retry. Paid models require explicit selection and authorization.",
+  });
+  expect(await client.inspect(created.task_id)).toEqual(created);
+  expect(f.launches).toHaveLength(0);
+  expect(requests).toBe(0);
+  await service.close();
+  const configured = await f.start(fetch);
+  await configured.client.start(created.task_id, {
+    expectedRevision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  const completed = await eventually(
+    () => configured.client.inspect(created.task_id),
+    (value) => value.status === "completed",
+  );
+  expect(completed.status).toBe("completed");
+  expect(requests).toBe(1);
+  expect(f.launches).toHaveLength(1);
+});
+
+test("HTTP oversized startup returns too_large without a runtime or revision change, including after restart", async () => {
+  const f = await fixture();
+  let requests = 0;
+  const fetch = async () => {
+    requests++;
+    throw new Error("Oversized startup must not call a model");
+  };
+  let { client, service } = await f.start(fetch);
+  const oversized = task();
+  oversized.request = "x".repeat(MAX_RUNTIME_INSTRUCTION_LENGTH);
+  const created = await client.create(oversized);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await expect(
+      client.start(created.task_id, {
+        expectedRevision: 0,
+        approvals: { read: true, write: true, execute: false },
+      }),
+    ).rejects.toMatchObject({ code: "too_large" });
+    expect(await client.inspect(created.task_id)).toEqual(created);
+    expect(f.launches).toHaveLength(0);
+    expect(requests).toBe(0);
+    expect(await readFile(join(f.source, "baseline.txt"), "utf8")).toBe(
+      "untouched\n",
+    );
+    if (attempt === 0) {
+      await service.close();
+      ({ client, service } = await f.start(fetch));
+    }
+  }
+  const normal = await client.create(task());
+  expect(normal.status).toBe("pending");
+});
 
 test("HTTP + actual Oh My Pi + real private workspace writes, progress, artifacts, checkpoint and restore (injected model)", async () => {
   const f = await fixture();
