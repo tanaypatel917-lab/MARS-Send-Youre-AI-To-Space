@@ -33,6 +33,14 @@
         "@types/vscode": "1.96.0",
       },
     },
+    "packages/context": {
+      "name": "@mars/context",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "typescript": "5.9.3",
+        "zod": "3.25.76",
+      },
+    },
     "packages/contracts": {
       "name": "@mars/contracts",
       "version": "0.0.1",
@@ -197,6 +205,8 @@
     "@img/sharp-win32-x64": ["@img/sharp-win32-x64@0.35.5", "", { "os": "win32", "cpu": "x64" }, "sha512-x76eH0vEiHlcMQu8Y8IenntaACtddpT6W0wmXtWrnKcnKI7ME5DdgqhAD6SEWOEl1v2zDvkZDhFA9KnURwpfqg=="],
 
     "@mars/cli": ["@mars/cli@workspace:apps/cli"],
+
+    "@mars/context": ["@mars/context@workspace:packages/context"],
 
     "@mars/contracts": ["@mars/contracts@workspace:packages/contracts"],
 
