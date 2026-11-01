@@ -73,6 +73,14 @@
         "zod": "3.25.76",
       },
     },
+    "packages/workbench": {
+      "name": "@mars/workbench",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
     "packages/workspaces": {
       "name": "@mars/workspaces",
       "version": "0.0.1",
@@ -184,6 +192,8 @@
     "@mars/tasks": ["@mars/tasks@workspace:packages/tasks"],
 
     "@mars/vscode-client": ["@mars/vscode-client@workspace:apps/vscode"],
+
+    "@mars/workbench": ["@mars/workbench@workspace:packages/workbench"],
 
     "@mars/workspaces": ["@mars/workspaces@workspace:packages/workspaces"],
 
