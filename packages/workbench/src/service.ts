@@ -9,6 +9,10 @@ import {
   resolve,
   sep,
 } from "node:path";
+import {
+  createRepositoryMapProvider,
+  type RepositoryMapProvider,
+} from "@mars/context";
 import { type Scope, ScopeSchema } from "@mars/contracts";
 import { createMemoryStore, type DurableMemoryStore } from "@mars/memory";
 import { loadModelRegistry, type ModelProviderRegistry } from "@mars/providers";
@@ -94,6 +98,7 @@ export async function createWorkbenchService(
     | undefined;
   let host: Awaited<ReturnType<typeof createWorkbenchHost>> | undefined;
   let memory: DurableMemoryStore | undefined;
+  let repositoryMap: RepositoryMapProvider | undefined;
   let server: ReturnType<typeof serveWorkbench> | undefined;
   try {
     memory = createMemoryStore({
@@ -115,6 +120,18 @@ export async function createWorkbenchService(
           "running",
     });
     const provider = workspace;
+    repositoryMap = createRepositoryMapProvider({
+      confinement: "anchored",
+      async resolveRoot(context, ref) {
+        const current = await provider.inspect(context, ref.workspace_id);
+        if (current.provider !== ref.provider)
+          throw new WorkbenchError("forbidden");
+        return {
+          root: await provider.workspacePath(context, ref),
+          revision: current.revision,
+        };
+      },
+    });
     host = await createWorkbenchHost({
       scope,
       workspaceLabel: basename(source),
@@ -123,7 +140,8 @@ export async function createWorkbenchService(
       registry,
       canExecute: Boolean(sandbox),
       memory,
-      hostPrivateRoots: [memoryRoot],
+      repositoryMap,
+      hostPrivateRoots: [memoryRoot, source],
       workspace: {
         prepare: provider.prepare.bind(provider),
         read: provider.read.bind(provider),
@@ -171,6 +189,7 @@ export async function createWorkbenchService(
     const runningHost = host;
     const runningServer = server;
     const runningMemory = memory;
+    const runningRepositoryMap = repositoryMap;
     let closing: Promise<void> | undefined;
     return {
       url,
@@ -180,6 +199,7 @@ export async function createWorkbenchService(
           const outcomes = [
             await Promise.allSettled([runningServer.stop(true)]),
             await Promise.allSettled([runningHost.close()]),
+            await Promise.allSettled([runningRepositoryMap.close()]),
             await Promise.allSettled([runningMemory.close()]),
             await Promise.allSettled([provider.close()]),
             await Promise.allSettled([store.close()]),
@@ -193,6 +213,7 @@ export async function createWorkbenchService(
   } catch (error) {
     await server?.stop(true).catch(() => undefined);
     if (host) await host.close().catch(() => undefined);
+    if (repositoryMap) await repositoryMap.close().catch(() => undefined);
     if (workspace) await workspace.close().catch(() => undefined);
     if (memory) await memory.close().catch(() => undefined);
     await store.close();

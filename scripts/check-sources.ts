@@ -71,6 +71,7 @@ export const ManifestSchema = z
             integration_status: z.enum([
               "initialization-only",
               "journal-probe-only",
+              "workbench-context-only",
               "not-integrated",
             ]),
           })
