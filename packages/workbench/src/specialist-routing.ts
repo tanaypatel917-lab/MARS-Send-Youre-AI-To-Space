@@ -1,5 +1,10 @@
+import { createHash } from "node:crypto";
 import type { RequestContext, Task } from "@mars/contracts";
-import type { RoutingDecision, RoutingRequest } from "@mars/specialists";
+import {
+  ID_PATTERN,
+  type RoutingDecision,
+  type RoutingRequest,
+} from "@mars/specialists";
 import { z } from "zod";
 import type { Approvals } from "./protocol";
 
@@ -23,6 +28,7 @@ export interface WorkbenchSpecialists {
 export const FrozenRoutingSchema = z
   .object({
     decision_id: z.string().uuid(),
+    routing_task_id: z.string().min(1),
     outcome: z.enum([
       "specialist",
       "baseline",
@@ -36,6 +42,16 @@ export const FrozenRoutingSchema = z
   .strict();
 export type FrozenRouting = z.infer<typeof FrozenRoutingSchema>;
 
+/**
+ * Workbench task ids are free-form; the registry only accepts its own id
+ * pattern. Ids that already match are used as-is, others get a stable alias
+ * so the persisted decision can still be traced back to the task.
+ */
+export function routingTaskId(taskId: string): string {
+  if (ID_PATTERN.test(taskId)) return taskId;
+  return `task.${createHash("sha256").update(taskId, "utf8").digest("hex")}`;
+}
+
 export function routingRequest(
   task: Task,
   approvals: Approvals,
@@ -47,7 +63,7 @@ export function routingRequest(
 ): RoutingRequest {
   return {
     schema_version: 1,
-    task_id: task.task_id,
+    task_id: routingTaskId(task.task_id),
     role: "worker",
     domain: specialists.domain,
     complexity: specialists.complexity ?? "medium",
@@ -83,12 +99,16 @@ export async function routeLaunch(
     decision.outcome === "specialist" || decision.outcome === "baseline"
       ? decision.selected
       : null;
+  const specialist =
+    decision.outcome === "specialist" && selected ? selected : null;
   return FrozenRoutingSchema.parse({
     decision_id: decision.decision_id,
+    routing_task_id: decision.task_id,
     outcome: decision.outcome,
     ref: selected?.ref ?? null,
-    specialist_revision:
-      decision.outcome === "specialist" && selected ? selected.ref : null,
-    model_id: selected?.model_id ?? null,
+    specialist_revision: specialist?.ref ?? null,
+    // Only a verified specialist pins a model. Baseline and failed outcomes
+    // keep the ordinary free-only default so routing can never widen paid use.
+    model_id: specialist?.model_id ?? null,
   });
 }

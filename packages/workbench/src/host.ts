@@ -14,6 +14,7 @@ import type {
 import { ScopeSchema } from "@mars/contracts";
 import {
   EXECUTION_PACKAGE_VERSION,
+  initialRequestAllowance,
   MAX_RUNTIME_INSTRUCTION_LENGTH,
   MIN_INITIAL_OUTPUT_RESERVE,
   openRuntimeSession,
@@ -619,8 +620,11 @@ export async function createWorkbenchHost(
             task,
             params.approvals,
             options.specialists,
-            Math.ceil(serializedBytes(baseInstruction) / 3) +
-              MIN_INITIAL_OUTPUT_RESERVE,
+            initialRequestAllowance({
+              approvals: params.approvals,
+              recall: Boolean(options.memory),
+              instruction: baseInstruction,
+            }) + MIN_INITIAL_OUTPUT_RESERVE,
           );
         } catch {
           throw new WorkbenchError("unavailable");

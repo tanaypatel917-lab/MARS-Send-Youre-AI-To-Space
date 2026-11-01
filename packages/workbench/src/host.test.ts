@@ -9,7 +9,9 @@ import {
 } from "@mars/context";
 import type { RequestContext, Task, WorkspaceRef } from "@mars/contracts";
 import {
+  initialRequestAllowance,
   MAX_RUNTIME_INSTRUCTION_LENGTH,
+  MIN_INITIAL_OUTPUT_RESERVE,
   optionalInstructionCapacity,
   type RuntimeOutcome,
   type RuntimeSessionOptions,
@@ -17,6 +19,7 @@ import {
 import { createMemoryStore } from "@mars/memory";
 import type { ModelProviderRegistry } from "@mars/providers";
 import { loadModelRegistry } from "@mars/providers";
+import type { RoutingRequest } from "@mars/specialists";
 import { createTaskStore } from "@mars/tasks";
 import {
   createRegistry as createSpecialistRegistry,
@@ -1375,8 +1378,10 @@ test.each(["specialist", "baseline", "manual"])(
     } else {
       expect(session.options.modelId).toBe("fixture/free");
       expect(running.specialist_revision).toBeNull();
-      if (mode === "baseline") expect(launch.routing.outcome).toBe("baseline");
-      else expect(launch.routing).toBeUndefined();
+      if (mode === "baseline") {
+        expect(launch.routing.outcome).toBe("baseline");
+        expect(launch.routing.model_id).toBeNull();
+      } else expect(launch.routing).toBeUndefined();
     }
     session.finish("paused");
     await session.disposed;
@@ -1392,3 +1397,66 @@ test.each(["specialist", "baseline", "manual"])(
     await api.close();
   },
 );
+
+test("routing aliases free-form task ids and sizes context like the model bridge", async () => {
+  const f = await fixture();
+  const routed = await f.routedRegistry();
+  const registry = createSpecialistRegistry(
+    join(f.root, "specialists"),
+    new MemoryArtifacts(),
+    {
+      catalog: routed,
+      evidenceVerifier: evidenceVerifier({ ownerIds: [scope.owner_id] }),
+    },
+  );
+  await registry.registerBaseline(
+    context(),
+    makeBaseline(scope, {
+      model_id: "fixture/free",
+      provider_id: "fixture",
+      provider_model: "fixture",
+    }),
+  );
+  const requests: RoutingRequest[] = [];
+  const api = await f.makeHost(routed, undefined, undefined, {
+    router: {
+      route: (requestContext, request) => {
+        requests.push(request);
+        return registry.route(requestContext, request);
+      },
+    },
+    domain: "coding/mechanical-edit",
+  });
+  const input = { ...task(), task_id: "Fix_UI" };
+  await api.create(context(), {
+    ...input,
+    budget: { ...input.budget, max_usd: 1 },
+  });
+  const approvals = { read: true, write: false, execute: false };
+  await api.start(context(), {
+    task_id: "Fix_UI",
+    expected_revision: 0,
+    approvals,
+  });
+  const session = required(f.sessions[0]);
+  const launch = JSON.parse(
+    await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+  );
+  expect(launch.routing.outcome).toBe("baseline");
+  expect(launch.routing.routing_task_id).toMatch(/^task\.[0-9a-f]{64}$/);
+  expect(
+    (await registry.decision(context(), launch.routing.decision_id)).task_id,
+  ).toBe(launch.routing.routing_task_id);
+  const instruction = session.instructions[0] ?? "";
+  const request = required(requests[0]);
+  expect(request.requires.min_context_tokens).toBeGreaterThanOrEqual(
+    Buffer.byteLength(instruction, "utf8") + 512 + MIN_INITIAL_OUTPUT_RESERVE,
+  );
+  expect(request.requires.min_context_tokens).toBe(
+    initialRequestAllowance({ approvals, recall: false, instruction }) +
+      MIN_INITIAL_OUTPUT_RESERVE,
+  );
+  session.finish("completed");
+  await session.disposed;
+  await api.close();
+});

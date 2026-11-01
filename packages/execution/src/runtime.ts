@@ -75,9 +75,7 @@ export const MIN_INITIAL_OUTPUT_RESERVE = 1024;
  * budget. Measure candidate evidence with the serialized JSON string bytes the
  * bridge reserves, not raw character counts.
  */
-export function optionalInstructionCapacity(options: {
-  model: Pick<ModelConfig, "capabilities">;
-  budget: Pick<Budget, "max_tokens">;
+export function initialRequestAllowance(options: {
   approvals: { read: boolean; write: boolean; execute: boolean };
   recall: boolean;
   instruction: string;
@@ -99,7 +97,17 @@ export function optionalInstructionCapacity(options: {
     ],
     tools: tools as never,
   });
-  const allowance = Buffer.byteLength(JSON.stringify(request), "utf8") + 512;
+  return Buffer.byteLength(JSON.stringify(request), "utf8") + 512;
+}
+
+export function optionalInstructionCapacity(options: {
+  model: Pick<ModelConfig, "capabilities">;
+  budget: Pick<Budget, "max_tokens">;
+  approvals: { read: boolean; write: boolean; execute: boolean };
+  recall: boolean;
+  instruction: string;
+}): number {
+  const allowance = initialRequestAllowance(options);
   const limit = Math.min(
     options.model.capabilities.contextWindow,
     options.budget.max_tokens,
