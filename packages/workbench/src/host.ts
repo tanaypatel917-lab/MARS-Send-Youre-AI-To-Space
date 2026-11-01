@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, realpath, stat } from "node:fs/promises";
+import { mkdir, open, realpath, rename, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
   type ChildLaunch,
   type ChildRunner,
+  CollaborationError,
   createChildRunner,
   createOhMyPiChildAdapter,
   inheritModelPolicy,
@@ -461,16 +462,64 @@ export async function createWorkbenchHost(
   };
   // Steering advances the task revision; the room marks pending child
   // proposals stale so the coordinator reviews them against current intent.
+  /**
+   * Steering changes the task the room was opened for. The room keeps its own
+   * monotonic task revision (the durable task revision does not change on
+   * steer): proposals from the previous revision become stale, children are
+   * cancelled, and the coordinator receives a fresh capability which replaces
+   * the frozen one in launch metadata and in the live room tools.
+   */
   const reviseRecordedRoom = async (task: Task) => {
     const launch = await readLaunch(task).catch(() => null);
-    if (launch?.collaboration && options.collaboration)
-      await options.collaboration.host
-        .reviseTask(
-          internalContext(options.scope),
-          launch.collaboration.room_id,
-          task,
-        )
-        .catch(() => undefined);
+    if (!launch?.collaboration || !options.collaboration) return;
+    const context = internalContext(options.scope);
+    const roomId = launch.collaboration.room_id;
+    try {
+      const room = await options.collaboration.host.inspectRoom(
+        context,
+        roomId,
+      );
+      const revised = await options.collaboration.host.reviseTask(
+        context,
+        roomId,
+        { ...task, revision: room.task_revision + 1 },
+      );
+      const frozen: FrozenCollaboration = {
+        ...launch.collaboration,
+        capability: revised.coordinator,
+        budget: revised.room.coordinator_runtime_budget,
+      };
+      await rewriteLaunch(task, { ...launch, collaboration: frozen });
+      const live = liveRooms.get(task.task_id);
+      if (live) Object.assign(live, frozen);
+    } catch (error) {
+      if (
+        error instanceof CollaborationError &&
+        (error.code === "closed" || error.code === "not_found")
+      )
+        return;
+      throw error;
+    }
+  };
+  const rewriteLaunch = async (task: Task, launch: Launch): Promise<void> => {
+    const dir = taskState(task);
+    if ((await realpath(dir)) !== dir || ((await stat(dir)).mode & 0o077) !== 0)
+      throw new WorkbenchError("internal_error");
+    const temporary = join(dir, "launch.json." + randomUUID());
+    const file = await open(
+      temporary,
+      constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_EXCL |
+        constants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      await file.writeFile(JSON.stringify(launchSchema.parse(launch)));
+    } finally {
+      await file.close();
+    }
+    await rename(temporary, join(dir, "launch.json"));
   };
   const run = (
     task: Task,
@@ -556,6 +605,7 @@ export async function createWorkbenchHost(
         await runtime.dispose().catch(() => undefined);
         if (active.get(task.task_id) === runtime) {
           active.delete(task.task_id);
+          liveRooms.delete(task.task_id);
           jobs.delete(task.task_id);
         }
       }
@@ -565,19 +615,37 @@ export async function createWorkbenchHost(
 
   const runtimeTask = (task: Task, frozen?: FrozenCollaboration): Task =>
     frozen ? { ...task, budget: frozen.budget } : task;
-  const roomToolsFor = (frozen: FrozenCollaboration) =>
-    options.collaboration
-      ? {
-          collaboration: collaborationTools(
-            options.collaboration.agents,
-            () => internalContext(options.scope),
-            frozen,
-            async () => {
-              await runner?.tick();
-            },
-          ),
-        }
-      : {};
+  /** Live frozen room records, mutated in place when a revision swaps capabilities. */
+  const liveRooms = new Map<string, FrozenCollaboration>();
+  const roomToolsFor = (
+    taskId: string,
+    frozen: FrozenCollaboration,
+    workspace: WorkspaceRef,
+  ) => {
+    const collaboration = options.collaboration;
+    if (!collaboration) return {};
+    liveRooms.set(taskId, frozen);
+    return {
+      collaboration: collaborationTools(
+        collaboration.agents,
+        () => internalContext(options.scope),
+        frozen,
+        {
+          afterDelegate: async () => {
+            await runner?.tick();
+          },
+          currentBaseRevision: () => workspace.revision ?? null,
+          roomTaskRevision: async () =>
+            (
+              await collaboration.host.inspectRoom(
+                internalContext(options.scope),
+                frozen.room_id,
+              )
+            ).task_revision,
+        },
+      ),
+    };
+  };
   const activeTask = (taskId: string) => async () => {
     const context = internalContext(options.scope);
     if ((await options.store.inspect(context, taskId)).status !== "running")
@@ -900,7 +968,9 @@ export async function createWorkbenchHost(
             running.budget,
             activeTask(running.task_id),
           ),
-          ...(collaboration ? roomToolsFor(collaboration) : {}),
+          ...(collaboration
+            ? roomToolsFor(task.task_id, collaboration, workspace)
+            : {}),
           ...(params.approvals.read ? historyFor(context) : {}),
           onEvent: async (event) => {
             if (!bound) {
@@ -1015,7 +1085,9 @@ export async function createWorkbenchHost(
             running.budget,
             activeTask(running.task_id),
           ),
-          ...(launch.collaboration ? roomToolsFor(launch.collaboration) : {}),
+          ...(launch.collaboration
+            ? roomToolsFor(task.task_id, launch.collaboration, workspace)
+            : {}),
           ...(launch.approvals.read ? historyFor(context) : {}),
           onEvent: observe(taskId),
         });

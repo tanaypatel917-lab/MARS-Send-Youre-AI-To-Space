@@ -82,13 +82,43 @@ function compact<T extends Record<string, unknown>>(value: T): T {
   ) as T;
 }
 
+/** Host-side hooks the coordinator's room tools need beyond the capability. */
+export interface RoomToolHooks {
+  /** Runs after a child is queued, e.g. to tick the child runner promptly. */
+  afterDelegate?: () => Promise<void>;
+  /** Current revision of the coordinator's own workspace, for result reviews. */
+  currentBaseRevision?: () => string | null;
+  /** The room's current task revision; reviews must name it explicitly. */
+  roomTaskRevision?: () => Promise<number>;
+}
+
+/** Room listings are paged by the room's page_limit; coordinators see the whole bounded set. */
+const MAX_LISTING_PAGES = 32;
+
+async function collectPages<T>(
+  fetchPage: (
+    cursor: string | null,
+  ) => Promise<{ items: T[]; next: string | null }>,
+): Promise<T[]> {
+  const items: T[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < MAX_LISTING_PAGES; page++) {
+    const result = await fetchPage(cursor);
+    items.push(...result.items);
+    if (result.next === null) break;
+    cursor = result.next;
+  }
+  return items;
+}
+
 function delegationTools(
   agents: Collaboration["agents"],
   context: () => RequestContext,
   frozen: FrozenCollaboration,
-  afterDelegate: () => Promise<void>,
+  hooks: RoomToolHooks,
 ): RuntimeDelegation {
-  const capability = frozen.capability;
+  // Read lazily: the host swaps the capability when the task is revised.
+  const capability = () => frozen.capability;
   return {
     async delegate(input) {
       const approvals = compact({
@@ -98,7 +128,7 @@ function delegationTools(
       });
       const view = await agents.delegate(
         context(),
-        capability,
+        capability(),
         compact({
           idempotency_key: randomUUID(),
           role_label: input.role_label,
@@ -119,7 +149,7 @@ function delegationTools(
           write_paths: input.write_paths,
         }),
       );
-      await afterDelegate();
+      await hooks.afterDelegate?.();
       return (
         "Delegated " +
         view.role_label +
@@ -133,26 +163,47 @@ function delegationTools(
       );
     },
     async cancelChild(childId) {
-      await agents.cancelChild(context(), capability, childId);
+      await agents.cancelChild(context(), capability(), childId);
       return "Cancelled child " + childId + ".";
     },
     async children() {
-      const page = await agents.children(context(), capability, {});
-      return JSON.stringify(page.children);
+      const children = await collectPages((cursor) =>
+        agents
+          .children(context(), capability(), cursor ? { cursor } : {})
+          .then((page) => ({ items: page.children, next: page.next_cursor })),
+      );
+      return JSON.stringify(children);
     },
     async results() {
-      const page = await agents.results(context(), capability, {});
-      if (page.results.length === 0) return "No child results.";
-      return page.results.map(renderUntrustedResult).join("\n\n");
+      const results = await collectPages((cursor) =>
+        agents
+          .results(context(), capability(), cursor ? { cursor } : {})
+          .then((page) => ({ items: page.results, next: page.next_cursor })),
+      );
+      const revision = await hooks.roomTaskRevision?.();
+      const header =
+        revision === undefined
+          ? []
+          : [
+              "Current task revision: " +
+                revision +
+                " (reviews must pass expected_task_revision=" +
+                revision +
+                "; proposals from earlier revisions are stale).",
+            ];
+      if (results.length === 0)
+        return [...header, "No child results."].join("\n\n");
+      return [...header, ...results.map(renderUntrustedResult)].join("\n\n");
     },
     async reviewResult(input) {
       const view = await agents.reviewResult(
         context(),
-        capability,
+        capability(),
         input.result_id,
         {
           decision: input.decision,
           expected_task_revision: input.expected_task_revision,
+          current_base_revision: hooks.currentBaseRevision?.() ?? null,
         },
       );
       return JSON.stringify({ result_id: view.result_id, status: view.status });
@@ -168,15 +219,16 @@ export function collaborationTools(
   agents: Collaboration["agents"],
   context: () => RequestContext,
   frozen: FrozenCollaboration,
-  afterDelegate: () => Promise<void> = async () => undefined,
+  hooks: RoomToolHooks = {},
 ): RuntimeCollaboration {
-  const capability = frozen.capability;
+  // Read lazily: the host swaps the capability when the task is revised.
+  const capability = () => frozen.capability;
   return {
     ...(frozen.delegation
-      ? { delegation: delegationTools(agents, context, frozen, afterDelegate) }
+      ? { delegation: delegationTools(agents, context, frozen, hooks) }
       : {}),
     async send(input) {
-      const view = await agents.send(context(), capability, {
+      const view = await agents.send(context(), capability(), {
         idempotency_key: randomUUID(),
         ...input,
       });
@@ -185,7 +237,7 @@ export function collaborationTools(
     async inbox(cursor) {
       const page = await agents.inbox(
         context(),
-        capability,
+        capability(),
         cursor ? { cursor } : {},
       );
       if (page.messages.length === 0) return "No new messages.";
@@ -201,13 +253,13 @@ export function collaborationTools(
     async ack(messageIds) {
       const { acknowledged } = await agents.ack(
         context(),
-        capability,
+        capability(),
         messageIds,
       );
       return `Acknowledged ${acknowledged} message(s).`;
     },
     async members() {
-      const page = await agents.members(context(), capability, {});
+      const page = await agents.members(context(), capability(), {});
       return JSON.stringify(page.members);
     },
   };
