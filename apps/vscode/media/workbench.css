@@ -1,0 +1,227 @@
+body {
+  padding: 0 8px 16px;
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+h2,
+h3,
+h4 {
+  margin: 0.4em 0;
+  font-weight: 600;
+}
+h2 {
+  font-size: 1.1em;
+}
+h3,
+h4 {
+  font-size: 1em;
+}
+ul,
+ol {
+  margin: 0.3em 0;
+  padding-left: 1.2em;
+}
+.panel {
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+  padding: 8px 0;
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.grow {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.muted {
+  color: var(--vscode-descriptionForeground);
+}
+.small {
+  font-size: 0.9em;
+}
+.mono {
+  font-family: var(--vscode-editor-font-family);
+}
+.hint {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.85em;
+}
+button {
+  border: 1px solid var(--vscode-button-border, transparent);
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  padding: 3px 10px;
+  border-radius: 2px;
+  cursor: pointer;
+  font: inherit;
+}
+button:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground);
+}
+button.secondary {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+}
+button.secondary:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+button.danger {
+  background: var(
+    --vscode-inputValidation-errorBackground,
+    var(--vscode-button-secondaryBackground)
+  );
+  border-color: var(--vscode-inputValidation-errorBorder, transparent);
+  color: var(--vscode-foreground);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+input,
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 4px;
+  font: inherit;
+}
+input[type="checkbox"] {
+  width: auto;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0 8px;
+}
+.check {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.pill,
+.badge {
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: 0.85em;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+}
+.status-connected {
+  background: var(--vscode-testing-iconPassed, var(--vscode-badge-background));
+}
+.status-disconnected,
+.status-unauthorized,
+.status-blocked,
+.status-error {
+  background: var(
+    --vscode-inputValidation-errorBackground,
+    var(--vscode-badge-background)
+  );
+  color: var(--vscode-foreground);
+}
+.notice {
+  margin: 6px 0;
+  padding: 6px;
+  border-left: 3px solid var(--vscode-focusBorder);
+  background: var(--vscode-textBlockQuote-background);
+}
+.notice.error,
+.notice.permission {
+  border-color: var(
+    --vscode-inputValidation-errorBorder,
+    var(--vscode-errorForeground)
+  );
+}
+.notice.conflict {
+  border-color: var(
+    --vscode-inputValidation-warningBorder,
+    var(--vscode-focusBorder)
+  );
+}
+.busy {
+  color: var(--vscode-descriptionForeground);
+  margin: 4px 0;
+}
+.tasks,
+.files,
+.timeline {
+  list-style: none;
+  padding: 0;
+}
+.tasks li,
+.files li,
+.timeline li {
+  margin: 3px 0;
+}
+button.task {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--vscode-foreground);
+}
+button.task:hover:not(:disabled) {
+  background: var(--vscode-list-hoverBackground);
+}
+button.task.selected {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+.timeline li {
+  border-left: 2px solid var(--vscode-panel-border, var(--vscode-focusBorder));
+  padding-left: 6px;
+}
+.request {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.meter {
+  display: grid;
+  grid-template-columns: 4em 1fr auto;
+  gap: 6px;
+  align-items: center;
+}
+progress {
+  width: 100%;
+  accent-color: var(--vscode-progressBar-background);
+}
+.add {
+  color: var(--vscode-gitDecoration-addedResourceForeground);
+}
+.del {
+  color: var(--vscode-gitDecoration-deletedResourceForeground);
+}
+pre.artifact {
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--vscode-textCodeBlock-background);
+  padding: 6px;
+  font-family: var(--vscode-editor-font-family);
+}
+.message {
+  margin: 4px 0;
+}

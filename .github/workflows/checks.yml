@@ -22,3 +22,6 @@ jobs:
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run check
       - run: bun run doctor
+      - name: VS Code client typecheck, build and Node smoke
+        working-directory: apps/vscode
+        run: bun run typecheck && bun run smoke
