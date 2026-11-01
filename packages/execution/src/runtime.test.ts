@@ -1,0 +1,434 @@
+import { expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Task } from "@mars/contracts";
+import { loadModelRegistry } from "@mars/providers";
+import type { Model } from "@oh-my-pi/pi-ai";
+import {
+  type BudgetLedger,
+  createModelBridge,
+  selectExecutionModel,
+  toChatRequest,
+} from "./model-bridge";
+import {
+  openRuntimeSession,
+  type RuntimeSession,
+  type RuntimeTools,
+} from "./runtime";
+
+function sse(delta: Record<string, unknown>, reason = "stop") {
+  return new Response(
+    [
+      `data: ${JSON.stringify({ choices: [{ delta, finish_reason: null }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: reason }], usage: { prompt_tokens: 50, completion_tokens: 12 } })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""),
+    { headers: { "content-type": "text/event-stream" } },
+  );
+}
+
+async function fixture() {
+  const root = await mkdtemp(join(tmpdir(), "mars-runtime-test-"));
+  const cwd = join(root, "workspace");
+  const home = join(root, "home");
+  await mkdir(cwd);
+  await mkdir(join(home, ".mars"), { recursive: true });
+  await writeFile(
+    join(home, ".mars", "models.json"),
+    JSON.stringify({
+      version: 1,
+      providers: [
+        {
+          id: "fixture",
+          kind: "openai-compatible",
+          baseUrl: "https://fixture.invalid/v1",
+          apiKeyEnv: "MARS_FIXTURE_KEY",
+        },
+      ],
+      models: [
+        {
+          id: "fixture/free",
+          providerId: "fixture",
+          model: "stub",
+          capabilities: { tools: true, vision: false, contextWindow: 32000 },
+          pricing: { free: true },
+        },
+        {
+          id: "fixture/paid",
+          providerId: "fixture",
+          model: "stub",
+          capabilities: { tools: true, vision: false, contextWindow: 32000 },
+          pricing: { free: false, inputPerMTokUsd: 1, outputPerMTokUsd: 2 },
+        },
+        {
+          id: "fixture/unknown",
+          providerId: "fixture",
+          model: "stub",
+          capabilities: { tools: true, vision: false, contextWindow: 32000 },
+          pricing: { free: false },
+        },
+      ],
+      routes: { default: ["fixture/paid", "fixture/free"] },
+      policy: { allowPaid: true },
+    }),
+  );
+  const env = { MARS_FIXTURE_KEY: "dummy-key-not-real" };
+  const registry = await loadModelRegistry({ cwd, home, env });
+  const task: Task = {
+    schema_version: 1,
+    task_id: randomUUID(),
+    session_id: randomUUID(),
+    scope: {
+      owner_id: "fixture",
+      project_id: "fixture",
+      workspace_id: "fixture",
+    },
+    revision: 0,
+    request: "Create a greeting file.",
+    acceptance_criteria: ["File contains Hello"],
+    budget: {
+      max_tokens: 24000,
+      max_usd: 0,
+      max_duration_ms: 60000,
+      max_depth: 0,
+      max_concurrency: 1,
+    },
+    status: "pending",
+    specialist_revision: null,
+    artifacts: [],
+  };
+  const tools: RuntimeTools = {
+    read: (path) => readFile(join(cwd, path)),
+    write: (path, content) => writeFile(join(cwd, path), content),
+    execute: async () => {
+      throw new Error("No execution sandbox in this unit fixture.");
+    },
+    stop: async () => undefined,
+  };
+  const sessions: RuntimeSession[] = [];
+  return {
+    root,
+    cwd,
+    env,
+    registry,
+    task,
+    tools,
+    stateDir: join(root, "state"),
+    async open(extra: Partial<Parameters<typeof openRuntimeSession>[0]> = {}) {
+      const session = await openRuntimeSession({
+        task,
+        cwd,
+        stateDir: join(root, "state"),
+        registry,
+        tools,
+        env,
+        approvals: { read: true, write: true, execute: false },
+        ...extra,
+      });
+      sessions.push(session);
+      return session;
+    },
+    async cleanup() {
+      for (const session of sessions) await session.dispose();
+      await rm(root, { recursive: true, force: true });
+    },
+  };
+}
+
+test("execution chooses free models automatically and rejects unpriced paid models", async () => {
+  const f = await fixture();
+  try {
+    expect(selectExecutionModel(f.registry).id).toBe("fixture/free");
+    expect(selectExecutionModel(f.registry, "fixture/paid").id).toBe(
+      "fixture/paid",
+    );
+    expect(() => selectExecutionModel(f.registry, "fixture/unknown")).toThrow(
+      "No eligible",
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("bridge preserves tool call identities and tool results without inventing another agent loop", () => {
+  const request = toChatRequest({
+    systemPrompt: ["System"],
+    messages: [
+      { role: "user", content: "Read file", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call",
+            name: "mars_read",
+            arguments: { path: "a.txt" },
+          },
+        ],
+        api: "fixture",
+        provider: "fixture",
+        model: "stub",
+        timestamp: 2,
+        stopReason: "toolUse",
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call",
+        toolName: "mars_read",
+        content: [{ type: "text", text: "file contents" }],
+        isError: false,
+        timestamp: 3,
+      },
+    ],
+  });
+  expect(request.messages[2]).toMatchObject({
+    role: "assistant",
+    tool_calls: [{ id: "call", name: "mars_read" }],
+  });
+  expect(request.messages[3]).toEqual({
+    role: "tool",
+    tool_call_id: "call",
+    content: "file contents",
+  });
+  expect(() =>
+    toChatRequest({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "image", data: "fake", mimeType: "image/png" }],
+          timestamp: 1,
+        },
+      ],
+    }),
+  ).toThrow("only supports text");
+});
+
+test("actual Oh My Pi owns a two-turn write-tool session through the existing provider adapter", async () => {
+  const f = await fixture();
+  const requests: Record<string, unknown>[] = [];
+  const observations: string[] = [];
+  try {
+    const session = await f.open({
+      onEvent: async (event) => {
+        observations.push(event.type);
+      },
+      fetch: async (_url, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return requests.length === 1
+          ? sse(
+              {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_write",
+                    type: "function",
+                    function: {
+                      name: "mars_write",
+                      arguments: JSON.stringify({
+                        path: "greet.txt",
+                        content: "Hello",
+                      }),
+                    },
+                  },
+                ],
+              },
+              "tool_calls",
+            )
+          : sse({ content: "Created greet.txt. No tests were run." });
+      },
+    });
+    const outcome = await session.run(f.task.request);
+    expect(outcome.status).toBe("completed");
+    expect(outcome.content).toBe("Created greet.txt. No tests were run.");
+    expect(await readFile(join(f.cwd, "greet.txt"), "utf8")).toBe("Hello");
+    expect(requests).toHaveLength(2);
+    expect(JSON.stringify(requests[1])).toContain("call_write");
+    expect(JSON.stringify(requests[0])).not.toContain("mars_execute");
+    expect(observations).toContain("tool_execution_end");
+    expect(outcome.usage.reserved_tokens).toBeGreaterThan(0);
+    expect(outcome.usage.input_tokens).toBe(100);
+    const journal = await readFile(session.journalPath, "utf8");
+    expect(journal).toContain("mars.binding");
+    expect(journal).toContain("mars.budget");
+    expect(journal).toContain("call_write");
+    expect(journal).not.toContain("dummy-key-not-real");
+  } finally {
+    await f.cleanup();
+  }
+}, 30000);
+
+test("a stopped SDK session reopens its original journal and retains budget and conversation", async () => {
+  const f = await fixture();
+  let requests = 0;
+  try {
+    const first = await f.open({
+      fetch: async () => {
+        requests++;
+        return sse({ content: "First turn" });
+      },
+    });
+    const result = await first.run("First instruction");
+    expect(result.status).toBe("completed");
+    const file = first.journalPath;
+    await first.dispose();
+    const second = await f.open({
+      sessionFile: file,
+      fetch: async (_url, init) => {
+        requests++;
+        const body = String(init?.body);
+        expect(body).toContain("First instruction");
+        expect(body).toContain("First turn");
+        return sse({ content: "Resumed turn" });
+      },
+    });
+    expect(second.sessionId).toBe(first.sessionId);
+    const resumed = await second.run(
+      "Continue from the persisted conversation",
+    );
+    expect(resumed.status).toBe("completed");
+    expect(resumed.usage.reserved_tokens).toBeGreaterThan(
+      result.usage.reserved_tokens,
+    );
+    expect(resumed.usage.deadline).toBe(result.usage.deadline);
+    expect(requests).toBe(2);
+    await second.dispose();
+    await expect(
+      f.open({
+        task: { ...f.task, task_id: "another-task" },
+        sessionFile: file,
+      }),
+    ).rejects.toThrow("binding");
+  } finally {
+    await f.cleanup();
+  }
+}, 30000);
+
+test("truncated streams cannot complete successfully or execute partial tool calls", async () => {
+  const f = await fixture();
+  let writes = 0;
+  try {
+    const session = await f.open({
+      tools: {
+        ...f.tools,
+        write: async () => {
+          writes++;
+        },
+      },
+      fetch: async () =>
+        new Response(
+          `data: ${JSON.stringify({ choices: [{ delta: { content: "Partial" } }] })}\n\n`,
+        ),
+    });
+    const outcome = await session.run("Fail safely");
+    expect(outcome.status).toBe("failed");
+    expect(writes).toBe(0);
+  } finally {
+    await f.cleanup();
+  }
+}, 30000);
+
+test("cancellation aborts the provider request, stops workspace execution and forbids further dispatch", async () => {
+  const f = await fixture();
+  let stops = 0;
+  let entered: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  try {
+    const session = await f.open({
+      tools: {
+        ...f.tools,
+        stop: async () => {
+          stops++;
+        },
+      },
+      fetch: async (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          entered?.();
+          const abort = () =>
+            reject(new DOMException("Cancelled", "AbortError"));
+          if (init?.signal?.aborted) abort();
+          else init?.signal?.addEventListener("abort", abort, { once: true });
+        }),
+    });
+    const running = session.run("Wait until cancelled");
+    await started;
+    await session.cancel();
+    expect((await running).status).toBe("cancelled");
+    expect(stops).toBeGreaterThan(0);
+    await expect(session.run("Do not dispatch")).rejects.toThrow("stopped");
+  } finally {
+    await f.cleanup();
+  }
+}, 30000);
+
+test("pre-dispatch reservation and persistence failure fail closed without provider calls", async () => {
+  const f = await fixture();
+  let calls = 0;
+  const selected = selectExecutionModel(f.registry);
+  const ledger: BudgetLedger = {
+    deadline: Date.now() + 60000,
+    reserved_tokens: 0,
+    reserved_usd: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+  };
+  const model = { api: "fixture", provider: "fixture", id: "stub" } as Model;
+  try {
+    const exhausted = createModelBridge({
+      registry: f.registry,
+      selected,
+      budget: { ...f.task.budget, max_tokens: 1 },
+      ledger,
+      signal: new AbortController().signal,
+      persistLedger: async () => undefined,
+      fetch: async () => {
+        calls++;
+        return sse({ content: "Should not run" });
+      },
+      env: f.env,
+    });
+    expect(
+      (
+        await exhausted(model, {
+          messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+        }).result()
+      ).stopReason,
+    ).toBe("error");
+    const failedPersistence = createModelBridge({
+      registry: f.registry,
+      selected,
+      budget: f.task.budget,
+      ledger,
+      signal: new AbortController().signal,
+      persistLedger: async () => {
+        throw new Error("Disk full");
+      },
+      fetch: async () => {
+        calls++;
+        return sse({ content: "Should not run" });
+      },
+      env: f.env,
+    });
+    expect(
+      (
+        await failedPersistence(model, {
+          messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+        }).result()
+      ).stopReason,
+    ).toBe("error");
+    expect(calls).toBe(0);
+  } finally {
+    await f.cleanup();
+  }
+});
