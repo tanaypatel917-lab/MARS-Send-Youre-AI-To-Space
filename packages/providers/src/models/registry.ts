@@ -252,6 +252,13 @@ export class ModelProviderRegistry {
     return this.file.models.find((model) => model.id === modelId);
   }
 
+  getProviderEnvironment(
+    providerId: string,
+  ): Record<string, string | undefined> {
+    const key = this.getProvider(providerId)?.apiKeyEnv;
+    return key ? { [key]: this.env[key] } : {};
+  }
+
   unavailableReason(providerId: string): string | undefined {
     const provider = this.getProvider(providerId);
     if (!provider) return "Provider is not configured.";

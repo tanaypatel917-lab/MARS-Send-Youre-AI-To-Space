@@ -137,29 +137,38 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
     manager = SessionManager.create(cwd, stateDir);
     manager.appendCustomEntry("mars.binding", binding);
   }
-  const previous = manager
-    .getEntries()
-    .filter(
-      (entry) => entry.type === "custom" && entry.customType === "mars.budget",
+  let ledger: BudgetLedger;
+  try {
+    const previous = manager
+      .getEntries()
+      .filter(
+        (entry) =>
+          entry.type === "custom" && entry.customType === "mars.budget",
+      )
+      .at(-1);
+    if (options.sessionFile && previous?.type !== "custom")
+      throw new Error(
+        "Cannot resume a session without its persisted execution budget.",
+      );
+    ledger =
+      previous?.type === "custom"
+        ? ledgerSchema.parse(previous.data)
+        : {
+            deadline: Date.now() + task.budget.max_duration_ms,
+            reserved_tokens: 0,
+            reserved_usd: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+          };
+    if (
+      ledger.reserved_tokens > task.budget.max_tokens ||
+      ledger.reserved_usd > task.budget.max_usd ||
+      Date.now() >= ledger.deadline
     )
-    .at(-1);
-  const ledger: BudgetLedger =
-    previous?.type === "custom"
-      ? ledgerSchema.parse(previous.data)
-      : {
-          deadline: Date.now() + task.budget.max_duration_ms,
-          reserved_tokens: 0,
-          reserved_usd: 0,
-          input_tokens: 0,
-          output_tokens: 0,
-        };
-  if (
-    ledger.reserved_tokens > task.budget.max_tokens ||
-    ledger.reserved_usd > task.budget.max_usd ||
-    Date.now() >= ledger.deadline
-  ) {
+      throw new ExecutionLimitError();
+  } catch (error) {
     await manager.close();
-    throw new ExecutionLimitError();
+    throw error;
   }
   const controller = new AbortController();
   const authStorage = await AuthStorage.create(":memory:");
@@ -469,9 +478,19 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
     async cancel() {
       userCancelled = true;
       controller.abort();
-      await Promise.all([session.abort(), options.tools.stop()]);
-      await observations;
-      await session.flushToDisk();
+      const stopped = await Promise.allSettled([
+        Promise.resolve().then(() => session.abort()),
+        Promise.resolve().then(() => options.tools.stop()),
+      ]);
+      const persisted = await Promise.allSettled([
+        observations.then(() => session.flushToDisk()),
+      ]);
+      if (
+        [...stopped, ...persisted].some(
+          (result) => result.status === "rejected",
+        )
+      )
+        throw new Error("Runtime cancellation encountered a cleanup failure.");
     },
     async dispose() {
       if (disposed) return;
@@ -479,14 +498,19 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
       controller.abort();
       clearTimeout(deadlineTimer);
       unsubscribe();
-      try {
-        await options.tools.stop();
-        await session.dispose();
-        await observations;
-      } finally {
-        models.unregisterProvider(providerId);
-        await authStorage.close();
-      }
+      const stopped = await Promise.allSettled([
+        Promise.resolve().then(() => options.tools.stop()),
+        Promise.resolve().then(() => session.dispose()),
+      ]);
+      const released = await Promise.allSettled([
+        observations,
+        Promise.resolve().then(() => models.unregisterProvider(providerId)),
+        Promise.resolve().then(() => authStorage.close()),
+      ]);
+      if (
+        [...stopped, ...released].some((result) => result.status === "rejected")
+      )
+        throw new Error("Runtime disposal encountered a cleanup failure.");
     },
   };
 }

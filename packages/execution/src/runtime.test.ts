@@ -1,11 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Task } from "@mars/contracts";
-import { loadModelRegistry } from "@mars/providers";
+import { loadModelRegistry, ModelRouter } from "@mars/providers";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { AgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
 import {
   type BudgetLedger,
   createModelBridge,
@@ -432,3 +433,178 @@ test("pre-dispatch reservation and persistence failure fail closed without provi
     await f.cleanup();
   }
 });
+
+test("runtime dispatch inherits registry credentials when env is omitted, for both stream and complete", async () => {
+  const f = await fixture();
+  let session: RuntimeSession | undefined;
+  let calls = 0;
+  const fetchFixture = async (_url: string, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get("authorization")).toBe(
+      "Bearer dummy-key-not-real",
+    );
+    calls++;
+    const body = JSON.parse(String(init?.body)) as { stream?: boolean };
+    return body.stream
+      ? sse({ content: "Configured credentials reached the adapter" })
+      : Response.json({
+          choices: [{ message: { role: "assistant", content: "Complete" } }],
+        });
+  };
+  try {
+    session = await openRuntimeSession({
+      task: f.task,
+      cwd: f.cwd,
+      stateDir: f.stateDir,
+      registry: f.registry,
+      tools: f.tools,
+      approvals: { read: false, write: false, execute: false },
+      fetch: fetchFixture,
+    });
+    expect(
+      (await session.run("Use configured provider credentials")).status,
+    ).toBe("completed");
+    const router = new ModelRouter(f.registry, {
+      adapterOptions: { fetch: fetchFixture },
+    });
+    expect(
+      (
+        await router.complete(
+          { messages: [{ role: "user", content: "Hello" }] },
+          { model: "fixture/free" },
+        )
+      ).content,
+    ).toBe("Complete");
+    expect(calls).toBe(2);
+    expect(Object.keys(f.registry.getProviderEnvironment("fixture"))).toEqual([
+      "MARS_FIXTURE_KEY",
+    ]);
+    expect(f.registry.getProviderEnvironment("unknown")).toEqual({});
+  } finally {
+    await session?.dispose();
+    await f.cleanup();
+  }
+}, 30000);
+
+test("cancellation flushes its journal even when workspace stop rejects", async () => {
+  const f = await fixture();
+  let entered: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let flush: ReturnType<typeof spyOn> | undefined;
+  try {
+    const session = await f.open({
+      tools: {
+        ...f.tools,
+        stop: async () => {
+          throw new Error("Untrusted stop detail");
+        },
+      },
+      fetch: async (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          entered?.();
+          const abort = () =>
+            reject(new DOMException("Cancelled", "AbortError"));
+          if (init?.signal?.aborted) abort();
+          else init?.signal?.addEventListener("abort", abort, { once: true });
+        }),
+    });
+    const running = session.run("Cancel despite workspace failure");
+    await started;
+    flush = spyOn(AgentSession.prototype, "flushToDisk");
+    await expect(session.cancel()).rejects.toThrow(
+      "Runtime cancellation encountered a cleanup failure.",
+    );
+    expect(flush).toHaveBeenCalled();
+    expect((await running).status).toBe("cancelled");
+    expect(await readFile(session.journalPath, "utf8")).toContain(
+      '"stopReason":"aborted"',
+    );
+    await expect(session.dispose()).rejects.toThrow(
+      "Runtime disposal encountered a cleanup failure.",
+    );
+  } finally {
+    flush?.mockRestore();
+    await f.cleanup();
+  }
+}, 30000);
+
+test("disposal closes the SDK journal even when workspace stop rejects", async () => {
+  const f = await fixture();
+  let dispose: ReturnType<typeof spyOn> | undefined;
+  let close: ReturnType<typeof spyOn> | undefined;
+  try {
+    dispose = spyOn(AgentSession.prototype, "dispose");
+    const session = await f.open({
+      tools: {
+        ...f.tools,
+        stop: async () => {
+          throw new Error("Stop failed");
+        },
+      },
+      fetch: async () => sse({ content: "Durable final response" }),
+    });
+    await session.run("Complete before disposal");
+    close = spyOn(SessionManager.prototype, "close");
+    await expect(session.dispose()).rejects.toThrow(
+      "Runtime disposal encountered a cleanup failure.",
+    );
+    expect(dispose).toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    expect(await readFile(session.journalPath, "utf8")).toContain(
+      "Durable final response",
+    );
+    await session.dispose();
+    expect(dispose).toHaveBeenCalledTimes(1);
+  } finally {
+    dispose?.mockRestore();
+    close?.mockRestore();
+    await f.cleanup();
+  }
+}, 30000);
+
+for (const damage of ["missing", "invalid"] as const) {
+  test(`resuming a journal with ${damage} budget fails closed and closes the reopened manager`, async () => {
+    const f = await fixture();
+    let close: ReturnType<typeof spyOn> | undefined;
+    let calls = 0;
+    try {
+      const first = await f.open({
+        fetch: async () => sse({ content: "Original budget" }),
+      });
+      await first.run("Persist original budget");
+      await first.dispose();
+      const entries = (await readFile(first.journalPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const damaged =
+        damage === "missing"
+          ? entries.filter((entry) => entry.customType !== "mars.budget")
+          : entries.map((entry) =>
+              entry.customType === "mars.budget"
+                ? { ...entry, data: { deadline: "invalid" } }
+                : entry,
+            );
+      await writeFile(
+        first.journalPath,
+        `${damaged.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      );
+      close = spyOn(SessionManager.prototype, "close");
+      await expect(
+        f.open({
+          sessionFile: first.journalPath,
+          fetch: async () => {
+            calls++;
+            return sse({ content: "Never dispatch" });
+          },
+        }),
+      ).rejects.toThrow();
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(calls).toBe(0);
+    } finally {
+      close?.mockRestore();
+      await f.cleanup();
+    }
+  }, 30000);
+}
