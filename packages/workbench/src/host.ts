@@ -12,7 +12,6 @@ import {
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
   type ChildLaunch,
-  type ChildOutcome,
   type ChildRunner,
   type ChildRuntimeAdapter,
   CollaborationError,
@@ -503,15 +502,12 @@ export async function createWorkbenchHost(
       },
     });
   };
-  /** Session usage already mirrored into task events for one child. */
-  const childResults = async (
-    context: RequestContext,
-    taskId: string,
-    childTaskId: string,
-  ) => {
-    let input = 0;
-    let output = 0;
-    let usd = 0;
+  /** Usage already mirrored into task events, and the last recorded state, per child. */
+  const childResults = async (context: RequestContext, taskId: string) => {
+    const recorded = new Map<
+      string,
+      { input: number; output: number; usd: number; state: string }
+    >();
     for await (const event of options.store.events(context, taskId)) {
       if (
         event.event_type !== "tool.completed" ||
@@ -522,70 +518,131 @@ export async function createWorkbenchHost(
       const payload = z
         .object({
           operation: z.literal("child.result"),
-          child_task_id: z.string(),
+          child_agent_id: z.string(),
+          status: z.string(),
         })
         .safeParse(JSON.parse(new TextDecoder().decode(bytes)));
-      if (!payload.success || payload.data.child_task_id !== childTaskId)
-        continue;
-      input += event.usage?.input_tokens ?? 0;
-      output += event.usage?.output_tokens ?? 0;
-      usd += event.usage?.cost_usd ?? 0;
+      if (!payload.success) continue;
+      const previous = recorded.get(payload.data.child_agent_id) ?? {
+        input: 0,
+        output: 0,
+        usd: 0,
+        state: "",
+      };
+      recorded.set(payload.data.child_agent_id, {
+        input: previous.input + (event.usage?.input_tokens ?? 0),
+        output: previous.output + (event.usage?.output_tokens ?? 0),
+        usd: previous.usd + (event.usage?.cost_usd ?? 0),
+        state: payload.data.status,
+      });
     }
-    return { input, output, usd };
+    return recorded;
   };
   const childRouting = new Map<string, FrozenRouting>();
+  const childLaunches = new Map<string, ChildLaunch>();
+  const childSweeps = new Map<string, Promise<void>>();
+  const TERMINAL_CHILD_STATES = new Set([
+    "completed",
+    "failed",
+    "cancelled",
+    "expired",
+  ]);
   /**
-   * Mirrors one child attempt into the parent task's durable timeline. The
-   * collaboration store stays authoritative for budgets; this records what
-   * each child ran, under which routing decision, and what it consumed.
+   * Mirrors the room's children into the parent task's durable timeline from
+   * the collaboration store's charged usage (the authority for budgets, which
+   * also covers usage reconciled during recovery). Sweeps are serialized per
+   * task so overlapping attempts can never record the same usage twice: each
+   * sweep records only the delta over what earlier events already carry, and
+   * a terminal state once.
    */
-  const publishChildResult = async (
-    launch: ChildLaunch,
-    outcome: ChildOutcome,
-  ) => {
-    const context = internalContext(options.scope);
-    const previous = await childResults(
-      context,
-      launch.task_id,
-      launch.child_task_id,
-    );
-    const usage = outcome.usage;
-    await options.store.appendEvent(context, launch.task_id, {
-      event_type: "tool.completed",
-      producer: "@mars/workbench",
-      run_id: randomUUID(),
-      versions: [{ component: "@mars/workbench", revision: "0.0.1" }],
-      payload: {
-        operation: "child.result",
-        child_task_id: launch.child_task_id,
-        child_agent_id: launch.agent_id,
-        role_label: launch.role_label,
-        task_revision: launch.task_revision,
-        attempt: launch.attempt,
-        status: outcome.status,
-        model_id: launch.model_id,
-        routing: childRouting.get(launch.child_task_id) ?? null,
-      },
-      ...(usage
-        ? {
-            usage: {
-              input_tokens: Math.max(0, usage.input_tokens - previous.input),
-              output_tokens: Math.max(0, usage.output_tokens - previous.output),
-              cost_usd: Math.max(0, usage.usd - previous.usd),
+  const sweepChildren = (taskId: string): Promise<void> => {
+    const collaboration = options.collaboration;
+    const frozen = liveRooms.get(taskId);
+    if (!collaboration || !frozen) return Promise.resolve();
+    const run = async () => {
+      const context = internalContext(options.scope);
+      const recorded = await childResults(context, taskId);
+      let cursor: string | null = null;
+      do {
+        const page = await collaboration.agents.children(
+          context,
+          frozen.capability,
+          cursor ? { cursor } : undefined,
+        );
+        for (const child of page.children) {
+          const previous = recorded.get(child.agent_id) ?? {
+            input: 0,
+            output: 0,
+            usd: 0,
+            state: "",
+          };
+          const delta = {
+            input_tokens: Math.max(
+              0,
+              child.usage.input_tokens - previous.input,
+            ),
+            output_tokens: Math.max(
+              0,
+              child.usage.output_tokens - previous.output,
+            ),
+            cost_usd: Math.max(0, child.usage.usd - previous.usd),
+          };
+          const terminal =
+            TERMINAL_CHILD_STATES.has(child.state) &&
+            previous.state !== child.state;
+          if (
+            !terminal &&
+            delta.input_tokens === 0 &&
+            delta.output_tokens === 0 &&
+            delta.cost_usd === 0
+          )
+            continue;
+          const childTaskId = `${taskId}.child.${child.agent_id}`;
+          const launch = childLaunches.get(childTaskId);
+          await options.store.appendEvent(context, taskId, {
+            event_type: "tool.completed",
+            producer: "@mars/workbench",
+            run_id: randomUUID(),
+            versions: [{ component: "@mars/workbench", revision: "0.0.1" }],
+            payload: {
+              operation: "child.result",
+              child_task_id: childTaskId,
+              child_agent_id: child.agent_id,
+              role_label: child.role_label,
+              task_revision: child.task_revision,
+              attempt: launch?.attempt ?? null,
+              status: child.state,
+              model_id: launch?.model_id ?? null,
+              routing: childRouting.get(childTaskId) ?? null,
             },
-          }
-        : {}),
-    });
+            usage: delta,
+          });
+        }
+        cursor = page.next_cursor;
+      } while (cursor);
+    };
+    const queued = (childSweeps.get(taskId) ?? Promise.resolve()).then(
+      run,
+      run,
+    );
+    const settled = queued.catch(() => undefined);
+    childSweeps.set(taskId, settled);
+    return queued;
   };
   const observeChildren = (
     adapter: ChildRuntimeAdapter,
   ): ChildRuntimeAdapter => ({
     async start(launch, hooks) {
+      childLaunches.set(launch.child_task_id, launch);
       const run = await adapter.start(launch, hooks);
-      void run.outcome.then(
-        (outcome) => publishChildResult(launch, outcome).catch(() => undefined),
-        () => undefined,
-      );
+      const sweep = () => {
+        // Let the runner finalize the child in the collaboration store first.
+        setTimeout(
+          () => void sweepChildren(launch.task_id).catch(() => undefined),
+          0,
+        ).unref();
+      };
+      void run.outcome.then(sweep, sweep);
       return run;
     },
     ...(adapter.reconcile
@@ -599,7 +656,7 @@ export async function createWorkbenchHost(
     options.collaboration
       ? options.collaboration.host
           .closeRoom(internalContext(options.scope), frozen.room_id, mode)
-          .then(() => undefined)
+          .then(() => sweepChildren(taskIdOfRoom(frozen)))
           .catch(() => undefined)
       : Promise.resolve();
   const closeRecordedRoom = async (task: Task, mode: "drain" | "cancel") => {
@@ -764,6 +821,9 @@ export async function createWorkbenchHost(
     frozen ? { ...task, budget: frozen.budget } : task;
   /** Live frozen room records, mutated in place when a revision swaps capabilities. */
   const liveRooms = new Map<string, FrozenCollaboration>();
+  const taskIdOfRoom = (frozen: FrozenCollaboration): string =>
+    [...liveRooms].find(([, live]) => live.room_id === frozen.room_id)?.[0] ??
+    "";
   const roomToolsFor = (
     taskId: string,
     frozen: FrozenCollaboration,
@@ -773,6 +833,8 @@ export async function createWorkbenchHost(
     const collaboration = options.collaboration;
     if (!collaboration) return {};
     liveRooms.set(taskId, frozen);
+    // A restarted host mirrors whatever recovery charged while it was away.
+    void sweepChildren(taskId).catch(() => undefined);
     return {
       collaboration: collaborationTools(
         collaboration.agents,
@@ -986,13 +1048,10 @@ export async function createWorkbenchHost(
       // With a specialist registry the child is routed like a launch, and a
       // verified specialist is pinned only when it is free and tool-capable.
       modelPolicy: async (request) => {
-        const fallback = selectExecutionModel(
-          options.registry,
-          undefined,
-          true,
-        );
+        const fallback = () =>
+          selectExecutionModel(options.registry, undefined, true);
         if (!options.specialists)
-          return { model_id: fallback.id, reason: "workbench free default" };
+          return { model_id: fallback().id, reason: "workbench free default" };
         let routing: FrozenRouting;
         try {
           routing = await routeLaunch(
@@ -1009,7 +1068,7 @@ export async function createWorkbenchHost(
           );
         } catch {
           return {
-            model_id: fallback.id,
+            model_id: fallback().id,
             reason: "workbench free default (routing unavailable)",
           };
         }
@@ -1027,7 +1086,7 @@ export async function createWorkbenchHost(
             reason: `specialist ${routing.decision_id}`,
           };
         return {
-          model_id: fallback.id,
+          model_id: fallback().id,
           reason: `workbench free default (${routing.outcome})`,
         };
       },
