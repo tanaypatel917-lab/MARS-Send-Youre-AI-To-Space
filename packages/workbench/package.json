@@ -6,6 +6,9 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@mars/contracts": "workspace:*",
+    "@mars/execution": "workspace:*",
+    "@mars/providers": "workspace:*",
+    "@mars/tasks": "workspace:*",
     "zod": "3.25.76"
   }
 }
