@@ -262,20 +262,10 @@ export async function loadMeta(
     });
   }
   const result = workspaceMetaSchema.safeParse(parsed);
-  if (!result.success) {
-    const hasRestoreJournal =
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "restore_journal" in parsed;
-    throw new IntegrityError(
-      hasRestoreJournal
-        ? "Invalid restore journal metadata"
-        : "workspace state lost",
-      {
-        cause: result.error,
-      },
-    );
-  }
+  if (!result.success)
+    throw new IntegrityError("workspace state lost", {
+      cause: result.error,
+    });
   return result.data;
 }
 

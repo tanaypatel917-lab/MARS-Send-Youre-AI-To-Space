@@ -829,14 +829,22 @@ test("restore journal paths are validated before recovery touches workspace data
     );
     const before = await hashDirectory(tree);
     await fixture.provider.close();
-    await expect(
-      createLocalWorkspaceProvider({
-        rootDir: fixture.rootDir,
-        sourceRoot: fixture.sourceRoot,
-        artifacts: fixture.artifacts,
-      }),
-    ).rejects.toBeInstanceOf(IntegrityError);
-    expect(await hashDirectory(tree)).toBe(before);
+    const reopened = await createLocalWorkspaceProvider({
+      rootDir: fixture.rootDir,
+      sourceRoot: fixture.sourceRoot,
+      artifacts: fixture.artifacts,
+    });
+    try {
+      await expect(
+        reopened.discover(context, "task-test"),
+      ).rejects.toMatchObject({
+        name: "IntegrityError",
+        message: "workspace state lost",
+      });
+      expect(await hashDirectory(tree)).toBe(before);
+    } finally {
+      await reopened.close();
+    }
   } finally {
     await fixture.close();
   }

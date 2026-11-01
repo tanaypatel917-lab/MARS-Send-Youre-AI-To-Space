@@ -51,6 +51,11 @@ limit, timeout cleanup, stop cancellation, and bounded output.
 
 Package suite total: **22 passed, 0 failed, 158 expectations across 2 files**.
 
+Fail-closed coverage includes missing-tree operations (`discover`, `inspect`,
+`prepare`, and `workspacePath`) and corrupt metadata. Reopening with malformed
+restore-journal metadata permits provider creation but workspace operations
+reject with `IntegrityError("workspace state lost")` without mutating the tree.
+
 The required second run, `bun test packages/workspaces/tests/docker.test.ts`,
 also ran all five real-container tests: **5 passed, 0 failed, 17 expectations
 across 1 file**.
