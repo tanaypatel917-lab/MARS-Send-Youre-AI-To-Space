@@ -152,6 +152,11 @@ export interface ImportHost {
   deleteToken(): Promise<void>;
   storeGlobalServerUrl(url: string): Promise<void>;
   confirm(message: string, detail: string, action: string): Promise<boolean>;
+  /**
+   * Drops the live connection and blocks reconnects until the returned resume
+   * is called, so neither token is ever paired with the other server's URL.
+   */
+  suspendConnections(): () => void;
 }
 
 export type ImportOutcome =
@@ -198,6 +203,19 @@ export async function importConnection(
     )
       return { status: "cancelled" };
   }
+  const resume = host.suspendConnections();
+  try {
+    return await storeConnection(host, connection, previousToken);
+  } finally {
+    resume();
+  }
+}
+
+async function storeConnection(
+  host: ImportHost,
+  connection: LocalConnection,
+  previousToken: string | undefined,
+): Promise<ImportOutcome> {
   try {
     await host.storeToken(connection.token);
   } catch {

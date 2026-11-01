@@ -63,6 +63,7 @@ class WorkbenchViewProvider
   private controller: WorkbenchController | undefined;
   private view: vscode.WebviewView | undefined;
   private readonly trustedOrigins = new Set<string>();
+  private suspended = 0;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -72,6 +73,19 @@ class WorkbenchViewProvider
   dispose(): void {
     this.controller?.dispose();
     this.controller = undefined;
+  }
+
+  /** Drops the connection and blocks reconnects until the returned resume runs. */
+  suspendConnections(): () => void {
+    this.suspended++;
+    void this.controller?.connect();
+    let resumed = false;
+    return () => {
+      if (resumed) return;
+      resumed = true;
+      this.suspended--;
+      if (this.suspended === 0) void this.controller?.connect();
+    };
   }
 
   get active(): WorkbenchController | undefined {
@@ -126,6 +140,12 @@ class WorkbenchViewProvider
   }
 
   private async connect(): Promise<ConnectResult> {
+    if (this.suspended > 0)
+      return {
+        ok: false,
+        status: "blocked",
+        message: "Updating MARS connection settings…",
+      };
     const config = settings();
     const endpoint = checkServerUrl(config.serverUrl, config.allowNonLoopback);
     if (!endpoint.ok)
@@ -158,7 +178,9 @@ class WorkbenchViewProvider
       };
     const transport = new HttpRpcTransport({
       rpcUrl: endpoint.rpcUrl,
-      getToken: () => Promise.resolve(this.context.secrets.get(TOKEN_KEY)),
+      // Bound at connect time: a later token is only used after a reconnect
+      // that re-reads the URL, never by this client.
+      getToken: () => Promise.resolve(token),
       timeoutMs: config.timeoutMs,
     });
     return {
@@ -229,6 +251,7 @@ class WorkbenchViewProvider
 
 async function importLocalConnection(
   context: vscode.ExtensionContext,
+  provider: WorkbenchViewProvider,
 ): Promise<void> {
   const outcome = await importConnection({
     pickFile: async () => {
@@ -263,6 +286,7 @@ async function importLocalConnection(
         { modal: true, detail },
         action,
       )) === action,
+    suspendConnections: () => provider.suspendConnections(),
   });
   if (outcome.status === "imported")
     void vscode.window.showInformationMessage(
@@ -303,7 +327,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await promptForToken(context);
     }),
     vscode.commands.registerCommand("mars.importConnection", () =>
-      importLocalConnection(context),
+      importLocalConnection(context, provider),
     ),
     vscode.commands.registerCommand("mars.clearToken", async () => {
       await context.secrets.delete(TOKEN_KEY);

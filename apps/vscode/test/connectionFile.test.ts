@@ -163,6 +163,8 @@ function fakeHost(
     url: overrides.url,
     confirms: [] as string[],
     answer: true,
+    suspended: 0,
+    log: [] as string[],
   };
   const host: ImportHost = {
     pickFile: async () => "/tmp/connection.json",
@@ -170,13 +172,23 @@ function fakeHost(
     globalServerUrl: () => state.url,
     getToken: async () => state.token,
     storeToken: async (token) => {
+      state.log.push(`token:${state.suspended}`);
       state.token = token;
     },
     deleteToken: async () => {
       state.token = undefined;
     },
     storeGlobalServerUrl: async (url) => {
+      state.log.push(`url:${state.suspended}`);
       state.url = url;
+    },
+    suspendConnections: () => {
+      state.suspended++;
+      state.log.push("suspend");
+      return () => {
+        state.suspended--;
+        state.log.push("resume");
+      };
     },
     confirm: async (message, detail) => {
       state.confirms.push(`${message}\n${detail}`);
@@ -197,6 +209,7 @@ describe("importConnection", () => {
     });
     expect(state).toMatchObject({ token: TOKEN, url: "http://127.0.0.1:7331" });
     expect(state.confirms).toEqual([]);
+    expect(state.log).toEqual(["suspend", "token:1", "url:1", "resume"]);
   });
 
   test("replacing an existing token or URL needs confirmation that never shows the token", async () => {
@@ -244,7 +257,11 @@ describe("importConnection", () => {
     expect(outcome.status).toBe("rejected");
     expect(JSON.stringify(outcome)).not.toContain(TOKEN);
     for (const ctx of [picker, unreadable, remote])
-      expect(ctx.state).toMatchObject({ token: undefined, url: undefined });
+      expect(ctx.state).toMatchObject({
+        token: undefined,
+        url: undefined,
+        log: [],
+      });
   });
 
   test("a failed URL save rolls the token back", async () => {
@@ -258,6 +275,8 @@ describe("importConnection", () => {
     expect(outcome.status).toBe("failed");
     expect(JSON.stringify(outcome)).not.toContain(TOKEN);
     expect(failing.state.token).toBe("old-token-value");
+    expect(failing.state.log.at(-1)).toBe("resume");
+    expect(failing.state.suspended).toBe(0);
     const fresh = fakeHost({
       storeGlobalServerUrl: async () => {
         throw new Error("boom");
