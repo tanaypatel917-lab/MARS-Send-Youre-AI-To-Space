@@ -3,7 +3,11 @@ import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCollaboration } from "@mars/collaboration";
+import {
+  type ChildLaunch,
+  type ChildOutcome,
+  createCollaboration,
+} from "@mars/collaboration";
 import {
   createRepositoryMapProvider,
   type RepositoryMapProvider,
@@ -29,9 +33,13 @@ import {
   makeBaseline,
   makeSpecialistFixture,
 } from "../../specialists/tests/helpers";
-import type { WorkbenchCollaboration } from "./collaboration-context";
+import type {
+  ChildWorkspaceBinder,
+  WorkbenchCollaboration,
+} from "./collaboration-context";
 import { createWorkbenchHost, type WorkspaceHost } from "./host";
 import type { WorkbenchMemory } from "./memory-context";
+import type { DiffResult } from "./protocol.js";
 import type { WorkbenchSpecialists } from "./specialist-routing";
 
 const scope = {
@@ -95,21 +103,26 @@ async function fixture() {
     revision: "r1",
   };
   let prepareCalls = 0;
+  const prepareIds: string[] = [];
   let failPrepare = false;
   let restoreCalls = 0;
+  let diffFiles: DiffResult["files"] = [];
+  const writes: string[] = [];
+  const writeModes = new Map<string, boolean | undefined>();
   const artifact = await store.artifacts.put(
     context(),
     new TextEncoder().encode("checkpoint"),
     "text/plain",
   );
   const workspace: WorkspaceHost = {
-    async prepare() {
+    async prepare(_context, taskId) {
       prepareCalls++;
+      prepareIds.push(taskId);
       if (failPrepare) throw new Error("fixture: prepare failed");
-      return ref;
+      return { ...ref };
     },
     async reopen() {
-      return ref;
+      return { ...ref };
     },
     async cwd() {
       return join(root, "isolated");
@@ -117,7 +130,10 @@ async function fixture() {
     async read() {
       return artifact;
     },
-    async write() {},
+    async write(_context, _workspace, path, _artifact, options) {
+      writes.push(path);
+      writeModes.set(path, options?.executable);
+    },
     async execute() {
       return {
         exit_code: 0,
@@ -139,7 +155,7 @@ async function fixture() {
       return ref;
     },
     async diff() {
-      return { files: [] };
+      return { files: diffFiles };
     },
   };
   const sessions: {
@@ -366,6 +382,15 @@ async function fixture() {
     routedRegistry,
     get prepareCalls() {
       return prepareCalls;
+    },
+    writes,
+    writeModes,
+    prepareIds,
+    set diffFiles(files: DiffResult["files"]) {
+      diffFiles = files;
+    },
+    set revision(revision: string) {
+      ref.revision = revision;
     },
     get restoreCalls() {
       return restoreCalls;
@@ -1731,4 +1756,392 @@ test("interrupted room sessions come back paused with their room still open", as
     ).status,
   ).toBe("closed");
   await second.close();
+});
+
+test("coordinators delegate bounded children that run in private workspaces and report reviewable proposals", async () => {
+  const f = await fixture();
+  const collaboration = await createCollaboration({
+    rootDir: join(f.root, "collaboration"),
+    hostPrivateRoots: [join(f.root, "private")],
+  });
+  const launches: ChildLaunch[] = [];
+  const bindings: Awaited<ReturnType<ChildWorkspaceBinder>>[] = [];
+  const finishers: ((outcome: ChildOutcome) => void)[] = [];
+  const startErrors: string[] = [];
+  const api = await f.makeHost(undefined, undefined, undefined, undefined, {
+    host: collaboration.host,
+    agents: collaboration.agents,
+    delegation: {
+      pool: { max_tokens: 400 },
+      tickMs: 10,
+      adapter: ({ workspaceFor }) => ({
+        async start(launch) {
+          launches.push(launch);
+          const binding = await workspaceFor(launch).catch((error) => {
+            startErrors.push(String(error));
+            throw error;
+          });
+          bindings.push(binding);
+          const outcome = new Promise<ChildOutcome>((resolve) => {
+            finishers.push(resolve);
+          });
+          return {
+            session_ref: null,
+            base_revision: binding.base_revision,
+            outcome,
+            async cancel() {},
+          };
+        },
+      }),
+    },
+  });
+  const base = task();
+  await api.create(context(), {
+    ...base,
+    budget: { ...base.budget, max_duration_ms: 60_000, max_concurrency: 3 },
+  });
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  const delegation = required(
+    required(session.options.collaboration).delegation,
+  );
+  const launch = JSON.parse(
+    await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+  );
+  expect(launch.collaboration.delegation).toBe(true);
+  const prepared = f.prepareCalls;
+  // The coordinator's edits travel into the child's tree, not the source
+  // checkout, mode included, and the proposal base is the coordinator's live
+  // revision at seeding time rather than the one frozen when the runtime began.
+  f.revision = "r2";
+  f.diffFiles = [
+    {
+      path: "src/feature.ts",
+      status: "modified",
+      patch:
+        "diff --git a/src/feature.ts b/src/feature.ts\nold mode 100644\nnew mode 100755\n",
+    },
+  ];
+
+  const request = {
+    role_label: "worker",
+    instruction: "Inspect the fixture and propose nothing.",
+    max_tokens: 100,
+    max_duration_ms: 30_000,
+    max_steps: 5,
+    max_messages: 4,
+  };
+  // Children never get approvals the launch itself lacks.
+  await expect(
+    delegation.delegate({ ...request, read: true, write: true }),
+  ).rejects.toMatchObject({ code: "forbidden" });
+  expect(launches).toHaveLength(0);
+  const reply = await delegation.delegate({ ...request, read: true });
+  expect(reply).toMatch(/^Delegated worker as \S+ \(queued, depth 1\)\.$/);
+  expect(launches).toHaveLength(1);
+  const child = required(launches[0]);
+  expect(child.approvals).toEqual({ read: true, write: false, execute: false });
+  expect(child.paid_models).toBe(false);
+  expect(child.model_id).toEqual(expect.any(String));
+  expect(f.writes).toContain("src/feature.ts");
+  expect(f.writeModes.get("src/feature.ts")).toBe(true);
+  expect(required(bindings[0]).base_revision).toBe("r2");
+  // Without write authority the collaboration package confines the child to a read-only workspace.
+  expect(child.workspace_mode).toBe("read_only");
+  expect(child.child_task_id).not.toBe("task");
+  expect(f.prepareCalls).toBe(prepared + 1);
+  await expect(
+    required(bindings[0]).tools.write("notes.txt", new Uint8Array([1])),
+  ).rejects.toMatchObject({ code: "forbidden" });
+  expect(JSON.parse(await delegation.children())).toMatchObject([
+    { role_label: "worker", state: "running", depth: 1 },
+  ]);
+
+  required(finishers[0])({
+    status: "completed",
+    summary: "Proposal: no change needed.",
+    artifacts: [],
+    usage: { input_tokens: 10, output_tokens: 5, usd: 0, steps: 1 },
+  });
+  const untilResults = async (predicate: (text: string) => boolean) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const text = await delegation.results();
+      if (predicate(text)) return text;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(
+      "child result did not arrive: " +
+        startErrors.join(";") +
+        (await delegation.children()) +
+        " | " +
+        (await delegation.results()),
+    );
+  };
+  const rendered = await untilResults((text) =>
+    text.includes("status=proposed"),
+  );
+  expect(rendered).toContain("untrusted child result");
+  expect(rendered).toContain(
+    "--- untrusted summary begin ---\nProposal: no change needed.",
+  );
+  const resultId = required(
+    /untrusted child result (\S+) /.exec(rendered)?.[1],
+  );
+  expect(rendered).toContain("Current task revision: 1 (reviews must pass");
+  expect(
+    JSON.parse(
+      await delegation.reviewResult({
+        result_id: resultId,
+        decision: "accept",
+        expected_task_revision: 1,
+      }),
+    ),
+  ).toEqual({ result_id: resultId, status: "accepted" });
+
+  await delegation.delegate({
+    role_label: "reviewer",
+    instruction: "Check the proposal.",
+    max_tokens: 100,
+    max_duration_ms: 30_000,
+    max_steps: 5,
+    max_messages: 4,
+  });
+  expect(required(launches[1]).workspace_mode).toBe("read_only");
+  required(finishers[1])({
+    status: "completed",
+    summary: "Looks fine.",
+    artifacts: [],
+    usage: { input_tokens: 10, output_tokens: 5, usd: 0, steps: 1 },
+  });
+  await untilResults((text) => text.includes("Looks fine."));
+  await api.steer(context(), "task", "Change of plan: also update docs.");
+  const afterSteer = await untilResults((text) =>
+    text.includes("status=stale"),
+  );
+  expect(afterSteer).toContain("status=accepted");
+  expect(afterSteer).toContain("Current task revision: 2 (");
+  // The revised room swapped the coordinator capability; live tools keep working.
+  expect(JSON.parse(await delegation.children())).toHaveLength(2);
+  expect(await delegation.delegate(request)).toMatch(/queued, depth 1/);
+  expect(launches).toHaveLength(3);
+  required(finishers[2])({
+    status: "completed",
+    summary: "Docs updated proposal.",
+    artifacts: [],
+    usage: { input_tokens: 10, output_tokens: 5, usd: 0, steps: 1 },
+  });
+  // A room with live children drains instead of closing; finish them first.
+  await untilResults((text) => text.includes("Docs updated proposal."));
+  expect(await required(session.options.collaboration).members()).toContain(
+    "reviewer",
+  );
+
+  session.finish("completed");
+  await session.disposed;
+  expect(
+    (
+      await collaboration.host.inspectRoom(
+        context(),
+        launch.collaboration.room_id,
+      )
+    ).status,
+  ).toBe("closed");
+  await api.close();
+});
+
+test("path-scoped writable children write only inside their claim and never execute", async () => {
+  const f = await fixture();
+  const collaboration = await createCollaboration({
+    rootDir: join(f.root, "collaboration"),
+    hostPrivateRoots: [join(f.root, "private")],
+  });
+  const launches: ChildLaunch[] = [];
+  const bindings: Awaited<ReturnType<ChildWorkspaceBinder>>[] = [];
+  const finishers: ((outcome: ChildOutcome) => void)[] = [];
+  let binder: ChildWorkspaceBinder | undefined;
+  const api = await f.makeHost(undefined, undefined, undefined, undefined, {
+    host: collaboration.host,
+    agents: collaboration.agents,
+    delegation: {
+      pool: { max_tokens: 400 },
+      tickMs: 10,
+      adapter: ({ workspaceFor }) => ({
+        async start(launch) {
+          binder = workspaceFor;
+          launches.push(launch);
+          const binding = await workspaceFor(launch);
+          bindings.push(binding);
+          return {
+            session_ref: null,
+            base_revision: binding.base_revision,
+            outcome: new Promise<ChildOutcome>((resolve) => {
+              finishers.push(resolve);
+            }),
+            async cancel() {},
+          };
+        },
+      }),
+    },
+  });
+  const base = task();
+  await api.create(context(), {
+    ...base,
+    budget: { ...base.budget, max_duration_ms: 60_000, max_concurrency: 3 },
+  });
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: true, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  const delegation = required(
+    required(session.options.collaboration).delegation,
+  );
+  f.diffFiles = [{ path: "docs/intro.md", status: "added", patch: "" }];
+  // Omitted approvals default to read-only within the coordinator's own.
+  await delegation.delegate({
+    role_label: "reader",
+    instruction: "Look only.",
+    max_tokens: 50,
+    max_duration_ms: 30_000,
+    max_steps: 2,
+    max_messages: 2,
+  });
+  await delegation.delegate({
+    role_label: "editor",
+    instruction: "Edit the docs.",
+    write: true,
+    write_paths: ["docs"],
+    max_tokens: 50,
+    max_duration_ms: 30_000,
+    max_steps: 2,
+    max_messages: 2,
+  });
+  const deadline = Date.now() + 5_000;
+  while (bindings.length < 2 && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(launches.map((launch) => launch.approvals)).toEqual([
+    { read: true, write: false, execute: false },
+    { read: true, write: true, execute: false },
+  ]);
+  expect(required(launches[1]).workspace_mode).toBe("private");
+  const editor = required(bindings[1]).tools;
+  const bytes = new TextEncoder().encode("x");
+  await expect(editor.write("src/feature.ts", bytes)).rejects.toMatchObject({
+    code: "forbidden",
+  });
+  await expect(editor.write("../docs/a.md", bytes)).rejects.toMatchObject({
+    code: "forbidden",
+  });
+  await expect(editor.write("./docs/a.md", bytes)).rejects.toMatchObject({
+    code: "forbidden",
+  });
+  await expect(editor.write("docs//a.md", bytes)).rejects.toMatchObject({
+    code: "forbidden",
+  });
+  await editor.write("docs/guide.md", bytes);
+  expect(f.writes).toContain("docs/guide.md");
+  // A retried attempt reopens the child's own tree: no re-seeding over its
+  // edits, and the recorded base survives coordinator progress.
+  const seeded = f.writes.filter((path) => path === "docs/intro.md").length;
+  f.revision = "r9";
+  const again = await required(binder)(required(launches[1]));
+  expect(again.base_revision).toBe(required(bindings[1]).base_revision);
+  expect(f.writes.filter((path) => path === "docs/intro.md").length).toBe(
+    seeded,
+  );
+  await expect(editor.execute(["true"])).rejects.toMatchObject({
+    code: "forbidden",
+  });
+  // Rooms with live children drain rather than close, so finish them first.
+  for (const finish of finishers)
+    finish({
+      status: "completed",
+      summary: "Done.",
+      artifacts: [],
+      usage: { input_tokens: 1, output_tokens: 1, usd: 0, steps: 1 },
+    });
+  const settled = Date.now() + 5_000;
+  while (Date.now() < settled) {
+    const listed = JSON.parse(await delegation.children()) as {
+      state: string;
+    }[];
+    if (listed.length === 2 && listed.every((c) => c.state === "completed"))
+      break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  session.finish("completed");
+  await api.close();
+});
+
+test("children of maximal-length task ids get provider-valid workspace ids", async () => {
+  const f = await fixture();
+  const collaboration = await createCollaboration({
+    rootDir: join(f.root, "collaboration"),
+    hostPrivateRoots: [join(f.root, "private")],
+  });
+  const launches: ChildLaunch[] = [];
+  const api = await f.makeHost(undefined, undefined, undefined, undefined, {
+    host: collaboration.host,
+    agents: collaboration.agents,
+    delegation: {
+      pool: { max_tokens: 400 },
+      tickMs: 10,
+      adapter: ({ workspaceFor }) => ({
+        async start(launch) {
+          launches.push(launch);
+          const binding = await workspaceFor(launch);
+          return {
+            session_ref: null,
+            base_revision: binding.base_revision,
+            outcome: Promise.resolve({
+              status: "completed" as const,
+              summary: "Done.",
+              artifacts: [],
+              usage: { input_tokens: 1, output_tokens: 1, usd: 0, steps: 1 },
+            }),
+            async cancel() {},
+          };
+        },
+      }),
+    },
+  });
+  const taskId = "t".repeat(128);
+  const base = task();
+  await api.create(context(), {
+    ...base,
+    task_id: taskId,
+    budget: { ...base.budget, max_duration_ms: 60_000, max_concurrency: 3 },
+  });
+  await api.start(context(), {
+    task_id: taskId,
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  const delegation = required(
+    required(session.options.collaboration).delegation,
+  );
+  await delegation.delegate({
+    role_label: "reader",
+    instruction: "Look only.",
+    max_tokens: 50,
+    max_duration_ms: 30_000,
+    max_steps: 2,
+    max_messages: 2,
+  });
+  const deadline = Date.now() + 5_000;
+  while (f.prepareIds.length < 2 && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(required(launches[0]).child_task_id.length).toBeGreaterThan(128);
+  const providerId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+  expect(f.prepareIds).toHaveLength(2);
+  for (const id of f.prepareIds) expect(id).toMatch(providerId);
+  expect(required(f.prepareIds[1]).startsWith("child.")).toBe(true);
+  session.finish("completed");
+  await api.close();
 });

@@ -1,10 +1,26 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, realpath, stat } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import {
+  type ChildLaunch,
+  type ChildRunner,
+  CollaborationError,
+  createChildRunner,
+  createOhMyPiChildAdapter,
+} from "@mars/collaboration";
 import type { RepositoryMapProvider } from "@mars/context";
 import type {
   ArtifactRef,
+  Budget,
   ExecutionProvider,
   RequestContext,
   Scope,
@@ -87,6 +103,13 @@ export interface WorkspaceHost extends ExecutionProvider {
   reopen(context: RequestContext, taskId: string): Promise<WorkspaceRef>;
   cwd(context: RequestContext, workspace: WorkspaceRef): Promise<string>;
   diff(context: RequestContext, workspace: WorkspaceRef): Promise<DiffResult>;
+  write(
+    context: RequestContext,
+    workspace: WorkspaceRef,
+    relativePath: string,
+    artifact: ArtifactRef,
+    options?: { executable?: boolean },
+  ): Promise<void>;
 }
 
 export interface WorkbenchHostOptions {
@@ -107,6 +130,48 @@ export interface WorkbenchHostOptions {
 
 export interface WorkbenchHostApi extends WorkbenchOperations {
   close(): Promise<void>;
+}
+
+function normalizeClaimedPath(path: string): string | null {
+  if (path.startsWith("/") || path.startsWith("\\")) return null;
+  const segments = path
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter((segment) => segment !== "" && segment !== ".");
+  if (segments.length === 0 || segments.includes("..")) return null;
+  return segments.join("/");
+}
+
+/** A write is inside the child's claim when it equals or sits under a claimed path. */
+/**
+ * The workspace id a child's tree is prepared under. The runner derives child
+ * task ids by suffixing the parent's, which can exceed the provider's 128
+ * character limit for a valid parent; such ids map to a stable digest alias.
+ */
+function childWorkspaceTaskId(childTaskId: string): string {
+  if (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(childTaskId))
+    return childTaskId;
+  return "child." + createHash("sha256").update(childTaskId).digest("hex");
+}
+
+/** The executable bit a workspace diff patch records for the file's new state. */
+function seededExecutable(patch: string): boolean | undefined {
+  const match = /^new (?:file )?mode (\d{6})$/m.exec(patch);
+  if (!match) return undefined;
+  return match[1] === "100755";
+}
+
+function withinClaimedPaths(path: string, claimed: readonly string[]): boolean {
+  const target = normalizeClaimedPath(path);
+  // Only the canonical spelling is accepted, so the claim check and the
+  // provider's own path validation always judge the same string.
+  if (target === null || target !== path) return false;
+  return claimed.some((claim) => {
+    const prefix = normalizeClaimedPath(claim);
+    return (
+      prefix !== null && (target === prefix || target.startsWith(prefix + "/"))
+    );
+  });
 }
 
 function internalContext(scope: Scope): RequestContext {
@@ -451,6 +516,67 @@ export async function createWorkbenchHost(
     if (launch?.collaboration)
       await closeFrozenRoom(launch.collaboration, mode);
   };
+  // Steering advances the task revision; the room marks pending child
+  // proposals stale so the coordinator reviews them against current intent.
+  /**
+   * Steering changes the task the room was opened for. The room keeps its own
+   * monotonic task revision (the durable task revision does not change on
+   * steer): proposals from the previous revision become stale, children are
+   * cancelled, and the coordinator receives a fresh capability which replaces
+   * the frozen one in launch metadata and in the live room tools.
+   */
+  const reviseRecordedRoom = async (task: Task) => {
+    const launch = await readLaunch(task).catch(() => null);
+    if (!launch?.collaboration || !options.collaboration) return;
+    const context = internalContext(options.scope);
+    const roomId = launch.collaboration.room_id;
+    try {
+      const room = await options.collaboration.host.inspectRoom(
+        context,
+        roomId,
+      );
+      const revised = await options.collaboration.host.reviseTask(
+        context,
+        roomId,
+        { ...task, revision: room.task_revision + 1 },
+      );
+      const frozen: FrozenCollaboration = {
+        ...launch.collaboration,
+        capability: revised.coordinator,
+        budget: revised.room.coordinator_runtime_budget,
+      };
+      await rewriteLaunch(task, { ...launch, collaboration: frozen });
+      const live = liveRooms.get(task.task_id);
+      if (live) Object.assign(live, frozen);
+    } catch (error) {
+      if (
+        error instanceof CollaborationError &&
+        (error.code === "closed" || error.code === "not_found")
+      )
+        return;
+      throw error;
+    }
+  };
+  const rewriteLaunch = async (task: Task, launch: Launch): Promise<void> => {
+    const dir = taskState(task);
+    if ((await realpath(dir)) !== dir || ((await stat(dir)).mode & 0o077) !== 0)
+      throw new WorkbenchError("internal_error");
+    const temporary = join(dir, "launch.json." + randomUUID());
+    const file = await open(
+      temporary,
+      constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_EXCL |
+        constants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      await file.writeFile(JSON.stringify(launchSchema.parse(launch)));
+    } finally {
+      await file.close();
+    }
+    await rename(temporary, join(dir, "launch.json"));
+  };
   const run = (
     task: Task,
     workspace: WorkspaceRef,
@@ -535,6 +661,7 @@ export async function createWorkbenchHost(
         await runtime.dispose().catch(() => undefined);
         if (active.get(task.task_id) === runtime) {
           active.delete(task.task_id);
+          liveRooms.delete(task.task_id);
           jobs.delete(task.task_id);
         }
       }
@@ -544,20 +671,56 @@ export async function createWorkbenchHost(
 
   const runtimeTask = (task: Task, frozen?: FrozenCollaboration): Task =>
     frozen ? { ...task, budget: frozen.budget } : task;
-  const roomToolsFor = (frozen: FrozenCollaboration) =>
-    options.collaboration
-      ? {
-          collaboration: collaborationTools(
-            options.collaboration.agents,
-            () => internalContext(options.scope),
-            frozen,
-          ),
-        }
-      : {};
-  const toolsFor = (
-    task: Task,
+  /** Live frozen room records, mutated in place when a revision swaps capabilities. */
+  const liveRooms = new Map<string, FrozenCollaboration>();
+  const roomToolsFor = (
+    taskId: string,
+    frozen: FrozenCollaboration,
     workspace: WorkspaceRef,
     approvals: Approvals,
+  ) => {
+    const collaboration = options.collaboration;
+    if (!collaboration) return {};
+    liveRooms.set(taskId, frozen);
+    return {
+      collaboration: collaborationTools(
+        collaboration.agents,
+        () => internalContext(options.scope),
+        frozen,
+        {
+          afterDelegate: async () => {
+            await runner?.tick();
+          },
+          currentBaseRevision: async () => {
+            const live = await options.workspace.reopen(
+              internalContext(options.scope),
+              taskId,
+            );
+            return live.revision ?? null;
+          },
+          parentApprovals: () => approvals,
+          roomTaskRevision: async () =>
+            (
+              await collaboration.host.inspectRoom(
+                internalContext(options.scope),
+                frozen.room_id,
+              )
+            ).task_revision,
+        },
+      ),
+    };
+  };
+  const activeTask = (taskId: string) => async () => {
+    const context = internalContext(options.scope);
+    if ((await options.store.inspect(context, taskId)).status !== "running")
+      throw new WorkbenchError("conflict");
+  };
+  const toolsFor = (
+    workspace: WorkspaceRef,
+    approvals: Approvals,
+    budget: Budget,
+    assertActive: () => Promise<void>,
+    writePaths: readonly string[] = [],
   ): RuntimeTools => {
     const authorize = async (permission: keyof Approvals) => {
       if (
@@ -565,13 +728,8 @@ export async function createWorkbenchHost(
         (permission === "execute" && !options.canExecute)
       )
         throw new WorkbenchError("forbidden");
-      const context = internalContext(options.scope);
-      if (
-        (await options.store.inspect(context, task.task_id)).status !==
-        "running"
-      )
-        throw new WorkbenchError("conflict");
-      return context;
+      await assertActive();
+      return internalContext(options.scope);
     };
     return {
       async read(path) {
@@ -583,6 +741,8 @@ export async function createWorkbenchHost(
       },
       async write(path, bytes) {
         const context = await authorize("write");
+        if (writePaths.length > 0 && !withinClaimedPaths(path, writePaths))
+          throw new WorkbenchError("forbidden");
         const artifact = await options.store.artifacts.put(
           context,
           bytes,
@@ -592,12 +752,15 @@ export async function createWorkbenchHost(
         await options.workspace.write(context, workspace, path, artifact);
       },
       async execute(argv) {
+        // Execution cannot be confined to claimed paths, so a path-scoped
+        // child does not execute at all.
+        if (writePaths.length > 0) throw new WorkbenchError("forbidden");
         const context = await authorize("execute");
         const result = await options.workspace.execute(
           context,
           workspace,
           argv,
-          task.budget,
+          budget,
         );
         return {
           exit_code: result.exit_code,
@@ -618,6 +781,125 @@ export async function createWorkbenchHost(
   await options.store.recoverInterrupted(internalContext(options.scope), {
     reason: "Workbench process interrupted.",
   });
+
+  // Children run under the host's own runner, in private workspaces prepared
+  // for their child task id, with tools bound to the child's clamped approvals
+  // and fenced on the room staying open.
+  const delegation = options.collaboration?.delegation;
+  let runner: ChildRunner | undefined;
+  let runnerTimer: ReturnType<typeof setInterval> | undefined;
+  const childWorkspaceFor = async (launch: ChildLaunch) => {
+    const room = options.collaboration;
+    if (
+      !room ||
+      launch.scope.owner_id !== options.scope.owner_id ||
+      launch.scope.project_id !== options.scope.project_id ||
+      (launch.scope.workspace_id ?? null) !==
+        (options.scope.workspace_id ?? null)
+    )
+      throw new WorkbenchError("forbidden");
+    const context = internalContext(options.scope);
+    const workspace = await options.workspace.prepare(
+      context,
+      childWorkspaceTaskId(launch.child_task_id),
+    );
+    // The child starts from the coordinator's current tree, not the source
+    // checkout: its proposal base is the coordinator revision it was seeded
+    // from, which the review compares with the coordinator's live revision.
+    // Seeding happens once per child; a retried attempt reopens the child's
+    // own tree and keeps the recorded base.
+    const seedsDir = join(options.stateRoot, "children", "seeds");
+    const seedPath = join(
+      seedsDir,
+      encodeURIComponent(launch.child_task_id) + ".json",
+    );
+    let baseRevision: string | null;
+    const recorded = await readFile(seedPath, "utf8").then(
+      (text) => JSON.parse(text) as { base_revision: string | null },
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      },
+    );
+    if (recorded) {
+      baseRevision = recorded.base_revision;
+    } else {
+      const parent = await options.workspace.reopen(context, launch.task_id);
+      const changes = await options.workspace.diff(context, parent);
+      for (const file of changes.files) {
+        if (file.status === "deleted") throw new WorkbenchError("unavailable");
+        const executable = seededExecutable(file.patch);
+        await options.workspace.write(
+          context,
+          workspace,
+          file.path,
+          await options.workspace.read(context, parent, file.path),
+          executable === undefined ? undefined : { executable },
+        );
+      }
+      baseRevision =
+        parent.revision === undefined || parent.revision === null
+          ? null
+          : String(parent.revision);
+      await mkdir(seedsDir, { recursive: true, mode: 0o700 });
+      const temporary = seedPath + "." + randomUUID() + ".tmp";
+      await writeFile(
+        temporary,
+        JSON.stringify({ base_revision: baseRevision }),
+        { mode: 0o600 },
+      );
+      await rename(temporary, seedPath);
+    }
+    const approvals: Approvals =
+      launch.workspace_mode === "read_only"
+        ? { read: launch.approvals.read, write: false, execute: false }
+        : launch.approvals;
+    return {
+      cwd: await options.workspace.cwd(context, workspace),
+      tools: toolsFor(
+        workspace,
+        approvals,
+        launch.budget,
+        async () => {
+          const view = await room.host.inspectRoom(context, launch.room_id);
+          if (view.status !== "open") throw new WorkbenchError("conflict");
+        },
+        launch.write_paths,
+      ),
+      base_revision: baseRevision,
+    };
+  };
+  if (options.collaboration && delegation) {
+    const collaboration = options.collaboration;
+    const adapter = delegation.adapter
+      ? delegation.adapter({ workspaceFor: childWorkspaceFor })
+      : createOhMyPiChildAdapter({
+          registry: options.registry,
+          stateRoot: join(options.stateRoot, "children"),
+          workspaceFor: childWorkspaceFor,
+          ...(options.runtimeFactory
+            ? { runtimeFactory: options.runtimeFactory }
+            : {}),
+        });
+    runner = createChildRunner({
+      collaboration: {
+        host: collaboration.host,
+        agents: collaboration.agents,
+        close: async () => undefined,
+      },
+      adapter,
+      // Children never inherit the coordinator's model: a paid coordinator
+      // would otherwise hand children a model they are not allowed to use.
+      modelPolicy: async () => ({
+        model_id: selectExecutionModel(options.registry, undefined, true).id,
+        reason: "workbench free default",
+      }),
+    });
+    await runner.recover();
+    const tick = () => void runner?.tick().catch(() => undefined);
+    runnerTimer = setInterval(tick, delegation.tickMs ?? 1000);
+    runnerTimer.unref();
+  }
 
   const api: WorkbenchOperations = {
     scope: options.scope,
@@ -655,6 +937,18 @@ export async function createWorkbenchHost(
       const baseInstruction = `${task.request}\n\nAcceptance criteria:\n${task.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
       if (baseInstruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH)
         throw new WorkbenchError("too_large");
+      // The coordinator runs under the room budget minus the delegation pool
+      // and carries the delegation tools, so optional evidence is sized the
+      // way the runtime will actually be constrained.
+      const coordinatorBudget: Budget = delegation
+        ? {
+            ...task.budget,
+            max_tokens: Math.max(
+              0,
+              task.budget.max_tokens - delegation.pool.max_tokens,
+            ),
+          }
+        : task.budget;
       let routing: FrozenRouting | undefined;
       if (options.specialists && params.model_id === undefined) {
         try {
@@ -667,6 +961,7 @@ export async function createWorkbenchHost(
               approvals: params.approvals,
               recall: Boolean(options.memory),
               collaboration: Boolean(options.collaboration),
+              delegation: Boolean(delegation),
               instruction: baseInstruction,
             }) + MIN_INITIAL_OUTPUT_RESERVE,
           );
@@ -680,10 +975,11 @@ export async function createWorkbenchHost(
       );
       const capacity = optionalInstructionCapacity({
         model,
-        budget: task.budget,
+        budget: coordinatorBudget,
         approvals: params.approvals,
         recall: Boolean(options.memory),
         collaboration: Boolean(options.collaboration),
+        delegation: Boolean(delegation),
         instruction: baseInstruction,
       });
       let memory: z.infer<typeof FrozenMemorySchema> | undefined;
@@ -722,15 +1018,32 @@ export async function createWorkbenchHost(
             idempotency_key: running.task_id,
             authority: {
               approvals: params.approvals,
-              allow_delegation: false,
+              allow_delegation: Boolean(delegation),
               paid_consent: false,
             },
+            ...(delegation
+              ? {
+                  delegation_pool: delegation.pool,
+                  ...(delegation.limits ? { limits: delegation.limits } : {}),
+                }
+              : {}),
             model_id: model.id,
           });
+          if (
+            opened.room.coordinator_runtime_budget.max_tokens <
+            coordinatorBudget.max_tokens
+          ) {
+            // Evidence was sized for a larger runtime than the room grants.
+            await options.collaboration.host
+              .closeRoom(context, opened.room.room_id, "cancel")
+              .catch(() => undefined);
+            throw new Error("Room budget below the sized coordinator budget");
+          }
           collaboration = {
             room_id: opened.room.room_id,
             capability: opened.coordinator,
             budget: opened.room.coordinator_runtime_budget,
+            delegation: Boolean(delegation),
           };
         } catch {
           await options.store
@@ -798,8 +1111,20 @@ export async function createWorkbenchHost(
           registry: options.registry,
           modelId: model.id,
           approvals: params.approvals,
-          tools: toolsFor(running, workspace, params.approvals),
-          ...(collaboration ? roomToolsFor(collaboration) : {}),
+          tools: toolsFor(
+            workspace,
+            params.approvals,
+            running.budget,
+            activeTask(running.task_id),
+          ),
+          ...(collaboration
+            ? roomToolsFor(
+                task.task_id,
+                collaboration,
+                workspace,
+                params.approvals,
+              )
+            : {}),
           ...(params.approvals.read ? historyFor(context) : {}),
           onEvent: async (event) => {
             if (!bound) {
@@ -908,8 +1233,20 @@ export async function createWorkbenchHost(
           registry: options.registry,
           modelId: launch.model_id,
           approvals: launch.approvals,
-          tools: toolsFor(running, workspace, launch.approvals),
-          ...(launch.collaboration ? roomToolsFor(launch.collaboration) : {}),
+          tools: toolsFor(
+            workspace,
+            launch.approvals,
+            running.budget,
+            activeTask(running.task_id),
+          ),
+          ...(launch.collaboration
+            ? roomToolsFor(
+                task.task_id,
+                launch.collaboration,
+                workspace,
+                launch.approvals,
+              )
+            : {}),
           ...(launch.approvals.read ? historyFor(context) : {}),
           onEvent: observe(taskId),
         });
@@ -950,6 +1287,7 @@ export async function createWorkbenchHost(
       if (task.status !== "paused" && (task.status !== "running" || !runtime))
         throw new WorkbenchError("conflict");
       await options.store.steer(context, taskId, instruction);
+      await reviseRecordedRoom(await options.store.inspect(context, taskId));
       if (task.status === "running") await runtime?.steer(instruction);
     },
     async cancel(context, taskId) {
@@ -1097,6 +1435,8 @@ export async function createWorkbenchHost(
     restore: serialize((_, taskId) => taskId, api.restore),
     async close() {
       closing = true;
+      if (runnerTimer) clearInterval(runnerTimer);
+      await runner?.shutdown().catch(() => undefined);
       await Promise.allSettled([...operations]);
       let cleanupFailed = false;
       await Promise.all(
