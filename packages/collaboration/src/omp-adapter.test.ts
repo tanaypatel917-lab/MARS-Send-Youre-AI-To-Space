@@ -361,3 +361,32 @@ test("OMP adapter cancels after the child exceeds its step limit", async () => {
   expect(outcome.usage?.steps).toBeGreaterThanOrEqual(1);
   expect(f.fetchCalls).toHaveLength(1);
 });
+
+test("resumed journal outcomes report per-attempt steps, not journal totals", async () => {
+  const f = await fixture();
+  const first = await f.adapter.start(f.launch, {
+    signal: new AbortController().signal,
+    async onProgress() {},
+  });
+  const firstOutcome = await first.outcome;
+  const sessionRef = first.session_ref;
+  if (!sessionRef) throw new Error("Runtime journal was not returned");
+  expect(firstOutcome.usage?.steps).toBeGreaterThanOrEqual(1);
+  const reconciled = await f.adapter.reconcile?.(sessionRef);
+  expect(reconciled?.steps).toBeGreaterThanOrEqual(1);
+  const controller = new AbortController();
+  controller.abort();
+  const resumed = await f.adapter.start(
+    { ...f.launch, session_ref: sessionRef, attempt: 2 },
+    { signal: controller.signal, async onProgress() {} },
+  );
+  const outcome = await resumed.outcome;
+  expect(outcome.status).toBe("cancelled");
+  expect(outcome.usage).toEqual({
+    input_tokens: reconciled?.input_tokens ?? -1,
+    output_tokens: reconciled?.output_tokens ?? -1,
+    usd: reconciled?.usd ?? -1,
+    steps: 0,
+  });
+  expect(f.fetchCalls).toHaveLength(1);
+});

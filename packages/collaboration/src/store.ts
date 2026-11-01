@@ -251,6 +251,13 @@ export class CollaborationStore {
         db.exec(
           `ALTER TABLE members ADD COLUMN pool_json TEXT NOT NULL DEFAULT '{"tokens":0,"usd":0}'`,
         );
+      const resultColumns = db
+        .query<{ name: string }, []>("PRAGMA table_info(results)")
+        .all();
+      if (!resultColumns.some((column) => column.name === "unsafe_artifacts"))
+        db.exec(
+          "ALTER TABLE results ADD COLUMN unsafe_artifacts INTEGER NOT NULL DEFAULT 0",
+        );
       const init = db.transaction(() => {
         const current = db
           .query<{ value: string }, [string]>(

@@ -237,6 +237,18 @@ function cancelledRun(
   };
 }
 
+/**
+ * Journal totals are cumulative for the whole session, but the runner adds
+ * earlier attempts' steps itself, so outcome steps must count this attempt
+ * only.
+ */
+function withAttemptSteps(
+  usage: ChildUsage | null,
+  attemptSteps: number,
+): ChildUsage | null {
+  return usage ? { ...usage, steps: attemptSteps } : null;
+}
+
 async function cancelledBeforeRuntime(
   launch: ChildLaunch,
   stateRoot: string,
@@ -244,7 +256,7 @@ async function cancelledBeforeRuntime(
 ): Promise<ChildRun> {
   const sessionRef = launch.session_ref || null;
   const usage = sessionRef
-    ? await usageFromJournal(sessionRef, stateRoot)
+    ? withAttemptSteps(await usageFromJournal(sessionRef, stateRoot), 0)
     : zeroUsage;
   return cancelledRun(sessionRef, baseRevision, usage);
 }
@@ -410,7 +422,10 @@ export function createOhMyPiChildAdapter(
         await session.dispose().catch(() => undefined);
         const usage = launch.session_ref
           ? sessionRef
-            ? await usageFromJournal(sessionRef, state.root)
+            ? withAttemptSteps(
+                await usageFromJournal(sessionRef, state.root),
+                0,
+              )
             : null
           : zeroUsage;
         return cancelledRun(sessionRef, workspace.base_revision, usage);
@@ -427,7 +442,10 @@ export function createOhMyPiChildAdapter(
         try {
           if (hooks.signal.aborted) {
             const usage = launch.session_ref
-              ? await usageFromJournal(sessionRef, state.root)
+              ? withAttemptSteps(
+                  await usageFromJournal(sessionRef, state.root),
+                  0,
+                )
               : zeroUsage;
             return cancelledOutcome(usage);
           }
@@ -450,7 +468,10 @@ export function createOhMyPiChildAdapter(
             status: "failed" as const,
             summary: "Runtime failed before a result could be produced.",
             artifacts: [],
-            usage: await usageFromJournal(sessionRef, state.root),
+            usage: withAttemptSteps(
+              await usageFromJournal(sessionRef, state.root),
+              steps,
+            ),
           };
         } finally {
           hooks.signal.removeEventListener("abort", abort);
