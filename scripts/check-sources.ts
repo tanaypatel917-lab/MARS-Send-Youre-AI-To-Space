@@ -108,6 +108,7 @@ export const REQUIRED_COMPONENTS = [
   "openclaw-gateway",
   "harbor",
   "mini-swe-agent",
+  "terminal-bench-2",
   "dspy",
   "gepa",
   "aider-repomap",

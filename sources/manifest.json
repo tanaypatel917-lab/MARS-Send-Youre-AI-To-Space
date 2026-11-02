@@ -1205,6 +1205,92 @@
       "background_references": []
     },
     {
+      "id": "terminal-bench-2",
+      "group": "evaluation",
+      "repository_url": "https://github.com/laude-institute/terminal-bench-2",
+      "revision": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+      "version_note": "Terminal-Bench 2.0 task set as pinned by the Harbor registry (laude-institute/harbor main @ a81b92d5f3cd06afaa1d3ad7bcaa926c6100fb5a, dataset `terminal-bench@2.0`, 89 tasks, every task entry points at this commit). The 10-task `terminal-bench-sample@2.0` dataset comes from laude-institute/terminal-bench-2-0-sample @ 7e917f35c281188532772312d4ad91ca9274febc.",
+      "license": {
+        "spdx": "NOASSERTION",
+        "path": "README.md",
+        "url": "https://github.com/laude-institute/terminal-bench-2/blob/69671fbaac6d67a7ef0dfec016cc38a64ef7a77c/README.md",
+        "additional_notices": [],
+        "notes": "The task repository has no LICENSE or NOTICE file at the pinned commit (verified with git ls-tree). The parent framework repository laude-institute/terminal-bench (HEAD d28711d0da2675d0bb1d56de45ae5df6082438a3) is Apache-2.0, but that license is not asserted here for the task contents. MARS does not vendor or copy any task; tasks are fetched by Harbor at run time and only task names, commit ids and parsed results are stored."
+      },
+      "sources": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/laude-institute/terminal-bench-2/blob/69671fbaac6d67a7ef0dfec016cc38a64ef7a77c/README.md",
+          "purpose": "Terminal-Bench 2.0 repository description and task layout"
+        },
+        {
+          "path": "chess-best-move/task.toml",
+          "url": "https://github.com/laude-institute/terminal-bench-2/blob/69671fbaac6d67a7ef0dfec016cc38a64ef7a77c/chess-best-move/task.toml",
+          "purpose": "Task config shape: [verifier]/[agent] timeout_sec, [environment] docker_image pinned by tag (e.g. ghcr.io/laude-institute/terminal-bench/chess-best-move:2.0)"
+        },
+        {
+          "path": "chess-best-move/tests/test.sh",
+          "url": "https://github.com/laude-institute/terminal-bench-2/blob/69671fbaac6d67a7ef0dfec016cc38a64ef7a77c/chess-best-move/tests/test.sh",
+          "purpose": "Verifier entrypoint kept outside the candidate's reach; produces the reward Harbor records"
+        },
+        {
+          "path": "chess-best-move/instruction.md",
+          "url": "https://github.com/laude-institute/terminal-bench-2/blob/69671fbaac6d67a7ef0dfec016cc38a64ef7a77c/chess-best-move/instruction.md",
+          "purpose": "The only task content handed to a candidate agent"
+        }
+      ],
+      "background_references": [
+        {
+          "url": "https://raw.githubusercontent.com/laude-institute/harbor/main/registry.json",
+          "notes": "Harbor dataset registry mapping dataset name@version to per-task git_url + git_commit_id; the evaluation package records these pins in its comparison manifest."
+        }
+      ],
+      "runtime_requirements": "Harbor 0.25.0 (Python >=3.12) with Docker; task images are pulled from ghcr.io at run time and are pinned by tag in task.toml, so the evaluation manifest must additionally record the resolved image digest for reproducibility.",
+      "integration_owner": "MARS evaluation group (eval harness owner)",
+      "target_milestone": "M4",
+      "adaptation_decision": "Use unmodified through Harbor datasets only (`-d terminal-bench@2.0` / `terminal-bench-sample@2.0` with explicit task ids). Never copy tasks or tests into this repository; never hand verifier files to the candidate. Pin the registry commit and per-task commit in `mars.evaluation-comparison/v1` manifests.",
+      "dependencies": [
+        "harbor",
+        "Docker",
+        "ghcr.io task images"
+      ],
+      "acceptance_plan": [
+        "T1 (no LLM): `harbor run -d terminal-bench-sample@2.0 -a nop --dry-run` resolves 10 trials at the pinned commits (executed in this increment: 'Dry run OK — 10 trial(s); nothing was run').",
+        "T2 (Docker, no LLM): run `-a nop` and `-a oracle` on one sample task with `-k 2`; parse trial result.json rewards (nop 0, oracle 1) and verify repeatability variance is 0 for the deterministic grader.",
+        "T3 (model): baseline mini-swe-agent 2.4.6 and `mars_harbor_agent.agent:MarsAgent` on a fixed task slice with identical model/base URL; compare parsed rewards, cost, runtime."
+      ],
+      "audit_checks": {
+        "executed": [
+          {
+            "cmd": "harbor dataset list --legacy",
+            "result": "terminal-bench 2.0 (89 tasks), terminal-bench-sample 2.0 (10 tasks), terminal-bench-pro 1.0 (200 tasks)"
+          },
+          {
+            "cmd": "curl registry.json; python: set((git_url, git_commit_id)) per dataset",
+            "result": "terminal-bench@2.0 -> single (terminal-bench-2.git, 69671fba...); terminal-bench-sample@2.0 -> single (terminal-bench-2-0-sample.git, 7e917f35...)"
+          },
+          {
+            "cmd": "git ls-tree -r 69671fba... | grep -i 'licen|notice'",
+            "result": "no matches (no license file in the task repository)"
+          },
+          {
+            "cmd": "harbor run -d terminal-bench-sample@2.0 -a nop --dry-run -o jobs --job-name dryrun-sample -y",
+            "result": "exit 0; 'Dry run OK — 10 trial(s); nothing was run' (pinned commit existence not verified by dry run)"
+          }
+        ],
+        "inspected_not_executed": [
+          "Running any TB2 task container (requires pulling ghcr.io images; not executed in this increment)"
+        ]
+      },
+      "risks": [
+        "No license file in the task repository: redistribution of task contents is not permitted by anything recorded here; consume via Harbor only",
+        "Task images are tag-pinned, not digest-pinned, upstream; digests must be resolved and recorded per run",
+        "Registry on the Harbor `main` branch can move; the registry commit must be recorded with every comparison",
+        "Some tasks require network access or large images; CPU-only VMs may time out"
+      ],
+      "integration_status": "not-integrated"
+    },
+    {
       "id": "dspy",
       "group": "evaluation",
       "repository_url": "https://github.com/stanfordnlp/dspy",
