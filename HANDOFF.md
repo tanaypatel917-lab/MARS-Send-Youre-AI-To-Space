@@ -58,7 +58,9 @@ Parked: the MARS Shell desktop app (needs a description from the owner).
 ## How to verify locally
 
 ```sh
-bash install-bun.sh bun-v1.4.4   # see README
+curl -fsSL https://bun.sh/install -o install-bun.sh   # installer is not tracked; see README
+bash install-bun.sh bun-v1.4.4
+export PATH="$HOME/.bun/bin:$PATH"
 bun install --frozen-lockfile --ignore-scripts
 bun run check && bun run doctor
 ```
