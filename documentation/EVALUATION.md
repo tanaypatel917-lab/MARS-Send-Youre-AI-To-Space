@@ -88,13 +88,21 @@ audited GEPA HEAD differs, so GEPA runs in its own worker. Package READMEs
 record the full `uv pip freeze` lock files they rely on. Harbor needs Docker;
 there is no host-shell fallback.
 
-Verified in this increment (no model, no container):
+Verified in this increment (no model):
 
 ```text
 $ harbor dataset list --legacy        # terminal-bench 2.0 (89), terminal-bench-sample 2.0 (10)
 $ harbor run -d terminal-bench-sample@2.0 -a nop --dry-run -o jobs --job-name dryrun-sample -y
 Dry run OK — 10 trial(s); nothing was run.
+$ harbor run -d terminal-bench-sample@2.0 -i regex-log -a nop    -k 2 -n 2 -o jobs --job-name nop-regex-log-k2 -y     # 2 completed, 0 errored, reward 0.0 x2, 27 s
+$ harbor run -d terminal-bench-sample@2.0 -i regex-log -a oracle -k 2 -n 2 -o jobs --job-name oracle-regex-log-k2 -y  # 2 completed, 0 errored, reward 1.0 x2, 26 s
 ```
+
+The two Docker runs (parsed records in
+[`evidence/harbor-live-runs.txt`](evidence/harbor-live-runs.txt)) show the
+grader discriminating (`nop` 0.0 vs `oracle` 1.0) with zero variance over two
+identical trials on a deterministic task. This is grader-repeatability evidence
+for one task without any model, not an agent comparison.
 
 ## Local model path: Ollama with Qwen3-Coder
 
@@ -157,8 +165,8 @@ Verified (commands and outputs recorded above or in the package READMEs):
 Unverified:
 
 - A full baseline-vs-candidate Terminal-Bench 2 comparison with a real model.
-- Grader repeatability on real TB2 containers beyond what the package README
-  reports.
+- Grader repeatability on real TB2 containers beyond the single `regex-log`
+  nop/oracle check above and what the package README reports.
 - A GEPA optimisation run with a real reflection model producing an improved
   validation score; a run that shows no improvement is an equally valid
   outcome and must be reported as such.
