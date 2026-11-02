@@ -60,11 +60,6 @@ const NAMED_LOOKUP = new Map(
     names.map((name) => [name, char] as const),
   ),
 );
-/** Encoded units closer than this are decoded as one region. */
-const REGION_GAP = 64;
-/** Literal context kept around a region so secret shapes spanning it match. */
-const REGION_PAD = 512;
-
 interface EncodedUnit {
   start: number;
   end: number;
@@ -72,10 +67,19 @@ interface EncodedUnit {
   byte?: number;
 }
 
+/**
+ * Decoded text plus a sparse map back to source offsets. Segments are stored
+ * as parallel arrays: decoded start, source start, source end and stride (the
+ * source chars per decoded UTF-16 unit; 0 = the whole segment maps to one
+ * span). Literal runs and uniform escape runs collapse into one segment each,
+ * so memory grows with the number of distinct encodings, not page size.
+ */
 interface DecodedView {
   text: string;
-  starts: number[];
-  ends: number[];
+  decodedStarts: number[];
+  sourceStarts: number[];
+  sourceEnds: number[];
+  strides: number[];
 }
 
 function utf8SequenceLength(lead: number): number {
@@ -111,113 +115,114 @@ function parseUnit(match: RegExpExecArray): EncodedUnit {
   };
 }
 
-/** Longest whitespace-free token a region is extended to cover. */
-const MAX_TOKEN_EXTENSION = 64 * 1024;
-
-function tokenStart(text: string, index: number): number {
-  const floor = Math.max(0, index - MAX_TOKEN_EXTENSION);
-  let i = index;
-  while (i > floor && !/\s/.test(text[i - 1] ?? " ")) i -= 1;
-  return i;
-}
-
-function tokenEnd(text: string, index: number): number {
-  const ceiling = Math.min(text.length, index + MAX_TOKEN_EXTENSION);
-  let i = index;
-  while (i < ceiling && !/\s/.test(text[i] ?? " ")) i += 1;
-  return i;
-}
-
-/**
- * Bounded windows of text that contain encoded units: literal padding on both
- * sides, extended to the whitespace-delimited token so an encoded label and
- * its whole value are decoded together.
- */
-function encodedRegions(text: string): Array<[number, number]> {
-  const regions: Array<[number, number]> = [];
-  let current: [number, number] | undefined;
-  for (const match of text.matchAll(ENCODED_UNIT)) {
-    const unitEnd = match.index + match[0].length;
-    if (current && unitEnd + REGION_PAD <= current[1]) continue;
-    const paddedEnd = Math.min(text.length, unitEnd + REGION_PAD);
-    if (current && match.index <= current[1] + REGION_GAP) {
-      // Extend from the previous boundary so each character is visited once.
-      current[1] = tokenEnd(text, Math.max(current[1], paddedEnd));
-      continue;
-    }
-    current = [
-      tokenStart(text, Math.max(0, match.index - REGION_PAD)),
-      tokenEnd(text, paddedEnd),
-    ];
-    regions.push(current);
-  }
-  return regions;
-}
-
-/**
- * Decodes entities and percent escapes inside one region while mapping each
- * decoded char back to exactly the source span that produced it.
- */
-function decodedView(text: string, from: number, to: number): DecodedView {
-  let decoded = "";
-  const starts: number[] = [];
-  const ends: number[] = [];
-  const push = (chunk: string, start: number, end: number) => {
-    decoded += chunk;
-    for (let i = 0; i < chunk.length; i += 1) {
-      starts.push(start);
-      ends.push(end);
-    }
+/** Decodes the whole text while mapping every decoded char to its source span. */
+function decodedView(text: string): DecodedView {
+  const view: DecodedView = {
+    text: "",
+    decodedStarts: [],
+    sourceStarts: [],
+    sourceEnds: [],
+    strides: [],
   };
-  const pushLiteral = (chunk: string, start: number) => {
-    let offset = start;
-    for (const char of chunk) {
-      push(char, offset, offset + char.length);
-      offset += char.length;
+  const parts: string[] = [];
+  let decodedLength = 0;
+  const append = (
+    chunk: string,
+    sourceStart: number,
+    sourceEnd: number,
+    stride: number,
+  ) => {
+    if (!chunk.length) return;
+    const last = view.strides.length - 1;
+    const mergeable =
+      last >= 0 &&
+      view.strides[last] === stride &&
+      stride > 0 &&
+      view.sourceEnds[last] === sourceStart;
+    if (mergeable) {
+      view.sourceEnds[last] = sourceEnd;
+    } else {
+      view.decodedStarts.push(decodedLength);
+      view.sourceStarts.push(sourceStart);
+      view.sourceEnds.push(sourceEnd);
+      view.strides.push(stride);
     }
+    parts.push(chunk);
+    decodedLength += chunk.length;
   };
   const units: EncodedUnit[] = [];
-  const pattern = new RegExp(ENCODED_UNIT.source, "giy");
-  pattern.lastIndex = from;
-  for (let scan = from; scan < to; ) {
-    pattern.lastIndex = scan;
-    const match = pattern.exec(text);
-    if (match && match.index === scan) {
-      const unit = parseUnit(match);
-      if (unit.end > to) break;
-      units.push(unit);
-      scan = unit.end;
-    } else {
-      scan += 1;
-    }
+  for (const match of text.matchAll(ENCODED_UNIT)) {
+    units.push(parseUnit(match as RegExpExecArray));
   }
   const decoder = new TextDecoder("utf-8", { fatal: false });
-  let cursor = from;
+  let cursor = 0;
   for (let i = 0; i < units.length; i += 1) {
     const unit = units[i];
     if (!unit) break;
     if (unit.start > cursor)
-      pushLiteral(text.slice(cursor, unit.start), cursor);
+      append(text.slice(cursor, unit.start), cursor, unit.start, 1);
     if (unit.char !== undefined) {
-      push(unit.char, unit.start, unit.end);
+      const width = unit.end - unit.start;
+      append(
+        unit.char,
+        unit.start,
+        unit.end,
+        unit.char.length === 1 ? width : 0,
+      );
       cursor = unit.end;
       continue;
     }
-    const length = utf8SequenceLength(unit.byte ?? 0);
     const bytes = [unit.byte ?? 0];
     let last = unit;
-    for (let j = 1; j < length; j += 1) {
+    for (let j = 1; j < utf8SequenceLength(bytes[0] ?? 0); j += 1) {
       const next = units[i + j];
       if (!next || next.byte === undefined || next.start !== last.end) break;
       bytes.push(next.byte);
       last = next;
     }
     i += bytes.length - 1;
-    push(decoder.decode(new Uint8Array(bytes)), unit.start, last.end);
+    const char = decoder.decode(new Uint8Array(bytes));
+    const width = last.end - unit.start;
+    append(char, unit.start, last.end, char.length === 1 ? width : 0);
     cursor = last.end;
   }
-  if (cursor < to) pushLiteral(text.slice(cursor, to), cursor);
-  return { text: decoded, starts, ends };
+  if (cursor < text.length) append(text.slice(cursor), cursor, text.length, 1);
+  view.text = parts.join("");
+  return view;
+}
+
+function segmentAt(view: DecodedView, index: number): number {
+  let lo = 0;
+  let hi = view.decodedStarts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if ((view.decodedStarts[mid] ?? 0) <= index) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+/** Source span [start, end) of the decoded chars [from, to). */
+function sourceSpan(
+  view: DecodedView,
+  from: number,
+  to: number,
+): [number, number] {
+  const first = segmentAt(view, from);
+  const lastIndex = segmentAt(view, to - 1);
+  const firstStride = view.strides[first] ?? 0;
+  const lastStride = view.strides[lastIndex] ?? 0;
+  const start =
+    firstStride > 0
+      ? (view.sourceStarts[first] ?? 0) +
+        (from - (view.decodedStarts[first] ?? 0)) * firstStride
+      : (view.sourceStarts[first] ?? 0);
+  const end =
+    lastStride > 0
+      ? (view.sourceStarts[lastIndex] ?? 0) +
+        (to - (view.decodedStarts[lastIndex] ?? 0)) * lastStride
+      : (view.sourceEnds[lastIndex] ?? 0);
+  return [start, end];
 }
 
 function spliceRanges(text: string, ranges: Array<[number, number]>): string {
@@ -234,16 +239,21 @@ function spliceRanges(text: string, ranges: Array<[number, number]>): string {
 }
 
 function redactSecretShapes(text: string): string {
-  const ranges: Array<[number, number]> = [];
-  for (const [from, to] of encodedRegions(text)) {
-    const view = decodedView(text, from, to);
+  if (!ENCODED_UNIT.test(text)) {
+    ENCODED_UNIT.lastIndex = 0;
+    let output = text;
     for (const pattern of SECRET_PATTERNS) {
-      for (const match of view.text.matchAll(pattern)) {
-        const index = match.index ?? 0;
-        const start = view.starts[index];
-        const end = view.ends[index + match[0].length - 1];
-        if (start !== undefined && end !== undefined) ranges.push([start, end]);
-      }
+      output = output.replace(pattern, "[redacted]");
+    }
+    return output;
+  }
+  ENCODED_UNIT.lastIndex = 0;
+  const view = decodedView(text);
+  const ranges: Array<[number, number]> = [];
+  for (const pattern of SECRET_PATTERNS) {
+    for (const match of view.text.matchAll(pattern)) {
+      const index = match.index ?? 0;
+      ranges.push(sourceSpan(view, index, index + match[0].length));
     }
   }
   let output = spliceRanges(text, ranges);

@@ -1053,6 +1053,12 @@ describe("encoded credentials", () => {
     ).join("");
     const longSecret = `before api%5Fkey: ${longValue} after`;
     expect(redact(longSecret, [])).toBe("before [redacted] after");
+    const spaced = `api%5Fkey:${" ".repeat(600)}%73%65%63%72%65%74%76%61%6C%75%65 tail`;
+    expect(redact(spaced, [])).toBe("[redacted] tail");
+    const pageEnd = `${"filler ".repeat(200)}&#112;assword=&#x73;ecretvalue${" ".repeat(2000)}end`;
+    expect(redact(pageEnd, [])).toBe(
+      `${"filler ".repeat(200)}[redacted]${" ".repeat(2000)}end`,
+    );
     const encodedRun = `<p>${"%61".repeat(350_000)}</p> token=abcdef123456`;
     const runStarted = performance.now();
     expect(redact(encodedRun, [])).toContain("[redacted]");
