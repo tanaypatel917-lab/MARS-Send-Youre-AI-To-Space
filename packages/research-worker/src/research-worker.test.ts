@@ -29,6 +29,7 @@ import {
   parseRobots,
   quoteSupported,
   type ResearchWorkerOptions,
+  redact,
   robotsDecision,
   type SearchProvider,
   type SearchResult,
@@ -1036,6 +1037,24 @@ describe("review regressions", () => {
 });
 
 describe("encoded credentials", () => {
+  test("percent-escaped characters map to their own escapes", () => {
+    const encodedResearch = "%72%65%73%65%61%72%63%68";
+    const text = `api_key: %22%61%62%63%64%65%66%67%68%22%20${encodedResearch} and %E2%82%AC%20price`;
+    const output = redact(text, []);
+    expect(output).toBe(
+      `[redacted]%22%20${encodedResearch} and %E2%82%AC%20price`,
+    );
+    expect(redact("plain text with &amp; and %20 but no secrets", [])).toBe(
+      "plain text with &amp; and %20 but no secrets",
+    );
+    const big = `${"x".repeat(2_000_000)} token=abcdef123456 ${"y".repeat(2_000_000)}`;
+    const started = performance.now();
+    const cleaned = redact(big, []);
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(cleaned).not.toContain("abcdef123456");
+    expect(cleaned.length).toBeGreaterThan(4_000_000);
+  });
+
   test("secret shapes are redacted even when entity or percent encoded", async () => {
     const journal = createRecordingJournal();
     const search = fakeSearch({

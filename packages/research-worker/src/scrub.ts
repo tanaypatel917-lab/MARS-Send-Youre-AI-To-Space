@@ -60,6 +60,17 @@ const NAMED_LOOKUP = new Map(
     names.map((name) => [name, char] as const),
   ),
 );
+/** Encoded units closer than this are decoded as one region. */
+const REGION_GAP = 64;
+/** Literal context kept around a region so secret shapes spanning it match. */
+const REGION_PAD = 512;
+
+interface EncodedUnit {
+  start: number;
+  end: number;
+  char?: string;
+  byte?: number;
+}
 
 interface DecodedView {
   text: string;
@@ -67,18 +78,71 @@ interface DecodedView {
   ends: number[];
 }
 
-/** Decodes entities and percent escapes while mapping each char to its span. */
-function decodedView(text: string): DecodedView {
+function utf8SequenceLength(lead: number): number {
+  if (lead < 0x80) return 1;
+  if ((lead & 0xe0) === 0xc0) return 2;
+  if ((lead & 0xf0) === 0xe0) return 3;
+  if ((lead & 0xf8) === 0xf0) return 4;
+  return 1;
+}
+
+function parseUnit(match: RegExpExecArray): EncodedUnit {
+  const [unit, hex, decimal, name, percent] = match;
+  const start = match.index;
+  const end = start + unit.length;
+  if (percent !== undefined) {
+    return { start, end, byte: Number.parseInt(percent, 16) };
+  }
+  if (hex !== undefined || decimal !== undefined) {
+    const code = Number.parseInt(
+      hex ?? decimal ?? "0",
+      hex !== undefined ? 16 : 10,
+    );
+    return {
+      start,
+      end,
+      char: code > 0 && code < 0x110000 ? String.fromCodePoint(code) : unit,
+    };
+  }
+  return {
+    start,
+    end,
+    char: NAMED_LOOKUP.get((name ?? "").toLowerCase()) ?? unit,
+  };
+}
+
+/** Bounded windows of text that contain encoded units, with literal padding. */
+function encodedRegions(text: string): Array<[number, number]> {
+  const regions: Array<[number, number]> = [];
+  for (const match of text.matchAll(ENCODED_UNIT)) {
+    const start = Math.max(0, match.index - REGION_PAD);
+    const end = Math.min(
+      text.length,
+      match.index + match[0].length + REGION_PAD,
+    );
+    const last = regions[regions.length - 1];
+    if (last && start <= last[1] + REGION_GAP) {
+      last[1] = Math.max(last[1], end);
+    } else {
+      regions.push([start, end]);
+    }
+  }
+  return regions;
+}
+
+/**
+ * Decodes entities and percent escapes inside one region while mapping each
+ * decoded char back to exactly the source span that produced it.
+ */
+function decodedView(text: string, from: number, to: number): DecodedView {
   let decoded = "";
   const starts: number[] = [];
   const ends: number[] = [];
   const push = (chunk: string, start: number, end: number) => {
-    for (const char of chunk) {
-      decoded += char;
-      for (let i = 0; i < char.length; i += 1) {
-        starts.push(start);
-        ends.push(end);
-      }
+    decoded += chunk;
+    for (let i = 0; i < chunk.length; i += 1) {
+      starts.push(start);
+      ends.push(end);
     }
   };
   const pushLiteral = (chunk: string, start: number) => {
@@ -88,65 +152,51 @@ function decodedView(text: string): DecodedView {
       offset += char.length;
     }
   };
-  let cursor = 0;
-  let pendingBytes: number[] = [];
-  let pendingStart = 0;
-  const flushBytes = (end: number) => {
-    if (!pendingBytes.length) return;
-    push(
-      new TextDecoder("utf-8", { fatal: false }).decode(
-        new Uint8Array(pendingBytes),
-      ),
-      pendingStart,
-      end,
-    );
-    pendingBytes = [];
-  };
-  for (const match of text.matchAll(ENCODED_UNIT)) {
-    const index = match.index ?? 0;
-    if (index > cursor) {
-      flushBytes(cursor);
-      pushLiteral(text.slice(cursor, index), cursor);
+  const units: EncodedUnit[] = [];
+  const pattern = new RegExp(ENCODED_UNIT.source, "giy");
+  pattern.lastIndex = from;
+  for (let scan = from; scan < to; ) {
+    pattern.lastIndex = scan;
+    const match = pattern.exec(text);
+    if (match && match.index === scan) {
+      const unit = parseUnit(match);
+      if (unit.end > to) break;
+      units.push(unit);
+      scan = unit.end;
+    } else {
+      scan += 1;
     }
-    const [unit, hex, decimal, name, percent] = match;
-    const end = index + unit.length;
-    if (percent !== undefined) {
-      if (!pendingBytes.length) pendingStart = index;
-      pendingBytes.push(Number.parseInt(percent, 16));
-      cursor = end;
+  }
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  let cursor = from;
+  for (let i = 0; i < units.length; i += 1) {
+    const unit = units[i];
+    if (!unit) break;
+    if (unit.start > cursor)
+      pushLiteral(text.slice(cursor, unit.start), cursor);
+    if (unit.char !== undefined) {
+      push(unit.char, unit.start, unit.end);
+      cursor = unit.end;
       continue;
     }
-    flushBytes(index);
-    let char: string | undefined;
-    if (hex !== undefined || decimal !== undefined) {
-      const code = Number.parseInt(
-        hex ?? decimal ?? "0",
-        hex !== undefined ? 16 : 10,
-      );
-      if (code > 0 && code < 0x110000) char = String.fromCodePoint(code);
-    } else if (name !== undefined) {
-      char = NAMED_LOOKUP.get(name.toLowerCase());
+    const length = utf8SequenceLength(unit.byte ?? 0);
+    const bytes = [unit.byte ?? 0];
+    let last = unit;
+    for (let j = 1; j < length; j += 1) {
+      const next = units[i + j];
+      if (!next || next.byte === undefined || next.start !== last.end) break;
+      bytes.push(next.byte);
+      last = next;
     }
-    push(char ?? unit, index, end);
-    cursor = end;
+    i += bytes.length - 1;
+    push(decoder.decode(new Uint8Array(bytes)), unit.start, last.end);
+    cursor = last.end;
   }
-  flushBytes(cursor);
-  if (cursor < text.length) pushLiteral(text.slice(cursor), cursor);
+  if (cursor < to) pushLiteral(text.slice(cursor, to), cursor);
   return { text: decoded, starts, ends };
 }
 
-function redactSecretShapes(text: string): string {
-  const view = decodedView(text);
-  const ranges: Array<[number, number]> = [];
-  for (const pattern of SECRET_PATTERNS) {
-    for (const match of view.text.matchAll(pattern)) {
-      const index = match.index ?? 0;
-      const last = index + match[0].length - 1;
-      const start = view.starts[index];
-      const end = view.ends[last];
-      if (start !== undefined && end !== undefined) ranges.push([start, end]);
-    }
-  }
+function spliceRanges(text: string, ranges: Array<[number, number]>): string {
   if (!ranges.length) return text;
   ranges.sort((a, b) => a[0] - b[0]);
   let output = "";
@@ -157,6 +207,26 @@ function redactSecretShapes(text: string): string {
     cursor = end;
   }
   return output + text.slice(cursor);
+}
+
+function redactSecretShapes(text: string): string {
+  const ranges: Array<[number, number]> = [];
+  for (const [from, to] of encodedRegions(text)) {
+    const view = decodedView(text, from, to);
+    for (const pattern of SECRET_PATTERNS) {
+      for (const match of view.text.matchAll(pattern)) {
+        const index = match.index ?? 0;
+        const start = view.starts[index];
+        const end = view.ends[index + match[0].length - 1];
+        if (start !== undefined && end !== undefined) ranges.push([start, end]);
+      }
+    }
+  }
+  let output = spliceRanges(text, ranges);
+  for (const pattern of SECRET_PATTERNS) {
+    output = output.replace(pattern, "[redacted]");
+  }
+  return output;
 }
 
 export function redact(text: string, needles: readonly string[]): string {
