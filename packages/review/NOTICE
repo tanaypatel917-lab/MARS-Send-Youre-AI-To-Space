@@ -1,0 +1,14 @@
+Background review safety semantics are adapted from NousResearch/hermes-agent
+agent/background_review.py at revision 7020ea3e96c3fdbc768c5296493e186df46f075b
+(Copyright (c) 2025 Nous Research, MIT License) and scheduling semantics from
+openclaw/openclaw src/skills/workshop/experience-review-scheduler.ts at
+revision 7d9677ce36db4aeea2ce36a3bb78588829e80933 (Copyright (c) 2026 OpenClaw
+Foundation, MIT License), via the MARS reference port in
+mars-platform/services/review.
+
+License texts: ../memory/third_party/hermes-agent/LICENSE.txt and
+../skills/third_party/openclaw/LICENSE.txt.
+
+Modified by MARS: proposal-only output, model calls through the MARS provider
+registry (free-first), host-scheduled after completed tasks, recursion guard,
+live-turn cancellation, bounded context and output.
