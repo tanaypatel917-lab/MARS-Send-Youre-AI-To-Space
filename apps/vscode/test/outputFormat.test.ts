@@ -12,7 +12,11 @@ import { join } from "node:path";
 import { WorkbenchController } from "../src/controller";
 import { WebviewMessageSchema } from "../src/messages";
 import { openReviewTarget, type ReviewOpenerHost } from "../src/reviewOpener";
-import { buildOutputView } from "../src/webview/outputView";
+import {
+  buildOutputView,
+  isFinalText,
+  tonePreamble,
+} from "../src/webview/outputView";
 import { describeResult, harness, makeTask } from "./fixtures";
 
 const base = mkdtempSync(join(tmpdir(), "mars-review-"));
@@ -264,5 +268,58 @@ describe("output view model", () => {
     expect(
       view.errors.find((error) => error.code === "invented_address")?.block_id,
     ).toBe("48213");
+  });
+
+  test("review links are demoted per link, not per line", () => {
+    const view = buildOutputView(
+      [
+        `[Open](mars://review?pr=${PR}&path=src/a.ts&line=2&end=41) [Wide](mars://review?pr=${PR}&path=src/a.ts&line=1&end=41) [$Slack](app://slack)`,
+        `[Bad](mars://review?pr=${PR}&path=../a.ts&line=2)`,
+      ].join("\n"),
+      makeTask(),
+    );
+    expect(
+      view.reviews.map((item) => [item.review.label, item.blocked]),
+    ).toEqual([
+      ["Open", null],
+      ["Wide", expect.stringContaining("41 lines")],
+    ]);
+    expect(view.errors.map((error) => [error.line, error.code])).toEqual([
+      [1, "unknown_connector"],
+      [1, "review_range_too_wide"],
+      [2, "malformed_review_link"],
+    ]);
+  });
+
+  test("tone preamble is exposed and code fences are skipped", () => {
+    const view = buildOutputView(
+      [
+        ':::writing{id="11111" variant="note"}',
+        "Introduction",
+        "```",
+        "::tone[Fake]",
+        "```",
+        "::tone[Formal]",
+        "Hello",
+        ":::",
+      ].join("\n"),
+      makeTask(),
+    );
+    const block = view.segments[0];
+    if (block?.kind !== "writing") throw new Error("expected a writing block");
+    expect(block.tones.map((tone) => tone.tone)).toEqual(["Formal"]);
+    expect(tonePreamble(block)).toBe("Introduction\n```\n::tone[Fake]\n```");
+    expect(tonePreamble({ ...block, tones: [] })).toBeNull();
+    expect(
+      tonePreamble({ ...block, body: "::tone[Formal]\nHello" }),
+    ).toBeNull();
+  });
+
+  test("only text/plain artifacts are treated as output format", () => {
+    expect(isFinalText("text/plain")).toBe(true);
+    expect(isFinalText("text/plain; charset=utf-8")).toBe(true);
+    expect(isFinalText("application/yaml")).toBe(false);
+    expect(isFinalText("text/x-diff")).toBe(false);
+    expect(isFinalText("text/plainish")).toBe(false);
   });
 });

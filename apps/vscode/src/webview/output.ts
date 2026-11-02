@@ -12,6 +12,7 @@ import {
   blockErrors,
   buildOutputView,
   type OutputView,
+  tonePreamble,
   withinSpan,
 } from "./outputView";
 
@@ -133,6 +134,9 @@ function renderWriting(
       list.append(h("li", {}, `${error.code} — ${error.message}`));
     panel.append(list);
   }
+  const preamble = tonePreamble(block);
+  if (preamble !== null)
+    panel.append(h("pre", { class: "artifact" }, preamble));
   if (block.tones.length > 0)
     for (const tone of block.tones)
       panel.append(

@@ -9,6 +9,7 @@ import type {
 } from "../messages";
 import { button, h } from "./dom";
 import { renderOutput } from "./output";
+import { isFinalText } from "./outputView";
 
 interface VsCodeApi {
   postMessage(message: WebviewMessage): void;
@@ -505,11 +506,13 @@ function renderSelected(s: ViewState, sel: SelectedView): HTMLElement {
           { class: "muted small" },
           `${sel.artifact.media_type} · ${sel.artifact.byte_length} B${sel.artifact.note ? ` · ${sel.artifact.note}` : ""}`,
         ),
-        ...(sel.artifact.text !== null
-          ? renderOutput(task, sel.artifact.text, (message) =>
-              vscode.postMessage(message),
-            )
-          : []),
+        ...(sel.artifact.text === null
+          ? []
+          : isFinalText(sel.artifact.media_type)
+            ? renderOutput(task, sel.artifact.text, (message) =>
+                vscode.postMessage(message),
+              )
+            : [h("pre", { class: "artifact" }, sel.artifact.text)]),
       )
     : null;
   return h(
