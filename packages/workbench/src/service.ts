@@ -16,6 +16,8 @@ import {
 import { type Scope, ScopeSchema } from "@mars/contracts";
 import { createMemoryStore, type DurableMemoryStore } from "@mars/memory";
 import { loadModelRegistry, type ModelProviderRegistry } from "@mars/providers";
+import { createRegistryReviewGateway, ReviewRunner } from "@mars/review";
+import { SkillStore } from "@mars/skills";
 import { createTaskStore } from "@mars/tasks";
 import {
   createDockerSandbox,
@@ -86,6 +88,17 @@ export async function createWorkbenchService(
   const memoryInfo = await stat(memoryRoot);
   if (!memoryInfo.isDirectory() || (memoryInfo.mode & 0o077) !== 0)
     throw new WorkbenchError("forbidden");
+  const privateRoot = async (name: string) => {
+    const path = await canonicalPath(join(root, name));
+    if (path !== join(root, name)) throw new WorkbenchError("forbidden");
+    await mkdir(path, { recursive: true, mode: 0o700 });
+    const info = await stat(path);
+    if (!info.isDirectory() || (info.mode & 0o077) !== 0)
+      throw new WorkbenchError("forbidden");
+    return path;
+  };
+  const skillsRoot = await privateRoot("skills");
+  const reviewRoot = await privateRoot("review");
   const hostRoot = join(root, "sessions");
   await mkdir(hostRoot, { recursive: true, mode: 0o700 });
   const registry =
@@ -97,20 +110,35 @@ export async function createWorkbenchService(
   const store = await createTaskStore({
     rootDir: join(root, "tasks"),
     workspaceRoots: [source],
-    hostPrivateRoots: [root, memoryRoot],
+    hostPrivateRoots: [root, memoryRoot, skillsRoot, reviewRoot],
   });
   let workspace:
     | Awaited<ReturnType<typeof createLocalWorkspaceProvider>>
     | undefined;
   let host: Awaited<ReturnType<typeof createWorkbenchHost>> | undefined;
   let memory: DurableMemoryStore | undefined;
+  let review: ReviewRunner | undefined;
   let repositoryMap: RepositoryMapProvider | undefined;
   let server: ReturnType<typeof serveWorkbench> | undefined;
   try {
     memory = createMemoryStore({
       rootDir: memoryRoot,
-      hostPrivateRoots: [source, root, memoryRoot],
+      hostPrivateRoots: [source, root, memoryRoot, skillsRoot, reviewRoot],
     });
+    const skills = new SkillStore(skillsRoot);
+    // Background review is proposal-only and free-model-only; without an
+    // eligible free model the workbench simply runs without it.
+    try {
+      review = new ReviewRunner({
+        context: { schema_version: 1, scope, request_id: randomUUID() },
+        memory,
+        skills,
+        model: createRegistryReviewGateway({ registry }),
+        logRoot: reviewRoot,
+      });
+    } catch {
+      review = undefined;
+    }
     const sandbox = options.image
       ? createDockerSandbox({ image: options.image })
       : undefined;
@@ -146,12 +174,14 @@ export async function createWorkbenchService(
       registry,
       canExecute: Boolean(sandbox),
       memory,
+      skills,
+      ...(review ? { review } : {}),
       repositoryMap,
       ...(options.specialists ? { specialists: options.specialists } : {}),
       ...(options.collaboration
         ? { collaboration: options.collaboration }
         : {}),
-      hostPrivateRoots: [memoryRoot, source],
+      hostPrivateRoots: [memoryRoot, skillsRoot, reviewRoot, source],
       workspace: {
         prepare: provider.prepare.bind(provider),
         read: provider.read.bind(provider),
@@ -199,6 +229,7 @@ export async function createWorkbenchService(
     const runningHost = host;
     const runningServer = server;
     const runningMemory = memory;
+    const runningReview = review;
     const runningRepositoryMap = repositoryMap;
     let closing: Promise<void> | undefined;
     return {
@@ -209,6 +240,9 @@ export async function createWorkbenchService(
           const outcomes = [
             await Promise.allSettled([runningServer.stop(true)]),
             await Promise.allSettled([runningHost.close()]),
+            await Promise.allSettled([
+              runningReview?.stop() ?? Promise.resolve(),
+            ]),
             await Promise.allSettled([runningRepositoryMap.close()]),
             await Promise.allSettled([runningMemory.close()]),
             await Promise.allSettled([provider.close()]),
@@ -223,6 +257,7 @@ export async function createWorkbenchService(
   } catch (error) {
     await server?.stop(true).catch(() => undefined);
     if (host) await host.close().catch(() => undefined);
+    if (review) await review.stop().catch(() => undefined);
     if (repositoryMap) await repositoryMap.close().catch(() => undefined);
     if (workspace) await workspace.close().catch(() => undefined);
     if (memory) await memory.close().catch(() => undefined);
