@@ -105,6 +105,12 @@ const PAGES: Record<string, FixturePage> = {
       "Visible text: &lt;script&gt;The measurement was 228 million km in the escaped block.&lt;/script&gt; Footer path /srv/mars-private/etc. Literal link https://example.org/a%2Fb stays encoded.",
     ),
   },
+  "https://leak.example/creds": {
+    body: html(
+      "Encoded credentials",
+      "Header Authorization: Bearer%20abcdefghijklmnopqrstuv and config api_key&#61;supersecretvalue99 plus token&#x3D;%74%6F%6B%65%6E%76%61%6C%75%65%31%32%33 appear here. The deployment key lives under [redacted]/keys and nowhere else.",
+    ),
+  },
   "https://leak.example/p": {
     body: html(
       "Leak",
@@ -1026,6 +1032,47 @@ describe("review regressions", () => {
       .map((entry) => (entry.value as { text: string }).text)
       .join("\n");
     expect(replies).not.toContain("mars-private");
+  });
+});
+
+describe("encoded credentials", () => {
+  test("secret shapes are redacted even when entity or percent encoded", async () => {
+    const journal = createRecordingJournal();
+    const search = fakeSearch({
+      "mars distance from sun": [result("https://leak.example/creds")],
+    });
+    const model = fakeModel({ plan: PLAN.slice(0, 1), extracts: EXTRACTS });
+    const prompts: string[] = [];
+    const spyingModel: ModelGateway = {
+      id: "spy",
+      complete: async (request) => {
+        prompts.push(request.user);
+        return model.gateway.complete(request);
+      },
+    };
+    const { instance } = worker({
+      search: search.provider,
+      model: spyingModel,
+      journal,
+    });
+    await instance.run(makeInput(), fakeContext().context);
+    const body = journal
+      .entries()
+      .filter((entry) => entry.kind === "fetch")
+      .map((entry) =>
+        Buffer.from(
+          (entry.value as { data?: string }).data ?? "",
+          "base64",
+        ).toString("utf8"),
+      )
+      .join("\n");
+    for (const haystack of [body, prompts.join("\n")]) {
+      expect(haystack).not.toContain("abcdefghijklmnopqrstuv");
+      expect(haystack).not.toContain("supersecretvalue99");
+      expect(haystack).not.toContain("%74%6F%6B%65%6E");
+      expect(haystack).toContain("[redacted]");
+    }
+    expect(body).toContain("<title>Encoded credentials</title>");
   });
 });
 
