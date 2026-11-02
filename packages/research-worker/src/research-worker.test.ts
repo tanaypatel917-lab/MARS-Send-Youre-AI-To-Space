@@ -96,7 +96,13 @@ const PAGES: Record<string, FixturePage> = {
   "https://leak.example/encoded": {
     body: html(
       "Encoded leak",
-      "Entity form &#47;srv&#47;mars&#45;private&#47;keys and percent form %2Fsrv%2Fmars-private%2Fkeys are both here. The deployment key lives under [redacted]/keys and nowhere else.",
+      "Entity form &#47;srv&#47;mars&#45;private&#47;keys, percent form %2Fsrv%2Fmars-private%2Fkeys and malformed %2Fsrv%2Fmars-private%FF are all here. The deployment key lives under [redacted]/keys and nowhere else.",
+    ),
+  },
+  "https://leak.example/escaped": {
+    body: html(
+      "Escaped markup",
+      "Visible text: &lt;script&gt;The measurement was 228 million km in the escaped block.&lt;/script&gt; Footer path /srv/mars-private/etc. Literal link https://example.org/a%2Fb stays encoded.",
     ),
   },
   "https://leak.example/p": {
@@ -326,6 +332,18 @@ const EXTRACTS: Record<string, Claim[]> = {
       claim: "Mars orbits at an average of 250 million km from the Sun.",
       quote: DISTANCE_C,
       recommendation: "Use 250 million km.",
+    },
+  ],
+  "https://leak.example/escaped": [
+    {
+      claim: "The measurement was 228 million km.",
+      quote: "The measurement was 228 million km in the escaped block.",
+      recommendation: "Use 228 million km.",
+    },
+    {
+      claim: "A literal link is kept percent-encoded.",
+      quote: "Literal link https://example.org/a%2Fb stays encoded.",
+      recommendation: "Keep the link as written.",
     },
   ],
   "https://leak.example/p": [
@@ -998,16 +1016,84 @@ describe("review regressions", () => {
             : entry.value,
         ),
     );
-    expect(serialized).not.toContain("/srv/mars-private");
+    expect(serialized).not.toContain("mars-private");
     expect(serialized).not.toContain("mars&#45;private");
-    expect(serialized).not.toContain("mars-private%2F");
     expect(serialized).toContain("[redacted]");
+    expect(serialized).toContain("%FF");
     const replies = journal
       .entries()
       .filter((entry) => entry.kind === "model")
       .map((entry) => (entry.value as { text: string }).text)
       .join("\n");
     expect(replies).not.toContain("mars-private");
+  });
+});
+
+describe("redaction keeps page text literal", () => {
+  test("live and replay agree on escaped markup next to a private root", async () => {
+    const journal = createRecordingJournal();
+    const search = fakeSearch({
+      "mars distance from sun": [result("https://leak.example/escaped")],
+    });
+    const model = fakeModel({ plan: PLAN.slice(0, 1), extracts: EXTRACTS });
+    const live = worker({
+      search: search.provider,
+      model: model.gateway,
+      journal,
+      hostPrivateRoots: ["/srv/mars-private"],
+    });
+    const env1 = fakeContext();
+    await live.instance.run(makeInput(), env1.context);
+    expect(env1.published.map((f) => f.claim.split("\n")[0]).sort()).toEqual([
+      "A literal link is kept percent-encoded.",
+      "The measurement was 228 million km.",
+    ]);
+    const body = journal
+      .entries()
+      .filter((entry) => entry.kind === "fetch")
+      .map((entry) =>
+        Buffer.from(
+          (entry.value as { data?: string }).data ?? "",
+          "base64",
+        ).toString("utf8"),
+      )
+      .join("\n");
+    expect(body).toContain("&lt;script&gt;");
+    expect(body).toContain("a%2Fb");
+    expect(body).not.toContain("mars-private");
+
+    const replay = createResearchWorker({
+      search: {
+        id: "fixture",
+        search: async () => {
+          throw new Error("search used during replay");
+        },
+      },
+      model: {
+        id: "fixture-model",
+        complete: async () => {
+          throw new Error("model used during replay");
+        },
+      },
+      fetch: async () => {
+        throw new Error("network used during replay");
+      },
+      resolveHost: async () => {
+        throw new Error("dns used during replay");
+      },
+      journal: createReplayJournal(journal.entries()),
+      sleep: async () => {},
+      hostPrivateRoots: ["/srv/mars-private"],
+      config: { per_host_min_interval_ms: 0 },
+    });
+    const env2 = fakeContext();
+    await replay.run(makeInput(), env2.context);
+    const strip = (findings: FindingProposal[]) =>
+      findings.map(({ sources, ...rest }) => ({
+        ...rest,
+        sources: sources.map((s) => s.url),
+      }));
+    expect(strip(env2.published)).toEqual(strip(env1.published));
   });
 });
 
