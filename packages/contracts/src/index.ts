@@ -424,3 +424,68 @@ export interface ModelRegistry {
 }
 
 export * from "./models";
+
+/**
+ * Milestone 4 additive contracts: prompt-target scoring shared by
+ * `@mars/evaluation` (producer) and `@mars/optimization` (consumer).
+ * A candidate maps named prompt components to text. Scores are higher-is-better
+ * in [0, 1]. The `final_holdout` split is never available to this interface;
+ * only the evaluation service's final-report path may read it.
+ */
+export const PromptCandidateSchema = z
+  .object({
+    candidate_id: id,
+    components: z.record(z.string().min(1), z.string()),
+    parent_candidate_id: id.nullable(),
+    created_at: z.string().datetime(),
+  })
+  .strict();
+export type PromptCandidate = z.infer<typeof PromptCandidateSchema>;
+
+export const ScoringSplitSchema = z.enum(["train", "validation"]);
+export type ScoringSplit = z.infer<typeof ScoringSplitSchema>;
+
+export const ScoringRequestSchema = z
+  .object({
+    candidate: PromptCandidateSchema,
+    split: ScoringSplitSchema,
+    instance_ids: z.array(z.string().min(1)).min(1),
+    repeats: z.number().int().min(1),
+    budget: BudgetSchema,
+  })
+  .strict();
+export type ScoringRequest = z.infer<typeof ScoringRequestSchema>;
+
+export const InstanceScoreSchema = z
+  .object({
+    instance_id: z.string().min(1),
+    score: z.number().min(0).max(1),
+    reward_valid: z.boolean(),
+    runtime_ms: z.number().int().min(0),
+    cost_usd: z.number().min(0).nullable(),
+    error: z.string().nullable(),
+    trajectory: ArtifactRefSchema.nullable(),
+    feedback: z.string(),
+  })
+  .strict();
+export type InstanceScore = z.infer<typeof InstanceScoreSchema>;
+
+export const ScoringResultSchema = z
+  .object({
+    request_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    split: ScoringSplitSchema,
+    scores: z.array(InstanceScoreSchema),
+    mean_score: z.number().min(0).max(1),
+    cost_usd: z.number().min(0).nullable(),
+    runtime_ms: z.number().int().min(0),
+    simulated: z.boolean(),
+  })
+  .strict();
+export type ScoringResult = z.infer<typeof ScoringResultSchema>;
+
+export interface PromptScoringBackend {
+  score(
+    context: RequestContext,
+    request: ScoringRequest,
+  ): Promise<ScoringResult>;
+}
