@@ -14,6 +14,7 @@ The local workbench connects the VS Code client and CLI to durable tasks, isolat
 - Digest-pinned Docker execution with no host-shell fallback; command execution is disabled when no sandbox is configured.
 - Offline integration tests using the actual SDK with injected model responses; these are **not** live-model or real VS Code UI acceptance evidence.
 - A CLI diagnostic, source-pin validator, tests, and CI.
+- The [MARS Output Format](documentation/OUTPUT_FORMAT.md): a deterministic, host-validated model-to-UI contract (`@mars/output-format`) for writing blocks, typed links, `app://` triggers, `mars://review` locations and `:mars-followup` buttons. Parsed output is untrusted text; follow-ups, app triggers and review links are proposals the host validates and the user confirms, never auto-run.
 
 The memory service, skill service, evaluation, datasets, training, and specialist serving are **not implemented**. Research has a durable control plane and an offline-verified worker ([documentation/RESEARCH_WORKER.md](documentation/RESEARCH_WORKER.md)) that no host wires yet. The integration trust gate is a library, not an enabled third-party loader or approval UI. Real-model and real IDE acceptance remain unverified. See [local workbench setup and evidence limits](documentation/LOCAL_WORKBENCH.md) and [milestone gates](documentation/MILESTONE_0.md).
 
@@ -47,6 +48,7 @@ Lifecycle scripts stay disabled: optional `onnxruntime-node` and `protobufjs` po
 | `bun run smoke:execution` | No-provider/no-tool SDK and native search probe |
 | `bun run audit:sources` | Validate source references, spec digest, package pins, installed versions, and lockfile integrity |
 | `bun run audit:sources:remote` | Fetch immutable source/license files and emit content hashes; network required |
+| `bun apps/cli/src/main.ts render [file]` | Parse and render a MARS Output Format reply in the terminal (framed artifacts, numbered follow-up chooser); offline, no model call |
 | `bun run format` | Apply Biome formatting and import organization |
 
 A small Bun build emits the CLI and provider library bundles with `bun run build`; the execution package still runs TypeScript directly. There are no existing database migrations, production data, or schema-upgrade guarantees at version 0.0.1.

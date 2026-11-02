@@ -23,6 +23,7 @@ All 67 PRs across the three repos are merged; no open PRs. CI green on `main` he
 | 4 Measured improvement (Harbor / Terminal-Bench, GEPA, mini-swe baseline, verifiers) | **not started**; only the evidence-gated specialist registry/routing exists (#30, #35, #38, #40) | `packages/specialists` |
 | 5-8 Remote execution, SFT, vLLM serving, RL | not started | — |
 | Collaboration (bounded delegation, rooms) | library + workbench wiring; fixture child adapter only (#32, #33, #36, #37) | `packages/collaboration` |
+| Output format (model-to-UI contract) | contracts + parser/validator/serializer + prompt fragment in the shared runtime prompt + CLI renderer; VS Code rendering per `documentation/OUTPUT_FORMAT.md` next-steps | `packages/contracts/src/output-format.ts`, `packages/output-format`, `apps/cli` (`render`) |
 | Integration trust gate | library only; no loader or approval UI (#8, #10) | `packages/integration-trust` |
 
 Everything is verified offline only: fixtures, injected model responses, `model_requests: 0`. Nothing has been run against a live model, a real search provider, a GPU, or a real IDE window.
@@ -42,6 +43,9 @@ Everything is verified offline only: fixtures, injected model responses, `model_
 - One owner per responsibility (spec section 3). Oh My Pi stays the only live session/tool owner; everything else connects through host-bound tools and contracts.
 - `mars-platform` and this repo both ship a `@mars/memory`. This repo's `packages/memory` (scoped durable MemoryService + journal index) is the one wired into sessions; `mars-platform`'s Hermes port is the reference for threat scanning and single-writer semantics. Reconciling the two is Milestone 3 work.
 - Free-first model routing (`allowPaid: false`) stays the default; no live provider keys are stored in repos.
+- The MARS Output Format is MARS-owned (`documentation/OUTPUT_FORMAT.md`), modelled on an unverified description of a third-party format; it claims no compatibility with OpenAI products. `codex://review` and `:codex-followup` are accepted on parse only, serialized as `mars://review` / `:mars-followup`.
+- Model output is untrusted: writing-block addresses are validated against addresses the user supplied in the request, `app://` connector ids against the host registry, review ranges against a line cap. Follow-ups, app triggers and review links are proposals; the host never runs a tool because the model emitted a link.
+- `OUTPUT_FORMAT_PROMPT` is appended once to the execution runtime system prompt, so coordinator, workers, reviewer and delegated children all receive it. The research worker's extraction model is deliberately excluded: its contract is a single JSON object, not Markdown.
 - Claims of "improvement" require independent evidence (holdout, baseline, cost) — a finished job is not evidence (spec sections 16-17).
 
 ## Next steps
@@ -52,6 +56,8 @@ Dispatched 2026-11-02 as parallel child sessions, each opening its own PR agains
 2. Milestone 4: Harbor / Terminal-Bench 2 adapter and GEPA prompt-optimisation worker behind the spec's evaluation and optimisation interfaces, with a documented local-model (Qwen3-Coder via Ollama) path.
 3. Milestone 3: bring `@mars/skills` and the proposal-only review runner from `mars-platform` into this repo behind the skill service interface, wired to workbench sessions.
 4. `MARS` site: rebase and land the `/how` landscape branches.
+
+5. Output format follow-ups: VS Code artifact panels / follow-up buttons / `mars://review` jumps if not landed with the parser PR; a host connector registry so `app://` triggers resolve to real tools (today the CLI only lists them); host-side `processOutput` on the final `text/plain` artifact so validation errors reach the UI.
 
 Parked: the MARS Shell desktop app (needs a description from the owner).
 
