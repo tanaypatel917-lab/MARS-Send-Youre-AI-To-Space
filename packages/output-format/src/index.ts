@@ -9,6 +9,10 @@ export {
 export { followUps, type ProcessedOutput, processOutput } from "./process";
 export { OUTPUT_FORMAT_PROMPT } from "./prompt";
 export {
+  type RenderTerminalOptions,
+  renderTerminal,
+} from "./render-terminal";
+export {
   headerAttributes,
   rewriteWritingBlocks,
   serializeAttributes,
