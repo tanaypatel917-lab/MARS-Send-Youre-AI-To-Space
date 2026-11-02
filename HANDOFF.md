@@ -18,7 +18,7 @@ All 67 PRs across the three repos are merged; no open PRs. CI green on `main` he
 | --- | --- | --- |
 | 0 Source baseline | done | `packages/contracts`, `sources/manifest.json`, `documentation/SOURCE_REGISTER.md` (#1) |
 | 1 Coding workbench | code complete; **acceptance unverified** (no live model run, no real VS Code window) | `packages/{providers,execution,tasks,workspaces,workbench}`, `apps/{cli,vscode}` (#2-#20, #23) |
-| 2 Memory & research | partial: memory service + frozen recall (#22-#29), Aider-style repo map (#28, #31, #34), research control plane wired to sessions (#26, #39), research worker package (#41) **not wired into `mars serve`**; no browser worker | `packages/{memory,context,research,research-worker}` |
+| 2 Memory & research | partial: memory service + frozen recall (#22-#29), Aider-style repo map (#28, #31, #34), research control plane wired to sessions (#26, #39), research worker package (#41) wired into `mars serve --research-search brave\|searxng\|tavily` (offline e2e verified; **live search/model run unverified**); no browser worker | `packages/{memory,context,research,research-worker}`, `apps/cli/src/serve.ts` |
 | 3 Skill learning | **not in this repo**; `mars-platform` has `@mars/skills` + `@mars/review` with no link to this repo | `mars-platform/packages/skills`, `mars-platform/services/review` |
 | 4 Measured improvement (Harbor / Terminal-Bench, GEPA, mini-swe baseline, verifiers) | **not started**; only the evidence-gated specialist registry/routing exists (#30, #35, #38, #40) | `packages/specialists` |
 | 5-8 Remote execution, SFT, vLLM serving, RL | not started | — |
@@ -44,6 +44,7 @@ Everything is verified offline only: fixtures, injected model responses, `model_
 - `mars-platform` and this repo both ship a `@mars/memory`. This repo's `packages/memory` (scoped durable MemoryService + journal index) is the one wired into sessions; `mars-platform`'s Hermes port is the reference for threat scanning and single-writer semantics. Reconciling the two is Milestone 3 work.
 - Free-first model routing (`allowPaid: false`) stays the default; no live provider keys are stored in repos.
 - Claims of "improvement" require independent evidence (holdout, baseline, cost) — a finished job is not evidence (spec sections 16-17).
+- Research in `mars serve` is opt-in (`--research-search`), credentials are referenced by environment variable name only, the worker uses the registry's free default model and refuses paid ones (no CLI paid opt-in), and startup fails fast when no free model is configured rather than queuing requests that cannot run. The research store's private needles are the sibling state directories (`memory`, `sessions`, `tasks`, `workspaces`) plus the source checkout, because the store refuses a private root that contains it.
 - watch-skill (MIT, Python 3.11+) is an external runtime, never a second loop: `@mars/watch` drives the CLI as an argv-only subprocess with an env allowlist, bounded roots, offline flags and a doctor gate (`version` must be 1.4.3, `doctor --no-fix --json` must be ok); if either fails the tools are `unavailable`/`inconclusive`, never `pass`. THE LOOP is `visual_advisory` and never `verified`; only a `verify` run with a passed required deterministic check at `deterministic_local`/`isolated_local` is. Screen/window capture is off for every role until the user sets `allow_screen_capture`; which roles may capture by default is an open product decision for the owner. `remote_attested` is refused because upstream does not implement it.
 - Vendored upstream text is allowed when copied verbatim with its license and a NOTICE (`skills/vendor/watch-skill`); the skill service (`@mars/skills`, ported on a separate branch) loads it as a read-only library — see the loader note there.
 
@@ -51,7 +52,7 @@ Everything is verified offline only: fixtures, injected model responses, `model_
 
 Dispatched 2026-11-02 as parallel child sessions, each opening its own PR against `main`:
 
-1. Wire `@mars/research-worker` into `mars serve` (host option, config, docs) so `mars_research` can retrieve live evidence when a search provider is configured.
+1. ~~Wire `@mars/research-worker` into `mars serve`~~ — done (`WorkbenchServiceOptions.research`, `mars serve --research-search`, `mars doctor` research section). Remaining: a human run with a real Brave/Tavily/SearXNG endpoint and a free model to verify live mode; recorded provider responses as fixtures.
 2. Milestone 4: Harbor / Terminal-Bench 2 adapter and GEPA prompt-optimisation worker behind the spec's evaluation and optimisation interfaces, with a documented local-model (Qwen3-Coder via Ollama) path.
 3. Milestone 3: bring `@mars/skills` and the proposal-only review runner from `mars-platform` into this repo behind the skill service interface, wired to workbench sessions.
 4. `MARS` site: rebase and land the `/how` landscape branches.
