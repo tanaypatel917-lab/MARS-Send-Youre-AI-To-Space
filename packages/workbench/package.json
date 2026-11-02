@@ -13,6 +13,8 @@
     "@mars/providers": "workspace:*",
     "@mars/research": "workspace:*",
     "@mars/research-worker": "workspace:*",
+    "@mars/review": "workspace:*",
+    "@mars/skills": "workspace:*",
     "@mars/specialists": "workspace:*",
     "@mars/tasks": "workspace:*",
     "@mars/workspaces": "workspace:*",
