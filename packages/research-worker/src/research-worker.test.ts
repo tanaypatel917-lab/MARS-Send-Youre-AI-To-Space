@@ -1047,6 +1047,12 @@ describe("encoded credentials", () => {
     expect(redact("plain text with &amp; and %20 but no secrets", [])).toBe(
       "plain text with &amp; and %20 but no secrets",
     );
+    const longValue = Array.from(
+      { length: 1500 },
+      (_, i) => `%${(0x61 + (i % 26)).toString(16)}`,
+    ).join("");
+    const longSecret = `before api%5Fkey: ${longValue} after`;
+    expect(redact(longSecret, [])).toBe("before [redacted] after");
     const big = `${"x".repeat(2_000_000)} token=abcdef123456 ${"y".repeat(2_000_000)}`;
     const started = performance.now();
     const cleaned = redact(big, []);

@@ -111,14 +111,35 @@ function parseUnit(match: RegExpExecArray): EncodedUnit {
   };
 }
 
-/** Bounded windows of text that contain encoded units, with literal padding. */
+/** Longest whitespace-free token a region is extended to cover. */
+const MAX_TOKEN_EXTENSION = 64 * 1024;
+
+function tokenStart(text: string, index: number): number {
+  const floor = Math.max(0, index - MAX_TOKEN_EXTENSION);
+  let i = index;
+  while (i > floor && !/\s/.test(text[i - 1] ?? " ")) i -= 1;
+  return i;
+}
+
+function tokenEnd(text: string, index: number): number {
+  const ceiling = Math.min(text.length, index + MAX_TOKEN_EXTENSION);
+  let i = index;
+  while (i < ceiling && !/\s/.test(text[i] ?? " ")) i += 1;
+  return i;
+}
+
+/**
+ * Bounded windows of text that contain encoded units: literal padding on both
+ * sides, extended to the whitespace-delimited token so an encoded label and
+ * its whole value are decoded together.
+ */
 function encodedRegions(text: string): Array<[number, number]> {
   const regions: Array<[number, number]> = [];
   for (const match of text.matchAll(ENCODED_UNIT)) {
-    const start = Math.max(0, match.index - REGION_PAD);
-    const end = Math.min(
-      text.length,
-      match.index + match[0].length + REGION_PAD,
+    const start = tokenStart(text, Math.max(0, match.index - REGION_PAD));
+    const end = tokenEnd(
+      text,
+      Math.min(text.length, match.index + match[0].length + REGION_PAD),
     );
     const last = regions[regions.length - 1];
     if (last && start <= last[1] + REGION_GAP) {
