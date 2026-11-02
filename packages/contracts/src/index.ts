@@ -265,6 +265,48 @@ export interface MemoryService {
   ): Promise<{ affected_training_manifests: string[] }>;
 }
 
+export type MemoryProposalStatus = "pending" | "accepted" | "rejected";
+/** A proposed memory batch awaiting a human/host decision; only the memory owner applies it. */
+export interface MemoryProposal {
+  proposal_id: string;
+  scope: Scope;
+  source: string;
+  operations: MemoryOperation[];
+  rationale: string;
+  expected_revision: number;
+  status: MemoryProposalStatus;
+  reason?: string;
+  submitted_at: string;
+  resolved_at?: string;
+  applied_revision?: number;
+}
+export interface MemoryProposalInput {
+  source: string;
+  operations: MemoryOperation[];
+  rationale: string;
+  expected_revision: number;
+}
+/** Proposal-only surface handed to background review; it can never write authoritative memory. */
+export interface MemoryProposalService {
+  submitProposal(
+    context: RequestContext,
+    proposal: MemoryProposalInput,
+  ): Promise<MemoryProposal>;
+  listProposals(
+    context: RequestContext,
+    status?: MemoryProposalStatus,
+  ): Promise<MemoryProposal[]>;
+  acceptProposal(
+    context: RequestContext,
+    proposalId: string,
+  ): Promise<MemoryProposal>;
+  rejectProposal(
+    context: RequestContext,
+    proposalId: string,
+    reason: string,
+  ): Promise<MemoryProposal>;
+}
+
 export interface SkillRevision {
   skill_id: string;
   revision: string;

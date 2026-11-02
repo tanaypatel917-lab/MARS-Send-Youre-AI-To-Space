@@ -1,0 +1,14 @@
+This package includes a threat-pattern scanner (src/threats.ts) adapted from
+NousResearch/hermes-agent tools/threat_patterns.py at revision
+7020ea3e96c3fdbc768c5296493e186df46f075b, via the MARS reference port in
+mars-platform/services/memory/src/threats.ts.
+Copyright (c) 2025 Nous Research.
+
+The adapted material is licensed under the MIT License.
+The license text is included at third_party/hermes-agent/LICENSE.txt.
+
+Modified by MARS: ported to TypeScript, bounded scan window, NFKC
+normalization, completed invisible/default-ignorable Unicode denylist, MARS
+configuration-modification pattern. Memory semantics (budgets, fact joining,
+frozen snapshots) are characterized from the same revision without copying
+source; see README.md.
