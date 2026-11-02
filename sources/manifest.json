@@ -1249,11 +1249,7 @@
       "integration_owner": "MARS evaluation group (eval harness owner)",
       "target_milestone": "M4",
       "adaptation_decision": "Use unmodified through Harbor datasets only (`-d terminal-bench@2.0` / `terminal-bench-sample@2.0` with explicit task ids). Never copy tasks or tests into this repository; never hand verifier files to the candidate. Pin the registry commit and per-task commit in `mars.evaluation-comparison/v1` manifests.",
-      "dependencies": [
-        "harbor",
-        "Docker",
-        "ghcr.io task images"
-      ],
+      "dependencies": ["harbor", "Docker", "ghcr.io task images"],
       "acceptance_plan": [
         "T1 (no LLM): `harbor run -d terminal-bench-sample@2.0 -a nop --dry-run` resolves 10 trials at the pinned commits (executed in this increment: 'Dry run OK — 10 trial(s); nothing was run').",
         "T2 (Docker, no LLM): run `-a nop` and `-a oracle` on one sample task with `-k 2`; parse trial result.json rewards (nop 0, oracle 1) and verify repeatability variance is 0 for the deterministic grader.",
