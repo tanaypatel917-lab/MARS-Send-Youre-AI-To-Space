@@ -15,7 +15,7 @@ The local workbench connects the VS Code client and CLI to durable tasks, isolat
 - Offline integration tests using the actual SDK with injected model responses; these are **not** live-model or real VS Code UI acceptance evidence.
 - A CLI diagnostic, source-pin validator, tests, and CI.
 
-The memory service, skill service, research, evaluation, datasets, training, and specialist serving are **not implemented**. The integration trust gate is a library, not an enabled third-party loader or approval UI. Real-model and real IDE acceptance remain unverified. See [local workbench setup and evidence limits](documentation/LOCAL_WORKBENCH.md) and [milestone gates](documentation/MILESTONE_0.md).
+The memory service, skill service, evaluation, datasets, training, and specialist serving are **not implemented**. Research has a durable control plane and an offline-verified worker ([documentation/RESEARCH_WORKER.md](documentation/RESEARCH_WORKER.md)) that no host wires yet. The integration trust gate is a library, not an enabled third-party loader or approval UI. Real-model and real IDE acceptance remain unverified. See [local workbench setup and evidence limits](documentation/LOCAL_WORKBENCH.md) and [milestone gates](documentation/MILESTONE_0.md).
 
 ## Setup
 

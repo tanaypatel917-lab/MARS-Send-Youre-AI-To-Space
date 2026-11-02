@@ -106,6 +106,20 @@
         "zod": "3.25.76",
       },
     },
+    "packages/research-worker": {
+      "name": "@mars/research-worker",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "@mars/execution": "workspace:*",
+        "@mars/providers": "workspace:*",
+        "@mars/research": "workspace:*",
+        "zod": "3.25.76",
+      },
+      "devDependencies": {
+        "@mars/tasks": "workspace:*",
+      },
+    },
     "packages/specialists": {
       "name": "@mars/specialists",
       "version": "0.0.1",
@@ -257,6 +271,8 @@
     "@mars/providers": ["@mars/providers@workspace:packages/providers"],
 
     "@mars/research": ["@mars/research@workspace:packages/research"],
+
+    "@mars/research-worker": ["@mars/research-worker@workspace:packages/research-worker"],
 
     "@mars/specialists": ["@mars/specialists@workspace:packages/specialists"],
 

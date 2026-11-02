@@ -12,7 +12,7 @@ Requests and findings survive restarts in `research.sqlite`. SQLite transactions
 
 The current `RESEARCH_STORE_FORMAT_VERSION` is 2. Version 1 stores are migrated atomically on open, including pending event-outbox entries.
 
-Workers report each usage delta through `reportUsage`. Evidence is stored through the configured artifact store, and finding records refer to those captured artifacts. The optional event sink is an outbox: event failures are retained as pending and retried on later pumps.
+Workers receive the request's accumulated usage in `ResearchWorkerInput.usage` and report each new delta through `reportUsage`. Evidence is stored through the configured artifact store, and finding records refer to those captured artifacts. The optional event sink is an outbox: event failures are retained as pending and retried on later pumps.
 
 ## Citations and privacy
 
@@ -52,11 +52,11 @@ Exports: `createResearchService`, `RetryableResearchError`, `ResearchError`, `Re
 
 ## Live dispatch status
 
-No live research or browser worker is available. Live research dispatch is unwired: this package ships no worker that talks to models or networks, and it performs no URL fetching. A production worker belongs in the parent on top of the Oh My Pi runtime, using `openRuntimeSession` with approvals `{ read: true, write: false, execute: false }`; evidence capture requires a future approved read-only retrieval tool.
+`@mars/research-worker` ([documentation/RESEARCH_WORKER.md](../../documentation/RESEARCH_WORKER.md)) is the production worker for this control plane: it searches through an injected provider, fetches behind an injected `fetch` with SSRF, robots and byte guards, captures every page as evidence before citing it, and drives model calls through the existing model registry. It is verified offline only; its live mode is opt-in and unverified until a human runs it. No host wires it yet.
 
 ## Known gaps
 
-- There is no production worker or approved live evidence-retrieval tool.
+- No host wires the worker yet, and live retrieval remains unverified.
 - Token and USD ceilings depend on truthful worker-reported usage.
 - Citation capture records provenance, not source authenticity or truth.
 - Parent lifecycle wiring, task-revision reconciliation, and RPC privacy boundaries remain the host's responsibility.
