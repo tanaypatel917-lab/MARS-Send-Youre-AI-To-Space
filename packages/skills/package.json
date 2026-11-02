@@ -1,0 +1,14 @@
+{
+  "name": "@mars/skills",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mars/contracts": "workspace:*",
+    "@mars/memory": "workspace:*",
+    "zod": "3.25.76"
+  }
+}

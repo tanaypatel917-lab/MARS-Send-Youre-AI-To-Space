@@ -121,6 +121,15 @@
         "@mars/tasks": "workspace:*",
       },
     },
+    "packages/skills": {
+      "name": "@mars/skills",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "@mars/memory": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
     "packages/specialists": {
       "name": "@mars/specialists",
       "version": "0.0.1",
@@ -275,6 +284,8 @@
     "@mars/research": ["@mars/research@workspace:packages/research"],
 
     "@mars/research-worker": ["@mars/research-worker@workspace:packages/research-worker"],
+
+    "@mars/skills": ["@mars/skills@workspace:packages/skills"],
 
     "@mars/specialists": ["@mars/specialists@workspace:packages/specialists"],
 
