@@ -1053,6 +1053,10 @@ describe("encoded credentials", () => {
     ).join("");
     const longSecret = `before api%5Fkey: ${longValue} after`;
     expect(redact(longSecret, [])).toBe("before [redacted] after");
+    const encodedRun = `<p>${"%61".repeat(350_000)}</p> token=abcdef123456`;
+    const runStarted = performance.now();
+    expect(redact(encodedRun, [])).toContain("[redacted]");
+    expect(performance.now() - runStarted).toBeLessThan(3000);
     const big = `${"x".repeat(2_000_000)} token=abcdef123456 ${"y".repeat(2_000_000)}`;
     const started = performance.now();
     const cleaned = redact(big, []);

@@ -135,18 +135,21 @@ function tokenEnd(text: string, index: number): number {
  */
 function encodedRegions(text: string): Array<[number, number]> {
   const regions: Array<[number, number]> = [];
+  let current: [number, number] | undefined;
   for (const match of text.matchAll(ENCODED_UNIT)) {
-    const start = tokenStart(text, Math.max(0, match.index - REGION_PAD));
-    const end = tokenEnd(
-      text,
-      Math.min(text.length, match.index + match[0].length + REGION_PAD),
-    );
-    const last = regions[regions.length - 1];
-    if (last && start <= last[1] + REGION_GAP) {
-      last[1] = Math.max(last[1], end);
-    } else {
-      regions.push([start, end]);
+    const unitEnd = match.index + match[0].length;
+    if (current && unitEnd + REGION_PAD <= current[1]) continue;
+    const paddedEnd = Math.min(text.length, unitEnd + REGION_PAD);
+    if (current && match.index <= current[1] + REGION_GAP) {
+      // Extend from the previous boundary so each character is visited once.
+      current[1] = tokenEnd(text, Math.max(current[1], paddedEnd));
+      continue;
     }
+    current = [
+      tokenStart(text, Math.max(0, match.index - REGION_PAD)),
+      tokenEnd(text, paddedEnd),
+    ];
+    regions.push(current);
   }
   return regions;
 }
