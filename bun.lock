@@ -90,6 +90,14 @@
         "@oh-my-pi/pi-coding-agent": "18.14.0",
       },
     },
+    "packages/output-format": {
+      "name": "@mars/output-format",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
     "packages/providers": {
       "name": "@mars/providers",
       "version": "0.0.1",
@@ -267,6 +275,8 @@
     "@mars/integration-trust": ["@mars/integration-trust@workspace:packages/integration-trust"],
 
     "@mars/memory": ["@mars/memory@workspace:packages/memory"],
+
+    "@mars/output-format": ["@mars/output-format@workspace:packages/output-format"],
 
     "@mars/providers": ["@mars/providers@workspace:packages/providers"],
 
