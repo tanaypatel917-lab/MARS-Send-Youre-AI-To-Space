@@ -2211,6 +2211,148 @@
         "Brand reputation and opaque remote M8ven Verified scores cannot approve code or MCP integrations."
       ],
       "integration_status": "not-integrated"
+    },
+    {
+      "id": "watch-skill",
+      "group": "perception-verification",
+      "repository_url": "https://github.com/oxbshw/watch-skill",
+      "revision": "f1317c8fe64744a606c31867b05fbbe3144268c6",
+      "version_note": "1.4.3 (pyproject.toml); tag v1.4.3 not present at audit, HEAD commit message 'Watch Skill 1.4.3 and DeepWatch 0.1.4'",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/LICENSE",
+        "additional_notices": [
+          "skills/vendor/watch-skill/LICENSE",
+          "skills/vendor/watch-skill/NOTICE.md"
+        ],
+        "notes": "MIT at pinned LICENSE ('Copyright (c) 2026 oxbshw'). The ten upstream skills/*/SKILL.md files are vendored verbatim (byte-identical) under skills/vendor/watch-skill/ with the upstream LICENSE and a NOTICE.md; no Python source, templates or docs are copied."
+      },
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/AGENTS.md",
+          "purpose": "Upstream agent-integration guidance; audited for the shell-command surface that MARS replaces with host-bound tools."
+        },
+        {
+          "path": "README.md",
+          "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/README.md",
+          "purpose": "Feature, install and extras overview (perceive/index/ocr/loop); audited for runtime requirements."
+        },
+        {
+          "path": "docs/verification.md",
+          "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/docs/verification.md",
+          "purpose": "Verification contract, run, assurance level and evidence bundle semantics behind mars_verify."
+        },
+        {
+          "path": "docs/agents/pi.md",
+          "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/docs/agents/pi.md",
+          "purpose": "Upstream Pi agent integration notes; audited only, MARS uses Oh My Pi host-bound tools instead."
+        },
+        {
+          "path": "docs/agents/hermes.md",
+          "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/docs/agents/hermes.md",
+          "purpose": "Upstream Hermes agent integration notes; audited only, no agent surface adopted."
+        },
+        {
+          "path": "templates/agent-integration/AGENTS.example.md",
+          "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/templates/agent-integration/AGENTS.example.md",
+          "purpose": "Example agent instructions; audited as untrusted guidance, not adopted as platform instructions."
+        },
+        {
+          "path": "src/watch_skill/surfaces/cli/main.py",
+          "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/src/watch_skill/surfaces/cli/main.py",
+          "purpose": "CLI subcommands, flags, JSON error shape and exit codes wrapped by the @mars/watch subprocess sandbox."
+        },
+        {
+          "path": "src/watch_skill/verify/contract.py",
+          "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/src/watch_skill/verify/contract.py",
+          "purpose": "Verification contract schema (contract_id, checks, required_assurance, allowed_origins) that mars_verify passes through frozen."
+        },
+        {
+          "path": "src/watch_skill/verify/evidence.py",
+          "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/src/watch_skill/verify/evidence.py",
+          "purpose": "Evidence bundle, verdict/assurance and signature_status fields mapped into WatchEvidenceRecordSchema."
+        },
+        {
+          "path": "src/watch_skill/loop/runner.py",
+          "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/src/watch_skill/loop/runner.py",
+          "purpose": "THE LOOP runner and loops/<loop_id>/state.json layout read by mars_loop; critique is advisory."
+        },
+        {
+          "path": "src/watch_skill/policy.py",
+          "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/src/watch_skill/policy.py",
+          "purpose": "Upstream policy knobs (offline mode, cost policy, data dir) pinned by the MARS env allowlist."
+        },
+        {
+          "path": "skills/the-loop/SKILL.md",
+          "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/skills/the-loop/SKILL.md",
+          "purpose": "Vendored verbatim; describes the record-critique-iterate loop whose verdict MARS treats as visual_advisory."
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/oxbshw/watch-skill/blob/f1317c8fe64744a606c31867b05fbbe3144268c6/pyproject.toml",
+          "purpose": "Version 1.4.3, requires-python >=3.11, optional extras; source of the expected CLI version gate."
+        }
+      ],
+      "background_references": [],
+      "runtime_requirements": [
+        "Python >=3.11 (external runtime, not installed into the Bun workspace)",
+        "pip watch-skill==1.4.3 (exact pin; `watch-skill version` must print 1.4.3)",
+        "ffmpeg (5.1+ recommended; doctor warns on 4.4)",
+        "Optional extras perceive/index/ocr/loop for vision, indexing, OCR and THE LOOP",
+        "Playwright chromium for URL (browser) capture",
+        "yt-dlp for URL video sources"
+      ],
+      "integration_owner": "@mars/watch host-bound tools; Oh My Pi owns execution",
+      "target_milestone": "Milestone 2 perception / Milestone 4 verification evidence",
+      "adaptation_decision": "Wrapped, not ported: the pinned CLI runs as a sandboxed subprocess (argv only, env allowlist, cwd = task workspace, output and time caps, WATCHSKILL_OFFLINE=1 and offline-only cost policy by default) behind @mars/watch host-bound tools (mars_watch, mars_watch_ask, mars_watch_search, mars_watch_capture, mars_watch_extract, mars_loop, mars_verify, mars_watch_evidence). No MCP server, no second agent loop; the host option `watch` is optional and absent means no tools. Doctor gate: version 1.4.3 and doctor ok:true, otherwise unavailable/inconclusive. Visual critique is advisory; only a passed deterministic required check in a verify run is verified. Model-visible output is untrusted evidence. The ten SKILL.md files are vendored verbatim under skills/vendor/watch-skill/ for the skill service to load read-only.",
+      "dependencies": [
+        "External Python >=3.11 runtime with watch-skill==1.4.3 (pip); not a Bun workspace dependency",
+        "ffmpeg on the host PATH",
+        "Optional: watch-skill extras, Playwright chromium, yt-dlp, a vision provider (cloud models off by default)"
+      ],
+      "acceptance_plan": {
+        "offline_tests": "packages/watch tests run a fixture CLI (packages/watch/test/fake-watch-skill.ts via bun) with scenario files; model_requests: 0; bun run check must pass.",
+        "doctor_gate": "Wrong version or doctor ok:false makes every tool answer unavailable (perception) or inconclusive (loop/verify); never pass.",
+        "verify_semantics": "verified only when verdict pass, assurance deterministic_local or isolated_local and >=1 required check passed; remote_attested contracts and non-loopback allowed_origins without allow_network_sources are inconclusive; the contract is frozen.",
+        "loop_semantics": "Loop evidence is assurance visual_advisory, verified:false, advisory:true; no iteration is inconclusive; CLI error is error.",
+        "sandbox": "argv only, no shell, stdin ignored, env allowlist, file args confined to the workspace or private data dir, output cap 96 KiB, 120 s timeout, screen capture and network sources refused unless policy opts in.",
+        "status": "Proposed and held by packages/watch fixture tests only; the real CLI runs listed in audit_checks are the only live evidence."
+      },
+      "audit_checks": {
+        "environment": "2026-11-02, Ubuntu VM, python3 -m venv + pip install watch-skill==1.4.3 (base extras only), system ffmpeg 4.4, Python 3.12.13, no network sources used.",
+        "version": "`watch-skill version` printed 1.4.3.",
+        "doctor": "`watch-skill doctor --no-fix --json` exit 1, ok:false: python ok; features warn (perceive/index/mcp/ocr/whisper/loop/api not installed); ffmpeg warn (4.4 < 5.1); yt-dlp fail (not found); js-runtime warn (no deno); memory warn; api-keys ok (local-only mode).",
+        "verify_checks": "`watch-skill verify checks` listed 14 types: browser_dom, command_exit, directory_manifest, file_digest, file_exists, http_request, human_approval, json_schema, json_value, live_console, live_evidence, numeric_invariant, sqlite_query, visual_absent.",
+        "capture_capabilities": "`watch-skill capture-capabilities`: available file_replay, screen (ffmpeg x11grab, X11 only), stream; degraded camera, microphone; unavailable browser (needs watch-skill[loop] + playwright chromium), window (Windows only), webrtc.",
+        "verify_run": "WATCHSKILL_OFFLINE=1 `watch-skill verify run contract.json --dir <work>` with contract mars-smoke-v1 (required_assurance isolated_local; file_exists present.txt required, file_exists missing.txt optional) exit 0: run_id vr_5881743307c6, verdict pass, assurance isolated_local, limitations [], signature_status unsigned_hash_bound, checks present pass (required) / absent fail (optional); bundle written under <data>/verifications/vr_5881743307c6/ and shown by `verify list`.",
+        "loop_status": "`watch-skill loop status nope` exit 1 with JSON {error: loop.not_found, message: 'unknown loop_id: nope', fix: 'start one with loop_start; state lives under ~/.watch-skill/loops', details: {}}.",
+        "vendoring": "Ten skills/*/SKILL.md files and LICENSE copied byte-identical (diff) to skills/vendor/watch-skill/.",
+        "unexecuted": [
+          "watch",
+          "ask",
+          "search",
+          "capture",
+          "loop start/iterate",
+          "extract",
+          "any vision provider",
+          "any URL source",
+          "upstream test suite"
+        ]
+      },
+      "risks": [
+        "External Python runtime: version or dependency drift (ffmpeg, yt-dlp, extras) silently degrades features; mitigated only by the version and doctor gate.",
+        "Doctor reported ok:false on the audit VM (ffmpeg 4.4, no yt-dlp, extras absent), so the tools would be unavailable there; a real deployment needs ffmpeg 5.1+ and extras.",
+        "Screen/window capture can record host-private content; off by default and X11-only (window capture Windows-only upstream).",
+        "URL sources and non-loopback targets imply egress and third-party content; disabled by default (WATCHSKILL_OFFLINE=1, allow_network_sources false).",
+        "Vision providers may send frames to cloud models; allow_cloud_models false by default and never widened by skill text.",
+        "Perception, OCR, transcript and critique output is model-steering untrusted content; visual critique is never verification evidence.",
+        "`verify run` exits 1 on verdict fail and on errors; the JSON verdict field, not the exit code, is authoritative.",
+        "Vendored SKILL.md files reference shell commands (setup-vision, lessons, library, viewer, batch) that MARS does not expose; they must not be read as platform instructions.",
+        "watch/ask/search/capture/loop iterate/extract were not run against the real CLI; their wrappers are fixture-verified only."
+      ],
+      "integration_status": "host-bound-tools"
     }
   ],
   "group_findings": [
@@ -2238,6 +2380,11 @@
       "group": "training-evolution",
       "findings": "Pins (git ls-remote, peeled to commits, 2026-10-30): dgm a565fd2d1dca504ef5104a7cc0f3bdc4ab9b4fd2 (main, no tags); trl v1.17.1 44809ba3f3a136f3d62859ee981fee2506bce5c9; peft v0.21.2 eaa35c777c7ba554a2a3639ac9c79bb690f39a57; agent-lightning v1.0.2 d381995396274039f2bb1cbe5ff42ac8067f4e47; vllm v0.32.0 5df63a7203cdb9328d824a27b682e77c7b9928be.",
       "blockers": "No NVIDIA GPU on this VM (nvidia-smi absent; 8 vCPU, 31 GiB RAM): no QLoRA/bitsandbytes, vLLM serving, LoRA hot-load, or Agent Lightning/verl rollout+training could be executed; all GPU-path acceptance tests are proposed only., Base model for specialists not selected -> model weight license/terms for training and serving cannot be verified (blueprint 15 requires weights whose terms permit training)., Dataset licenses unresolved: princeton-nlp/SWE-bench_Verified has no license on its HF card/API; Aider polyglot-benchmark has no top-level license (per-exercise Exercism LICENSE files); MARS training data must come from reviewed, permitted sources., vLLM v0.32.0 does not reject adapters whose base_model_name_or_path differs from the served model (serving.py silently drops non-matching base_model_name); Milestone 7's 'wrong-base adapters are rejected' must be implemented in the MARS registry., Agent Lightning v1.0.2 has no LoRA references in agentlightning/ or its verl config; LoRA/QLoRA RL interoperability unverified. Its gateway store is in-memory only., DGM CLI cannot start (even --help) without the SWE-bench editable install; '--choose_selfimproves_method best' is unreachable due to missing comma in argparse choices; external benchmark fetches are unpinned., Version split: AGL/verl pins vllm 0.12.0 or 0.22.0 (docs say 0.20.2 for verl 0.8.0, script installs 0.22.0); serving pin vLLM 0.32.0 uses torch 2.13.0 vs SFT env torch 2.15.0 -> at least three isolated environments required., GitHub REST API rate-limited unauthenticated during audit; license/tree scans were done via git (ls-remote, blob-less clones) instead - no data gap resulted."
+    },
+    {
+      "group": "perception-verification",
+      "findings": "Pin (2026-11-02): oxbshw/watch-skill HEAD f1317c8fe64744a606c31867b05fbbe3144268c6, pyproject version 1.4.3, no v1.4.3 tag at audit, MIT. Real CLI runs against pip watch-skill==1.4.3: version, doctor --no-fix --json (ok:false on the audit VM), verify checks (14 types), capture-capabilities, one offline verify run (verdict pass, assurance isolated_local, signature_status unsigned_hash_bound), loop status on an unknown id (loop.not_found error JSON). Ten SKILL.md files vendored verbatim under skills/vendor/watch-skill/.",
+      "blockers": "watch, ask, search, capture, loop start/iterate, extract, vision providers and URL sources were not exercised against the real CLI; packages/watch tests use a fixture CLI only. Audit VM doctor was ok:false (ffmpeg 4.4 < 5.1, yt-dlp missing, extras not installed), so a conforming deployment needs ffmpeg 5.1+, yt-dlp and the perceive/index/ocr/loop extras before any tool is available."
     }
   ]
 }
