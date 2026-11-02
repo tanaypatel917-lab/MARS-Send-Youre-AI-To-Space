@@ -1,6 +1,6 @@
 # @mars/output-format
 
-`@mars/output-format` parses, validates, serializes and renders the MARS Output Format: the structured model-to-UI contract whose AST lives in `@mars/contracts` (`OutputDocument`, writing blocks, follow-ups, links, app triggers, review links, typed `OutputError`s). The format is specified in [documentation/OUTPUT_FORMAT.md](../../documentation/OUTPUT_FORMAT.md).
+`@mars/output-format` parses, validates, serializes and renders the MARS Output Format: the structured model-to-UI contract whose AST lives in `@mars/contracts` (`OutputDocument`, writing blocks, follow-ups, links, app triggers, review links, typed `OutputError`s). The format is specified in [documentation/OUTPUT_FORMAT.md](../../documentation/OUTPUT_FORMAT.md); that spec lands in the same output-format parent PR as this package, so the link resolves once both are merged.
 
 Everything parsed here is untrusted model text. `parseOutput` never throws on model output; every problem becomes a typed error and the offending lines stay Markdown. `validateOutput` checks a document against host facts (`connector_ids`, `allowed_addresses`, `max_review_lines`); `processOutput` runs both and returns `{ document, errors, ok }`. `serializeOutput` is the inverse of the parser and `rewriteWritingBlocks` lets a host replace or redact blocks before display. `followUps` and `writingBlocks` are segment selectors, and `OUTPUT_FORMAT_PROMPT` is the system-prompt fragment that teaches a model the format.
 

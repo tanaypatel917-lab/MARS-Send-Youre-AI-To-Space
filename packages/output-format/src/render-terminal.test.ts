@@ -218,6 +218,6 @@ alpha  beta  gamma delta  epsilon
   const lines = renderTerminal(document, { width: 20 })
     .split("\n")
     .filter((line) => line.startsWith("│"))
-    .map((line) => line.slice(2, -2));
-  expect(lines.slice(1)).toEqual(["alpha  beta  gamma", "delta  epsilon  "]);
+    .map((line) => line.slice(2, -2).trimEnd());
+  expect(lines.slice(1)).toEqual(["alpha  beta", "gamma delta", "epsilon"]);
 });
