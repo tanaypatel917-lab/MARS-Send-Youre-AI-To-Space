@@ -230,7 +230,7 @@ try {
       execution: await probeExecution(),
       limitations: [
         "Initialization probe only; no agent task or model request was run.",
-        "Live-provider and real IDE workbench acceptance remain unverified; memory, learning, and training are not implemented.",
+        "Live-provider and real IDE workbench acceptance remain unverified; memory and learning (skills plus proposal-only background review) are implemented with offline evidence only; training is not implemented.",
         "Python services must use separate versioned environments.",
       ],
     };

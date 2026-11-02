@@ -486,8 +486,11 @@
         "spdx": "MIT",
         "path": "LICENSE",
         "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/LICENSE",
-        "additional_notices": [],
-        "notes": "Preserve upstream notices. No source copied in this increment."
+        "additional_notices": [
+          "packages/memory/NOTICE",
+          "packages/memory/third_party/hermes-agent/LICENSE.txt"
+        ],
+        "notes": "Preserve upstream notices. packages/memory/src/threats.ts contains a MARS TypeScript adaptation of tools/threat_patterns.py at this revision (bounded scan window, NFKC normalization, completed invisible/default-ignorable Unicode denylist, MARS configuration-modification pattern); upstream MIT license copied verbatim to packages/memory/third_party/hermes-agent/LICENSE.txt, attribution in packages/memory/NOTICE."
       },
       "sources": [
         {
@@ -509,6 +512,11 @@
           "path": "website/docs/user-guide/features/memory.md",
           "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/website/docs/user-guide/features/memory.md",
           "purpose": "doc S07 exists at pin; confirms 2,200/1,375 budgets and frozen snapshot"
+        },
+        {
+          "path": "tools/threat_patterns.py",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/tools/threat_patterns.py",
+          "purpose": "Threat-pattern denylist adapted into packages/memory/src/threats.ts (scanThreat) with a completed invisible-Unicode denylist; shared by memory, skills and review."
         }
       ],
       "runtime_requirements": "Python >=3.11,<3.15 (uv.lock only supports python>=3.14; uv sync on 3.12 failed); Unix fcntl or Windows msvcrt file locking; HERMES_HOME dir",
@@ -552,8 +560,12 @@
         "spdx": "MIT",
         "path": "LICENSE",
         "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/LICENSE",
-        "additional_notices": [],
-        "notes": "Preserve upstream notices. No source copied in this increment."
+        "additional_notices": [
+          "packages/skills/NOTICE",
+          "packages/review/NOTICE",
+          "packages/memory/NOTICE"
+        ],
+        "notes": "Preserve upstream notices. packages/review (runner.ts, output.ts) adapts background_review.py safety semantics (review tool whitelist reduced to memory.submitProposal/skills.submitProposal, no-recursion rule, cancel-on-live-turn, review write metadata) at this revision via the mars-platform reference port, without importing or forking the Hermes agent loop; model calls go through the MARS provider registry (free-first). License text at packages/memory/third_party/hermes-agent/LICENSE.txt; attribution in packages/review/NOTICE. No Hermes source was copied verbatim."
       },
       "sources": [
         {
@@ -573,7 +585,7 @@
         }
       ],
       "runtime_requirements": "Python 3.11-3.14; a live AIAgent instance (forks the parent agent with cache-parity kwargs); auxiliary model provider",
-      "integration_owner": "Background scheduler (learning curator role) - single review pipeline shared with OpenClaw scheduler port",
+      "integration_owner": "packages/review (@mars/review): single proposal-only review pipeline shared with the OpenClaw scheduler port; memory and skill proposals are accepted by humans/host through @mars/memory and @mars/skills.",
       "target_milestone": "Milestone 3 (Persistent skill learning)",
       "adaptation_decision": "Port behavior only (prompt/whitelist/digest/cancellation/no-recursion via skip flag); do not import - it forks Hermes AIAgent, which would create a second live agent loop. Reviewer must emit proposals to memory service and skill service instead of writing directly.",
       "dependencies": [
@@ -598,7 +610,7 @@
         "Deep coupling to AIAgent internals and prompt-cache parity",
         "Directly writes memory/skills in Hermes; MARS must interpose proposal step"
       ],
-      "integration_status": "not-integrated",
+      "integration_status": "workbench-context-only",
       "background_references": []
     },
     {
@@ -611,8 +623,12 @@
         "spdx": "MIT",
         "path": "LICENSE",
         "url": "https://github.com/NousResearch/hermes-agent/blob/7020ea3e96c3fdbc768c5296493e186df46f075b/LICENSE",
-        "additional_notices": [],
-        "notes": "Preserve upstream notices. No source copied in this increment."
+        "additional_notices": [
+          "packages/skills/NOTICE",
+          "packages/review/NOTICE",
+          "packages/memory/NOTICE"
+        ],
+        "notes": "Preserve upstream notices. SkillStore.runCurator in packages/skills/src/store.ts characterises curator.py apply_automatic_transitions (active -> stale after 14 idle days -> archived after 30; pinned skipped; archive to skills/.archive/, never delete) and recordUse mirrors tools/skill_usage.py usage counters at this revision, via the mars-platform reference port. should_run_now scheduling, curator_backup and run reports were not ported; nothing in this repository schedules runCurator yet. Attribution in packages/skills/NOTICE; license text at packages/memory/third_party/hermes-agent/LICENSE.txt."
       },
       "sources": [
         {
@@ -637,7 +653,7 @@
         }
       ],
       "runtime_requirements": "Python 3.11-3.14; ~/.hermes/skills tree; optional aux LLM for consolidation pass",
-      "integration_owner": "packages/skills (skill lifecycle owner) consuming curator signals",
+      "integration_owner": "packages/skills (@mars/skills): stale/archive transitions in SkillStore.runCurator and usage counters via recordUse; no separate curator process.",
       "target_milestone": "Milestone 3",
       "adaptation_decision": "Adapt usage signals + deterministic stale/archive transitions as inputs to the MARS skill service (OpenClaw-derived); do not run Hermes curator as a second skill owner. LLM consolidation becomes a proposal, evaluated before acceptance.",
       "dependencies": ["hermes skills dir layout", "cron job registry"],
@@ -655,7 +671,7 @@
       "risks": [
         "Curator archive semantics overlap OpenClaw unused-archive; must pick one implementation (OpenClaw) to avoid dual owners"
       ],
-      "integration_status": "not-integrated",
+      "integration_status": "workbench-context-only",
       "background_references": []
     },
     {
@@ -720,8 +736,12 @@
         "spdx": "MIT",
         "path": "LICENSE",
         "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/LICENSE",
-        "additional_notices": [],
-        "notes": "Preserve upstream notices. No source copied in this increment."
+        "additional_notices": [
+          "packages/skills/NOTICE",
+          "packages/review/NOTICE",
+          "packages/memory/NOTICE"
+        ],
+        "notes": "Preserve upstream notices. packages/skills/src/store.ts contains a MARS Bun/TypeScript port of the Skill Workshop lifecycle semantics (skill-versions.ts newest-10 versions, drafts.ts, review-undo.ts changes.jsonl + undoReview, unused-archive.ts stale 14d / archive 30d with pinned exempt, changes.ts change log) at this revision via the mars-platform reference port, modified by MARS (single-writer directory lock, transactional persistence with recovery, proposal queue, threat scanning via @mars/memory, flat frontmatter parser, @mars/contracts adapter). Upstream MIT license copied verbatim to packages/skills/third_party/openclaw/LICENSE.txt; attribution and modification notice in packages/skills/NOTICE. No other OpenClaw source was copied."
       },
       "sources": [
         {
@@ -761,7 +781,7 @@
         }
       ],
       "runtime_requirements": "Node >=24.16.0 <25 || >=26.1.0; pnpm 12.15.0 (packageManager); TypeScript monorepo",
-      "integration_owner": "packages/skills (skill service; sole writer of skill files and version manifest)",
+      "integration_owner": "packages/skills (@mars/skills SkillStore): sole writer of skill files, versions, drafts, proposals and changes.jsonl. Workbench freezes bounded, untrusted-labelled skill context at launch; Oh My Pi owns execution. No human owner assigned by specification.",
       "target_milestone": "Milestone 3",
       "adaptation_decision": "Adapt (TypeScript-to-TypeScript port) into packages/skills as the SINGLE skill lifecycle owner: versions, drafts, change log, undo, archive/restore. Add MARS evaluation gate between draft and accepted, plus Hermes usage signals. Do not depend on OpenClaw runtime/authority guards wholesale; port guard semantics (fail-closed) with tests.",
       "dependencies": [
@@ -785,7 +805,7 @@
         "Skill directory layout conventions differ from Hermes SKILL.md hub layout",
         "--ignore-scripts install may skip native builds needed elsewhere"
       ],
-      "integration_status": "not-integrated",
+      "integration_status": "workbench-context-only",
       "background_references": []
     },
     {
@@ -798,8 +818,12 @@
         "spdx": "MIT",
         "path": "LICENSE",
         "url": "https://github.com/openclaw/openclaw/blob/7d9677ce36db4aeea2ce36a3bb78588829e80933/LICENSE",
-        "additional_notices": [],
-        "notes": "Preserve upstream notices. No source copied in this increment."
+        "additional_notices": [
+          "packages/skills/NOTICE",
+          "packages/review/NOTICE",
+          "packages/memory/NOTICE"
+        ],
+        "notes": "Preserve upstream notices. packages/review/src/runner.ts contains a MARS port of the experience-review-scheduler.ts mechanics (10-iteration counter per session, quiet-period debounce, single review in flight, rate-limit backoff, live-turn cancellation) at this revision via the mars-platform reference port, modified by MARS (proposal-only output, recursion guard, bounded context/output, revision fencing, review.jsonl audit log). License text at packages/skills/third_party/openclaw/LICENSE.txt; attribution in packages/review/NOTICE. The reviewer prompt and skill_manage tool surface were not copied."
       },
       "sources": [
         {
@@ -824,7 +848,7 @@
         }
       ],
       "runtime_requirements": "Node 24.16+/26.1+, pnpm 12.15",
-      "integration_owner": "Background scheduler service (TypeScript)",
+      "integration_owner": "packages/review (@mars/review ReviewRunner): the ONE background review scheduler, host-scheduled after completed foreground tasks; emits proposals only.",
       "target_milestone": "Milestone 3",
       "adaptation_decision": "Port scheduler (counter + idle debounce + single-flight + backoff) as the ONE MARS background review scheduler; plug Hermes-derived review prompt/whitelist into its runReview dependency; reviewer outputs proposals only.",
       "dependencies": ["openclaw-skill-workshop"],
@@ -843,7 +867,7 @@
         "In-process timers; MARS needs persistence across restarts (scheduler state is in-memory Maps)",
         "Overlap with Hermes background_review must be resolved to one pipeline"
       ],
-      "integration_status": "not-integrated",
+      "integration_status": "workbench-context-only",
       "background_references": []
     },
     {
@@ -1115,7 +1139,7 @@
         ]
       },
       "risks": [
-        "HEAD is untagged dev commit past v0.25.0 \u2014 choose tag pin or this SHA explicitly in manifest",
+        "HEAD is untagged dev commit past v0.25.0 — choose tag pin or this SHA explicitly in manifest",
         "CLI exit 0 on errored trials can hide failures",
         "separate-verifier no-network tasks cannot run on this VM's Docker; requires nftables-capable host or cloud provider",
         "custom agent module must be importable (PYTHONPATH) from Harbor process",
@@ -1217,7 +1241,7 @@
         "additional_notices": [
           {
             "path": "dspy/clients/model_metadata/LICENSE",
-            "spdx": "MIT for non-restricted content; derived LiteLLM model metadata with provenance.json \u2014 verify upstream LiteLLM license terms before redistribution",
+            "spdx": "MIT for non-restricted content; derived LiteLLM model metadata with provenance.json — verify upstream LiteLLM license terms before redistribution",
             "url": "https://github.com/stanfordnlp/dspy/blob/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007/dspy/clients/model_metadata/LICENSE"
           }
         ],
@@ -1343,7 +1367,7 @@
         "litellm (optional extras)"
       ],
       "acceptance_plan": [
-        "D1 (no LLM): implement a fake GEPAAdapter returning deterministic scores and run gepa.optimize(seed_candidate={'system':'x'}, trainset=T, valset=V, adapter=fake, reflection_lm=lambda p:'y', max_metric_calls=30, run_dir=tmp, seed=0); assert every evaluated example id is in T\u222aV, none in final set F; assert len(outputs)==len(scores)==len(batch); rerun with same seed reproduces val_aggregate_scores; resume from run_dir works.",
+        "D1 (no LLM): implement a fake GEPAAdapter returning deterministic scores and run gepa.optimize(seed_candidate={'system':'x'}, trainset=T, valset=V, adapter=fake, reflection_lm=lambda p:'y', max_metric_calls=30, run_dir=tmp, seed=0); assert every evaluated example id is in T∪V, none in final set F; assert len(outputs)==len(scores)==len(batch); rerun with same seed reproduces val_aggregate_scores; resume from run_dir works.",
         "D2 (Harbor-backed, needs model budget approval): HarborGEPAAdapter over 3 train + 3 val Harbor tasks, max_metric_calls small; final 5-task held-out slice scored after optimize() for seed and best candidate with recorded cost."
       ],
       "audit_checks": {
@@ -2226,7 +2250,7 @@
     },
     {
       "group": "evaluation",
-      "findings": "Pins: Harbor c23909f47508af47a70321eb22c2b40aa190ca5d (0.25.0+, not tag), mini-swe-agent 04d809ceab9df28f9adaed044884180159172930 (v2.4.6), DSPy 25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007 (3.4.1), GEPA 02ea4152ff6e512484cb5298046bfe967aea4735 (HEAD; DSPy requires 0.1.4 = 8b0ce6cd99a234f6b74daf37558a2ac0ce18f975). (1) Adapter: MARS plugs into Harbor as a BaseAgent subclass referenced by 'module:Class'; verified E2E with Harbor's no-LLM MarkerAgent on hello-world (reward 1.0, marker artifact present) after PYTHONPATH fix and mirror.gcr.io image retag; oracle=1.0, nop=0.0 show verifier discrimination on this deterministic task only. (2) Baseline: Harbor ships an installed mini-swe-agent adapter (ATIF v1.7 conversion, version pin via --ak version); use it so baseline and candidate share env/verifier; no model run executed. (3) Scoring: Harbor reward = finite numeric from /logs/verifier/reward.txt|json -> VerifierResult.rewards dict; GEPA needs per-example float higher-is-better with fallback 0.0 on per-example failure \u2014 direct mapping, but harbor CLI exit code is 0 even when trials error, so wrappers must read result.json n_errored_trials. (4) Holdout: DSPy GEPA.compile and gepa.optimize take train+val only; final test isolation is caller-enforced (optimize_anything has a test_set evaluated post-budget). Harbor separate-verifier mode / RewardKit secure worker keep private tests out of candidate env, but separate-verifier E2E could not run here. (5) Missing capability: no Harbor<->GEPA adapter upstream; MARS must write HarborGEPAAdapter (closest reference: gepa terminal_bench_adapter). Unit evidence: Harbor 138 passed, mini-swe-agent 302 passed/16 deselected, DSPy GEPA 97 passed, GEPA 18 passed/1 skipped. No interoperability between GEPA/DSPy and Harbor, and no LLM run, was executed.",
+      "findings": "Pins: Harbor c23909f47508af47a70321eb22c2b40aa190ca5d (0.25.0+, not tag), mini-swe-agent 04d809ceab9df28f9adaed044884180159172930 (v2.4.6), DSPy 25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007 (3.4.1), GEPA 02ea4152ff6e512484cb5298046bfe967aea4735 (HEAD; DSPy requires 0.1.4 = 8b0ce6cd99a234f6b74daf37558a2ac0ce18f975). (1) Adapter: MARS plugs into Harbor as a BaseAgent subclass referenced by 'module:Class'; verified E2E with Harbor's no-LLM MarkerAgent on hello-world (reward 1.0, marker artifact present) after PYTHONPATH fix and mirror.gcr.io image retag; oracle=1.0, nop=0.0 show verifier discrimination on this deterministic task only. (2) Baseline: Harbor ships an installed mini-swe-agent adapter (ATIF v1.7 conversion, version pin via --ak version); use it so baseline and candidate share env/verifier; no model run executed. (3) Scoring: Harbor reward = finite numeric from /logs/verifier/reward.txt|json -> VerifierResult.rewards dict; GEPA needs per-example float higher-is-better with fallback 0.0 on per-example failure — direct mapping, but harbor CLI exit code is 0 even when trials error, so wrappers must read result.json n_errored_trials. (4) Holdout: DSPy GEPA.compile and gepa.optimize take train+val only; final test isolation is caller-enforced (optimize_anything has a test_set evaluated post-budget). Harbor separate-verifier mode / RewardKit secure worker keep private tests out of candidate env, but separate-verifier E2E could not run here. (5) Missing capability: no Harbor<->GEPA adapter upstream; MARS must write HarborGEPAAdapter (closest reference: gepa terminal_bench_adapter). Unit evidence: Harbor 138 passed, mini-swe-agent 302 passed/16 deselected, DSPy GEPA 97 passed, GEPA 18 passed/1 skipped. No interoperability between GEPA/DSPy and Harbor, and no LLM run, was executed.",
       "blockers": "Harbor separate-verifier isolation E2E not verified: examples/tasks/separate-verifier-environment fails on this VM's Docker with ValueError network_mode='no-network' not supported (egress-control nftables kernel support not detected). Needs nftables-capable Linux host or a cloud provider (e.g. Daytona/Modal)., Docker Hub rate limit (HTTP 429) on ubuntu:24.04 blocked first Harbor E2E attempts; workaround used: docker pull mirror.gcr.io/library/ubuntu:24.04 && docker tag as ubuntu:24.04. Reproducible E2E needs a registry mirror or authenticated pulls., No upstream Harbor GEPA adapter; HarborGEPAAdapter must be implemented by MARS (M4)., No model/LLM runs executed (mini-swe-agent baseline, GEPA/DSPy optimization) by scope; baseline/candidate comparison and prompt-improvement claims remain unverified., Version skew: GEPA audited at HEAD while DSPy 3.4.1 hard-pins gepa==0.1.4; Harbor audited HEAD is past v0.25.0 tag. Manifest must choose one pin per component., harbor run returns exit 0 when trials error (observed); CI gates must parse result.json."
     },
     {
