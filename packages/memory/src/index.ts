@@ -15,6 +15,10 @@ import {
   ArtifactRefSchema,
   type MemoryEntry,
   type MemoryOperation,
+  type MemoryProposal,
+  type MemoryProposalInput,
+  type MemoryProposalService,
+  type MemoryProposalStatus,
   type MemoryService,
   type RequestContext,
   ScopeSchema,
@@ -25,6 +29,15 @@ import {
   type JournalMessage,
   parseJournal,
 } from "./journal";
+import { scanThreat } from "./threats";
+
+export {
+  findInvisibleCodePoint,
+  INVISIBLE_CODE_POINT_RANGES,
+  isInvisibleCodePoint,
+  scanThreat,
+  THREAT_PATTERN_IDS,
+} from "./threats";
 
 export const MEMORY_STORE_FORMAT_VERSION = 2;
 export const DEFAULT_BUDGETS = { profile: 1375, project: 2200 } as const;
@@ -251,7 +264,30 @@ export function formatSnapshot(
     .join("\n");
 }
 
-export class DurableMemoryStore implements MemoryService {
+export const PROPOSAL_LIMITS = {
+  pending_per_scope: 64,
+  operations: 32,
+  rationale_length: 2048,
+  reason_length: 1024,
+  source_length: 128,
+} as const;
+const proposalInputSchema = z
+  .object({
+    source: z.string().min(1).max(PROPOSAL_LIMITS.source_length),
+    operations: z.array(operationSchema).min(1).max(PROPOSAL_LIMITS.operations),
+    rationale: z.string().min(1).max(PROPOSAL_LIMITS.rationale_length),
+    expected_revision: z.number().int().nonnegative(),
+  })
+  .strict();
+const proposalStatusSchema = z.enum(["pending", "accepted", "rejected"]);
+interface ProposalRow {
+  proposal_id: string;
+  status: string;
+  record: string;
+}
+export class DurableMemoryStore
+  implements MemoryService, MemoryProposalService
+{
   private db!: Database;
   private queue: Promise<unknown> = Promise.resolve();
   private closed = false;
@@ -308,6 +344,7 @@ export class DurableMemoryStore implements MemoryService {
         CREATE TABLE IF NOT EXISTS exclusions (digest TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS dataset_use (scope_key TEXT, manifest_id TEXT, source_id TEXT, evidence_id TEXT, session_id TEXT, entry_id TEXT, PRIMARY KEY(scope_key,manifest_id,source_id,evidence_id));
         CREATE TABLE IF NOT EXISTS exports (scope_key TEXT, digest TEXT, owner TEXT, PRIMARY KEY(scope_key,digest));
+        CREATE TABLE IF NOT EXISTS proposals (proposal_id TEXT PRIMARY KEY, scope_key TEXT, status TEXT, ordinal INTEGER, record TEXT);
         PRAGMA user_version=2; COMMIT;`);
     } catch (e) {
       if (e instanceof MemoryStoreError) throw e;
@@ -355,6 +392,8 @@ export class DurableMemoryStore implements MemoryService {
     ]) {
       if (root && value.includes(root)) fail("invalid_input");
     }
+    const threat = scanThreat(value);
+    if (threat) fail("invalid_input", { threat });
     return fact(value);
   }
   private revision(ctx: RequestContext): number {
@@ -508,7 +547,14 @@ export class DurableMemoryStore implements MemoryService {
     this.context(ctx);
     validate(z.number().int().nonnegative(), expectedRevision);
     const ops = validate(z.array(operationSchema), operations);
-    return this.write(() => {
+    return this.write(() => this.applyBatch(ctx, expectedRevision, ops));
+  }
+  private applyBatch(
+    ctx: RequestContext,
+    expectedRevision: number,
+    ops: MemoryOperation[],
+  ): ErasureResult & { revision: number } {
+    {
       const current = this.revision(ctx);
       if (current !== expectedRevision)
         fail("conflict", { current_revision: current });
@@ -603,7 +649,7 @@ export class DurableMemoryStore implements MemoryService {
         affected_training_manifests: this.affected(ctx, removedSources),
         disclosure: DISCLOSURE,
       };
-    });
+    }
   }
   private checkBudgets(
     ctx: RequestContext,
@@ -1212,6 +1258,9 @@ export class DurableMemoryStore implements MemoryService {
       const affected = this.affected(ctx, sources);
       const seq = this.nextSeq();
       this.db
+        .query("DELETE FROM proposals WHERE scope_key=?")
+        .run(scopeKey(ctx));
+      this.db
         .query(`UPDATE streams SET last_seq=? WHERE ${visibility}`)
         .run(seq, ...args(ctx));
       const anchor: MemoryEntry = {
@@ -1245,6 +1294,201 @@ export class DurableMemoryStore implements MemoryService {
       this.clearDatasetUse(ctx, sources);
       return { affected_training_manifests: affected, disclosure: DISCLOSURE };
     }, true);
+  }
+  private loadProposal(
+    ctx: RequestContext,
+    proposalId: string,
+  ): MemoryProposal {
+    const row = this.db
+      .query(
+        "SELECT proposal_id, status, record FROM proposals WHERE proposal_id=? AND scope_key=?",
+      )
+      .get(proposalId, scopeKey(ctx)) as ProposalRow | null;
+    if (!row) fail("not_found");
+    try {
+      const record: unknown = JSON.parse(row.record);
+      if (
+        typeof record !== "object" ||
+        record === null ||
+        (record as { proposal_id?: unknown }).proposal_id !== row.proposal_id ||
+        (record as { status?: unknown }).status !== row.status
+      )
+        fail("corrupt_record");
+      return record as MemoryProposal;
+    } catch (e) {
+      if (e instanceof MemoryStoreError) throw e;
+      fail("corrupt_record");
+    }
+  }
+  private storeProposal(ctx: RequestContext, proposal: MemoryProposal): void {
+    this.db
+      .query(
+        "INSERT INTO proposals VALUES(?,?,?,?,?) ON CONFLICT(proposal_id) DO UPDATE SET status=excluded.status, record=excluded.record",
+      )
+      .run(
+        proposal.proposal_id,
+        scopeKey(ctx),
+        proposal.status,
+        this.nextOrdinal(),
+        canonicalJson(proposal),
+      );
+  }
+  private now(): string {
+    return (this.options.now?.() ?? new Date()).toISOString();
+  }
+  private nextOrdinal(): number {
+    return (
+      (
+        this.db
+          .query("SELECT COALESCE(MAX(ordinal),0) AS ordinal FROM proposals")
+          .get() as { ordinal: number }
+      ).ordinal + 1
+    );
+  }
+  private text(value: string, limit: number): string {
+    const trimmed = value.trim();
+    if (!trimmed || [...trimmed].length > limit) fail("invalid_input");
+    const threat = scanThreat(trimmed);
+    if (threat) fail("invalid_input", { threat });
+    return trimmed;
+  }
+  /**
+   * Validates a proposed batch by dry-running it inside a rolled-back
+   * savepoint (scope, threat, budget and conflict checks all run) and persists
+   * it as `pending`. Live memory is untouched until `acceptProposal`.
+   */
+  async submitProposal(
+    ctx: RequestContext,
+    input: MemoryProposalInput,
+  ): Promise<MemoryProposal> {
+    this.context(ctx);
+    const proposal = validate(proposalInputSchema, input);
+    const source = this.text(proposal.source, PROPOSAL_LIMITS.source_length);
+    const rationale = this.text(
+      proposal.rationale,
+      PROPOSAL_LIMITS.rationale_length,
+    );
+    return this.write(() => {
+      const pending = (
+        this.db
+          .query(
+            "SELECT COUNT(*) AS count FROM proposals WHERE scope_key=? AND status='pending'",
+          )
+          .get(scopeKey(ctx)) as { count: number }
+      ).count;
+      if (pending >= PROPOSAL_LIMITS.pending_per_scope)
+        fail("budget_exceeded", { pending });
+      this.db.exec("SAVEPOINT proposal_dry_run");
+      try {
+        this.applyBatch(ctx, proposal.expected_revision, proposal.operations);
+      } finally {
+        this.db.exec("ROLLBACK TO proposal_dry_run");
+        this.db.exec("RELEASE proposal_dry_run");
+      }
+      const record: MemoryProposal = {
+        proposal_id: hash(
+          canonicalJson([
+            scopeKey(ctx),
+            ctx.request_id,
+            this.nextOrdinal(),
+            proposal,
+          ]),
+        ).slice(0, 32),
+        scope: ctx.scope,
+        source,
+        operations: proposal.operations,
+        rationale,
+        expected_revision: proposal.expected_revision,
+        status: "pending",
+        submitted_at: this.now(),
+      };
+      if (
+        this.db
+          .query("SELECT 1 FROM proposals WHERE proposal_id=?")
+          .get(record.proposal_id)
+      )
+        fail("conflict");
+      this.storeProposal(ctx, record);
+      return record;
+    });
+  }
+  async listProposals(
+    ctx: RequestContext,
+    status?: MemoryProposalStatus,
+  ): Promise<MemoryProposal[]> {
+    this.context(ctx);
+    const filter =
+      status === undefined ? undefined : validate(proposalStatusSchema, status);
+    return this.transaction(() => {
+      const rows = (
+        filter
+          ? this.db
+              .query(
+                "SELECT proposal_id, status, record FROM proposals WHERE scope_key=? AND status=? ORDER BY ordinal, proposal_id",
+              )
+              .all(scopeKey(ctx), filter)
+          : this.db
+              .query(
+                "SELECT proposal_id, status, record FROM proposals WHERE scope_key=? ORDER BY ordinal, proposal_id",
+              )
+              .all(scopeKey(ctx))
+      ) as ProposalRow[];
+      return rows.map((row) => this.loadProposal(ctx, row.proposal_id));
+    });
+  }
+  /**
+   * Applies a pending proposal through the normal batch path. The proposal's
+   * captured `expected_revision` must still be current; otherwise `conflict`.
+   */
+  async acceptProposal(
+    ctx: RequestContext,
+    proposalId: string,
+  ): Promise<MemoryProposal> {
+    this.context(ctx);
+    validate(id, proposalId);
+    return this.write(() => {
+      const proposal = this.loadProposal(ctx, proposalId);
+      if (proposal.status !== "pending")
+        fail("conflict", { status: proposal.status });
+      const applied = this.applyBatch(
+        ctx,
+        proposal.expected_revision,
+        proposal.operations,
+      );
+      const resolved: MemoryProposal = {
+        ...proposal,
+        status: "accepted",
+        resolved_at: this.now(),
+        applied_revision: applied.revision,
+      };
+      this.storeProposal(ctx, resolved);
+      return resolved;
+    });
+  }
+  async rejectProposal(
+    ctx: RequestContext,
+    proposalId: string,
+    reason: string,
+  ): Promise<MemoryProposal> {
+    this.context(ctx);
+    validate(id, proposalId);
+    const why = this.text(
+      validate(z.string(), reason),
+      PROPOSAL_LIMITS.reason_length,
+    );
+    return this.write(() => {
+      const proposal = this.loadProposal(ctx, proposalId);
+      if (proposal.status !== "pending")
+        fail("conflict", { status: proposal.status });
+      const resolved: MemoryProposal = {
+        ...proposal,
+        status: "rejected",
+        reason: why,
+        resolved_at: this.now(),
+      };
+      this.storeProposal(ctx, resolved);
+      return resolved;
+    });
   }
   async close(): Promise<void> {
     await this.queue;
