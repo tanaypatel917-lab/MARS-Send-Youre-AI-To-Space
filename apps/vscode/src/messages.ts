@@ -11,6 +11,8 @@ import { z } from "zod";
 const taskId = z.string().min(1).max(200);
 const shortId = z.string().min(1).max(500);
 const finite = z.number().finite();
+const line = z.number().int().positive().max(10_000_000);
+const prompt = z.string().min(1).max(8000);
 
 /** Messages the webview may send. Anything else is dropped. */
 export const WebviewMessageSchema = z.discriminatedUnion("type", [
@@ -74,6 +76,21 @@ export const WebviewMessageSchema = z.discriminatedUnion("type", [
       taskId,
       checkpointId: shortId,
     })
+    .strict(),
+  z.object({ type: z.literal("followUp"), taskId, prompt }).strict(),
+  z
+    .object({
+      type: z.literal("openReview"),
+      taskId,
+      path: z.string().min(1).max(1024),
+      line_start: line,
+      line_end: line,
+      side: z.enum(["left", "right"]),
+      pr: z.string().url().max(2048),
+    })
+    .strict(),
+  z
+    .object({ type: z.literal("copyText"), text: z.string().max(256 * 1024) })
     .strict(),
 ]);
 export type WebviewMessage = z.infer<typeof WebviewMessageSchema>;

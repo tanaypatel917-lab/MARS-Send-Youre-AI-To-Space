@@ -37,6 +37,19 @@ Commands: `mars.connect`, `mars.importConnection`, `mars.setToken`, `mars.clearT
 
 `POST {serverUrl}/v1/rpc` with `Authorization: Bearer <token>`, body `{method, context, params}`, response `{result}` or `{error:{code,message}}`. `workbench.describe` is sent with `params:{}` and no context; every other call carries `{schema_version:1, scope:<server scope>, request_id:<fresh uuid>}`. Methods: `tasks.create|list|inspect|start|resume|steer|cancel|events|artifact|diff|checkpoint|restore` (see `src/client.ts`). All responses are validated with `@mars/contracts` schemas plus `src/protocol.ts`; anything unexpected is an error. Error codes `conflict`/`revision_conflict` (or HTTP 409) are treated as revision conflicts and trigger a reload of server state.
 
+## Output format
+
+When you **Inspect** a `text/plain` artifact (the model's final text), the webview parses it as the [MARS Output Format](../../packages/output-format/src/parse.ts) with `parseOutput` + `validateOutput` (no connectors registered; allowed email addresses are those found in the task request and acceptance criteria). Model text only ever becomes text nodes:
+
+- Markdown segments are shown verbatim in a `<pre>`; no HTML or Markdown is rendered from model text.
+- Each `:::writing{...}` block becomes a panel with its variant, id and email fields (subject/to/cc/bcc), one sub-panel per `::tone[...]` section (or the body), and a **Copy** button that puts the raw body on the clipboard.
+- `- :mars-followup[phrase]{prompt="..."}` becomes a button labelled with the phrase whose tooltip is the hidden prompt. Clicking opens a native confirmation showing the full prompt; only **Send follow-up** sends it through the normal steer path, and only when the task is running or paused (otherwise a notice explains that a follow-up can only steer a live task).
+- `mars://review?pr=...&path=...&line=N&end=M&side=...` becomes a button that opens `path` from the single open workspace folder matching the server's workspace label (same path checks as diffs: workspace-relative only, no `..`, no absolute/URI paths, symlinks must stay inside) and selects lines `N`–`M`. The `side` and `pr` are shown in the notice and status bar; the PR is never fetched.
+- `[$label](app://id)` is shown as a disabled chip "label (connector id not registered)" because this client has no connector registry.
+- Parse and validation errors are listed under the output. Any review link whose line carries an error is shown as plain text, never as a button.
+
+Nothing runs because the model emitted a link: every action above needs an explicit click, and follow-ups need a second confirmation.
+
 ## Safety model
 
 - Webview: strict CSP (`default-src 'none'`, nonce script, no connect/frame/form), no command URIs, no forms, DOM built with `textContent` only. Messages from the webview are validated with a strict schema (`src/messages.ts`).

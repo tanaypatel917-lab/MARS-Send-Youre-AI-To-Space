@@ -132,6 +132,7 @@
   },
   "dependencies": {
     "@mars/contracts": "workspace:*",
+    "@mars/output-format": "workspace:*",
     "zod": "3.25.76"
   },
   "devDependencies": {

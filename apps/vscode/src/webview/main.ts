@@ -7,6 +7,8 @@ import type {
   ViewState,
   WebviewMessage,
 } from "../messages";
+import { button, h } from "./dom";
+import { renderOutput } from "./output";
 
 interface VsCodeApi {
   postMessage(message: WebviewMessage): void;
@@ -19,62 +21,6 @@ const vscode = acquireVsCodeApi();
 const app = document.getElementById("app") as HTMLElement;
 let state: ViewState | null = null;
 let approvalTask: string | null = null;
-
-type Child = Node | string | null | undefined | false;
-
-function h<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: {
-    class?: string;
-    key?: string;
-    title?: string;
-    role?: string;
-    label?: string;
-  } = {},
-  ...children: Child[]
-): HTMLElementTagNameMap[K] {
-  const element = document.createElement(tag);
-  if (props.class) element.className = props.class;
-  if (props.key) element.dataset.focusKey = props.key;
-  if (props.title) element.title = props.title;
-  if (props.role) element.setAttribute("role", props.role);
-  if (props.label) element.setAttribute("aria-label", props.label);
-  for (const child of children) {
-    if (child === null || child === undefined || child === false) continue;
-    element.append(
-      typeof child === "string" ? document.createTextNode(child) : child,
-    );
-  }
-  return element;
-}
-
-function button(
-  text: string,
-  key: string,
-  onClick: () => void,
-  options: {
-    secondary?: boolean;
-    disabled?: boolean;
-    title?: string;
-    danger?: boolean;
-  } = {},
-): HTMLButtonElement {
-  const element = h("button", {
-    class: [
-      options.secondary ? "secondary" : "",
-      options.danger ? "danger" : "",
-    ]
-      .join(" ")
-      .trim(),
-    key,
-    ...(options.title ? { title: options.title } : {}),
-  });
-  element.type = "button";
-  element.textContent = text;
-  element.disabled = !!options.disabled;
-  element.addEventListener("click", onClick);
-  return element;
-}
 
 function field(
   labelText: string,
@@ -559,9 +505,11 @@ function renderSelected(s: ViewState, sel: SelectedView): HTMLElement {
           { class: "muted small" },
           `${sel.artifact.media_type} · ${sel.artifact.byte_length} B${sel.artifact.note ? ` · ${sel.artifact.note}` : ""}`,
         ),
-        sel.artifact.text !== null
-          ? h("pre", { class: "artifact" }, sel.artifact.text)
-          : null,
+        ...(sel.artifact.text !== null
+          ? renderOutput(task, sel.artifact.text, (message) =>
+              vscode.postMessage(message),
+            )
+          : []),
       )
     : null;
   return h(
