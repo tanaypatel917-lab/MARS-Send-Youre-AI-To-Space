@@ -83,8 +83,8 @@ Proposed actions (not executed)
   - Review "the diff": https://github.com/acme/rocket/pull/7 src/launch.ts:10-14 (right, line 22)
 
 Format errors
-  - line 3 [invented_address] block 48213: Email cc "grace@example.com" was not supplied by the user.
-  - line 22 [forbidden_link_scheme]: file:// links are not allowed; reference local files by absolute or workspace-relative path.
+  - line 3 [invented_address] block 48213: Email cc "grace@example.com" is not exactly one address supplied by the user.
+  - line 22 [forbidden_link_scheme]: file: links are not allowed; use https, a workspace path, app:// or mars://review.
   - line 22 [unknown_connector]: No registered connector "slack".
 `;
 
