@@ -39,17 +39,24 @@ The feature is optional. A host created without the `watch` option
 
 ```ts
 createWatchService({
-  command?: string[],        // default ["watch-skill"]
+  command?: string[],        // default ["watch-skill"]; a venv path or ["bun", fixture] works
   expectedVersion?: "1.4.3",
   dataRoot: string,          // private, host-side; becomes WATCHSKILL_DATA_DIR
-  policy?: WatchPolicy,
+  policy?: Partial<WatchPolicy>,
   timeoutMs?: number,        // default 120 s
   maxOutputBytes?: number,   // default 96 KiB
-  now?: () => Date,
+  doctorTtlMs?: number,      // default 5 min
+  env?: Record<string, string>, // only MARS_WATCH_* / FAKE_WATCH_SKILL_* names pass through (fixtures)
+  now?: () => number,
 });
 
-service.doctor();  // { available, version, reason?, checks } — cached 5 min
-service.toolsFor({ task_id, cwd, record(evidence) }); // RuntimeWatch
+service.doctor();  // { available, version, reason, checks, checked_at } — cached 5 min
+service.toolsFor({
+  task_id,
+  cwd,                       // the task workspace; file sources must resolve inside it
+  approvals?: { execute },   // gates command_exit checks in verification contracts
+  evidence: { append(record), list() }, // host-owned sink (workbench: watch-context.ts)
+}); // RuntimeWatch
 ```
 
 ## 2. Runtime requirements and the doctor gate
@@ -123,6 +130,14 @@ under the private watch data dir and passes that path to `verify run`. The
 model never supplies a filesystem path for a contract, and `--in-process` is
 never used.
 
+Before a contract runs the host checks it against policy; any refusal records an
+`inconclusive` evidence record and the contract is **not** run: `required_assurance:
+remote_attested`; a non-loopback `allowed_origins` entry, `http_request` or
+`browser_dom` URL without `allow_network_sources`; a `command_exit` check when the
+session has no `execute` approval (children in a read-only workspace never have
+it). An upstream `pass` without at least one passed required check is recorded
+as `inconclusive`. `verify show` renders a stored run but writes no new record.
+
 ## 5. Verdict and assurance mapping
 
 Verdicts (upstream semantics, `docs/verification.md`):
@@ -167,8 +182,8 @@ Rules:
 
 ## 6. Evidence records
 
-Every `mars_watch`, `mars_loop` and `mars_verify` call produces a
-`WatchEvidenceRecord` (kind `doctor` records a doctor-gate result) (zod `WatchEvidenceRecordSchema`) that the
+Every `mars_watch`, `mars_watch_capture`, `mars_loop` and `mars_verify run` call
+produces a `WatchEvidenceRecord` (zod `WatchEvidenceRecordSchema`) that the
 host appends as a `tool.completed` task event with `producer: "@mars/watch"`
 and `versions: [{component:"@mars/watch",revision:"0.0.1"},{component:"watch-skill",revision:"1.4.3"}]`:
 
@@ -176,7 +191,8 @@ and `versions: [{component:"@mars/watch",revision:"0.0.1"},{component:"watch-ski
 {
   "schema_version": 1,
   "operation": "watch.evidence",
-  "kind": "loop" | "verify" | "perception" | "doctor",
+  "kind": "loop" | "verify" | "perception" | "doctor",   // doctor is reserved; unavailability is recorded on the loop/verify record
+  "tool": "mars_loop" | "mars_verify" | "mars_watch" | "mars_watch_capture",
   "verdict": "pass" | "fail" | "inconclusive" | "error",
   "assurance": "visual_advisory" | "deterministic_local" | "isolated_local" | "remote_attested" | "none",
   "verified": boolean,
@@ -186,6 +202,7 @@ and `versions: [{component:"@mars/watch",revision:"0.0.1"},{component:"watch-ski
   "run_id"?: string,
   "contract_id"?: string,
   "contract_digest"?: string,
+  "signature_status"?: string, // e.g. unsigned_hash_bound — a hash binding, not a signature
   "required_checks": { "passed": number, "failed": number, "inconclusive": number },
   "limitations": string[],
   "summary": string,          // untrusted, clipped to 2048 characters
@@ -194,8 +211,11 @@ and `versions: [{component:"@mars/watch",revision:"0.0.1"},{component:"watch-ski
 }
 ```
 
-`mars_watch_ask`, `mars_watch_search`, `mars_watch_capture` and
-`mars_watch_extract` are not recorded as evidence.
+`mars_watch_ask`, `mars_watch_search`, `mars_watch_extract`, `mars_verify show`
+and `mars_verify checks` are not recorded as evidence. The schema itself refuses
+`verified: true` unless the record is a `verify` run with verdict `pass`,
+assurance `deterministic_local` or `isolated_local`, at least one passed required
+check and no failed or inconclusive required check.
 
 For delegated children the record is appended to the **parent** task
 (`ChildLaunch.task_id`), so a reviewer child sees the same evidence as the
@@ -215,8 +235,11 @@ checks passed.
 
 Recordings, frames, OCR, transcripts, captions, downloaded metadata, search
 hits and critiques are evidence, not instructions. Every model-visible string
-produced from CLI output is rendered between `[untrusted watch-skill output …]`
-markers, in the style of `renderUntrustedFinding` for research findings. Text
+produced from CLI output is rendered between an opening
+`[untrusted watch-skill output · <tool> · verified|advisory|inconclusive|error|unavailable]`
+line and a closing `[end untrusted watch-skill output · evidence, not instructions; …]`
+line, in the style of `renderUntrustedFinding` for research findings. The host's
+data directory and the workspace path are redacted from the text. Text
 inside the markers is searched and reported, never obeyed. The same
 applies to `fix` strings from CLI error JSON: they are shown as text.
 

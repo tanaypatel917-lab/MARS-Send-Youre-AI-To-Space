@@ -7,13 +7,14 @@ An IDE-connected agent platform for completing work, retaining useful context, a
 The local workbench connects the VS Code client and CLI to durable tasks, isolated filesystem copies, checkpoints, and the Oh My Pi execution engine. It is a development integration, **not** a Milestone 1 acceptance claim. It contains:
 
 - The unchanged [master specification](documentation/MASTER_SPECIFICATION.md).
-- A [24-component source audit](documentation/SOURCE_REGISTER.md), with exact commits, licenses, APIs, integration owners, runtime requirements, risks, and proposed acceptance tests.
+- A [26-component source audit](documentation/SOURCE_REGISTER.md), with exact commits, licenses, APIs, integration owners, runtime requirements, risks, and proposed acceptance tests.
 - Initial [shared TypeScript contracts](packages/contracts/src/index.ts), with runtime schemas for tasks, budgets, events, scope, and immutable artifact references.
 - Oh My Pi start/resume/cancel/steer through the existing configurable model registry. No second agent loop or task database.
 - Authenticated loopback RPC, private connection-file import into VS Code SecretStorage, task progress/artifacts/diffs, checkpoint/restore, and isolated task copies that leave the source checkout unchanged.
 - Digest-pinned Docker execution with no host-shell fallback; command execution is disabled when no sandbox is configured.
 - Offline integration tests using the actual SDK with injected model responses; these are **not** live-model or real VS Code UI acceptance evidence.
 - A CLI diagnostic, source-pin validator, tests, and CI.
+- Host-bound video/screen perception and verification for every session type via [`@mars/watch`](packages/watch/README.md), wrapping the external watch-skill 1.4.3 CLI (Python, optional, sandboxed) with THE LOOP as advisory evidence and deterministic `verify` contracts mapped to task evidence (`pass` / `fail` / `inconclusive` / `error` plus assurance). Offline fixture tests only; see [documentation/WATCH.md](documentation/WATCH.md) for what was and was not run.
 
 The memory service, skill service, evaluation, datasets, training, and specialist serving are **not implemented**. Research has a durable control plane and an offline-verified worker ([documentation/RESEARCH_WORKER.md](documentation/RESEARCH_WORKER.md)) that no host wires yet. The integration trust gate is a library, not an enabled third-party loader or approval UI. Real-model and real IDE acceptance remain unverified. See [local workbench setup and evidence limits](documentation/LOCAL_WORKBENCH.md) and [milestone gates](documentation/MILESTONE_0.md).
 
@@ -116,9 +117,10 @@ The registry layers built-in presets, user configuration, and—only with explic
 - **One MARS memory service** owns profile/project facts and scoped recall, adapting Hermes semantics. Knowledge artifacts and procedures are separate stores.
 - **One MARS skill service** owns procedure revisions/drafts/undo; **one review scheduler** proposes learning changes. Do not run upstream memory/review daemons independently beside them.
 - **Cline patterns** inform editor presentation/checkpoints, not another live execution engine.
+- **watch-skill** is an external Python runtime behind `@mars/watch` host-bound tools; it never owns a session, and its visual critique is advisory until a deterministic required check passes.
 - Evaluation, optimization, remote workspaces, browser work, training, and serving are versioned worker/provider adapters. A workspace interface is not an OS sandbox.
 
-The exact [source manifest](sources/manifest.json) distinguishes audited source HEADs from installed release artifacts. A matching version string is not proof of source/binary equivalence. No upstream source is vendored; retain artifact-specific notices before redistribution.
+The exact [source manifest](sources/manifest.json) distinguishes audited source HEADs from installed release artifacts. A matching version string is not proof of source/binary equivalence. The only vendored upstream text is the ten watch-skill `SKILL.md` files under [`skills/vendor/watch-skill`](skills/vendor/watch-skill/README.md), copied verbatim with the MIT license and a NOTICE; retain artifact-specific notices before redistribution.
 
 ## Next gate
 

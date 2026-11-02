@@ -42,6 +42,7 @@ import {
   type RuntimeSession,
   type RuntimeSessionOptions,
   type RuntimeTools,
+  type RuntimeWatch,
   selectExecutionModel,
 } from "@mars/execution";
 import type { ModelProviderRegistry } from "@mars/providers";
@@ -89,6 +90,7 @@ import {
   routeLaunch,
   type WorkbenchSpecialists,
 } from "./specialist-routing";
+import { type WorkbenchWatch, watchEvidence } from "./watch-context";
 
 const launchSchema = z
   .object({
@@ -134,6 +136,8 @@ export interface WorkbenchHostOptions {
   specialists?: WorkbenchSpecialists;
   collaboration?: WorkbenchCollaboration;
   research?: WorkbenchResearch;
+  /** Host-owned watch-skill perception and verification; absent means no watch tools. */
+  watch?: WorkbenchWatch;
   hostPrivateRoots?: string[];
   runtimeFactory?: (options: RuntimeSessionOptions) => Promise<RuntimeSession>;
 }
@@ -250,7 +254,37 @@ export async function createWorkbenchHost(
   const toolsRequired = (approvals: Approvals, collaboration: boolean) =>
     collaboration ||
     Boolean(options.research) ||
+    Boolean(options.watch) ||
     Object.values(approvals).some(Boolean);
+  // Watch tools are host-bound too: the subprocess, policy and evidence
+  // records belong to the host, and loop/verify verdicts land in the task's
+  // events so a reviewer can require them. Children bind to the parent task.
+  const watchFor = (
+    taskId: string,
+    cwd: string,
+    approvals: Pick<Approvals, "execute">,
+  ): RuntimeWatch | undefined => {
+    const watch = options.watch;
+    if (!watch) return undefined;
+    return watch.toolsFor({
+      task_id: taskId,
+      cwd,
+      approvals: { execute: approvals.execute },
+      evidence: watchEvidence(
+        options.store,
+        () => internalContext(options.scope),
+        taskId,
+      ),
+    });
+  };
+  const watchOption = (
+    taskId: string,
+    cwd: string,
+    approvals: Pick<Approvals, "execute">,
+  ) => {
+    const watch = watchFor(taskId, cwd, approvals);
+    return watch ? { watch } : {};
+  };
   // Research tools are host-bound: requests carry the task's current durable
   // revision and budget, and findings return as rendered untrusted text.
   const researchFor = (taskId: string, deadline: () => number) => {
@@ -1210,6 +1244,16 @@ export async function createWorkbenchHost(
             ...(options.runtimeFactory
               ? { runtimeFactory: options.runtimeFactory }
               : {}),
+            ...(options.watch
+              ? {
+                  watchFor: (launch: ChildLaunch, cwd: string) =>
+                    watchFor(launch.task_id, cwd, {
+                      execute:
+                        launch.approvals.execute &&
+                        launch.workspace_mode !== "read_only",
+                    }),
+                }
+              : {}),
           }),
     );
     runner = createChildRunner({
@@ -1342,6 +1386,7 @@ export async function createWorkbenchHost(
               collaboration: Boolean(options.collaboration),
               delegation: Boolean(delegation),
               research: Boolean(options.research),
+              watch: Boolean(options.watch),
               instruction: baseInstruction,
             }) + MIN_INITIAL_OUTPUT_RESERVE,
           );
@@ -1361,6 +1406,7 @@ export async function createWorkbenchHost(
         collaboration: Boolean(options.collaboration),
         delegation: Boolean(delegation),
         research: Boolean(options.research),
+        watch: Boolean(options.watch),
         instruction: baseInstruction,
       });
       let memory: z.infer<typeof FrozenMemorySchema> | undefined;
@@ -1512,6 +1558,7 @@ export async function createWorkbenchHost(
             : {}),
           ...(params.approvals.read ? historyFor(context) : {}),
           ...researchFor(task.task_id, () => launchDeadline),
+          ...watchOption(task.task_id, cwd, params.approvals),
           onEvent: async (event) => {
             if (!bound) {
               if (initialObservations.length >= 1000)
@@ -1642,6 +1689,7 @@ export async function createWorkbenchHost(
             task.task_id,
             () => launch.deadline ?? Date.now() + task.budget.max_duration_ms,
           ),
+          ...watchOption(task.task_id, cwd, launch.approvals),
           onEvent: observe(taskId),
         });
         if (closing) throw new WorkbenchError("unavailable");

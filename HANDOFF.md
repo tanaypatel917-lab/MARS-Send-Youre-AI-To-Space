@@ -24,6 +24,7 @@ All 67 PRs across the three repos are merged; no open PRs. CI green on `main` he
 | 5-8 Remote execution, SFT, vLLM serving, RL | not started | — |
 | Collaboration (bounded delegation, rooms) | library + workbench wiring; fixture child adapter only (#32, #33, #36, #37) | `packages/collaboration` |
 | Integration trust gate | library only; no loader or approval UI (#8, #10) | `packages/integration-trust` |
+| Perception & verification (watch-skill) | `@mars/watch` host-bound tools for every session type, THE LOOP + deterministic `verify` mapped to task evidence, ten vendored SKILL.md files; **offline fixture only** — real `watch`, `capture`, `loop` and model critique never run here | `packages/watch`, `skills/vendor/watch-skill`, `documentation/WATCH.md` |
 
 Everything is verified offline only: fixtures, injected model responses, `model_requests: 0`. Nothing has been run against a live model, a real search provider, a GPU, or a real IDE window.
 
@@ -43,6 +44,8 @@ Everything is verified offline only: fixtures, injected model responses, `model_
 - `mars-platform` and this repo both ship a `@mars/memory`. This repo's `packages/memory` (scoped durable MemoryService + journal index) is the one wired into sessions; `mars-platform`'s Hermes port is the reference for threat scanning and single-writer semantics. Reconciling the two is Milestone 3 work.
 - Free-first model routing (`allowPaid: false`) stays the default; no live provider keys are stored in repos.
 - Claims of "improvement" require independent evidence (holdout, baseline, cost) — a finished job is not evidence (spec sections 16-17).
+- watch-skill (MIT, Python 3.11+) is an external runtime, never a second loop: `@mars/watch` drives the CLI as an argv-only subprocess with an env allowlist, bounded roots, offline flags and a doctor gate (`version` must be 1.4.3, `doctor --no-fix --json` must be ok); if either fails the tools are `unavailable`/`inconclusive`, never `pass`. THE LOOP is `visual_advisory` and never `verified`; only a `verify` run with a passed required deterministic check at `deterministic_local`/`isolated_local` is. Screen/window capture is off for every role until the user sets `allow_screen_capture`; which roles may capture by default is an open product decision for the owner. `remote_attested` is refused because upstream does not implement it.
+- Vendored upstream text is allowed when copied verbatim with its license and a NOTICE (`skills/vendor/watch-skill`); the skill service (`@mars/skills`, ported on a separate branch) loads it as a read-only library — see the loader note there.
 
 ## Next steps
 
@@ -53,7 +56,10 @@ Dispatched 2026-11-02 as parallel child sessions, each opening its own PR agains
 3. Milestone 3: bring `@mars/skills` and the proposal-only review runner from `mars-platform` into this repo behind the skill service interface, wired to workbench sessions.
 4. `MARS` site: rebase and land the `/how` landscape branches.
 
-Parked: the MARS Shell desktop app (needs a description from the owner).
+5. Wire `@mars/watch` into `mars serve`: a `--watch-command`/venv option, a `WATCH_DATA_DIR` under the state root, policy flags (`allow_screen_capture`, `allow_network_sources`, `allow_cloud_models`), then run the real CLI once end to end (`watch` on a local file, `loop start` on a loopback URL with Playwright, `verify run`) and record the commands and results in `documentation/WATCH.md`.
+6. Make the skill service load `skills/vendor/watch-skill` and let the reviewer require a `verify` record for visual work (reviewer policy, not yet enforced anywhere).
+
+Parked: the MARS Shell desktop app (needs a description from the owner). Open product decision: which agent roles, if any, may run `mars_watch_capture` on the user's screen by default (currently none).
 
 ## How to verify locally
 
