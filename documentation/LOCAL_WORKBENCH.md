@@ -114,6 +114,8 @@ No live model request, paid service or real VS Code window is used for this veri
 
 ## Background research
 
+Agent text is parsed with the [MARS Output Format](OUTPUT_FORMAT.md) (writing blocks, app triggers, review links, follow-ups).
+
 When the host is created with a parent-owned `research` service (the
 `@mars/research` control plane; no production worker ships yet, so this is
 test-injected only), every session is given two host-bound tools:
