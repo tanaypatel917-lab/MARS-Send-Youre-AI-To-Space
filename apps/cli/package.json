@@ -7,6 +7,7 @@
     "@mars/contracts": "workspace:*",
     "@mars/execution": "workspace:*",
     "@mars/providers": "workspace:*",
+    "@mars/research-worker": "workspace:*",
     "@mars/workbench": "workspace:*"
   }
 }

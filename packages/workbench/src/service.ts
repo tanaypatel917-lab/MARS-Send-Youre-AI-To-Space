@@ -16,6 +16,22 @@ import {
 import { type Scope, ScopeSchema } from "@mars/contracts";
 import { createMemoryStore, type DurableMemoryStore } from "@mars/memory";
 import { loadModelRegistry, type ModelProviderRegistry } from "@mars/providers";
+import {
+  createResearchService,
+  type DurableResearchService,
+  type ResearchServiceOptions,
+} from "@mars/research";
+import {
+  createRegistryModelGateway,
+  createResearchWorker,
+  type FetchLike,
+  type HostResolver,
+  type ModelGateway,
+  parseResearchWorkerConfig,
+  type ResearchWorkerConfigInput,
+  type SearchProvider,
+  type WorkerLogEvent,
+} from "@mars/research-worker";
 import { createTaskStore } from "@mars/tasks";
 import {
   createDockerSandbox,
@@ -26,6 +42,44 @@ import type { WorkbenchCollaboration } from "./collaboration-context";
 import { createWorkbenchHost, type WorkbenchHostOptions } from "./host";
 import { serveWorkbench, WorkbenchError } from "./server";
 import type { WorkbenchSpecialists } from "./specialist-routing";
+
+/**
+ * Background research for every session: the durable `@mars/research` control
+ * plane is opened under the private state root and the `@mars/research-worker`
+ * claim loop runs while the service runs. Credentials never enter this object;
+ * search adapters receive values the caller read from its environment.
+ */
+export interface WorkbenchResearchOptions {
+  /** Web search the worker queries (`createBraveSearch`, `createSearxngSearch`, ...). */
+  search: SearchProvider;
+  /** Worker settings; `live: true` permits the global fetch and real DNS. */
+  worker?: ResearchWorkerConfigInput;
+  /**
+   * Model gateway for planning and extraction. Defaults to the registry's
+   * free default route (or `worker.model`), refusing paid models unless
+   * `worker.paid_consent` is set.
+   */
+  model?: ModelGateway;
+  /** Control-plane limits: concurrency, leases, retries and polling. */
+  service?: Pick<
+    ResearchServiceOptions,
+    | "maxConcurrency"
+    | "maxActivePerScope"
+    | "maxActiveTotal"
+    | "maxAttempts"
+    | "leaseMs"
+    | "retryBackoffMs"
+    | "pollMs"
+  >;
+  /** Page fetch for the worker; required unless `worker.live` is true. */
+  fetch?: FetchLike;
+  resolveHost?: HostResolver;
+  /** Environment the default registry gateway reads provider credentials from. */
+  env?: Record<string, string | undefined>;
+  log?: (event: WorkerLogEvent) => void;
+  /** Time given to running requests before shutdown re-queues them (default 5 s). */
+  drainMs?: number;
+}
 
 export interface WorkbenchServiceOptions {
   sourceRoot: string;
@@ -39,6 +93,8 @@ export interface WorkbenchServiceOptions {
   specialists?: WorkbenchSpecialists;
   /** Task-scoped collaboration rooms; launches stay single-agent without it. */
   collaboration?: WorkbenchCollaboration;
+  /** Background research worker and control plane; sessions get no research tools without it. */
+  research?: WorkbenchResearchOptions;
   runtimeFactory?: WorkbenchHostOptions["runtimeFactory"];
 }
 
@@ -46,6 +102,19 @@ export interface WorkbenchService {
   readonly url: string;
   readonly connectionFile: string;
   close(): Promise<void>;
+}
+
+async function privateSubdirectory(
+  root: string,
+  name: string,
+): Promise<string> {
+  const path = await canonicalPath(join(root, name));
+  if (path !== join(root, name)) throw new WorkbenchError("forbidden");
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  const info = await stat(path);
+  if (!info.isDirectory() || (info.mode & 0o077) !== 0)
+    throw new WorkbenchError("forbidden");
+  return path;
 }
 
 async function canonicalPath(path: string): Promise<string> {
@@ -79,13 +148,10 @@ export async function createWorkbenchService(
   const info = await stat(root);
   if (!info.isDirectory() || (info.mode & 0o077) !== 0)
     throw new WorkbenchError("forbidden");
-  const memoryRoot = await canonicalPath(join(root, "memory"));
-  if (memoryRoot !== join(root, "memory"))
-    throw new WorkbenchError("forbidden");
-  await mkdir(memoryRoot, { recursive: true, mode: 0o700 });
-  const memoryInfo = await stat(memoryRoot);
-  if (!memoryInfo.isDirectory() || (memoryInfo.mode & 0o077) !== 0)
-    throw new WorkbenchError("forbidden");
+  const memoryRoot = await privateSubdirectory(root, "memory");
+  const researchRoot = options.research
+    ? await privateSubdirectory(root, "research")
+    : undefined;
   const hostRoot = join(root, "sessions");
   await mkdir(hostRoot, { recursive: true, mode: 0o700 });
   const registry =
@@ -105,8 +171,49 @@ export async function createWorkbenchService(
   let host: Awaited<ReturnType<typeof createWorkbenchHost>> | undefined;
   let memory: DurableMemoryStore | undefined;
   let repositoryMap: RepositoryMapProvider | undefined;
+  let research: DurableResearchService | undefined;
   let server: ReturnType<typeof serveWorkbench> | undefined;
   try {
+    if (options.research && researchRoot) {
+      const researchOptions = options.research;
+      // The research store refuses roots that contain it, so its private
+      // needles are the sibling state directories rather than the state root.
+      const privateRoots = [
+        source,
+        memoryRoot,
+        hostRoot,
+        join(root, "tasks"),
+        join(root, "workspaces"),
+      ];
+      const workerConfig = parseResearchWorkerConfig(researchOptions.worker);
+      const worker = createResearchWorker({
+        config: workerConfig,
+        search: researchOptions.search,
+        model:
+          researchOptions.model ??
+          createRegistryModelGateway({
+            registry,
+            ...(workerConfig.model ? { model: workerConfig.model } : {}),
+            paidConsent: workerConfig.paid_consent,
+            ...(researchOptions.env ? { env: researchOptions.env } : {}),
+          }),
+        ...(researchOptions.fetch ? { fetch: researchOptions.fetch } : {}),
+        ...(researchOptions.resolveHost
+          ? { resolveHost: researchOptions.resolveHost }
+          : {}),
+        ...(researchOptions.log ? { log: researchOptions.log } : {}),
+        hostPrivateRoots: privateRoots,
+      });
+      research = await createResearchService({
+        ...researchOptions.service,
+        rootDir: researchRoot,
+        tasks: store,
+        artifacts: store.artifacts,
+        events: store,
+        worker,
+        hostPrivateRoots: privateRoots,
+      });
+    }
     memory = createMemoryStore({
       rootDir: memoryRoot,
       hostPrivateRoots: [source, root, memoryRoot],
@@ -151,7 +258,12 @@ export async function createWorkbenchService(
       ...(options.collaboration
         ? { collaboration: options.collaboration }
         : {}),
-      hostPrivateRoots: [memoryRoot, source],
+      ...(research ? { research } : {}),
+      hostPrivateRoots: [
+        memoryRoot,
+        source,
+        ...(researchRoot ? [researchRoot] : []),
+      ],
       workspace: {
         prepare: provider.prepare.bind(provider),
         read: provider.read.bind(provider),
@@ -200,6 +312,8 @@ export async function createWorkbenchService(
     const runningServer = server;
     const runningMemory = memory;
     const runningRepositoryMap = repositoryMap;
+    const runningResearch = research;
+    const researchDrainMs = options.research?.drainMs;
     let closing: Promise<void> | undefined;
     return {
       url,
@@ -209,6 +323,15 @@ export async function createWorkbenchService(
           const outcomes = [
             await Promise.allSettled([runningServer.stop(true)]),
             await Promise.allSettled([runningHost.close()]),
+            await Promise.allSettled([
+              runningResearch
+                ? runningResearch.close(
+                    researchDrainMs === undefined
+                      ? undefined
+                      : { drainMs: researchDrainMs },
+                  )
+                : Promise.resolve(),
+            ]),
             await Promise.allSettled([runningRepositoryMap.close()]),
             await Promise.allSettled([runningMemory.close()]),
             await Promise.allSettled([provider.close()]),
@@ -223,6 +346,7 @@ export async function createWorkbenchService(
   } catch (error) {
     await server?.stop(true).catch(() => undefined);
     if (host) await host.close().catch(() => undefined);
+    if (research) await research.close({ drainMs: 0 }).catch(() => undefined);
     if (repositoryMap) await repositoryMap.close().catch(() => undefined);
     if (workspace) await workspace.close().catch(() => undefined);
     if (memory) await memory.close().catch(() => undefined);
