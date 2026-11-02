@@ -4,6 +4,7 @@ import type {
   OutputValidationContext,
   WritingBlock,
 } from "@mars/contracts";
+import { canonicalAddress } from "./parse";
 
 export const DEFAULT_MAX_REVIEW_LINES = 40;
 
@@ -12,9 +13,18 @@ export interface ValidationResult {
   errors: OutputError[];
 }
 
-function normalizeAddress(address: string): string {
-  const match = /<([^>]+)>/.exec(address);
-  return (match?.[1] ?? address).trim().toLowerCase();
+function allowedAddresses(context: OutputValidationContext): Set<string> {
+  const allowed = new Set<string>();
+  for (const value of context.allowed_addresses) {
+    const address = canonicalAddress(value);
+    if (address) allowed.add(address);
+  }
+  return allowed;
+}
+
+function isAllowed(allowed: Set<string>, value: string): boolean {
+  const address = canonicalAddress(value);
+  return address !== null && allowed.has(address);
 }
 
 /**
@@ -27,7 +37,7 @@ export function validateOutput(
   context: OutputValidationContext,
 ): ValidationResult {
   const errors: OutputError[] = [...document.errors];
-  const allowed = new Set(context.allowed_addresses.map(normalizeAddress));
+  const allowed = allowedAddresses(context);
   const connectors = new Set(context.connector_ids);
   const maxLines = context.max_review_lines ?? DEFAULT_MAX_REVIEW_LINES;
 
@@ -35,10 +45,10 @@ export function validateOutput(
     if (segment.kind !== "writing" || !segment.email) continue;
     for (const field of ["recipient", "cc", "bcc"] as const)
       for (const address of segment.email[field])
-        if (!allowed.has(normalizeAddress(address)))
+        if (!isAllowed(allowed, address))
           errors.push({
             code: "invented_address",
-            message: `Email ${field} "${address}" was not supplied by the user.`,
+            message: `Email ${field} "${address}" is not exactly one address supplied by the user.`,
             line: segment.span.start_line,
             block_id: segment.id,
           });
@@ -46,10 +56,10 @@ export function validateOutput(
   for (const link of document.links) {
     if (!/^mailto:/i.test(link.target)) continue;
     const address = link.target.slice("mailto:".length).split("?")[0] ?? "";
-    if (!allowed.has(normalizeAddress(address)))
+    if (!isAllowed(allowed, address))
       errors.push({
         code: "invented_address",
-        message: `mailto address "${address}" was not supplied by the user.`,
+        message: `mailto address "${address}" is not exactly one address supplied by the user.`,
         line: link.line,
         block_id: link.block_id,
       });

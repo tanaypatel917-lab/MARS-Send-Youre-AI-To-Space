@@ -1,4 +1,5 @@
 export {
+  canonicalAddress,
   collectAddresses,
   FORBIDDEN_LINK_SCHEMES,
   parseAttributes,
@@ -8,6 +9,7 @@ export {
 export { followUps, type ProcessedOutput, processOutput } from "./process";
 export { OUTPUT_FORMAT_PROMPT } from "./prompt";
 export {
+  headerAttributes,
   rewriteWritingBlocks,
   serializeAttributes,
   serializeFollowUp,

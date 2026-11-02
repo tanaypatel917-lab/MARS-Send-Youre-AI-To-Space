@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { OutputDocumentSchema, type OutputErrorCode } from "@mars/contracts";
 import {
+  canonicalAddress,
   collectAddresses,
   followUps,
+  headerAttributes,
   OUTPUT_FORMAT_PROMPT,
   parseAttributes,
   parseOutput,
@@ -58,7 +60,6 @@ describe("parseOutput golden fixture", () => {
         "mars://review?pr=https://github.com/o/r/pull/1&path=src/app.ts&line=10&end=14&side=right",
       ],
       ["app", "app://calendar"],
-      ["other", "file:///etc/passwd"],
       ["local", "docs/my file.md"],
     ]);
     expect(document.app_triggers).toEqual([
@@ -131,7 +132,7 @@ describe("parseOutput golden fixture", () => {
       kind: "replace",
       block: {
         ...block,
-        attributes: { ...block.attributes, cc: "bob@example.com" },
+        email: block.email && { ...block.email, cc: ["bob@example.com"] },
         body: "Hello",
       },
     }));
@@ -214,6 +215,81 @@ describe("invalid constructs", () => {
     expect(writingBlocks(crlf)[0]?.body).toBe("Hi");
   });
 
+  test("script-capable and editor schemes are rejected, not recorded as links", () => {
+    const text = [
+      "[a](javascript:alert(1))",
+      "[b](JavaScript:alert(1))",
+      "[c](<data:text/html,hi>)",
+      "[d](vbscript:x) [e](blob:https://x) [f](vscode://file/x) [g](file:///x)",
+      "[ok](https://ok.example) [tel](tel:+123) [rel](docs/a.md) [win](C:\\\\repo\\\\a.ts)",
+    ].join("\n");
+    const document = parseOutput(text);
+    expect(codes(document.errors)).toEqual(
+      Array<OutputErrorCode>(7).fill("forbidden_link_scheme"),
+    );
+    expect(document.links.map((l) => [l.kind, l.target])).toEqual([
+      ["external", "https://ok.example"],
+      ["other", "tel:+123"],
+      ["local", "docs/a.md"],
+      ["local", "C:\\\\repo\\\\a.ts"],
+    ]);
+    expect(parseOutput("[x](https://a.b/\u0001c)").errors[0]?.code).toBe(
+      "malformed_link",
+    );
+  });
+
+  test("destinations may contain balanced parentheses and escapes", () => {
+    const document = parseOutput(
+      "See [article](https://en.wikipedia.org/wiki/Function_(mathematics)) and [esc](https://a.b/x\\)y) and [app](app://cal(1)) now.",
+    );
+    expect(document.links.map((l) => l.target)).toEqual([
+      "https://en.wikipedia.org/wiki/Function_(mathematics)",
+      "https://a.b/x)y",
+      "app://cal(1)",
+    ]);
+    expect(codes(document.errors)).toEqual(["malformed_link"]);
+    expect(parseOutput("[unbalanced](https://a.b/(x").links).toEqual([]);
+  });
+
+  test("link-shaped text inside single-line and multi-line code spans is ignored", () => {
+    const single = parseOutput(
+      "Use `[`x`](https://a.b)` literally, then [real](https://c.d).",
+    );
+    expect(single.errors).toEqual([]);
+    expect(single.links.map((l) => l.target)).toEqual(["https://c.d"]);
+    const multi = parseOutput(
+      [
+        "Example: `",
+        "[example](app://calendar) [x](https://in.span)",
+        "` and [after](https://out.span)",
+        "",
+        "`unterminated",
+        "[live](app://calendar)",
+      ].join("\n"),
+    );
+    expect(multi.app_triggers.map((t) => [t.connector_id, t.line])).toEqual([
+      ["calendar", 6],
+    ]);
+    expect(multi.links.map((l) => l.target)).toEqual([
+      "https://out.span",
+      "app://calendar",
+    ]);
+    expect(multi.errors).toEqual([]);
+  });
+
+  test("attribute keys that collide with object prototypes are malformed", () => {
+    expect(parseAttributes('id="12345" __proto__="x"')).toBeNull();
+    expect(parseAttributes('constructor="x"')).toBeNull();
+    const document = parseOutput(
+      ':::writing{id="12345" variant="note" __proto__="x"}\nbody\n:::',
+    );
+    expect(document.errors[0]?.code).toBe("malformed_fence");
+    expect(writingBlocks(document)).toHaveLength(0);
+    expect(Object.getPrototypeOf(parseAttributes('a="1"'))).toBe(
+      Object.prototype,
+    );
+  });
+
   test("codex review links import with the same keys", () => {
     const document = parseOutput(
       "[x](codex://review?pr=https://github.com/o/r/pull/2&path=lib/a.ts&line=7&side=left)",
@@ -264,6 +340,31 @@ describe("helpers", () => {
     expect(parseAttributes("=x")).toBeNull();
   });
 
+  test("canonicalAddress accepts exactly one address, bare or bracketed", () => {
+    expect(canonicalAddress("Ana@Example.com")).toBe("ana@example.com");
+    expect(canonicalAddress("Ana Lopez <ana@example.com>")).toBe(
+      "ana@example.com",
+    );
+    expect(
+      canonicalAddress("User <allowed@example.com> evil@example.com"),
+    ).toBeNull();
+    expect(canonicalAddress("allowed@example.com evil@example.com")).toBeNull();
+    expect(canonicalAddress("<a@b.co><c@d.co>")).toBeNull();
+    expect(canonicalAddress("not an address")).toBeNull();
+    const block =
+      ':::writing{id="12345" variant="email" recipient="User <allowed@example.com> evil@example.com"}\nx\n:::';
+    const result = validateOutput(parseOutput(block), {
+      connector_ids: [],
+      allowed_addresses: ["allowed@example.com"],
+    });
+    expect(codes(result.errors)).toEqual(["invented_address"]);
+    const mailto = validateOutput(parseOutput("[m](mailto:evil@example.com)"), {
+      connector_ids: [],
+      allowed_addresses: ["allowed@example.com"],
+    });
+    expect(codes(mailto.errors)).toEqual(["invented_address"]);
+  });
+
   test("collectAddresses finds user-supplied addresses once", () => {
     expect(
       collectAddresses([
@@ -279,6 +380,55 @@ describe("helpers", () => {
         allowed_addresses: ["ana@example.com"],
       }).ok,
     ).toBe(true);
+  });
+
+  test("replacing a block's id, variant or email header wins over stale attributes", async () => {
+    const document = parseOutput(await fixture("reply.md"));
+    const replaced = rewriteWritingBlocks(document, (block) => ({
+      kind: "replace",
+      block: {
+        ...block,
+        id: "99999",
+        email: block.email && {
+          ...block.email,
+          subject: "New",
+          recipient: ["new@example.com"],
+          cc: [],
+          bcc: ["Bob <bob@example.com>"],
+        },
+      },
+    }));
+    const [block] = writingBlocks(replaced);
+    expect(block?.id).toBe("99999");
+    expect(block?.email).toEqual({
+      subject: "New",
+      recipient: ["new@example.com"],
+      cc: [],
+      bcc: ["Bob <bob@example.com>"],
+    });
+    expect(block?.attributes).toEqual({
+      id: "99999",
+      variant: "email",
+      subject: "New",
+      recipient: "new@example.com",
+      cc: "",
+      bcc: "Bob <bob@example.com>",
+    });
+    const note = rewriteWritingBlocks(document, (b) => ({
+      kind: "replace",
+      block: { ...b, variant: "note", email: null },
+    }));
+    expect(writingBlocks(note)[0]).toMatchObject({
+      variant: "note",
+      email: null,
+    });
+    expect(headerAttributes(writingBlocks(note)[0] as never)).toEqual({
+      id: "48213",
+      variant: "note",
+      subject: "Re: launch",
+      recipient: "ana@example.com",
+      cc: "bob@example.com, eve@evil.example",
+    });
   });
 
   test("serializer escapes follow-up prompts and quotes bare attributes canonically", () => {

@@ -18,12 +18,45 @@ export function serializeAttributes(
     .join(" ");
 }
 
-export function serializeWritingBlock(block: WritingBlock): string {
-  const attributes = {
+const EMAIL_LIST_KEYS = ["recipient", "cc", "bcc"] as const;
+
+/**
+ * Opening-fence attributes with `id`, `variant` and the email header as the
+ * source of truth, so a host replacement that edits those parsed fields wins
+ * over the stale `attributes` copy. Attribute order is preserved.
+ */
+export function headerAttributes(block: WritingBlock): Record<string, string> {
+  const header: Record<string, string> = {
     id: block.id,
     variant: block.variant,
-    ...block.attributes,
   };
+  const email = block.email;
+  const valueFor = (key: string): string | null => {
+    if (key === "id") return block.id;
+    if (key === "variant") return block.variant;
+    if (!email) return block.attributes[key] ?? null;
+    if (key === "subject") return email.subject;
+    if ((EMAIL_LIST_KEYS as readonly string[]).includes(key))
+      return email[key as (typeof EMAIL_LIST_KEYS)[number]].join(", ");
+    return block.attributes[key] ?? null;
+  };
+  for (const key of Object.keys(block.attributes)) {
+    const value = valueFor(key);
+    if (value !== null) header[key] = value;
+    else delete header[key];
+  }
+  if (email) {
+    if (email.subject !== null && !("subject" in header))
+      header.subject = email.subject;
+    for (const key of EMAIL_LIST_KEYS)
+      if (email[key].length > 0 && !(key in header))
+        header[key] = email[key].join(", ");
+  }
+  return header;
+}
+
+export function serializeWritingBlock(block: WritingBlock): string {
+  const attributes = headerAttributes(block);
   const open = `:::writing{${serializeAttributes(attributes)}}`;
   return block.body.length === 0
     ? `${open}\n:::`

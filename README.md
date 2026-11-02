@@ -48,7 +48,6 @@ Lifecycle scripts stay disabled: optional `onnxruntime-node` and `protobufjs` po
 | `bun run smoke:execution` | No-provider/no-tool SDK and native search probe |
 | `bun run audit:sources` | Validate source references, spec digest, package pins, installed versions, and lockfile integrity |
 | `bun run audit:sources:remote` | Fetch immutable source/license files and emit content hashes; network required |
-| `bun apps/cli/src/main.ts render [file]` | Parse and render a MARS Output Format reply in the terminal (framed artifacts, numbered follow-up chooser); offline, no model call |
 | `bun run format` | Apply Biome formatting and import organization |
 
 A small Bun build emits the CLI and provider library bundles with `bun run build`; the execution package still runs TypeScript directly. There are no existing database migrations, production data, or schema-upgrade guarantees at version 0.0.1.

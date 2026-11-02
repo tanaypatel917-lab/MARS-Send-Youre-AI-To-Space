@@ -29,15 +29,23 @@ const FOLLOW_UP =
 const LOOSE_FOLLOW_UP = /^\s*[-*]?\s*:(mars|codex)-followup\b/;
 const ATTRIBUTE =
   /^([A-Za-z_][A-Za-z0-9_-]*)=(?:"((?:[^"\\]|\\.)*)"|([^\s"{}]+))/;
-const LINK = /(!?)\[([^\]\n]*)\]\((<[^>\n]*>|[^)\s]*)\)/g;
-const SPACED_LINK = /(!?)\[([^\]\n]*)\]\(([^)<\n]*\s[^)\n]*)\)/g;
+const RESERVED_ATTRIBUTE_KEYS = ["__proto__", "constructor", "prototype"];
 const CONNECTOR_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const WINDOWS_PATH = /^[A-Za-z]:[\\/]/;
 const EMAIL_ADDRESS =
   /[A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+/g;
 
-export const FORBIDDEN_LINK_SCHEMES = ["file", "vscode", "vscode-insiders"];
+/** Schemes that never become links: local-file/editor schemes and script-capable URIs. */
+export const FORBIDDEN_LINK_SCHEMES = [
+  "file",
+  "vscode",
+  "vscode-insiders",
+  "javascript",
+  "vbscript",
+  "data",
+  "blob",
+];
 
 /** Parse `key="value" key=bare` attribute lists. Returns null when malformed. */
 export function parseAttributes(source: string): Record<string, string> | null {
@@ -47,7 +55,8 @@ export function parseAttributes(source: string): Record<string, string> | null {
     const match = ATTRIBUTE.exec(rest);
     if (!match) return null;
     const key = match[1] as string;
-    if (Object.hasOwn(attributes, key)) return null;
+    if (RESERVED_ATTRIBUTE_KEYS.includes(key) || Object.hasOwn(attributes, key))
+      return null;
     attributes[key] =
       match[2] !== undefined ? unescapeAttribute(match[2]) : (match[3] ?? "");
     rest = rest.slice(match[0].length);
@@ -69,6 +78,20 @@ export function splitAddresses(value: string | undefined): string[] {
     .filter((part) => part.length > 0);
 }
 
+const SINGLE_ADDRESS = new RegExp(
+  `^(?:[^<>]*<\\s*(${EMAIL_ADDRESS.source})\\s*>|(${EMAIL_ADDRESS.source}))$`,
+);
+
+/**
+ * Canonical lower-cased address for `addr` or `Name <addr>`; null when the
+ * value is not exactly one address (extra text, several addresses, brackets).
+ */
+export function canonicalAddress(value: string): string | null {
+  const match = SINGLE_ADDRESS.exec(value.trim());
+  const address = match?.[1] ?? match?.[2];
+  return address ? address.toLowerCase() : null;
+}
+
 /** Email addresses mentioned in user-supplied text, deduplicated. */
 export function collectAddresses(texts: readonly string[]): string[] {
   const found = new Set<string>();
@@ -77,9 +100,39 @@ export function collectAddresses(texts: readonly string[]): string[] {
   return [...found];
 }
 
-function codeSpanRanges(text: string): Array<[number, number]> {
+interface CodeSpanScan {
+  ranges: Array<[number, number]>;
+  /** Length of a backtick run still open at the end of the line, if any. */
+  open: number | null;
+}
+
+/**
+ * Inline code spans on one line. A span may continue from the previous line
+ * (`open`), because CommonMark code spans can contain line breaks.
+ */
+function codeSpanRanges(
+  text: string,
+  openSpan: number | null,
+  closesLater: (length: number) => boolean,
+): CodeSpanScan {
   const ranges: Array<[number, number]> = [];
   let index = 0;
+  const findClose = (length: number, from: number): number => {
+    const fence = "`".repeat(length);
+    let close = text.indexOf(fence, from);
+    while (close !== -1 && text[close + length] === "`") {
+      let run = close;
+      while (text[run] === "`") run += 1;
+      close = text.indexOf(fence, run);
+    }
+    return close;
+  };
+  if (openSpan !== null) {
+    const close = findClose(openSpan, 0);
+    if (close === -1) return { ranges: [[0, text.length]], open: openSpan };
+    ranges.push([0, close + openSpan]);
+    index = close + openSpan;
+  }
   while (index < text.length) {
     if (text[index] !== "`") {
       index += 1;
@@ -87,29 +140,33 @@ function codeSpanRanges(text: string): Array<[number, number]> {
     }
     let length = 0;
     while (text[index + length] === "`") length += 1;
-    const fence = "`".repeat(length);
-    let close = text.indexOf(fence, index + length);
-    while (close !== -1 && text[close + length] === "`") {
-      let run = close;
-      while (text[run] === "`") run += 1;
-      close = text.indexOf(fence, run);
-    }
+    const close = findClose(length, index + length);
     if (close === -1) {
-      index += length;
-      continue;
+      if (!closesLater(length)) {
+        index += length;
+        continue;
+      }
+      ranges.push([index, text.length]);
+      return { ranges, open: length };
     }
     ranges.push([index, close + length]);
     index = close + length;
   }
-  return ranges;
+  return { ranges, open: null };
+}
+
+/** A backtick run of exactly `length` that is not part of a longer run. */
+function hasBacktickRun(text: string, length: number): boolean {
+  return new RegExp(`(^|[^\`])\`{${length}}(?!\`)`).test(text);
 }
 
 function insideRanges(
   ranges: Array<[number, number]>,
-  start: number,
-  end: number,
+  ...positions: number[]
 ): boolean {
-  return ranges.some(([from, to]) => start < to && end > from);
+  return positions.some((position) =>
+    ranges.some(([from, to]) => position >= from && position < to),
+  );
 }
 
 interface LinkTargets {
@@ -173,28 +230,111 @@ function parseReviewLink(
   };
 }
 
+interface LinkMatch {
+  index: number;
+  /** Index of the `]` that ends the label. */
+  labelEnd: number;
+  end: number;
+  image: boolean;
+  label: string;
+  /** Destination as written, including angle brackets when used. */
+  rawTarget: string;
+  /** Bare destination contained whitespace (must use angle brackets). */
+  spaced: boolean;
+}
+
+/**
+ * Markdown inline links on one line. Bare destinations may contain balanced
+ * parentheses and backslash escapes (CommonMark); whitespace ends them.
+ */
+function findLinks(text: string): LinkMatch[] {
+  const links: LinkMatch[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const open = text.indexOf("[", index);
+    if (open === -1) break;
+    const image = open > 0 && text[open - 1] === "!";
+    const labelEnd = text.indexOf("]", open + 1);
+    if (labelEnd === -1 || text[labelEnd + 1] !== "(") {
+      index = open + 1;
+      continue;
+    }
+    const label = text.slice(open + 1, labelEnd);
+    let cursor = labelEnd + 2;
+    let rawTarget: string | null = null;
+    let spaced = false;
+    if (text[cursor] === "<") {
+      const close = text.indexOf(">", cursor + 1);
+      if (close !== -1 && text[close + 1] === ")") {
+        rawTarget = text.slice(cursor, close + 1);
+        cursor = close + 2;
+      }
+    } else {
+      let depth = 0;
+      let position = cursor;
+      while (position < text.length) {
+        const char = text[position] as string;
+        if (char === "\\" && position + 1 < text.length) {
+          position += 2;
+          continue;
+        }
+        if (char === "(") depth += 1;
+        else if (char === ")") {
+          if (depth === 0) break;
+          depth -= 1;
+        } else if (/\s/.test(char)) spaced = true;
+        position += 1;
+      }
+      if (position < text.length) {
+        rawTarget = text.slice(cursor, position);
+        cursor = position + 1;
+      }
+    }
+    if (rawTarget === null) {
+      index = open + 1;
+      continue;
+    }
+    links.push({
+      index: image ? open - 1 : open,
+      labelEnd,
+      end: cursor,
+      image,
+      label,
+      rawTarget,
+      spaced,
+    });
+    index = cursor;
+  }
+  return links;
+}
+
 function scanLinks(
   text: string,
   line: number,
   blockId: string | null,
   out: LinkTargets,
-): void {
-  const spans = codeSpanRanges(text);
+  openSpan: number | null,
+  closesLater: (length: number) => boolean,
+): number | null {
+  const { ranges: spans, open } = codeSpanRanges(text, openSpan, closesLater);
   const error = (code: OutputErrorCode, message: string) =>
     out.errors.push({ code, message, line, block_id: blockId });
-  for (const match of text.matchAll(SPACED_LINK)) {
-    if (match[1] === "!") continue;
-    if (insideRanges(spans, match.index, match.index + match[0].length))
+  for (const match of findLinks(text)) {
+    // A link whose brackets or parentheses sit inside a code span is literal
+    // text; backticks inside the label or target are still a format error.
+    if (
+      match.image ||
+      insideRanges(spans, match.index, match.labelEnd, match.end - 1)
+    )
       continue;
-    error(
-      "malformed_link",
-      "Link targets with spaces must be wrapped in angle brackets: [Label](<target with spaces>).",
-    );
-  }
-  for (const match of text.matchAll(LINK)) {
-    if (match[1] === "!") continue;
-    const label = match[2] as string;
-    const rawTarget = match[3] as string;
+    const { label, rawTarget } = match;
+    if (match.spaced) {
+      error(
+        "malformed_link",
+        "Link targets with spaces must be wrapped in angle brackets: [Label](<target with spaces>).",
+      );
+      continue;
+    }
     if (label.includes("`") || rawTarget.includes("`")) {
       error(
         "backtick_in_link",
@@ -202,16 +342,31 @@ function scanLinks(
       );
       continue;
     }
-    if (insideRanges(spans, match.index, match.index + match[0].length))
-      continue;
     const target = rawTarget.startsWith("<")
       ? rawTarget.slice(1, -1)
-      : rawTarget;
+      : rawTarget.replace(/\\([()])/g, "$1");
     if (target.trim().length === 0) {
       error("malformed_link", "Link target is empty.");
       continue;
     }
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
+    if (/[\u0000-\u001f\u007f]/.test(target)) {
+      error("malformed_link", "Link target contains control characters.");
+      continue;
+    }
     const kind = classifyTarget(target);
+    if (kind === "other") {
+      const scheme = (SCHEME.exec(target)?.[0] ?? "")
+        .slice(0, -1)
+        .toLowerCase();
+      if (FORBIDDEN_LINK_SCHEMES.includes(scheme)) {
+        error(
+          "forbidden_link_scheme",
+          `${scheme}: links are not allowed; use https, a workspace path, app:// or mars://review.`,
+        );
+        continue;
+      }
+    }
     out.links.push({ kind, label, target, line, block_id: blockId });
     if (kind === "app") {
       const connectorId = target.slice("app://".length);
@@ -234,17 +389,9 @@ function scanLinks(
           "malformed_review_link",
           `Review link rejected: ${parsed.error}.`,
         );
-    } else if (kind === "other") {
-      const scheme = (SCHEME.exec(target)?.[0] ?? "")
-        .slice(0, -1)
-        .toLowerCase();
-      if (FORBIDDEN_LINK_SCHEMES.includes(scheme))
-        error(
-          "forbidden_link_scheme",
-          `${scheme}:// links are not allowed; reference local files by absolute or workspace-relative path.`,
-        );
     }
   }
+  return open;
 }
 
 function toneSections(lines: readonly string[]): ToneSection[] {
@@ -321,6 +468,7 @@ export function parseOutput(text: string): OutputDocument {
   let block: OpenBlock | null = null;
   let skipping: number | null = null;
   let inCode: { char: string; length: number } | null = null;
+  let openSpan: number | null = null;
 
   const error = (
     code: OutputErrorCode,
@@ -362,6 +510,32 @@ export function parseOutput(text: string): OutputDocument {
     const codeBefore = inCode;
     inCode = codeFenceState(content, inCode);
     const inCodeNow = codeBefore !== null || inCode !== null;
+    if (inCodeNow || content.trim().length === 0) openSpan = null;
+    const closesLater = (length: number): boolean => {
+      for (let next = index + 1; next < lines.length; next += 1) {
+        const candidate = lines[next] as string;
+        if (
+          candidate.trim().length === 0 ||
+          CODE_FENCE_OPEN.test(candidate) ||
+          LOOSE_OPEN_FENCE.test(candidate) ||
+          LOOSE_CLOSE_FENCE.test(candidate)
+        )
+          return false;
+        if (hasBacktickRun(candidate, length)) return true;
+      }
+      return false;
+    };
+    const scan = (blockId: string | null) => {
+      if (!inCodeNow)
+        openSpan = scanLinks(
+          content,
+          line,
+          blockId,
+          targets,
+          openSpan,
+          closesLater,
+        );
+    };
 
     if (skipping !== null) {
       if (!inCodeNow && LOOSE_CLOSE_FENCE.test(content)) {
@@ -375,7 +549,7 @@ export function parseOutput(text: string): OutputDocument {
         skipping = null;
       }
       pushMarkdown(line, content);
-      if (!inCodeNow) scanLinks(content, line, null, targets);
+      scan(null);
       continue;
     }
 
@@ -397,7 +571,7 @@ export function parseOutput(text: string): OutputDocument {
           "Writing blocks cannot be nested; close the open block first.",
           line,
         );
-      if (!inCodeNow) scanLinks(content, line, block.id, targets);
+      scan(block.id);
       block.lines.push(content);
       continue;
     }
@@ -477,7 +651,7 @@ export function parseOutput(text: string): OutputDocument {
           null,
         );
         pushMarkdown(line, content);
-        scanLinks(content, line, null, targets);
+        scan(null);
         continue;
       }
       flushMarkdown(line - 1);
@@ -500,7 +674,7 @@ export function parseOutput(text: string): OutputDocument {
         null,
       );
     pushMarkdown(line, content);
-    if (!inCodeNow) scanLinks(content, line, null, targets);
+    scan(null);
   }
 
   if (block) {
