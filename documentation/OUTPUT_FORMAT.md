@@ -35,8 +35,10 @@ raw text, so a client renders those segments with its own Markdown renderer.
 Fenced code blocks (``` or ~~~, up to three leading spaces, closed by a fence
 of the same character at least as long) and inline code spans are opaque:
 nothing inside them is parsed, no error is reported for them, and a fence
-inside a writing block likewise hides tone markers. `\r\n` is normalized to
-`\n`. Image links `![alt](src)` are ignored entirely.
+inside a writing block likewise hides tone markers. A code span may span
+lines (CommonMark) as long as its closing backtick run appears before the
+next blank line or fence. `\r\n` is normalized to `\n`. Image links
+`![alt](src)` are ignored entirely.
 
 ## 3. Writing blocks
 
@@ -65,7 +67,8 @@ Rules:
   `Re: "Q3"`; the serializer escapes only `"` and `\`). Bare
   values without quotes are accepted when they contain no whitespace, quotes
   or braces (`id=48213`). Keys match `[A-Za-z_][A-Za-z0-9_-]*` and must be
-  unique; a duplicate key makes the whole fence `malformed_fence`.
+  unique; a duplicate key, or one of the reserved keys `__proto__`,
+  `constructor`, `prototype`, makes the whole fence `malformed_fence`.
 - `id` is required: exactly five digits, unique within the document. The
   model reuses the same id when revising the same draft so clients can
   replace it in place. Four digits or a missing id is `invalid_block_id`; a
@@ -84,13 +87,15 @@ For `variant="email"` the parser fills `block.email` from `subject`
 `,` or `;` and trimmed; `Lee Park <lee@example.com>` is accepted. For every
 other variant `block.email` is `null`.
 
-Addresses must come from the user. `validateOutput` compares each address
-(the part inside `<...>` if present, lower-cased) with
-`context.allowed_addresses` and reports `invented_address` for any other
-address, on the block's opening line with its `block_id`. The same check
-applies to every `mailto:` link in the document (the part after `mailto:` and
-before `?`). `collectAddresses(texts)` extracts addresses from user-supplied
-text so a host can build `allowed_addresses`.
+Addresses must come from the user. `canonicalAddress(value)` accepts exactly
+one address, bare `addr` or `Name <addr>`, trimmed and lower-cased; anything
+else (two addresses in one value, text after `>`) yields `null`. Both the
+entries of `context.allowed_addresses` and every `recipient`/`cc`/`bcc` value
+go through it, and `validateOutput` reports `invented_address` for each value
+that is not exactly one allowed address, on the block's opening line with its
+`block_id`. The same check applies to every `mailto:` link in the document
+(the part after `mailto:` and before `?`). `collectAddresses(texts)` extracts
+addresses from user-supplied text so a host can build `allowed_addresses`.
 
 ### Tone sections
 
@@ -124,29 +129,38 @@ offending lines stay Markdown.
 
 Every non-image `[Label](target)` outside code is recorded in
 `document.links` with `kind`, `label`, `target`, `line` and the `block_id` of
-the enclosing writing block (or `null`).
+the enclosing writing block (or `null`). A bare destination ends at the first
+whitespace or unbalanced `)`; it may contain balanced parentheses and
+backslash escapes per CommonMark (`[wp](https://en.wikipedia.org/wiki/Foo_(bar))`
+keeps the parentheses, `\)` yields `)`). Text with an unbalanced `(` is not a
+link at all. Angle-bracket targets `<...>` take everything up to `>`.
 
 | Form | Kind | Notes |
 | --- | --- | --- |
-| `[Docs](https://example.com/x)`, `[Mail](mailto:a@x.com)` | `external` | `http`, `https`, `mailto` |
+| `[Docs](https://example.com/x)`, `[Mail](mailto:a@x.com)` | `external` | `http`, `https`, `mailto`; clickable |
 | `[Roadmap](<docs/road map.md>)` | `local` | targets containing spaces must be wrapped in `<...>`; the brackets are stripped |
 | `[Config](/etc/mars/config.toml)`, `[Note](./docs/a.md)`, `[Win](C:\repo\x.ts)` | `local` | absolute or workspace-relative path; anything without a scheme |
 | `[Top](#heading)` | `anchor` | |
 | `[$github](app://github)` | `app` | section 5 |
 | `[parse.ts](mars://review?...)` | `review` | section 6 |
-| `[x](ftp://host/x)` | `other` | any other scheme; no error unless forbidden |
+| `[x](ftp://host/x)`, `[call](tel:+1555)` | `other` | any other non-forbidden scheme; recorded, no error, rendered as plain text |
 
 Errors:
 
-- `forbidden_link_scheme`: `file://`, `vscode://` and `vscode-insiders://`
-  (`FORBIDDEN_LINK_SCHEMES`). Local files are referenced by path instead.
-- `backtick_in_link`: a backtick anywhere in the label or target; the link
-  is not recorded.
+- `forbidden_link_scheme`: `file`, `vscode`, `vscode-insiders`, `javascript`,
+  `vbscript`, `data`, `blob` (`FORBIDDEN_LINK_SCHEMES`, matched
+  case-insensitively). The link is not recorded in `document.links` at all.
+  Local files are referenced by path instead.
+- `backtick_in_link`: a backtick anywhere in the label or target
+  (`` [`x`](https://e.com) ``); the link is not recorded. A link that sits
+  entirely inside a code span is ignored instead.
 - `malformed_link`: an unwrapped target containing whitespace
-  (`[a](docs/road map.md)`), or an empty target (`[a]()`).
+  (`[a](docs/road map.md)`), an empty target (`[a]()`), or a target containing
+  control characters (`\u0000`-`\u001f`, `\u007f`).
 
-A link that produced an error is rendered as plain text, never as something
-clickable (section 9).
+Renderers may make `external`, `local`, `app`, `review` and `anchor` links
+clickable (after validation); `other` and anything that produced an error is
+rendered as plain text (section 9).
 
 ## 5. App triggers
 
@@ -223,20 +237,20 @@ context errors, sorted by line.
 
 | Code | Reported by | Construct | Meaning |
 | --- | --- | --- | --- |
-| `malformed_fence` | parser | writing block | opening line not exactly `:::writing{...}` or attributes invalid; closing `:::` with whitespace; `:::` with no open block |
+| `malformed_fence` | parser | writing block | opening line not exactly `:::writing{...}`, attributes invalid, duplicate or reserved key; closing `:::` with whitespace; `:::` with no open block |
 | `unclosed_fence` | parser | writing block | document ended inside a block or a skipped fence region |
 | `nested_fence` | parser | writing block | `:::writing` inside an open block |
 | `invalid_block_id` | parser | writing block | `id` missing or not five digits |
 | `duplicate_id` | parser | writing block | `id` already used in this document |
 | `unknown_variant` | parser | writing block | `variant` not in the list of section 3 |
-| `malformed_link` | parser | link, app trigger | unwrapped spaces, empty target, invalid or templated connector id |
+| `malformed_link` | parser | link, app trigger | unwrapped spaces, empty target, control characters, invalid or templated connector id |
 | `backtick_in_link` | parser | link | backtick in label or target |
-| `forbidden_link_scheme` | parser | link | `file://`, `vscode://`, `vscode-insiders://` |
+| `forbidden_link_scheme` | parser | link | `file`, `vscode`, `vscode-insiders`, `javascript`, `vbscript`, `data`, `blob`; link not recorded |
 | `unknown_connector` | validator | app trigger | id not in `connector_ids` |
 | `malformed_review_link` | parser | code location | a key of section 6 violated or unknown key |
 | `review_range_too_wide` | validator | code location | range wider than `max_review_lines` |
 | `malformed_followup` | parser | follow-up | line starts like a follow-up but does not match the form |
-| `invented_address` | validator | email block, `mailto:` link | address not in `allowed_addresses` |
+| `invented_address` | validator | email block, `mailto:` link | value is not exactly one address from `allowed_addresses` |
 
 ## 9. Security model
 
@@ -250,9 +264,11 @@ model proposed; it never grants permission.
   emitted a link, and must show the hidden prompt, the connector id or the
   target before acting.
 - Entries that produced an error are displayed as plain text, not as
-  actionable items. `unknown_connector`, `review_range_too_wide` and
-  `invented_address` leave the item in the document so it can be shown as
-  rejected; it must not be actionable.
+  actionable items; so are `other` links. Forbidden schemes (including the
+  script-capable `javascript:`, `data:`, `blob:`) never reach `links`.
+  `unknown_connector`, `review_range_too_wide` and `invented_address` leave
+  the item in the document so it can be shown as rejected; it must not be
+  actionable.
 - Hosts can redact or rewrite writing blocks before display with
   `rewriteWritingBlocks(document, block => decision)`, where the decision is
   `{ kind: "keep" }`, `{ kind: "replace", block }` or
@@ -283,12 +299,17 @@ processOutput(text, context) = both steps ──▶ { document, errors, ok }
 - `processOutput(text, context)` is the usual entry point; `ok` is `true`
   only when there are no errors of either kind.
 - Helpers: `writingBlocks(document)`, `followUps(document)`,
-  `parseAttributes`, `splitAddresses`, `collectAddresses`.
+  `parseAttributes`, `splitAddresses`, `canonicalAddress`,
+  `collectAddresses`.
 - `serializeOutput(document)` renders canonical text: writing blocks as
   `:::writing{id="…" variant="…" …other attributes…}`, every attribute
   double-quoted with `\"`/`\\` escapes, `id` then `variant` first, body
   verbatim; follow-ups as `- :<tag>[label]{prompt="…"}`; markdown segments
-  verbatim; segments joined with `\n`. `serializeWritingBlock`,
+  verbatim; segments joined with `\n`. `headerAttributes(block)` builds the
+  opening fence: `id`, `variant` and `email` (`subject`, `recipient`, `cc`,
+  `bcc`, lists joined with `, `) are the source of truth over the parsed
+  `attributes` copy, so a host `replace` that edits those fields wins and any
+  email key missing from `attributes` is appended. `serializeWritingBlock`,
   `serializeFollowUp`, `serializeSegment` and `serializeAttributes` are
   exported for partial use.
 
