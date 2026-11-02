@@ -166,3 +166,58 @@ test("renderTerminal emits ANSI codes only when color is requested", () => {
 test("renderTerminal renders an empty document as a single newline", () => {
   expect(renderTerminal(parseOutput(""))).toBe("\n");
 });
+
+test("renderTerminal keeps the preamble before the first tone marker, ignoring markers inside code fences", () => {
+  const document = parseOutput(
+    `:::writing{id="22222" variant="note"}
+Please choose a style.
+
+\`\`\`
+::tone[NotAMarker]
+\`\`\`
+::tone[Formal]
+Dear Ada,
+::tone[Casual]
+Hi.
+:::`,
+  );
+  const rendered = renderTerminal(document, { width: 40 });
+  expect(rendered).toContain(
+    "├──────────────────────────────────────┤\n│ Please choose a style.               │\n│                                      │\n│ ```                                  │\n│ ::tone[NotAMarker]                   │\n│ ```                                  │\n├──────────────────────────────────────┤\n│ ── Formal ──                         │\n│ Dear Ada,                            │\n├──────────────────────────────────────┤\n│ ── Casual ──                         │\n│ Hi.                                  │\n└",
+  );
+});
+
+test("renderTerminal rejects only the review link whose range is too wide when two share a line", () => {
+  const processed = processOutput(
+    "See [a](mars://review?pr=https://github.com/a/b/pull/1&path=x.ts&line=1&end=50) and [b](mars://review?pr=https://github.com/a/b/pull/1&path=x.ts&line=1&end=3).",
+    CONTEXT,
+  );
+  const rendered = renderTerminal(processed.document, {
+    errors: processed.errors,
+  });
+  expect(rendered).toContain(
+    'Review "a": https://github.com/a/b/pull/1 x.ts:1-50 (right, line 1) — rejected (review_range_too_wide)\n',
+  );
+  expect(rendered).toContain(
+    'Review "b": https://github.com/a/b/pull/1 x.ts:1-3 (right, line 1)\n',
+  );
+});
+
+test("renderTerminal preserves leading Markdown indentation and only strips trailing newlines", () => {
+  expect(
+    renderTerminal(parseOutput("    const x = 1;\n    const y = 2;\n\n")),
+  ).toBe("    const x = 1;\n    const y = 2;\n");
+});
+
+test("renderTerminal wrapping consumes exactly one space at the break and keeps other whitespace", () => {
+  const document = parseOutput(
+    `:::writing{id="33333" variant="note"}
+alpha  beta  gamma delta  epsilon
+:::`,
+  );
+  const lines = renderTerminal(document, { width: 20 })
+    .split("\n")
+    .filter((line) => line.startsWith("│"))
+    .map((line) => line.slice(2, -2));
+  expect(lines.slice(1)).toEqual(["alpha  beta  gamma", "delta  epsilon  "]);
+});

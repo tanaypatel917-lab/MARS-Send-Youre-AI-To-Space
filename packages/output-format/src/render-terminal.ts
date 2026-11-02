@@ -19,6 +19,8 @@ export interface RenderTerminalOptions {
 const DEFAULT_WIDTH = 80;
 const MIN_WIDTH = 20;
 const INDENT = "  ";
+const TONE_MARKER = /^::tone\[[^\]]+\]$/;
+const CODE_FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
 
 interface Style {
   frame(text: string): string;
@@ -48,9 +50,13 @@ function wrap(text: string, width: number): string[] {
     let rest = raw;
     while (rest.length > width) {
       const cut = rest.lastIndexOf(" ", width);
-      const at = cut > 0 ? cut : width;
-      lines.push(rest.slice(0, at).trimEnd());
-      rest = rest.slice(at).trimStart();
+      if (cut > 0) {
+        lines.push(rest.slice(0, cut));
+        rest = rest.slice(cut + 1);
+      } else {
+        lines.push(rest.slice(0, width));
+        rest = rest.slice(width);
+      }
     }
     lines.push(rest);
   }
@@ -66,6 +72,28 @@ function indent(text: string, prefix: string): string {
     .split("\n")
     .map((line) => `${prefix}${line}`)
     .join("\n");
+}
+
+function preamble(block: WritingBlock): string | null {
+  if (block.tones.length === 0) return null;
+  const lines: string[] = [];
+  let fence: { char: string; length: number } | null = null;
+  for (const text of block.body.split("\n")) {
+    if (fence) {
+      const close = new RegExp(`^ {0,3}\\${fence.char}{${fence.length},}\\s*$`);
+      if (close.test(text)) fence = null;
+    } else if (TONE_MARKER.test(text)) break;
+    else {
+      const open = CODE_FENCE_OPEN.exec(text);
+      if (open) {
+        const marker = open[1] as string;
+        fence = { char: marker[0] as string, length: marker.length };
+      }
+    }
+    lines.push(text);
+  }
+  const text = lines.join("\n");
+  return text.trim().length > 0 ? text : null;
 }
 
 function headerLines(block: WritingBlock): string[] {
@@ -92,10 +120,14 @@ function renderWritingBlock(
   for (const line of headerLines(block))
     out.push(row(truncate(line, inner), style.label));
   out.push(style.frame(`├${bar}┤`));
-  const sections =
+  const intro = preamble(block);
+  const sections: Array<{ tone: string | null; body: string }> =
     block.tones.length > 0
-      ? block.tones
-      : [{ tone: null as string | null, body: block.body }];
+      ? [
+          ...(intro === null ? [] : [{ tone: null, body: intro }]),
+          ...block.tones,
+        ]
+      : [{ tone: null, body: block.body }];
   sections.forEach((section, index) => {
     if (index > 0) out.push(style.frame(`├${bar}┤`));
     if (section.tone !== null)
@@ -143,15 +175,18 @@ function renderActions(
       )}`,
     );
   for (const review of reviews) {
+    const span = review.line_end - review.line_start + 1;
     const range =
-      review.line_end === review.line_start
+      span === 1
         ? `${review.line_start}`
         : `${review.line_start}-${review.line_end}`;
     out.push(
       `${INDENT}- Review "${review.label}": ${review.pr} ${review.path}:${range} (${review.side}, line ${review.line})${rejected(
         errors,
         (error) =>
-          error.code === "review_range_too_wide" && error.line === review.line,
+          error.code === "review_range_too_wide" &&
+          error.line === review.line &&
+          /spans (\d+) lines/.exec(error.message)?.[1] === `${span}`,
       )}`,
     );
   }
@@ -190,8 +225,8 @@ export function renderTerminal(
       body.push(renderWritingBlock(segment, width, style));
     else followUps.push(segment);
   }
-  const text = body.join("\n").trim();
-  if (text.length > 0) parts.push(text);
+  const text = body.join("\n").replace(/\n+$/, "");
+  if (text.trim().length > 0) parts.push(text);
   if (followUps.length > 0) parts.push(renderFollowUps(followUps, style));
   if (document.app_triggers.length > 0 || document.review_links.length > 0)
     parts.push(
