@@ -5,7 +5,7 @@ Maintained by the active Devin session; update it in every PR that changes scope
 Covers all three repositories:
 
 - `tanaypatel917-lab/MARS-Send-Youre-AI-To-Space` (this repo) — the agent platform, Bun 1.4.4 monorepo.
-- `tanaypatel917-lab/mars-platform` — earlier Node 24 / pnpm core: Hermes-style `@mars/memory`, OpenClaw-style `@mars/skills`, proposal-only `@mars/review`, OpenClaw gateway probe.
+- `tanaypatel917-lab/mars-platform` — earlier Node 24 / pnpm core: Hermes-style `@mars/memory`, OpenClaw-style `@mars/skills`, proposal-only `@mars/review`, OpenClaw gateway probe. **Reference-only once Milestone 3 lands here**; not modified.
 - `tanaypatel917-lab/MARS` — public Vite/Three.js intro site (`/` planet, `/how` loop).
 
 Authoritative spec: `documentation/MASTER_SPECIFICATION.md` (10 milestones, section 16).
@@ -19,7 +19,7 @@ All 67 PRs across the three repos are merged; no open PRs. CI green on `main` he
 | 0 Source baseline | done | `packages/contracts`, `sources/manifest.json`, `documentation/SOURCE_REGISTER.md` (#1) |
 | 1 Coding workbench | code complete; **acceptance unverified** (no live model run, no real VS Code window) | `packages/{providers,execution,tasks,workspaces,workbench}`, `apps/{cli,vscode}` (#2-#20, #23) |
 | 2 Memory & research | partial: memory service + frozen recall (#22-#29), Aider-style repo map (#28, #31, #34), research control plane wired to sessions (#26, #39), research worker package (#41) wired into `mars serve --research-search brave\|searxng\|tavily` (offline e2e verified; **live search/model run unverified**); no browser worker | `packages/{memory,context,research,research-worker}`, `apps/cli/src/serve.ts` |
-| 3 Skill learning | **not in this repo**; `mars-platform` has `@mars/skills` + `@mars/review` with no link to this repo | `mars-platform/packages/skills`, `mars-platform/services/review` |
+| 3 Skill learning | implemented, **offline-verified only**: `@mars/skills` store (versions, drafts, proposals, `undoReview`, curator, directory lock, transactional recovery; 29 tests), `@mars/review` proposal-only runner (recursion guard, revision fencing, strict output whitelist, free-first registry gateway; offline tests with an injected fake model gateway), Hermes threat scanner with complete invisible-Unicode denylist + memory proposal API in `@mars/memory`; workbench wiring (frozen untrusted skill context via `skills-context.ts`, `WorkbenchHostOptions.skills`/`.review`, review scheduled after completed foreground tasks, `mars serve` constructs the store and runner) verified by offline host tests. No live-model review, no operator CLI, curator not scheduled | `packages/{skills,review,memory}`, `documentation/SKILLS.md` |
 | 4 Measured improvement (Harbor / Terminal-Bench, GEPA, mini-swe baseline, verifiers) | **not started**; only the evidence-gated specialist registry/routing exists (#30, #35, #38, #40) | `packages/specialists` |
 | 5-8 Remote execution, SFT, vLLM serving, RL | not started | — |
 | Collaboration (bounded delegation, rooms) | library + workbench wiring; fixture child adapter only (#32, #33, #36, #37) | `packages/collaboration` |
@@ -40,7 +40,11 @@ Everything is verified offline only: fixtures, injected model responses, `model_
 ## Decisions
 
 - One owner per responsibility (spec section 3). Oh My Pi stays the only live session/tool owner; everything else connects through host-bound tools and contracts.
-- `mars-platform` and this repo both ship a `@mars/memory`. This repo's `packages/memory` (scoped durable MemoryService + journal index) is the one wired into sessions; `mars-platform`'s Hermes port is the reference for threat scanning and single-writer semantics. Reconciling the two is Milestone 3 work.
+- `mars-platform` and this repo both ship a `@mars/memory`. This repo's `packages/memory` (scoped durable MemoryService + journal index) is the one wired into sessions; the Hermes threat scanner and proposal API were ported into it in Milestone 3.
+- `mars-platform` is reference-only once Milestone 3 lands; it is not modified, and future changes to memory, skills and review happen in this repo.
+- Background review calls models through the provider registry (`selectExecutionModel`, free-first, refuses paid), not through an OpenAI-compatible endpoint env (`MARS_REVIEW_*` does not exist here).
+- Memory proposals are scoped to the exact review context and revision-fenced (`expected_revision` checked at submission and again at acceptance); skill proposals likewise carry `expectedRevision`. Review can only submit; humans/host accept.
+- The SKILL.md frontmatter parser is a flat `key: value` subset with no YAML dependency (anchors, aliases, block scalars, nesting rejected).
 - Free-first model routing (`allowPaid: false`) stays the default; no live provider keys are stored in repos.
 - Claims of "improvement" require independent evidence (holdout, baseline, cost) — a finished job is not evidence (spec sections 16-17).
 - Research in `mars serve` is opt-in (`--research-search`), credentials are referenced by environment variable name only, the worker uses the registry's free default model and refuses paid ones (no CLI paid opt-in), and startup fails fast when no free model is configured rather than queuing requests that cannot run. The research store's private needles are the sibling state directories (`memory`, `sessions`, `tasks`, `workspaces`) plus the source checkout, because the store refuses a private root that contains it.
@@ -51,8 +55,15 @@ Dispatched 2026-11-02 as parallel child sessions, each opening its own PR agains
 
 1. ~~Wire `@mars/research-worker` into `mars serve`~~ — done (`WorkbenchServiceOptions.research`, `mars serve --research-search`, `mars doctor` research section). Remaining: a human run with a real Brave/Tavily/SearXNG endpoint and a free model to verify live mode; recorded provider responses as fixtures.
 2. Milestone 4: Harbor / Terminal-Bench 2 adapter and GEPA prompt-optimisation worker behind the spec's evaluation and optimisation interfaces, with a documented local-model (Qwen3-Coder via Ollama) path.
-3. Milestone 3: bring `@mars/skills` and the proposal-only review runner from `mars-platform` into this repo behind the skill service interface, wired to workbench sessions.
+3. ~~Milestone 3: bring `@mars/skills` and the proposal-only review runner into this repo~~ — landed by the Milestone 3 PR (offline-verified only).
 4. `MARS` site: rebase and land the `/how` landscape branches.
+
+Milestone 3 follow-ups:
+
+- Live-model acceptance of background review: run a real free model against a recorded transcript, record `review.jsonl` and the resulting proposals as evidence; until then the schema/threat whitelist is untested against real output.
+- CLI/RPC commands for proposals (`list`/`accept`/`reject`), `undoReview`, `pin`/`restore`, and `runCurator` (nothing schedules the curator today).
+- Scope the skill store by owner/project (it is per state directory) and add relevance-based selection instead of size-bounded `list()`.
+- Evaluation gate between proposal and acceptance (spec: evaluate before accept) once Milestone 4 provides verifiers.
 
 Parked: the MARS Shell desktop app (needs a description from the owner).
 

@@ -1,30 +1,56 @@
 # @mars/review
 
-The single proposal-only background review runner (Milestone 3). It is a host-bound service, not an agent loop: it has no tools, cannot accept proposals, cannot write authoritative memory or skills, and cannot schedule itself. Ported from `mars-platform/services/review` (Hermes background-review safety semantics, OpenClaw experience-review scheduling; see `NOTICE`). Everything here is offline-verified only; no live-model review has been run.
+The single proposal-only background review runner. It reads a completed foreground transcript plus frozen memory and skills, asks one model once, and submits bounded proposals to `@mars/memory` and `@mars/skills`. It never executes tools, never accepts proposals, never writes authoritative memory or skills, and never schedules itself. Ported from `mars-platform/services/review` (Hermes background-review safety semantics, OpenClaw experience-review scheduling); see `NOTICE`.
 
-## Ownership
+**Status: offline-verified only**, with an injected fake `ReviewModelGateway`. No review has run against a live model; `modelRequests` stays 0 in `bun run check` unless a test injects a fake.
 
-- `ReviewRunner` receives only `MemoryProposalService.submitProposal` + `snapshot` from `@mars/memory`, and `SkillProposalService` (`list`, `getRevision`, `submitProposal`) from `@mars/skills`. Hand it nothing else. `DurableMemoryStore` and `SkillStore` remain the only writers; humans/hosts call `acceptProposal`/`accept` or `rejectProposal`/`reject`.
-- Model calls go through `ReviewModelGateway`. `createRegistryReviewGateway({ registry })` routes through the shared `@mars/providers` `ModelRouter` using `@mars/execution` `selectExecutionModel` (free-first; it refuses to construct if the selected model is paid). No endpoint, API key or `MARS_REVIEW_*` environment configuration exists in this repo. Offline tests inject a fake gateway; `runner.modelRequests` reports the count.
-- Oh My Pi stays the only live session/tool/model owner: the runner never opens sessions and the host is what schedules it.
+## Integration
 
-## Scheduling
+```ts
+import { ReviewRunner, createRegistryReviewGateway } from "@mars/review";
+const review = new ReviewRunner({
+  context,                                   // exact RequestContext scope; proposals never widen it
+  memory: { snapshot: memory.snapshot.bind(memory), submitProposal: memory.submitProposal.bind(memory) },
+  skills,                                    // SkillProposalService: list, getRevision, submitProposal only
+  model: createRegistryReviewGateway({ registry }), // free model via @mars/providers; throws if paid
+  logRoot: join(privateStateDirectory, "review"),
+  idleMs: 30_000, timeoutMs: 60_000,
+});
+review.beginLiveTurn(sessionId); /* foreground task runs */ review.endLiveTurn(sessionId);
+review.recordTurn({ sessionId, origin: "foreground", iterations, transcript, success: true });
+await review.stop();
+```
 
-`recordTurn(turn)` accumulates `iterations` per foreground `sessionId`; at 10 the session becomes pending (≤32 pending, oldest evicted; ≤1024 counters). `beginLiveTurn(id)` defers scheduling and aborts an in-flight review; `endLiveTurn(id)` restarts the quiet period (`idleMs`, default 30 s). One review runs at a time, bounded by `timeoutMs` (default 60 s). `ReviewRateLimit` backs off 15 min, doubling to 60 min, keeping the session pending. `stop()` clears pending work, aborts and drains.
+Exports: `ReviewRunner`, `REVIEW_LIMITS`, `eligible`, `createRegistryReviewGateway`, `ReviewRateLimit`, `parseOutput`, `OUTPUT_LIMITS`, `InvalidOutput`, `SYSTEM_PROMPT`, and the `Turn`, `TurnOrigin`, `TranscriptMessage`, `ReviewDependencies`, `ReviewResult`, `ReviewModelGateway`, `ReviewModelRequest`, `ReviewModelReply`, `ReviewProposal`, `ReviewMemoryOperation`, `RegistryReviewGatewayOptions` types.
 
-Recursion guard (`eligible`): only `origin: "foreground"` turns with a non-empty session ID that does not match `review|background_review|cron|heartbeat|hook|subagent|acp|memory|overflow`, `active-memory`, `incognito` or `internal:` are ever reviewed. A completed review enqueues nothing. Failed turns (`success: false`) only reset the quiet timer.
+## API
 
-## Review flow
+- `recordTurn(turn)`: accumulate `iterations` per session; queue the session at ≥10 (`REVIEW_LIMITS.iterations_threshold`); `success: false` only resets the quiet timer. Ignored when the runner is stopped or the turn is ineligible.
+- `beginLiveTurn(id)` / `endLiveTurn(id)`: foreground work defers scheduling and aborts the in-flight review (`cancelled`); the quiet timer restarts when the live turn ends.
+- `reviewNow(turn)`: run one review immediately if eligible, no live turn, nothing in flight and not in cooldown; otherwise `skipped`.
+- `stop()`: clear pending work and counters, abort and drain.
+- `modelRequests`, `pendingSessions`: offline-test observability.
+- `ReviewResult { reviewId, status: completed | rejected | cancelled | rate-limited | error | skipped, proposals: { store, id }[] }`.
 
-1. Validate the transcript shape; snapshot memory (`snapshot(context)`) and skills (`getRevision`, `list`, re-check revision).
-2. Render transcript + up to 200 facts + up to 64 non-archived skills (4,000 chars each) as one JSON blob flagged `untrusted_evidence: true`; reject if over 64,000 chars.
-3. One model call (`maxTokens` 1024, temperature 0). Replies with tool calls, non-`stop` finish reasons or >64,000 chars are rejected.
-4. `parseOutput` (`output.ts`): root exactly `{"proposals":[...]}`, ≤8 proposals, each `{tool, rationale(≤1000), ops(1–8)}`. `memory.submitProposal` ops are `{op:"add", target:"memory"|"user", content(≤2200)}` → scoped `project`/`profile` `MemoryEntry` adds; `skills.submitProposal` ops are `{op:"create"|"update", name, content(≤8000)}`. Every string is threat-scanned. Anything else is `rejected`.
-5. Before each submission, re-check both revisions (`error` on drift). Memory proposals carry `expected_revision`; skill proposals carry `expectedRevision` and `reviewId`, so `undoReview(reviewId)` can reverse an accepted review.
-6. `review.jsonl` under `logRoot` (0600, directory-locked) records timestamps, session/review IDs, gateway ID, transcript and output SHA-256 hashes, proposal IDs and revisions — never transcript or model text.
+## Invariants
 
-Result statuses: `completed`, `rejected` (schema/threat/store validation), `cancelled`, `rate-limited`, `error`, `skipped`.
+- **Recursion guard.** `eligible(turn)` requires `origin === "foreground"` and a nonempty `sessionId` with no `review`, `background_review`, `cron`, `heartbeat`, `hook`, `subagent`, `acp`, `memory` or `overflow` segment and no `active-memory`, `incognito` or `internal:` substring. Proposals are attributed to `background_review:<sessionId>:<reviewId>`, which is itself ineligible.
+- **Single flight, quiet period, backoff.** One review at a time; starts after `idleMs` quiet; a provider 429 (`ReviewRateLimit`) requeues the session and backs off 15 → 30 → 60 min (`backoff_initial_ms`, `backoff_max_ms`). Pending sessions ≤32, counters ≤1024, oldest evicted.
+- **Bounded, labelled input.** Transcript messages must be `{ role: user | assistant | tool, content: string }`. The prompt is JSON with `untrusted_evidence: true`, ≤200 memory entries (`target`, `fact` only), ≤64 non-archived skills truncated to 4000 chars, and both store revisions; total ≤64,000 chars or the review is `rejected`.
+- **Strict output.** The reply must have no tool calls, finish reason `stop` (or null) and ≤64,000 bytes. `parseOutput` accepts exactly `{"proposals":[...]}` with ≤8 proposals of `{ tool, rationale, ops }` and ≤8 ops each: `memory.submitProposal` ops are `{ op: "add", target: "memory" | "user", content ≤2200 }`; `skills.submitProposal` ops are `{ op: "create" | "update", name, content ≤8000 }`; rationale ≤1000; no extra keys; every string passes `scanThreat`. Anything else is `rejected`.
+- **Scope and revision fencing.** Memory `target: "memory"` becomes a `project` entry in the exact review `context.scope`; `target: "user"` becomes a `profile` entry for `{ owner_id, project_id }`. Entry ids are `review:<reviewId>:<n>`, `source_event_ids` `review:<reviewId>`, and the request id is suffixed with the review id. Memory and skill revisions are captured at snapshot time, re-checked before every `submitProposal`, and passed as `expected_revision` / `expectedRevision`, so stale proposals fail again at acceptance.
+- **Model access.** `createRegistryReviewGateway` selects via `selectExecutionModel(registry, model, false)` (no paid consent) and throws if the selected model is paid; completions go through `ModelRouter` with `temperature: 0`, the request's `maxTokens`, timeout and abort signal; 429 maps to `ReviewRateLimit`. No OpenAI-compatible endpoint configuration or `MARS_REVIEW_*` environment variables exist.
+- **Audit log.** `<logRoot>/review.jsonl` (dir 0700, file 0600, appended under `withDirectoryLock`): `ts`, `actor: "@mars/review"`, `source: "background_review"`, `sessionId`, `reviewId`, `model`, `event` (`started`, `proposal`, final status), `transcriptHash`, `outputHash`, `proposals`, revisions, `cooldownUntil`. No transcript, prompt or model text is logged.
+- **Dependencies are narrowed** in the constructor to `memory.snapshot`/`memory.submitProposal` and `skills.list`/`getRevision`/`submitProposal`; `context` is cloned. Handing the runner a full `MemoryService` or `SkillLifecycleService` is a host bug, not a capability.
 
-## Not implemented / unverified
+## Limits
 
-Live-model acceptance, automatic acceptance of any proposal, memory `patch`/`remove` proposals, and multi-scope review (one `RequestContext` per runner).
+`REVIEW_LIMITS`: iterations 10, pending sessions 32, counters 1024, context 64,000 chars, memory entries 200, skills 64 × 4000 chars, max_tokens 1024, backoff 15–60 min. `OUTPUT_LIMITS`: proposals 8, ops 8, rationale 1000, memory content 2200, skill content 8000, output 64,000 bytes. Defaults: `idleMs` 30 s, `timeoutMs` 60 s.
+
+## Not implemented
+
+Live-model acceptance; host-side `review.jsonl` inspection or proposal accept/reject/undo commands; a `skip_background_review`-style flag on the execution session (eligibility is decided from `Turn.origin`/`sessionId` supplied by the host); Hermes `_digest_history` summarisation (the transcript is passed as supplied, bounded by size); multi-model or paid routing.
+
+## Attribution
+
+Safety semantics from `NousResearch/hermes-agent` `agent/background_review.py` at `7020ea3e96c3fdbc768c5296493e186df46f075b` (MIT); scheduling from `openclaw/openclaw` `src/skills/workshop/experience-review-scheduler.ts` at `7d9677ce36db4aeea2ce36a3bb78588829e80933` (MIT); license texts in `../memory/third_party/hermes-agent/LICENSE.txt` and `../skills/third_party/openclaw/LICENSE.txt`. MARS modifications listed in `NOTICE`.
