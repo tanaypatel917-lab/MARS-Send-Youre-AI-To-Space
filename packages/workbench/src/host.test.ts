@@ -3569,6 +3569,33 @@ test("mars_apply_patch can delete or move a binary file: existence never decodes
   await api.close();
 });
 
+test("a slash command whose expansion exceeds the prompt bound fails start with too_large", async () => {
+  const f = await fixture();
+  const api = await conventionsHost(f, {
+    commands: {
+      expand(input) {
+        if (!input.startsWith("/huge")) return null;
+        throw Object.assign(new Error("expanded prompt exceeds 65536 bytes"), {
+          code: "too-large",
+        });
+      },
+    },
+  });
+  await api.create(context(), {
+    ...task("huge"),
+    request: "/huge everything",
+  });
+  await expect(
+    api.start(context(), {
+      task_id: "huge",
+      expected_revision: 0,
+      approvals: { read: true, write: false, execute: false },
+    }),
+  ).rejects.toMatchObject({ code: "too_large" });
+  expect(f.sessions).toHaveLength(0);
+  await api.close();
+});
+
 async function api_start(
   api: Awaited<ReturnType<typeof createWorkbenchHost>>,
   taskId: string,

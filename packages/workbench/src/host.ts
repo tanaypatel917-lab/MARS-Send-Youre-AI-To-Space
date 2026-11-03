@@ -1215,6 +1215,22 @@ export async function createWorkbenchHost(
    * pre-tool hook exiting 2 blocks the tool call (Claude Code semantics).
    */
   const HOOK_BUDGET_MAX_MS = 300_000;
+  // A slash command whose expansion exceeds the registry's prompt bound is a
+  // workbench size error, not an internal failure.
+  const expandRequest = (request: string) => {
+    try {
+      return options.conventions?.commands?.expand(request) ?? null;
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code: unknown }).code === "too-large"
+      )
+        throw new WorkbenchError("too_large");
+      throw error;
+    }
+  };
   const dispatchHooks = async (
     taskId: string | undefined,
     workspace: WorkspaceRef,
@@ -1711,7 +1727,7 @@ export async function createWorkbenchHost(
         throw new WorkbenchError("forbidden");
       // A request that names a repository slash command (`/name args`) is
       // expanded from the command file; the durable task keeps the original.
-      const expanded = options.conventions?.commands?.expand(task.request);
+      const expanded = expandRequest(task.request);
       const request = expanded ? expanded.prompt : task.request;
       const baseInstruction = `${request}\n\nAcceptance criteria:\n${task.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
       if (baseInstruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH)
