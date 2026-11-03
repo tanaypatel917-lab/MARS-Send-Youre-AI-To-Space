@@ -44,6 +44,10 @@ before any proposal is created.
   graph/<workspace_id>/files/<path with / → __>.md
 ```
 
+Graph file names join path components with `__`; a run of two or more
+underscores inside a component is percent-encoded (`src/a__b.ts` →
+`src__a%5F%5Fb.ts`) so it can never collide with `src/a/b.ts`.
+
 No `.obsidian/` directory is created; Obsidian creates its own when you open
 the folder. Files the manifest does not track (your own notes, Obsidian
 settings) are left alone by export, import and status.
@@ -76,9 +80,13 @@ Every generated note has three parts:
   is exactly `SkillStore.get(name).content`.
 - The **Related** section is generated and is *not* part of the body digest;
   edits there are ignored. Wikilinks are only ever added here, never inside the
-  fact or skill text.
+  fact or skill text. The `<!-- mars:related -->` marker is always emitted and
+  the parser uses the *last* marker in the file as the boundary, so a body that
+  itself contains the marker still round-trips.
 
-`content_digest` is the SHA-256 of the exact exported body.
+`content_digest` is the SHA-256 of the exact exported body; the manifest also
+records `file_digest`, the SHA-256 of the whole rendered note. Notes and
+directories are written with private permissions (`0600`/`0700`).
 
 ### Frontmatter fields
 
@@ -132,12 +140,15 @@ edges as wikilinks to the other file notes.
 - Atomic: each file is written to a temporary sibling and renamed; the manifest
   is written last.
 - Reconciles with the previous export: notes whose entry disappeared are
-  removed **only if their body is unchanged** (a stale note you edited is kept
-  and reported as `kept_modified`); untracked files are never touched.
+  removed **only if the file is byte-identical to what was generated**
+  (`file_digest`); a stale note you edited anywhere — body, frontmatter or
+  Related — is kept and reported as `kept_modified`. Untracked files are never
+  touched.
 - Refuses a `vaultDir` that overlaps a host-private root or the memory/skills
   state directories (`VaultPathError`), refuses note paths that escape the
-  vault, and refuses a vault exported for a different `owner_id`/`project_id`
-  (`scope_mismatch`).
+  vault lexically or through a symlinked directory/file inside the vault
+  (`path_escape`), and refuses to export into a vault whose manifest belongs to
+  a different `owner_id`/`project_id`/`workspace_id` (`scope_mismatch`).
 
 The manifest `.mars-vault.json` records `schema_version: 1`, `exported_at`,
 `scope`, `memory_revision`, `skills_revision`, `graph` digests and one
@@ -160,7 +171,7 @@ Reconciliation rules, per tracked note:
 | new `skills/<name>.md` | `op: "create"` (the name must satisfy the skill store's own validation) |
 | skill note deleted | reported; with `--allow-remove` an `archive` proposal (skills are never erased) |
 | project/graph note edited or deleted | `ignored_derived` — rebuilt by the next export, never proposed |
-| frontmatter unparsable / wrong kind | `invalid`, nothing proposed |
+| frontmatter unparsable, or `mars_kind` differs from the exported kind | `invalid`, nothing proposed |
 | identical proposal already pending from the vault | `already_proposed` (no duplicate) |
 
 Revision fencing and `stale_export`:
