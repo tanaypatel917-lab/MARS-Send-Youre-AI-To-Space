@@ -14,6 +14,7 @@ import {
   toChatRequest,
 } from "./model-bridge";
 import {
+  MAX_SYSTEM_PROMPT_CHARS,
   openRuntimeSession,
   type RuntimeSession,
   type RuntimeTools,
@@ -694,3 +695,50 @@ for (const damage of ["missing", "invalid"] as const) {
     }
   }, 30000);
 }
+
+test("systemPromptOverride replaces the fixed prompt only when supplied", async () => {
+  const f = await fixture();
+  const requests: Record<string, unknown>[] = [];
+  const systemMessage = (request: Record<string, unknown> | undefined) => {
+    const messages = request?.messages as
+      | { role: string; content: unknown }[]
+      | undefined;
+    return messages?.find((message) => message.role === "system")?.content;
+  };
+  try {
+    const fetch = async (_url: string, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return sse({ content: "Done. No tests were run." });
+    };
+    const defaultSession = await f.open({ fetch });
+    await defaultSession.run(f.task.request);
+    expect(String(systemMessage(requests[0]))).toContain(
+      "You are MARS, a coding assistant.",
+    );
+
+    const overridden = await f.open({
+      fetch,
+      systemPromptOverride:
+        "  You are candidate prompt 7. Verify before claiming. ",
+    });
+    await overridden.run(f.task.request);
+    expect(String(systemMessage(requests[1]))).toContain(
+      "You are candidate prompt 7.",
+    );
+    expect(String(systemMessage(requests[1]))).not.toContain(
+      "You are MARS, a coding assistant.",
+    );
+
+    await expect(
+      f.open({ fetch, systemPromptOverride: "   " }),
+    ).rejects.toThrow("System prompt override is empty.");
+    await expect(
+      f.open({
+        fetch,
+        systemPromptOverride: "x".repeat(MAX_SYSTEM_PROMPT_CHARS + 1),
+      }),
+    ).rejects.toThrow("exceeds the size limit");
+  } finally {
+    await f.cleanup();
+  }
+}, 30000);
