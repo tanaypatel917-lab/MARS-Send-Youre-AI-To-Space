@@ -556,13 +556,36 @@ export async function exportVault(
     paths.set(note.path, note);
   }
 
+  // A file at a generated path that the previous manifest does not own is the
+  // user's; refuse before touching anything rather than overwrite it.
+  const owned = new Set((previous?.notes ?? []).map((note) => note.path));
+  const planned = [...notes].sort((a, b) => byString(a.path, b.path));
+  const rendered = new Map<string, string>();
+  for (const note of planned) {
+    const text = renderNote(note);
+    rendered.set(note.path, text);
+    if (owned.has(note.path)) continue;
+    const absolute = resolveInside(vaultDir, note.path);
+    let current: string | null = null;
+    try {
+      current = await readFile(absolute, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (current !== null && current !== text)
+      throw new VaultPathError(
+        "path_collision",
+        `${note.path} exists but is not tracked by the vault manifest; move or delete it before exporting`,
+      );
+  }
+
   let written = 0;
   let unchanged = 0;
   const manifestNotes: ManifestNote[] = [];
   const counts: Partial<Record<NoteKind, number>> = {};
-  for (const note of [...notes].sort((a, b) => byString(a.path, b.path))) {
+  for (const note of planned) {
     const absolute = resolveInside(vaultDir, note.path);
-    const text = renderNote(note);
+    const text = rendered.get(note.path) ?? renderNote(note);
     if (await writeAtomic(vaultDir, absolute, text)) written += 1;
     else unchanged += 1;
     counts[note.kind] = (counts[note.kind] ?? 0) + 1;

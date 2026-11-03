@@ -26,7 +26,9 @@ const emptyCounts = (): NoteCounts => ({
 function count(notes: ScannedNote[]): NoteCounts {
   const counts = emptyCounts();
   for (const note of notes) {
-    if (note.derived) {
+    // Generated notes count as derived only while untouched; a deleted,
+    // edited or unparseable one is reported by its state so it is not hidden.
+    if (note.derived && note.state === "unchanged") {
       counts.derived += 1;
       continue;
     }

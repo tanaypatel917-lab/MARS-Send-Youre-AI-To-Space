@@ -47,14 +47,22 @@ function item(
   };
 }
 
-function errorText(error: unknown): string {
-  if (error instanceof Error) {
-    const code = (error as { code?: unknown }).code;
-    return typeof code === "string"
-      ? `${code}: ${error.message}`
-      : error.message;
-  }
-  return String(error);
+/**
+ * Store errors may echo the rejected content; the report keeps the error code
+ * or class and a short message with every submitted text redacted.
+ */
+function errorText(error: unknown, texts: readonly string[] = []): string {
+  const code =
+    error instanceof Error
+      ? typeof (error as { code?: unknown }).code === "string"
+        ? String((error as { code?: unknown }).code)
+        : error.name
+      : "error";
+  let message = error instanceof Error ? error.message : String(error);
+  for (const text of [...texts].sort((a, b) => b.length - a.length))
+    if (text.length > 0) message = message.split(text).join("<note text>");
+  message = message.replace(/\s+/g, " ").trim().slice(0, 200);
+  return message ? `${code}: ${message}` : code;
 }
 
 /**
@@ -198,7 +206,7 @@ export async function importVault(
         item(note.path, note.kind, note.id, "failed", {
           operation,
           store,
-          reason: errorText(error),
+          reason: errorText(error, plan.texts),
         }),
       );
     }
@@ -431,7 +439,10 @@ export async function importVault(
         { ...note, id: name },
         "create",
         [body, rationale],
-        (op) => skillOp(op).op === "create" && skillOp(op).name === name,
+        (op) =>
+          skillOp(op).op === "create" &&
+          skillOp(op).name === name &&
+          skillOp(op).content === body,
         async (expectedRevision) =>
           (
             await options.skills.submitProposal(

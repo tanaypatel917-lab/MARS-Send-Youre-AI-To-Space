@@ -864,3 +864,146 @@ test("review: manifests written without file_digest still open and keep stale no
     ),
   ).toBe(true);
 });
+
+test("review: export refuses to overwrite an untracked user note at a generated path", async () => {
+  const { common, vaultDir } = await fixture();
+  mkdirSync(join(vaultDir, "facts"), { recursive: true });
+  writeFileSync(join(vaultDir, "facts/fact-plain.md"), "my own note\n");
+  await expect(exportVault(ctx, common)).rejects.toMatchObject({
+    code: "path_collision",
+  });
+  expect(read(vaultDir, "facts/fact-plain.md")).toBe("my own note\n");
+  expect(existsSync(join(vaultDir, VAULT_MANIFEST_FILE))).toBe(false);
+  expect(existsSync(join(vaultDir, "facts/fact-graph.md"))).toBe(false);
+  rmSync(join(vaultDir, "facts/fact-plain.md"));
+  await exportVault(ctx, common);
+  // a tracked note is still refreshed by later exports
+  writeFileSync(
+    join(vaultDir, "facts/fact-plain.md"),
+    read(vaultDir, "facts/fact-plain.md").replace("Fridays", "Mondays"),
+  );
+  const again = await exportVault(ctx, common);
+  expect(again.written).toBe(1);
+  expect(read(vaultDir, "facts/fact-plain.md")).toContain("Fridays");
+});
+
+test("review: import never follows a symlinked note out of the vault", async () => {
+  const { common, vaultDir, state, memory } = await fixture();
+  await exportVault(ctx, common);
+  writeFileSync(join(state, "secret.txt"), "sk-live-private-token\n");
+  rmSync(join(vaultDir, "facts/fact-plain.md"));
+  symlinkSync(join(state, "secret.txt"), join(vaultDir, "facts/fact-plain.md"));
+  const report = await importVault(ctx, { ...common, actor: "tester" });
+  const item = report.items.find((i) => i.path === "facts/fact-plain.md");
+  expect(item?.action).toBe("invalid");
+  expect(item?.reason).toContain("symlink");
+  expect(report.proposals.memory).toEqual([]);
+  expect(await memory.listProposals(ctx, "pending")).toEqual([]);
+  expect(JSON.stringify(report)).not.toContain("sk-live-private-token");
+  const status = await vaultStatus(ctx, common);
+  expect(status.memory.notes.invalid).toBe(1);
+
+  // a symlinked directory is refused the same way
+  rmSync(join(vaultDir, "skills"), { recursive: true, force: true });
+  mkdirSync(join(state, "elsewhere"));
+  writeFileSync(
+    join(state, "elsewhere", "release-notes.md"),
+    read(vaultDir, "facts/fact-profile.md"),
+  );
+  symlinkSync(join(state, "elsewhere"), join(vaultDir, "skills"));
+  const second = await importVault(ctx, { ...common, actor: "tester" });
+  const skill = second.items.find((i) => i.path === "skills/release-notes.md");
+  expect(skill?.action).toBe("invalid");
+  expect(skill?.reason).toContain("outside the vault");
+});
+
+test("review: status reports deleted or edited generated notes by state", async () => {
+  const { common, vaultDir } = await fixture();
+  await exportVault(ctx, { ...common, graph: graphFixture() });
+  rmSync(join(vaultDir, "graph/ws1/index.md"));
+  writeFileSync(
+    join(vaultDir, "projects/p.md"),
+    read(vaultDir, "projects/p.md").replace("## Skills", "## Skills (edited)"),
+  );
+  const status = await vaultStatus(ctx, common);
+  expect(status.derived).toMatchObject({
+    derived: 4,
+    deleted: 1,
+    modified: 1,
+    invalid: 0,
+  });
+  const report = await importVault(ctx, { ...common, actor: "tester" });
+  expect(
+    report.items
+      .filter(
+        (i) => i.path === "graph/ws1/index.md" || i.path === "projects/p.md",
+      )
+      .map((i) => i.action),
+  ).toEqual(["ignored_derived", "ignored_derived"]);
+});
+
+test("review: editing a new skill note again proposes the new content", async () => {
+  const { common, vaultDir, skills } = await fixture();
+  await exportVault(ctx, common);
+  const path = join(vaultDir, "skills/triage.md");
+  writeFileSync(
+    path,
+    `---\nmars_kind: skill\n---\n${SKILL("triage", "Step A\n")}`,
+  );
+  const first = await importVault(ctx, { ...common, actor: "tester" });
+  expect(first.proposals.skills).toHaveLength(1);
+  const repeat = await importVault(ctx, { ...common, actor: "tester" });
+  expect(repeat.items.find((i) => i.path === "skills/triage.md")?.action).toBe(
+    "already_proposed",
+  );
+  writeFileSync(
+    path,
+    `---\nmars_kind: skill\n---\n${SKILL("triage", "Step B\n")}`,
+  );
+  const edited = await importVault(ctx, { ...common, actor: "tester" });
+  expect(edited.items.find((i) => i.path === "skills/triage.md")?.action).toBe(
+    "proposed",
+  );
+  const pending = (await skills.listProposals()).filter(
+    (p) => p.status === "pending" && p.source === "memory-vault",
+  );
+  expect(pending).toHaveLength(2);
+  expect(
+    pending.some((p) =>
+      p.ops.some((op) => "content" in op && op.content?.includes("Step B")),
+    ),
+  ).toBe(true);
+});
+
+test("review: store errors in the import report never echo note text", async () => {
+  const { common, vaultDir, memory } = await fixture();
+  await exportVault(ctx, common);
+  const secret = "Deploys happen on Mondays with token sk-live-abc";
+  writeFileSync(
+    join(vaultDir, "facts/fact-plain.md"),
+    read(vaultDir, "facts/fact-plain.md").replace(
+      "Deploys happen on Fridays.",
+      secret,
+    ),
+  );
+  const failing = {
+    snapshot: (c: RequestContext) => memory.snapshot(c),
+    listProposals: (c: RequestContext, status?: "pending") =>
+      memory.listProposals(c, status),
+    submitProposal: async (): Promise<never> => {
+      const error = new Error(`store rejected fact "${secret}" for policy`);
+      (error as { code?: string }).code = "policy_violation";
+      throw error;
+    },
+  };
+  const report = await importVault(ctx, {
+    ...common,
+    memory: failing as unknown as typeof memory,
+    actor: "tester",
+  });
+  const item = report.items.find((i) => i.path === "facts/fact-plain.md");
+  expect(item?.action).toBe("failed");
+  expect(item?.reason).toContain("policy_violation");
+  expect(item?.reason).toContain("<note text>");
+  expect(JSON.stringify(report)).not.toContain("sk-live-abc");
+});

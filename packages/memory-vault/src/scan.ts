@@ -1,11 +1,16 @@
-import { readdir, readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { lstat, readdir, readFile, realpath } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import type { RequestContext } from "@mars/contracts";
 import { canonicalJson, RequestContextSchema } from "@mars/memory";
 import { VaultError } from "./errors";
 import { readManifest } from "./export";
 import { type ParsedNote, parseNote, sha256 } from "./notes";
-import { assertVaultDirectory, resolveInside } from "./paths";
+import {
+  assertVaultDirectory,
+  contains,
+  resolveInside,
+  VaultPathError,
+} from "./paths";
 import {
   DERIVED_KINDS,
   type ManifestNote,
@@ -119,10 +124,32 @@ export async function scanVault(
     }
     let text: string;
     try {
+      // Never follow a link out of the vault: a symlinked note (or a note in a
+      // symlinked directory) could pull private files into a proposal.
+      if ((await lstat(absolute)).isSymbolicLink())
+        throw new VaultPathError("path_escape", `${tracked.path} is a symlink`);
+      const [realVault, realParent] = await Promise.all([
+        realpath(vaultDir),
+        realpath(dirname(absolute)),
+      ]);
+      if (realParent !== realVault && !contains(realVault, realParent))
+        throw new VaultPathError(
+          "path_escape",
+          `${tracked.path} resolves outside the vault`,
+        );
       text = await readFile(absolute, "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         notes.push({ ...base, state: "deleted", note: null, reason: null });
+        continue;
+      }
+      if (error instanceof VaultPathError) {
+        notes.push({
+          ...base,
+          state: "invalid",
+          note: null,
+          reason: error.message,
+        });
         continue;
       }
       throw error;
