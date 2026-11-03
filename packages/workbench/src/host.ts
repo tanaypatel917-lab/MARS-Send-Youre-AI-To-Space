@@ -1466,13 +1466,13 @@ export async function createWorkbenchHost(
           return "file" as const;
         } catch (error) {
           if (notFound(error)) return null;
-          if (
-            typeof error === "object" &&
-            error !== null &&
-            "code" in error &&
-            (error as { code: unknown }).code === "policy"
-          )
-            return "directory" as const;
+          const code =
+            typeof error === "object" && error !== null && "code" in error
+              ? (error as { code: unknown }).code
+              : undefined;
+          // A file too large to read still exists and can be deleted or moved.
+          if (code === "limit_exceeded") return "file" as const;
+          if (code === "policy") return "directory" as const;
           throw error;
         }
       },

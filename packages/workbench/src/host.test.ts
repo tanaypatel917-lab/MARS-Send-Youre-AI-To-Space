@@ -132,7 +132,7 @@ async function fixture() {
   let diffFiles: DiffResult["files"] = [];
   const writes: string[] = [];
   const removes: string[] = [];
-  const readArtifacts = new Map<string, ArtifactRef | null>();
+  const readArtifacts = new Map<string, ArtifactRef | string | null>();
   const writeModes = new Map<string, boolean | undefined>();
   const artifact = await store.artifacts.put(
     context(),
@@ -157,6 +157,11 @@ async function fixture() {
       if (override === null) {
         throw Object.assign(new Error(`fixture: ${path} not found`), {
           code: "not_found",
+        });
+      }
+      if (typeof override === "string") {
+        throw Object.assign(new Error(`fixture: ${path} ${override}`), {
+          code: override,
         });
       }
       return override ?? artifact;
@@ -3543,9 +3548,13 @@ test("mars_apply_patch can delete or move a binary file: existence never decodes
   );
   f.readArtifacts.set("assets/logo.png", png);
   f.readArtifacts.set("missing.txt", null);
+  f.readArtifacts.set("assets/huge.bin", "limit_exceeded");
+  f.readArtifacts.set("assets", "policy");
   const api = await conventionsHost(f, {
     async applyPatch(_patch, files) {
       expect(await files.exists("assets/logo.png")).toBe("file");
+      expect(await files.exists("assets/huge.bin")).toBe("file");
+      expect(await files.exists("assets")).toBe("directory");
       expect(await files.exists("missing.txt")).toBeNull();
       await expect(files.read("assets/logo.png")).rejects.toThrow();
       await files.remove("assets/logo.png");
