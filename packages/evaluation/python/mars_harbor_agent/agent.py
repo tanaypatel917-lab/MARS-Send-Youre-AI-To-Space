@@ -23,6 +23,7 @@ or logs by this adapter.
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import json
 import os
 import re
@@ -243,10 +244,32 @@ class MarsAgent(BaseAgent):
     ) -> None:
         if len(instruction.encode("utf-8")) > _MAX_INSTRUCTION_BYTES:
             raise MarsAgentConfigError("instruction exceeds the adapter size limit")
+        # trial_timeout_ms bounds run() end-to-end: instruction upload,
+        # credential handover, the bundle and usage/result collection. Harbor's
+        # upload/download calls take no timeout, so they are wrapped in
+        # asyncio.wait_for on the remaining budget. setup() is bounded by
+        # Harbor's agent setup timeout.
+        started = self._clock()
+
+        def remaining_ms() -> int:
+            return self.trial_timeout_ms - int((self._clock() - started) * 1000)
+
+        async def bounded(label: str, awaitable):
+            budget_ms = remaining_ms()
+            if budget_ms < 1000:
+                raise MarsAgentError(f"{label}: less than one second of trial_timeout_ms remains; aborting the trial")
+            try:
+                return await asyncio.wait_for(awaitable, timeout=budget_ms / 1000)
+            except asyncio.TimeoutError as error:
+                raise MarsAgentError(f"{label} exceeded trial_timeout_ms") from error
+
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         instruction_path = self.logs_dir / "mars-instruction.txt"
         instruction_path.write_text(instruction, "utf-8")
-        await environment.upload_file(instruction_path, str(CONTAINER_STATE_DIR / "instruction.txt"))
+        await bounded(
+            "instruction upload",
+            environment.upload_file(instruction_path, str(CONTAINER_STATE_DIR / "instruction.txt")),
+        )
 
         env_name = self._api_key_env()
         env: dict[str, str] = {
@@ -262,20 +285,16 @@ class MarsAgent(BaseAgent):
         # argv: it is uploaded as a 0600 file that the bundle reads and unlinks
         # before any task command runs. (Deleting a variable inside a process
         # would not scrub /proc/<pid>/environ.)
-        started = self._clock()
         if key_value:
             credential_path = CONTAINER_STATE_DIR / CREDENTIAL_FILE
-            await self._upload_credential(environment, key_value, credential_path)
-            env["MARS_AGENT_CREDENTIAL"] = str(credential_path)
-        # The credential handover is charged to the trial budget: the bundle
-        # gets whatever is left of trial_timeout_ms, so run() as a whole stays
-        # bounded even when Harbor's own agent timeout is unset.
-        remaining_ms = self.trial_timeout_ms - int((self._clock() - started) * 1000)
-        if remaining_ms < 1000:
-            raise MarsAgentError(
-                "credential handover left less than one second of the trial timeout; refusing to start the bundle"
+            await bounded(
+                "credential handover", self._upload_credential(environment, key_value, credential_path)
             )
-        timeout_sec = remaining_ms // 1000  # whole-second floor never exceeds the budget
+            env["MARS_AGENT_CREDENTIAL"] = str(credential_path)
+        budget_ms = remaining_ms()
+        if budget_ms < 1000:
+            raise MarsAgentError("less than one second of trial_timeout_ms remains; refusing to start the bundle")
+        timeout_sec = budget_ms // 1000  # whole-second floor never exceeds the budget
         command = (
             f"cd {shlex.quote(str(self.workdir))} && "
             f"exec {shlex.quote(str(CONTAINER_AGENT_DIR / BUNDLE_BINARY))} "
@@ -283,7 +302,7 @@ class MarsAgent(BaseAgent):
             f"2> {shlex.quote(str(self.environment_logs_dir / 'mars-agent.stderr.txt'))}"
         )
         result = await environment.exec(command, env=env, timeout_sec=timeout_sec)
-        await self._collect(environment, context, result.return_code)
+        await bounded("usage/result collection", self._collect(environment, context, result.return_code))
 
     async def _upload_credential(
         self, environment: BaseEnvironment, key_value: str, credential_path: PurePosixPath

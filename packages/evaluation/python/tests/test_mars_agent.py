@@ -284,12 +284,14 @@ def test_credential_handover_is_charged_to_the_trial_timeout(tmp_path, bundle, m
     import asyncio
 
     def fake_clock(*samples: float):
+        # run() reads the clock at entry, before each bounded transfer, before
+        # the bundle exec and before collection; keep returning the last sample.
         it = iter(samples)
-        return lambda: next(it)
+        return lambda: next(it, samples[-1])
 
     # handover took 45 s of a 120 s trial budget
     agent = make_agent(tmp_path, bundle)
-    agent._clock = fake_clock(1000.0, 1045.0)
+    agent._clock = fake_clock(1000.0, 1000.0, 1000.0, 1045.0)
     env = FakeEnvironment(usage=None, return_code=0)
     asyncio.run(agent.setup(env))
     asyncio.run(agent.run("Do the task.", env, AgentContext()))
@@ -299,9 +301,27 @@ def test_credential_handover_is_charged_to_the_trial_timeout(tmp_path, bundle, m
     # handover left under one second (500 ms): a 1 s floor would exceed the budget
     for stalled_until in (1119.5, 1120.0, 1130.0):
         agent = make_agent(tmp_path, bundle)
-        agent._clock = fake_clock(1000.0, stalled_until)
+        agent._clock = fake_clock(1000.0, 1000.0, 1000.0, stalled_until)
         env = FakeEnvironment(usage=None, return_code=0)
         asyncio.run(agent.setup(env))
-        with pytest.raises(MarsAgentError, match="less than one second of the trial timeout"):
+        with pytest.raises(MarsAgentError, match="less than one second of trial_timeout_ms"):
             asyncio.run(agent.run("Do the task.", env, AgentContext()))
         assert not any(c["command"].startswith("cd ") for c in env.commands)
+
+
+def test_stalled_transfer_is_bounded_by_the_trial_timeout(tmp_path, bundle, monkeypatch):
+    monkeypatch.delenv("MARS_EVAL_API_KEY", raising=False)
+    import asyncio
+
+    class StallingEnvironment(FakeEnvironment):
+        async def upload_file(self, source_path, target_path):
+            if str(target_path).endswith("instruction.txt"):
+                await asyncio.sleep(30)
+            await super().upload_file(source_path, target_path)
+
+    agent = make_agent(tmp_path, bundle, trial_timeout_ms=1000)
+    env = StallingEnvironment(usage=None, return_code=0)
+    asyncio.run(agent.setup(env))
+    with pytest.raises(MarsAgentError, match="instruction upload exceeded trial_timeout_ms"):
+        asyncio.run(agent.run("Do the task.", env, AgentContext()))
+    assert not any(c["command"].startswith("cd ") for c in env.commands)
