@@ -27,6 +27,7 @@ import json
 import os
 import re
 import shlex
+import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -44,6 +45,7 @@ NATIVE_ADDON_GLOB = "pi_natives.*.node"
 CONTAINER_AGENT_DIR = PurePosixPath("/opt/mars-agent")
 CONTAINER_STATE_DIR = PurePosixPath("/tmp/mars-state")
 CREDENTIAL_FILE = "credential"
+RESERVED_ENV_PREFIX = "MARS_AGENT_"
 USAGE_FILE = "mars-usage.json"
 RESULT_FILE = "mars-result.json"
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
@@ -165,6 +167,8 @@ class MarsAgent(BaseAgent):
         env_name = self._model_api_key_name or "MARS_EVAL_API_KEY"
         if not _ENV_NAME.fullmatch(env_name):
             raise MarsAgentConfigError("api key env var name is invalid")
+        if env_name.startswith(RESERVED_ENV_PREFIX):
+            raise MarsAgentConfigError(f"api key env var name must not start with {RESERVED_ENV_PREFIX}")
         return env_name
 
     def _resolved_base_url(self) -> str:
@@ -235,29 +239,36 @@ class MarsAgent(BaseAgent):
             "MARS_HOME": str(CONTAINER_STATE_DIR / "home"),
         }
         key_value = os.environ.get(env_name)
-        # The credential never reaches the bundle's environment: the shell
-        # writes it to a 0600 file, unsets it and exec()s the bundle, which
-        # reads and unlinks the file before any task command runs. Deleting a
-        # variable inside the bundle would not scrub /proc/<pid>/environ.
-        credential_path = CONTAINER_STATE_DIR / CREDENTIAL_FILE
-        handover = ""
+        # The credential never enters any container process environment or
+        # argv: it is uploaded as a 0600 file that the bundle reads and unlinks
+        # before any task command runs. (Deleting a variable inside a process
+        # would not scrub /proc/<pid>/environ.)
         if key_value:
-            env[env_name] = key_value
+            credential_path = CONTAINER_STATE_DIR / CREDENTIAL_FILE
+            await self._upload_credential(environment, key_value, credential_path)
             env["MARS_AGENT_CREDENTIAL"] = str(credential_path)
-            handover = (
-                f"umask 077 && printf '%s' \"${env_name}\" > {shlex.quote(str(credential_path))} && "
-                f"unset {env_name} && "
-            )
         timeout_sec = max(1, self.trial_timeout_ms // 1000)
         command = (
             f"cd {shlex.quote(str(self.workdir))} && "
-            f"{handover}"
             f"exec {shlex.quote(str(CONTAINER_AGENT_DIR / BUNDLE_BINARY))} "
             f"> {shlex.quote(str(self.environment_logs_dir / 'mars-agent.stdout.txt'))} "
             f"2> {shlex.quote(str(self.environment_logs_dir / 'mars-agent.stderr.txt'))}"
         )
         result = await environment.exec(command, env=env, timeout_sec=timeout_sec)
         await self._collect(environment, context, result.return_code)
+
+    async def _upload_credential(
+        self, environment: BaseEnvironment, key_value: str, credential_path: PurePosixPath
+    ) -> None:
+        fd, host_path = tempfile.mkstemp(prefix="mars-credential-", dir=self.logs_dir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(key_value)
+            os.chmod(host_path, 0o600)
+            await environment.upload_file(host_path, str(credential_path))
+        finally:
+            os.unlink(host_path)
+        await environment.exec(f"chmod 0600 {shlex.quote(str(credential_path))}")
 
     async def _collect(self, environment: BaseEnvironment, context: AgentContext, return_code: int) -> None:
         usage_target = self.logs_dir / USAGE_FILE

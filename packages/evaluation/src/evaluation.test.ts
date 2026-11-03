@@ -127,6 +127,11 @@ test("manifest refuses unpinned docker images, budget inversions, holdout/task e
       model: { ...base.model, api_key_env: "sk-live-value-here" },
     }),
   ).rejects.toThrow();
+  await expect(
+    sampleManifest({
+      model: { ...base.model, api_key_env: "MARS_AGENT_CREDENTIAL" },
+    }),
+  ).rejects.toThrow(/reserved/);
   const roundTrip = parseComparisonManifest(JSON.parse(canonicalJson(base)));
   expect(roundTrip).toEqual(base);
 });

@@ -130,15 +130,15 @@ def test_run_passes_instruction_only_and_reports_usage(tmp_path, bundle, monkeyp
     run_cmd = [c for c in env.commands if c["command"].startswith("cd ")][0]
     assert run_cmd["timeout_sec"] == 120
     assert run_cmd["command"].startswith("cd /app && ")
-    assert run_cmd["env"]["MARS_EVAL_API_KEY"] == "sk-not-real-secret"
+    # Credential handover: uploaded as a 0600 file, never placed in any
+    # container process environment or argv.
+    assert "MARS_EVAL_API_KEY" not in run_cmd["env"]
     assert run_cmd["env"]["MARS_AGENT_CREDENTIAL"] == str(CONTAINER_STATE_DIR / "credential")
-    # Credential handover: written to a 0600 file, unset, then exec so the
-    # bundle's /proc/<pid>/environ never contains it.
+    assert env.files[str(CONTAINER_STATE_DIR / "credential")] == b"sk-not-real-secret"
     assert "sk-not-real-secret" not in run_cmd["command"]
-    assert (
-        f"umask 077 && printf '%s' \"$MARS_EVAL_API_KEY\" > {CONTAINER_STATE_DIR / 'credential'} && "
-        "unset MARS_EVAL_API_KEY && exec /opt/mars-agent/mars-agent "
-    ) in run_cmd["command"]
+    assert run_cmd["command"].startswith("cd /app && exec /opt/mars-agent/mars-agent ")
+    assert any(c["command"] == f"chmod 0600 {CONTAINER_STATE_DIR / 'credential'}" for c in env.commands)
+    assert not list(tmp_path.rglob("mars-credential-*"))
     assert "tests" not in run_cmd["command"]
     assert env.files[str(CONTAINER_STATE_DIR / "instruction.txt")] == b"Fix the regex in /app/filter.py so the tests pass."
     assert context.n_input_tokens == 1200
@@ -166,6 +166,8 @@ def test_run_without_usage_summary_records_absence(tmp_path, bundle):
 
 
 def test_config_validation(tmp_path, bundle):
+    with pytest.raises(MarsAgentConfigError, match="MARS_AGENT_"):
+        make_agent(tmp_path, bundle, model_api_key_name="MARS_AGENT_CREDENTIAL").provider_config()
     with pytest.raises(MarsAgentConfigError, match="bundle_dir"):
         make_agent(tmp_path, {**bundle, "bundle_dir": None})
     with pytest.raises(MarsAgentConfigError, match="workdir"):
@@ -206,5 +208,5 @@ def test_run_without_key_skips_credential_handover(tmp_path, bundle, monkeypatch
     run_cmd = [c for c in env.commands if c["command"].startswith("cd ")][0]
     assert "MARS_EVAL_API_KEY" not in run_cmd["env"]
     assert "MARS_AGENT_CREDENTIAL" not in run_cmd["env"]
-    assert "printf" not in run_cmd["command"]
-    assert "&& exec /opt/mars-agent/mars-agent " in run_cmd["command"]
+    assert str(CONTAINER_STATE_DIR / "credential") not in env.files
+    assert run_cmd["command"].startswith("cd /app && exec /opt/mars-agent/mars-agent ")

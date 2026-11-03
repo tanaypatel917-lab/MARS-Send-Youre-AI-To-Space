@@ -33,7 +33,12 @@ const ConfigSchema = z
     schema: z.literal("mars.evaluation-agent-config/v1"),
     model_id: z.string().min(1),
     base_url: z.string().url(),
-    api_key_env: z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/),
+    api_key_env: z
+      .string()
+      .regex(/^[A-Z][A-Z0-9_]{0,127}$/)
+      .refine((name) => !name.startsWith("MARS_AGENT_"), {
+        message: "MARS_AGENT_* names are reserved for the adapter",
+      }),
     pricing: z
       .object({
         input_per_mtok_usd: z.number().finite().nonnegative(),

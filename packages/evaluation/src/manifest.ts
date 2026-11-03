@@ -17,7 +17,10 @@ const commit = z.string().regex(/^[a-f0-9]{40}$/, "expected a 40-hex commit");
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/, "expected a sha256 hex");
 const envName = z
   .string()
-  .regex(/^[A-Z_][A-Z0-9_]*$/, "expected an environment variable NAME");
+  .regex(/^[A-Z_][A-Z0-9_]*$/, "expected an environment variable NAME")
+  .refine((name) => !name.startsWith("MARS_AGENT_"), {
+    message: "MARS_AGENT_* names are reserved for the Harbor agent adapter",
+  });
 /** Mirrors `packages/workspaces/src/sandbox.ts`: images must be digest pinned. */
 export const DOCKER_DIGEST_PATTERN =
   /^[a-z0-9][a-z0-9._/:-]*@sha256:[a-f0-9]{64}$/;
