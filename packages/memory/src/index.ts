@@ -1437,8 +1437,11 @@ export class DurableMemoryStore
     });
   }
   /**
-   * Applies a pending proposal through the normal batch path. The proposal's
-   * captured `expected_revision` must still be current; otherwise `conflict`.
+   * Applies a pending proposal through the normal batch path. Proposals that
+   * patch, remove or supersede entries must still match their captured
+   * `expected_revision` (otherwise `conflict`); add-only proposals cannot
+   * clobber anything, so they are applied at the current revision and only
+   * fail on entry-id conflicts, budgets or threats.
    */
   async acceptProposal(
     ctx: RequestContext,
@@ -1450,9 +1453,12 @@ export class DurableMemoryStore
       const proposal = this.loadProposal(ctx, proposalId);
       if (proposal.status !== "pending")
         fail("conflict", { status: proposal.status });
+      const addOnly = proposal.operations.every(
+        (op) => op.operation === "add" && !op.entry.supersedes,
+      );
       const applied = this.applyBatch(
         ctx,
-        proposal.expected_revision,
+        addOnly ? this.revision(ctx) : proposal.expected_revision,
         proposal.operations,
       );
       const resolved: MemoryProposal = {

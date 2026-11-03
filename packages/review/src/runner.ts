@@ -6,6 +6,7 @@ import type {
   MemoryOperation,
   MemoryProposalService,
   RequestContext,
+  SkillMutationOptions,
   SkillProposalService,
 } from "@mars/contracts";
 import { MemoryStoreError } from "@mars/memory";
@@ -45,12 +46,24 @@ export interface Turn {
 export interface ReviewDependencies {
   /** Exact scope the review proposes into; proposals never widen it. */
   context: RequestContext;
-  memory: Pick<MemoryProposalService, "submitProposal"> & {
-    snapshot(
-      context: RequestContext,
-    ): Promise<{ revision: number; entries: MemoryEntry[] }>;
+  /**
+   * `rejectProposal`/`reject` are optional and used only to withdraw this
+   * review's own just-submitted proposals when a later one fails, so the
+   * review status and the proposal inbox never disagree.
+   */
+  memory: Pick<MemoryProposalService, "submitProposal"> &
+    Partial<Pick<MemoryProposalService, "rejectProposal">> & {
+      snapshot(
+        context: RequestContext,
+      ): Promise<{ revision: number; entries: MemoryEntry[] }>;
+    };
+  skills: SkillProposalService & {
+    reject?(
+      id: string,
+      reason: string,
+      options?: SkillMutationOptions,
+    ): Promise<string>;
   };
-  skills: SkillProposalService;
   model: ReviewModelGateway;
   logRoot: string;
   idleMs?: number;
@@ -94,6 +107,7 @@ export const eligible = (turn: Turn) =>
 function memoryEntries(
   context: RequestContext,
   reviewId: string,
+  proposalIndex: number,
   ops: { target: "memory" | "user"; content: string }[],
   now: string,
 ): MemoryOperation[] {
@@ -107,7 +121,7 @@ function memoryEntries(
           }
         : context.scope;
     const entry: MemoryEntry = {
-      entry_id: `review:${reviewId}:${index}`,
+      entry_id: `review:${reviewId}:${proposalIndex}:${index}`,
       scope,
       target,
       fact: op.content,
@@ -147,11 +161,17 @@ export class ReviewRunner {
       memory: {
         snapshot: deps.memory.snapshot.bind(deps.memory),
         submitProposal: deps.memory.submitProposal.bind(deps.memory),
+        ...(deps.memory.rejectProposal
+          ? { rejectProposal: deps.memory.rejectProposal.bind(deps.memory) }
+          : {}),
       },
       skills: {
         list: deps.skills.list.bind(deps.skills),
         getRevision: deps.skills.getRevision.bind(deps.skills),
         submitProposal: deps.skills.submitProposal.bind(deps.skills),
+        ...(deps.skills.reject
+          ? { reject: deps.skills.reject.bind(deps.skills) }
+          : {}),
       },
     };
     this.now = deps.clock ?? Date.now;
@@ -361,7 +381,7 @@ export class ReviewRunner {
       signal.throwIfAborted();
       const source = `background_review:${turn.sessionId}:${result.reviewId}`;
       const now = new Date(this.now()).toISOString();
-      for (const proposal of proposals) {
+      for (const [proposalIndex, proposal] of proposals.entries()) {
         signal.throwIfAborted();
         if (
           (await this.deps.memory.snapshot(context)).revision !==
@@ -383,6 +403,7 @@ export class ReviewRunner {
               operations: memoryEntries(
                 context,
                 result.reviewId,
+                proposalIndex,
                 proposal.ops,
                 now,
               ),
@@ -419,6 +440,7 @@ export class ReviewRunner {
       this.backoff = 0;
       result.status = "completed";
     } catch (error) {
+      if (result.proposals.length) await this.withdraw(turn, result, error);
       if (signal.aborted) result.status = "cancelled";
       else if (error instanceof ReviewRateLimit) {
         result.status = "rate-limited";
@@ -443,6 +465,47 @@ export class ReviewRunner {
       cooldownUntil: this.cooldown || undefined,
     });
     return result;
+  }
+  /**
+   * A review is all-or-nothing: if any submission fails after earlier ones
+   * succeeded, withdraw (reject) this review's own proposals so the inbox
+   * matches the reported status. Withdrawal failures are logged, never thrown.
+   */
+  private async withdraw(
+    turn: Turn,
+    result: ReviewResult,
+    cause: unknown,
+  ): Promise<void> {
+    const reason = `Withdrawn: review ${result.reviewId} ${
+      cause instanceof Error ? cause.name : "failed"
+    }`;
+    const withdrawn: ReviewResult["proposals"] = [];
+    for (const proposal of result.proposals.splice(0)) {
+      try {
+        if (proposal.store === "memory") {
+          if (!this.deps.memory.rejectProposal) throw new Error("unsupported");
+          await this.deps.memory.rejectProposal(
+            this.deps.context,
+            proposal.id,
+            reason,
+          );
+        } else {
+          if (!this.deps.skills.reject) throw new Error("unsupported");
+          await this.deps.skills.reject(proposal.id, reason, {
+            actor: "@mars/review",
+            source: "background_review",
+            reviewId: result.reviewId,
+          });
+        }
+        withdrawn.push(proposal);
+      } catch {
+        result.proposals.push(proposal);
+      }
+    }
+    await this.log(turn, result, "withdrawn", {
+      withdrawn,
+      remaining: result.proposals,
+    });
   }
   /** Clears pending work, aborts in-flight review and drains it. */
   async stop() {

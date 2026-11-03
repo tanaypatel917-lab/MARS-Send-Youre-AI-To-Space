@@ -114,7 +114,10 @@ workbench wiring (`WorkbenchHostOptions.skills` / `.review`, a
 `skills-context.ts` mirroring `memory-context.ts`, review scheduled after
 completed foreground tasks, `mars serve` constructing the `SkillStore` and
 `ReviewRunner`) is covered by offline host tests only; no live session has
-consumed a frozen skill.
+consumed a frozen skill. Read-denied tasks are never reported to review (the
+reviewer would otherwise see context the task could not read), and
+`iterations` counts assistant messages added to the Oh My Pi journal during
+the run, not raw journal records.
 
 ## Background review
 

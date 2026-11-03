@@ -7,13 +7,18 @@ import {
   rename,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { type MutationOptions, SkillStore } from "./index";
+import {
+  type MutationOptions,
+  OWNERLESS_LOCK_GRACE_MS,
+  SkillStore,
+} from "./index";
 
 const options: MutationOptions = { actor: "user", source: "interactive" };
 const content = (name: string, text = "Useful instructions") =>
@@ -462,5 +467,17 @@ describe("skill lifecycle owner", () => {
     await expect(read(".skills-transaction.json")).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+});
+
+describe("writer lock recovery", () => {
+  it("reclaims an aged ownerless lock directory but not a fresh one", async () => {
+    const lock = join(root, ".writer.lock");
+    await mkdir(lock);
+    const old = new Date(Date.now() - OWNERLESS_LOCK_GRACE_MS - 1_000);
+    await utimes(lock, old, old);
+    await store.create("test", content("test"), options);
+    expect((await store.get("test"))?.status).toBe("active");
+    await expect(readFile(lock)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

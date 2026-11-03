@@ -4,6 +4,7 @@ import {
   readdir,
   readFile,
   rmdir,
+  stat,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -20,9 +21,20 @@ function alive(pid: number): boolean {
   }
 }
 
+/** An ownerless lock directory older than this is treated as abandoned. */
+export const OWNERLESS_LOCK_GRACE_MS = 5_000;
+
 async function reclaim(lock: string) {
   try {
     const files = await readdir(lock);
+    if (files.length === 0) {
+      // The acquirer died between mkdir and writing its owner file. rmdir is
+      // atomic and fails with ENOTEMPTY if a live acquirer wrote its owner
+      // file meanwhile, so an aged empty directory can be removed safely.
+      if (Date.now() - (await stat(lock)).mtimeMs >= OWNERLESS_LOCK_GRACE_MS)
+        await rmdir(lock);
+      return;
+    }
     const name = files[0];
     if (files.length !== 1 || !name || !/^[\da-f-]+\.json$/.test(name)) return;
     const ownerFile = join(lock, name);
@@ -87,6 +99,8 @@ export async function withDirectoryLock<T>(
     await unlink(ownerFile).catch((error) => {
       if (error.code !== "ENOENT") throw error;
     });
-    await rmdir(lock);
+    await rmdir(lock).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+    });
   }
 }

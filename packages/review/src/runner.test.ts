@@ -351,7 +351,7 @@ test("snapshot fencing: stores that change mid-review get no proposals", async (
   expect(await memory.listProposals(context)).toEqual([]);
 });
 
-test("stale memory proposals are rejected by the owner, not applied", async () => {
+test("add-only review proposals rebase onto later user writes instead of clobbering them", async () => {
   const { memory, runner } = setup(
     fakeModel(() => output([memoryProposal("fact")])),
   );
@@ -375,12 +375,10 @@ test("stale memory proposals are rejected by the owner, not applied", async () =
     },
   ]);
   const id = result.proposals[0]?.id ?? "";
-  await expect(memory.acceptProposal(context, id)).rejects.toMatchObject({
-    code: "conflict",
-  });
-  expect((await memory.snapshot(context)).entries.map((e) => e.fact)).toEqual([
-    "User wrote this first",
-  ]);
+  expect((await memory.acceptProposal(context, id)).applied_revision).toBe(2);
+  expect(
+    (await memory.snapshot(context)).entries.map((e) => e.fact).sort(),
+  ).toEqual(["User wrote this first", "fact"]);
 });
 
 test("one review in flight, timeouts cancel, and stop drains", async () => {
@@ -424,4 +422,116 @@ test("oversized context and transcripts are rejected without a model call", asyn
   };
   expect((await runner.reviewNow(badRole)).status).toBe("rejected");
   expect(runner.modelRequests).toBe(0);
+});
+
+test("several memory lessons from one review get distinct ids and can all be accepted", async () => {
+  const { memory, runner } = setup(
+    fakeModel(() =>
+      output([
+        memoryProposal("Run tests"),
+        memoryProposal("Prefer concise replies"),
+      ]),
+    ),
+  );
+  const result = await runner.reviewNow(turn());
+  expect(result.status).toBe("completed");
+  const pending = await memory.listProposals(context, "pending");
+  const ids = pending
+    .map((p) => p.operations[0])
+    .map((op) => (op?.operation === "add" ? op.entry.entry_id : ""));
+  expect(new Set(ids).size).toBe(2);
+  for (const proposal of pending)
+    expect(
+      (await memory.acceptProposal(context, proposal.proposal_id)).status,
+    ).toBe("accepted");
+  expect(
+    (await memory.snapshot(context)).entries.map((e) => e.fact).sort(),
+  ).toEqual(["Prefer concise replies", "Run tests"]);
+});
+
+test("a review is all-or-nothing: earlier proposals are withdrawn when a later one fails", async () => {
+  const { memory, skills, runner, log } = setup(
+    fakeModel(() =>
+      output([memoryProposal("Run tests"), skillProposal("taken")]),
+    ),
+  );
+  await skills.create("taken", skillContent("taken"), {
+    actor: "user",
+    source: "interactive",
+  });
+  const result = await runner.reviewNow(turn());
+  expect(result.status).toBe("rejected");
+  expect(result.proposals).toEqual([]);
+  expect(await memory.listProposals(context, "pending")).toEqual([]);
+  const rejected = await memory.listProposals(context, "rejected");
+  expect(rejected).toHaveLength(1);
+  expect(rejected[0]?.reason).toContain(`Withdrawn: review ${result.reviewId}`);
+  expect(await skills.listProposals()).toEqual([]);
+  expect(log().map((r) => r.event)).toEqual([
+    "started",
+    "proposal",
+    "withdrawn",
+    "rejected",
+  ]);
+});
+
+test("the registry gateway maps an exhausted 429 route to ReviewRateLimit", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mars-review-gateway-"));
+  roots.push(dir);
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  mkdirSync(join(dir, ".mars"));
+  writeFileSync(
+    join(dir, ".mars", "models.json"),
+    JSON.stringify({
+      version: 1,
+      providers: [
+        {
+          id: "fixture",
+          kind: "openai-compatible",
+          baseUrl: "https://fixture.invalid/v1",
+          apiKeyEnv: "FIXTURE_KEY",
+        },
+      ],
+      models: [
+        {
+          id: "fixture/free",
+          providerId: "fixture",
+          model: "fixture",
+          capabilities: { tools: true, vision: false, contextWindow: 32768 },
+          pricing: { free: true },
+        },
+      ],
+      routes: { default: ["fixture/free"] },
+    }),
+  );
+  const { loadModelRegistry } = await import("@mars/providers");
+  const { createRegistryReviewGateway } = await import("./model");
+  const registry = await loadModelRegistry({
+    cwd: dir,
+    home: dir,
+    env: { FIXTURE_KEY: "dummy-not-live" },
+  });
+  let fetches = 0;
+  const gateway = createRegistryReviewGateway({
+    registry,
+    env: { FIXTURE_KEY: "dummy-not-live" },
+    fetch: async () => {
+      fetches++;
+      return new Response("slow down", { status: 429 });
+    },
+  });
+  const request = {
+    system: "s",
+    user: "u",
+    maxTokens: 16,
+    timeoutMs: 1_000,
+    signal: new AbortController().signal,
+  };
+  await expect(gateway.complete(request)).rejects.toBeInstanceOf(
+    ReviewRateLimit,
+  );
+  expect(fetches).toBe(1);
+  const { runner } = setup(gateway);
+  expect((await runner.reviewNow(turn())).status).toBe("rate-limited");
+  expect(runner.pendingSessions).toEqual(["session-a"]);
 });

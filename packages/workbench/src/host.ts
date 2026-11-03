@@ -929,18 +929,34 @@ export async function createWorkbenchHost(
    * Only successful foreground turns reach background review; `run` is never
    * used for delegated children, which execute under the child runner.
    */
+  /** Model iterations = assistant messages in the Oh My Pi journal. */
+  const modelIterations = (runtime: RuntimeSession): number => {
+    try {
+      return runtime.journalSnapshot().entries.filter((entry) => {
+        const record = entry as {
+          type?: unknown;
+          message?: { role?: unknown };
+        } | null;
+        return (
+          record?.type === "message" && record.message?.role === "assistant"
+        );
+      }).length;
+    } catch {
+      return 0;
+    }
+  };
   const recordReviewTurn = (
     runtime: RuntimeSession,
     instruction: string,
     content: string,
+    iterationsBefore: number,
   ) => {
     if (!options.review) return;
     try {
-      const entries = runtime.journalSnapshot().entries.length;
       options.review.recordTurn({
         sessionId: runtime.sessionId,
         origin: "foreground",
-        iterations: Math.max(1, entries),
+        iterations: Math.max(1, modelIterations(runtime) - iterationsBefore),
         transcript: [
           {
             role: "user",
@@ -965,6 +981,7 @@ export async function createWorkbenchHost(
     steeringEventIds: string[] = [],
     remainingSteering = false,
     collaboration?: FrozenCollaboration,
+    reviewable = false,
   ) => {
     const closeRoom = (mode: "drain" | "cancel") =>
       collaboration
@@ -978,6 +995,7 @@ export async function createWorkbenchHost(
         } catch {
           // Review is advisory; it never affects the task.
         }
+        const iterationsBefore = reviewable ? modelIterations(runtime) : 0;
         const outcome = await runtime.run(instruction);
         if (options.memory) {
           const context = internalContext(options.scope);
@@ -1032,8 +1050,15 @@ export async function createWorkbenchHost(
         });
         if (status !== "paused")
           await closeRoom(status === "cancelled" ? "cancel" : "drain");
-        if (status === "completed")
-          recordReviewTurn(runtime, instruction, outcome.content);
+        // Read-denied tasks never feed review: the reviewer would otherwise
+        // see saved memory and skills the task itself was not allowed to read.
+        if (status === "completed" && reviewable)
+          recordReviewTurn(
+            runtime,
+            instruction,
+            outcome.content,
+            iterationsBefore,
+          );
         await reconcileResearch(task.task_id);
       } catch {
         await closeRoom("cancel");
@@ -1640,7 +1665,16 @@ export async function createWorkbenchHost(
         for (const observation of initialObservations)
           await persistObservation(observation);
         bound = true;
-        run(running, workspace, runtime, instruction, [], false, collaboration);
+        run(
+          running,
+          workspace,
+          runtime,
+          instruction,
+          [],
+          false,
+          collaboration,
+          params.approvals.read,
+        );
         return running;
       } catch (error) {
         await runtime?.dispose().catch(() => undefined);
@@ -1747,6 +1781,7 @@ export async function createWorkbenchHost(
           steeringEventIds,
           steeringEventIds.length < queued.length,
           launch.collaboration,
+          launch.approvals.read,
         );
         return running;
       } catch (error) {

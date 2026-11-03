@@ -2,6 +2,7 @@ import { selectExecutionModel } from "@mars/execution";
 import {
   type ModelProviderRegistry,
   ModelRouter,
+  NoModelAvailableError,
   ProviderError,
 } from "@mars/providers";
 
@@ -26,6 +27,22 @@ export interface ReviewModelReply {
 export interface ReviewModelGateway {
   readonly id: string;
   complete(request: ReviewModelRequest): Promise<ReviewModelReply>;
+}
+const RATE_LIMIT_TEXT = /HTTP 429|rate.?limit|too.?many.?requests|quota/i;
+/**
+ * `ModelRouter` retries retryable failures itself and surfaces an exhausted
+ * route as `NoModelAvailableError` with the attempts; a 429 on the selected
+ * model therefore arrives either directly or inside those attempts.
+ */
+export function isRateLimit(error: unknown): boolean {
+  if (error instanceof ProviderError)
+    return error.status === 429 || RATE_LIMIT_TEXT.test(error.message);
+  if (error instanceof NoModelAvailableError)
+    return (
+      error.attempts.length > 0 &&
+      error.attempts.every((attempt) => RATE_LIMIT_TEXT.test(attempt.error))
+    );
+  return false;
 }
 export class ReviewRateLimit extends Error {
   constructor() {
@@ -83,8 +100,7 @@ export function createRegistryReviewGateway(
           toolCalls: response.toolCalls.length,
         };
       } catch (error) {
-        if (error instanceof ProviderError && error.status === 429)
-          throw new ReviewRateLimit();
+        if (isRateLimit(error)) throw new ReviewRateLimit();
         throw error;
       }
     },

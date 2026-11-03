@@ -112,14 +112,41 @@ test("accept applies the batch through the normal writer and records the revisio
   ).toEqual({ code: "conflict", details: { status: "accepted" } });
 });
 
-test("stale proposals conflict instead of clobbering newer writes", async () => {
+test("stale mutating proposals conflict; add-only proposals rebase onto newer writes", async () => {
   const store = open();
-  const proposal = await submit(store, ["Use bun test"]);
-  await store.batch(c, 0, [{ operation: "add", entry: entry("fresh") }]);
+  await store.batch(c, 0, [{ operation: "add", entry: entry("existing") }]);
+  const proposal = await store.submitProposal(c, {
+    source: "review:test",
+    rationale: "Patch it",
+    expected_revision: 1,
+    operations: [
+      {
+        operation: "patch",
+        entry_id: "existing",
+        fact: "patched",
+        source_event_ids: ["e2"],
+      },
+    ],
+  });
+  await store.batch(c, 1, [{ operation: "add", entry: entry("fresh") }]);
   expect(await code(store.acceptProposal(c, proposal.proposal_id))).toEqual({
     code: "conflict",
-    details: { current_revision: 1 },
+    details: { current_revision: 2 },
   });
+  const addOnly = await submit(store, ["Use bun test"], 2);
+  const second = await submit(store, ["Prefer Biome"], 2);
+  expect(
+    (await store.acceptProposal(c, addOnly.proposal_id)).applied_revision,
+  ).toBe(3);
+  expect(
+    (await store.acceptProposal(c, second.proposal_id)).applied_revision,
+  ).toBe(4);
+  expect((await store.snapshot(c)).entries.map((e) => e.fact).sort()).toEqual([
+    "Prefer Biome",
+    "Use bun test",
+    "existing",
+    "fresh",
+  ]);
   expect(
     (await store.listProposals(c, "pending")).map((p) => p.proposal_id),
   ).toEqual([proposal.proposal_id]);

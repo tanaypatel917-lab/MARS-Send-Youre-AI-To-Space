@@ -10,6 +10,8 @@
  */
 
 const MAX_SCAN_CODE_POINTS = 65_536;
+/** Window overlap so a pattern straddling a boundary is still seen whole. */
+const SCAN_OVERLAP_CODE_POINTS = 4_096;
 
 /** Inclusive code-point ranges rejected as `invisible_unicode`. */
 export const INVISIBLE_CODE_POINT_RANGES: readonly (readonly [
@@ -49,9 +51,7 @@ export function isInvisibleCodePoint(codePoint: number): boolean {
 }
 
 export function findInvisibleCodePoint(content: string): number | undefined {
-  let seen = 0;
   for (const char of content) {
-    if (seen++ >= MAX_SCAN_CODE_POINTS) break;
     const codePoint = char.codePointAt(0) ?? 0;
     if (isInvisibleCodePoint(codePoint) && codePoint !== 0x0d) return codePoint;
   }
@@ -172,12 +172,26 @@ const SECRET_ASSIGNMENT =
 
 /**
  * Returns a threat identifier when `content` matches a denied pattern, else
- * `undefined`. Scans at most 65,536 code points; longer content is rejected by
- * size limits at the service boundary before it reaches the scanner.
+ * `undefined`. Long content is scanned in overlapping 65,536-code-point
+ * windows so no part of it escapes the patterns.
  */
 export function scanThreat(content: string): string | undefined {
   if (findInvisibleCodePoint(content) !== undefined) return "invisible_unicode";
-  const raw = [...content].slice(0, MAX_SCAN_CODE_POINTS).join("");
+  const codePoints = [...content];
+  for (
+    let start = 0;
+    start === 0 || start < codePoints.length;
+    start += MAX_SCAN_CODE_POINTS - SCAN_OVERLAP_CODE_POINTS
+  ) {
+    const threat = scanWindow(
+      codePoints.slice(start, start + MAX_SCAN_CODE_POINTS).join(""),
+    );
+    if (threat) return threat;
+  }
+  return undefined;
+}
+
+function scanWindow(raw: string): string | undefined {
   const normalized = raw.normalize("NFKC");
   if (findInvisibleCodePoint(normalized) !== undefined)
     return "invisible_unicode";

@@ -3071,3 +3071,29 @@ test("review hooks that throw never fail the task or leak into its events", asyn
   expect(payloads.join("\n")).not.toContain("REVIEW_PRIVATE_FAILURE");
   await api.close();
 });
+
+test("read-denied tasks never reach background review, even when completed", async () => {
+  const f = await fixture();
+  const { review, calls } = fakeReview();
+  const api = await f.makeHost(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { review },
+  );
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: false, write: false, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  session.finish("completed");
+  await session.disposed;
+  expect((await api.inspect(context(), "task")).status).toBe("completed");
+  expect(calls.map((call) => call.kind)).toEqual(["begin", "end"]);
+  await api.close();
+});
