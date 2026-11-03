@@ -265,6 +265,176 @@ export interface MemoryService {
   ): Promise<{ affected_training_manifests: string[] }>;
 }
 
+export type MemoryProposalStatus = "pending" | "accepted" | "rejected";
+/** A proposed memory batch awaiting a human/host decision; only the memory owner applies it. */
+export interface MemoryProposal {
+  proposal_id: string;
+  scope: Scope;
+  source: string;
+  operations: MemoryOperation[];
+  rationale: string;
+  expected_revision: number;
+  status: MemoryProposalStatus;
+  reason?: string;
+  submitted_at: string;
+  resolved_at?: string;
+  applied_revision?: number;
+}
+export interface MemoryProposalInput {
+  source: string;
+  operations: MemoryOperation[];
+  rationale: string;
+  expected_revision: number;
+}
+/** Proposal-only surface handed to background review; it can never write authoritative memory. */
+export interface MemoryProposalService {
+  submitProposal(
+    context: RequestContext,
+    proposal: MemoryProposalInput,
+  ): Promise<MemoryProposal>;
+  listProposals(
+    context: RequestContext,
+    status?: MemoryProposalStatus,
+  ): Promise<MemoryProposal[]>;
+  acceptProposal(
+    context: RequestContext,
+    proposalId: string,
+  ): Promise<MemoryProposal>;
+  rejectProposal(
+    context: RequestContext,
+    proposalId: string,
+    reason: string,
+  ): Promise<MemoryProposal>;
+}
+
+/**
+ * Additive file-backed skill lifecycle contract implemented by `@mars/skills`
+ * (OpenClaw Skill Workshop semantics). `SkillService` below remains the
+ * artifact/revision-oriented contract for future scoped services.
+ */
+export type SkillLifecycleStatus = "active" | "stale" | "archived";
+export interface SkillRecord {
+  name: string;
+  content: string;
+  status: SkillLifecycleStatus;
+  pinned: boolean;
+  createdAt: number;
+  lastActivity: number;
+  useCount: number;
+}
+export interface SkillVersion {
+  id: string;
+  ts: string;
+  op: string;
+  skill: SkillRecord;
+}
+export interface SkillDraft {
+  id: string;
+  name: string;
+  content: string;
+  rationale: string;
+  ts: string;
+  baseRevision: string;
+}
+export type SkillOperation = { name: string } & (
+  | { op: "create"; content: string }
+  | { op: "update"; content: string }
+  | { op: "archive" | "restore" | "recordUse" | "stale" }
+  | { op: "pin"; pinned: boolean }
+  | { op: "restoreVersion"; versionId: string }
+);
+export interface SkillMutationOptions {
+  actor: string;
+  source: string;
+  expectedRevision?: string;
+  reviewId?: string;
+}
+export interface SkillProposal {
+  id: string;
+  source: string;
+  ops: SkillOperation[];
+  rationale: string;
+  expectedRevision: string;
+  status: "pending" | "accepted" | "rejected";
+  reason?: string;
+}
+export interface SkillChange {
+  ts: string;
+  actor: string;
+  source: string;
+  op: string;
+  skill: string | null;
+  revisionBefore: string;
+  revisionAfter: string;
+  reviewId: string | null;
+  before?: SkillRecord;
+  after?: SkillRecord;
+  draftsBefore?: SkillDraft[];
+  draftsAfter?: SkillDraft[];
+}
+/** Read + proposal-only surface handed to background review. */
+export interface SkillProposalService {
+  list(): Promise<SkillRecord[]>;
+  getRevision(): Promise<string>;
+  submitProposal(
+    input: { source: string; ops: SkillOperation[]; rationale: string },
+    options?: SkillMutationOptions,
+  ): Promise<SkillProposal>;
+}
+export interface SkillLifecycleService extends SkillProposalService {
+  get(name: string): Promise<SkillRecord | null>;
+  applyBatch(
+    ops: SkillOperation[],
+    options: SkillMutationOptions,
+  ): Promise<string>;
+  create(
+    name: string,
+    content: string,
+    options: SkillMutationOptions,
+  ): Promise<string>;
+  update(
+    name: string,
+    content: string,
+    options: SkillMutationOptions,
+  ): Promise<string>;
+  archive(name: string, options: SkillMutationOptions): Promise<string>;
+  restore(name: string, options: SkillMutationOptions): Promise<string>;
+  pin(
+    name: string,
+    pinned: boolean,
+    options: SkillMutationOptions,
+  ): Promise<string>;
+  recordUse(name: string, options?: SkillMutationOptions): Promise<string>;
+  listVersions(name: string): Promise<SkillVersion[]>;
+  restoreVersion(
+    name: string,
+    versionId: string,
+    options: SkillMutationOptions,
+  ): Promise<string>;
+  saveDraft(
+    name: string,
+    content: string,
+    options: SkillMutationOptions,
+    rationale?: string,
+  ): Promise<SkillDraft>;
+  viewDraft(id: string): Promise<SkillDraft | null>;
+  listDrafts(): Promise<SkillDraft[]>;
+  discardDraft(id: string, options: SkillMutationOptions): Promise<string>;
+  applyDraft(id: string, options: SkillMutationOptions): Promise<string>;
+  runCurator(options?: SkillMutationOptions): Promise<SkillChange[]>;
+  undoReview(
+    reviewId: string,
+    options: SkillMutationOptions,
+  ): Promise<SkillChange[]>;
+  listProposals(): Promise<SkillProposal[]>;
+  accept(id: string, input: SkillMutationOptions | string): Promise<string>;
+  reject(
+    id: string,
+    reason: string,
+    options?: SkillMutationOptions,
+  ): Promise<string>;
+}
+
 export interface SkillRevision {
   skill_id: string;
   revision: string;

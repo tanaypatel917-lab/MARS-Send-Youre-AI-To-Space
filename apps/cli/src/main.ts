@@ -250,7 +250,7 @@ try {
       },
       limitations: [
         "Initialization probe only; no agent task or model request was run.",
-        "Live-provider and real IDE workbench acceptance remain unverified; memory, learning, and training are not implemented.",
+        "Live-provider and real IDE workbench acceptance remain unverified; memory and learning (skills plus proposal-only background review) are implemented with offline evidence only; training is not implemented.",
         "Background research runs only when mars serve is started with --research-search; no live search provider or model run has been verified.",
         "Python services must use separate versioned environments.",
       ],
