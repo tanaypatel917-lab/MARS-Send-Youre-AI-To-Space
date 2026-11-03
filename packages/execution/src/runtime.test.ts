@@ -626,3 +626,77 @@ for (const damage of ["missing", "invalid"] as const) {
     }
   }, 30000);
 }
+
+test("mars_apply_patch is a host-bound tool: Oh My Pi passes the patch text to the host applier and relays its summary", async () => {
+  const f = await fixture();
+  const requests: Record<string, unknown>[] = [];
+  const patches: string[] = [];
+  const patchText =
+    "*** Begin Patch\n*** Add File: greet.txt\n+Hello\n*** End Patch";
+  try {
+    const session = await f.open({
+      patch: {
+        async apply(patch) {
+          patches.push(patch);
+          await writeFile(join(f.cwd, "greet.txt"), "Hello\n");
+          return "Success. Updated the following files:\nA greet.txt";
+        },
+      },
+      fetch: async (_url, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return requests.length === 1
+          ? sse(
+              {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_patch",
+                    type: "function",
+                    function: {
+                      name: "mars_apply_patch",
+                      arguments: JSON.stringify({ patch: patchText }),
+                    },
+                  },
+                ],
+              },
+              "tool_calls",
+            )
+          : sse({ content: "Applied the patch." });
+      },
+    });
+    const outcome = await session.run(f.task.request);
+    expect(outcome.status).toBe("completed");
+    expect(patches).toEqual([patchText]);
+    expect(await readFile(join(f.cwd, "greet.txt"), "utf8")).toBe("Hello\n");
+    expect(JSON.stringify(requests[0])).toContain("mars_apply_patch");
+    expect(JSON.stringify(requests[1])).toContain(
+      "Success. Updated the following files:",
+    );
+  } finally {
+    await f.cleanup();
+  }
+}, 30000);
+
+test("mars_apply_patch is not declared without write approval or without a host applier", async () => {
+  const f = await fixture();
+  const requests: Record<string, unknown>[] = [];
+  try {
+    const respond = async (_url: string, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return sse({ content: "Nothing to do." });
+    };
+    const readOnly = await f.open({
+      approvals: { read: true, write: false, execute: false },
+      patch: { apply: async () => "unreachable" },
+      fetch: respond,
+    });
+    await readOnly.run(f.task.request);
+    const noApplier = await f.open({ fetch: respond });
+    await noApplier.run(f.task.request);
+    expect(requests).toHaveLength(2);
+    for (const request of requests)
+      expect(JSON.stringify(request)).not.toContain("mars_apply_patch");
+  } finally {
+    await f.cleanup();
+  }
+}, 30000);

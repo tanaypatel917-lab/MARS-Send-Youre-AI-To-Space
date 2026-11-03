@@ -50,6 +50,7 @@ import type {
   ChildWorkspaceBinder,
   WorkbenchCollaboration,
 } from "./collaboration-context";
+import type { WorkbenchConventions } from "./conventions-context";
 import {
   createWorkbenchHost,
   type WorkbenchHostOptions,
@@ -230,7 +231,10 @@ async function fixture() {
     specialists?: WorkbenchSpecialists,
     collaboration?: WorkbenchCollaboration,
     research?: WorkbenchResearch,
-    extras: Pick<WorkbenchHostOptions, "skills" | "review" | "watch"> = {},
+    extras: Pick<
+      WorkbenchHostOptions,
+      "skills" | "review" | "watch" | "conventions"
+    > & { canExecute?: boolean } = {},
   ) =>
     createWorkbenchHost({
       ...extras,
@@ -240,7 +244,7 @@ async function fixture() {
       store,
       workspace,
       registry: modelRegistry,
-      canExecute: false,
+      canExecute: extras.canExecute ?? false,
       ...(memory ? { memory } : {}),
       ...(repositoryMap ? { repositoryMap } : {}),
       ...(specialists ? { specialists } : {}),
@@ -413,6 +417,7 @@ async function fixture() {
       return prepareCalls;
     },
     writes,
+    removes,
     writeModes,
     prepareIds,
     set diffFiles(files: DiffResult["files"]) {
@@ -3216,5 +3221,330 @@ test("watch tools are host-bound per task and their verdicts become reviewable t
   ).toHaveLength(2);
   session.finish("completed");
   await session.disposed;
+  await api.close();
+});
+
+const conventionsHost = (
+  f: Awaited<ReturnType<typeof fixture>>,
+  conventions: WorkbenchConventions,
+  canExecute = false,
+) =>
+  f.makeHost(undefined, undefined, undefined, undefined, undefined, undefined, {
+    conventions,
+    canExecute,
+  });
+
+const taskEvents = async (
+  f: Awaited<ReturnType<typeof fixture>>,
+  taskId: string,
+  operation: string,
+) => {
+  const payloads: Record<string, unknown>[] = [];
+  for await (const event of f.store.events(context(), taskId)) {
+    if (
+      event.event_type !== "tool.completed" ||
+      event.producer !== "@mars/workbench"
+    )
+      continue;
+    const payload = JSON.parse(
+      new TextDecoder().decode(
+        await f.store.artifacts.get(context(), event.payload),
+      ),
+    ) as Record<string, unknown>;
+    if (payload.operation === operation) payloads.push(payload);
+  }
+  return payloads;
+};
+
+test("repository conventions expand slash commands and freeze instruction files and skill folders into the launch", async () => {
+  const f = await fixture();
+  const repoSkill: SkillRecord = {
+    name: "release-notes",
+    content:
+      "---\nname: release-notes\ndescription: Write release notes\n---\nList user-facing changes.",
+    status: "active",
+    pinned: false,
+    createdAt: 0,
+    lastActivity: 0,
+    useCount: 0,
+  };
+  const instructionsText =
+    "Repository instructions (from the trusted project checkout; conventions to follow, not permission to use tools):\n\n--- AGENTS.md ---\nRun bun run check before finishing.";
+  const conventions: WorkbenchConventions = {
+    commands: {
+      expand(input) {
+        if (!input.startsWith("/review ")) return null;
+        return {
+          name: "review",
+          prompt: `Review ${input.slice("/review ".length)} for defects.`,
+          command: {
+            name: "review",
+            path: ".mars/commands/review.md",
+            source: ".mars/commands",
+            body: "Review $ARGUMENTS for defects.",
+            unsupported: [],
+          },
+        };
+      },
+    },
+    instructions: {
+      files: [
+        {
+          path: "AGENTS.md",
+          kind: "AGENTS.md",
+          bytes: 40,
+          truncated: false,
+          text: "Run bun run check before finishing.",
+        },
+      ],
+      total_bytes: 40,
+      omitted: 1,
+      text: instructionsText,
+      sha256: createHash("sha256").update(instructionsText).digest("hex"),
+    },
+    repositorySkills: [repoSkill],
+  };
+  const api = await conventionsHost(f, conventions);
+  await api.create(context(), { ...task(), request: "/review src/app.ts" });
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  const instruction = required(session.instructions[0]);
+  expect(instruction.startsWith("Review src/app.ts for defects.")).toBe(true);
+  expect(instruction).toContain("### release-notes (active)");
+  expect(instruction.endsWith(instructionsText)).toBe(true);
+  expect(instruction.indexOf("### release-notes")).toBeLessThan(
+    instruction.indexOf("Repository instructions"),
+  );
+  expect(session.options.patch).toBeUndefined();
+  const launch = JSON.parse(
+    await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+  ) as {
+    instructions?: {
+      text: string;
+      sha256: string;
+      files: string[];
+      omitted: number;
+    };
+    skills?: { skills: string[] };
+  };
+  expect(launch.instructions).toEqual({
+    text: instructionsText,
+    sha256: createHash("sha256").update(instructionsText).digest("hex"),
+    files: ["AGENTS.md"],
+    omitted: 1,
+  });
+  expect(launch.skills?.skills).toEqual(["release-notes"]);
+  expect((await f.store.inspect(context(), "task")).request).toBe(
+    "/review src/app.ts",
+  );
+  expect(await taskEvents(f, "task", "conventions.applied")).toEqual([
+    {
+      operation: "conventions.applied",
+      command: "review",
+      instructions: "frozen",
+    },
+  ]);
+  session.finish("completed");
+  await session.disposed;
+  await api.close();
+});
+
+test("oversized instruction files are omitted whole and recorded, never truncated into the prompt", async () => {
+  const f = await fixture();
+  const text = `Repository instructions:\n${"x".repeat(40_000)}`;
+  const api = await conventionsHost(f, {
+    instructions: {
+      files: [
+        {
+          path: "CLAUDE.md",
+          kind: "CLAUDE.md",
+          bytes: text.length,
+          truncated: false,
+          text,
+        },
+      ],
+      total_bytes: text.length,
+      omitted: 0,
+      text,
+      sha256: createHash("sha256").update(text).digest("hex"),
+    },
+  });
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: false, write: false, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  expect(required(session.instructions[0])).not.toContain("xxxx");
+  const launch = JSON.parse(
+    await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+  ) as { instructions?: unknown };
+  expect(launch.instructions).toBeUndefined();
+  expect(await taskEvents(f, "task", "conventions.applied")).toEqual([
+    { operation: "conventions.applied", instructions: "omitted" },
+  ]);
+  session.finish("completed");
+  await session.disposed;
+  await api.close();
+});
+
+test("hooks only run through the approval-gated sandboxed execute and a blocking pre-tool hook refuses the write", async () => {
+  const f = await fixture();
+  const calls: Array<{ event: string; tool?: string; path?: string }> = [];
+  const hooks: WorkbenchConventions["hooks"] = {
+    async run(event, hookContext, executor) {
+      calls.push({ event, ...hookContext });
+      const argv = ["hook", event, hookContext.tool ?? "-"];
+      const execution = await executor(argv, 5_000);
+      if ("skipped" in execution)
+        return [
+          {
+            event,
+            ...(hookContext.tool ? { tool: hookContext.tool } : {}),
+            argv,
+            outcome: "skipped",
+            stdout: "",
+            stderr: "",
+            blocked: false,
+            reason: execution.skipped,
+          },
+        ];
+      return [
+        {
+          event,
+          ...(hookContext.tool ? { tool: hookContext.tool } : {}),
+          argv,
+          outcome: "ran",
+          exit_code: 0,
+          stdout: "",
+          stderr:
+            event === "pre-tool" && hookContext.tool === "mars_write"
+              ? "formatting required"
+              : "",
+          blocked: event === "pre-tool" && hookContext.tool === "mars_write",
+        },
+      ];
+    },
+  };
+  // Without execute approval every hook is skipped and nothing is blocked.
+  const skippedApi = await conventionsHost(f, { hooks });
+  await api_start(skippedApi, "task", {
+    read: true,
+    write: true,
+    execute: false,
+  });
+  const skipped = required(f.sessions[0]);
+  await skipped.options.tools.write("a.txt", new TextEncoder().encode("a"));
+  expect(f.writes).toEqual(["a.txt"]);
+  const skippedEvents = await taskEvents(f, "task", "hook.completed");
+  expect(skippedEvents.map((event) => event.event)).toEqual([
+    "session-start",
+    "pre-tool",
+    "post-tool",
+  ]);
+  expect(
+    skippedEvents.flatMap((event) =>
+      (event.results as Array<{ outcome: string; reason?: string }>).map(
+        (result) => `${result.outcome}:${result.reason}`,
+      ),
+    ),
+  ).toEqual(Array(3).fill("skipped:execute approval not granted"));
+  skipped.finish("completed");
+  await skipped.disposed;
+  await skippedApi.close();
+  f.writes.length = 0;
+  calls.length = 0;
+
+  // With execute approval and a sandbox the hook runs; exit 2 semantics are
+  // reported by the registry as blocked and the host refuses the tool call.
+  const api = await conventionsHost(f, { hooks }, true);
+  await api_start(api, "task-2", { read: true, write: true, execute: true });
+  const session = required(f.sessions[1]);
+  await expect(
+    session.options.tools.write("b.txt", new TextEncoder().encode("b")),
+  ).rejects.toThrow("Blocked by pre-tool hook (hook): formatting required");
+  expect(f.writes).toEqual([]);
+  const content = await session.options.tools.read("b.txt");
+  expect(content.byteLength).toBeGreaterThan(0);
+  expect(calls).toEqual([
+    { event: "session-start" },
+    { event: "pre-tool", tool: "mars_write", path: "b.txt" },
+    { event: "pre-tool", tool: "mars_read", path: "b.txt" },
+    { event: "post-tool", tool: "mars_read", path: "b.txt" },
+  ]);
+  const ran = await taskEvents(f, "task-2", "hook.completed");
+  expect(
+    ran.map((event) =>
+      (event.results as Array<{ outcome: string; blocked: boolean }>).map(
+        (result) => `${result.outcome}:${result.blocked}`,
+      ),
+    ),
+  ).toEqual([["ran:false"], ["ran:true"], ["ran:false"], ["ran:false"]]);
+  session.finish("completed");
+  await session.disposed;
+  await api.close();
+});
+
+async function api_start(
+  api: Awaited<ReturnType<typeof createWorkbenchHost>>,
+  taskId: string,
+  approvals: { read: boolean; write: boolean; execute: boolean },
+) {
+  await api.create(context(), task(taskId));
+  await api.start(context(), {
+    task_id: taskId,
+    expected_revision: 0,
+    approvals,
+  });
+}
+
+test("mars_apply_patch is declared only with write approval and writes, removes and reads through the workspace provider", async () => {
+  const f = await fixture();
+  const seen: string[] = [];
+  const api = await conventionsHost(f, {
+    async applyPatch(patch, files) {
+      seen.push(patch);
+      expect(await files.exists("tracked.txt")).toBe("file");
+      expect(await files.read("tracked.txt")).toBe("checkpoint");
+      await files.write("added.txt", "new\n");
+      await files.remove("obsolete.txt");
+      return {
+        ok: false,
+        applied: {
+          added: ["added.txt"],
+          modified: [],
+          deleted: ["obsolete.txt"],
+        },
+        failed_hunk: 2,
+        error: "Failed to find expected lines in missing.txt:\nold",
+      };
+    },
+  });
+  await api_start(api, "task", { read: false, write: true, execute: false });
+  const writable = required(f.sessions[0]);
+  const patch = required(writable.options.patch);
+  expect(
+    await patch.apply(
+      "*** Begin Patch\n*** Add File: added.txt\n+new\n*** End Patch",
+    ),
+  ).toBe(
+    "apply_patch failed at hunk 3: Failed to find expected lines in missing.txt:\nold\nHunks before it were applied:\nA added.txt\nD obsolete.txt",
+  );
+  expect(seen).toHaveLength(1);
+  expect(f.writes).toEqual(["added.txt"]);
+  expect(f.removes).toEqual(["obsolete.txt"]);
+  writable.finish("completed");
+  await writable.disposed;
+
+  await api_start(api, "task-2", { read: true, write: false, execute: false });
+  const readOnly = required(f.sessions[1]);
+  expect(readOnly.options.patch).toBeUndefined();
+  readOnly.finish("completed");
+  await readOnly.disposed;
   await api.close();
 });
