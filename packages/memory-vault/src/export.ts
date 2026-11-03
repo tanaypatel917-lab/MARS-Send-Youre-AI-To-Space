@@ -1,13 +1,22 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import type { MemoryEntry, RequestContext } from "@mars/contracts";
-import { RequestContextSchema } from "@mars/memory";
+import { canonicalJson, RequestContextSchema } from "@mars/memory";
 import type { Skill } from "@mars/skills";
 import { VaultError } from "./errors";
-import { parseNote, renderNote, sha256, wikilink } from "./notes";
+import { renderNote, sha256, wikilink } from "./notes";
 import {
   assertVaultDirectory,
+  contains,
   encodeSegment,
   encodeSourcePath,
   resolveInside,
@@ -93,19 +102,47 @@ export async function readManifest(
   return result.data;
 }
 
-async function writeAtomic(absolute: string, text: string): Promise<boolean> {
+/**
+ * Writes a note privately (0600, directories 0700) via a temporary sibling and
+ * rename. The parent directory is resolved through symlinks and must still be
+ * inside the real vault directory, and the target may not be a symlink, so a
+ * planted link inside the vault cannot redirect the export elsewhere.
+ */
+async function writeAtomic(
+  vaultDir: string,
+  absolute: string,
+  text: string,
+): Promise<boolean> {
+  await mkdir(dirname(absolute), { recursive: true, mode: 0o700 });
+  const [realVault, realParent] = await Promise.all([
+    realpath(vaultDir),
+    realpath(dirname(absolute)),
+  ]);
+  if (realParent !== realVault && !contains(realVault, realParent))
+    throw new VaultPathError(
+      "path_escape",
+      `${relative(vaultDir, absolute)} resolves outside the vault`,
+    );
   try {
+    if ((await lstat(absolute)).isSymbolicLink())
+      throw new VaultPathError(
+        "path_escape",
+        `${relative(vaultDir, absolute)} is a symlink`,
+      );
     if ((await readFile(absolute, "utf8")) === text) return false;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  await mkdir(dirname(absolute), { recursive: true });
   const temporary = join(
     dirname(absolute),
     `.${basename(absolute)}.${randomBytes(6).toString("hex")}.tmp`,
   );
   try {
-    await writeFile(temporary, text, { encoding: "utf8", flag: "wx" });
+    await writeFile(temporary, text, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
     await rename(temporary, absolute);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => undefined);
@@ -407,6 +444,11 @@ export async function exportVault(
   );
 
   const previous = await readManifest(vaultDir);
+  if (previous && canonicalJson(previous.scope) !== canonicalJson(ctx.scope))
+    throw new VaultError(
+      "scope_mismatch",
+      "the vault was exported for a different owner/project/workspace; use another vault directory",
+    );
   const snapshot = await options.memory.snapshot(ctx);
   const entries = snapshot.entries
     .filter((entry) => !entry.deleted)
@@ -520,7 +562,8 @@ export async function exportVault(
   const counts: Partial<Record<NoteKind, number>> = {};
   for (const note of [...notes].sort((a, b) => byString(a.path, b.path))) {
     const absolute = resolveInside(vaultDir, note.path);
-    if (await writeAtomic(absolute, renderNote(note))) written += 1;
+    const text = renderNote(note);
+    if (await writeAtomic(vaultDir, absolute, text)) written += 1;
     else unchanged += 1;
     counts[note.kind] = (counts[note.kind] ?? 0) + 1;
     manifestNotes.push({
@@ -529,6 +572,7 @@ export async function exportVault(
       id: note.id,
       revision: note.revision,
       content_digest: sha256(note.body),
+      file_digest: sha256(text),
     });
   }
   let removed = 0;
@@ -547,13 +591,9 @@ export async function exportVault(
     } catch {
       continue;
     }
-    let unchangedBody = false;
-    try {
-      unchangedBody = sha256(parseNote(current).body) === stale.content_digest;
-    } catch {
-      unchangedBody = false;
-    }
-    if (unchangedBody) {
+    // Only a byte-identical generated note is removed; any edit (body,
+    // frontmatter or Related section) keeps the file and is reported.
+    if (sha256(current) === stale.file_digest) {
       await rm(absolute, { force: true });
       removed += 1;
     } else keptModified += 1;
@@ -573,6 +613,7 @@ export async function exportVault(
     notes: manifestNotes,
   };
   await writeAtomic(
+    vaultDir,
     join(vaultDir, VAULT_MANIFEST_FILE),
     `${JSON.stringify(manifest, null, 2)}\n`,
   );

@@ -37,9 +37,10 @@ export function renderNote(note: NoteSource): string {
     note.body,
     "\n",
   ];
+  parts.push(`${RELATED_MARKER}\n`);
   if (note.related.length > 0)
     parts.push(
-      `${RELATED_MARKER}\n## Related\n`,
+      "## Related\n",
       note.related.map((link) => `- ${link}\n`).join(""),
     );
   return parts.join("");
@@ -84,7 +85,9 @@ export function parseNote(text: string): ParsedNote {
   if (rest.startsWith(`${BODY_MARKER}\n`))
     rest = rest.slice(BODY_MARKER.length + 1);
   else if (rest === BODY_MARKER) rest = "";
-  const related = rest.indexOf(`\n${RELATED_MARKER}`);
+  // The generated Related section is appended after the verbatim body, so
+  // the last marker is always the generated one even if the body has one.
+  const related = rest.lastIndexOf(`\n${RELATED_MARKER}`);
   let body: string;
   if (related >= 0) body = rest.slice(0, related);
   else if (rest.startsWith(RELATED_MARKER)) body = "";

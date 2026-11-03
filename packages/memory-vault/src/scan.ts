@@ -139,6 +139,15 @@ export async function scanVault(
       });
       continue;
     }
+    if (note.frontmatter.mars_kind !== tracked.kind) {
+      notes.push({
+        ...base,
+        state: "invalid",
+        note: null,
+        reason: `mars_kind ${String(note.frontmatter.mars_kind)} does not match the exported kind ${tracked.kind}`,
+      });
+      continue;
+    }
     notes.push({
       ...base,
       state:

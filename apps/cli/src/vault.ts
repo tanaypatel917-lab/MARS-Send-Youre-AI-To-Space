@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -144,7 +145,7 @@ export async function runVault(args: string[]): Promise<void> {
     console.log(VAULT_USAGE);
     return;
   }
-  const source = resolve(values.source ?? process.cwd());
+  const source = await realpath(resolve(values.source ?? process.cwd()));
   const project =
     values.project ??
     `project-${createHash("sha256").update(source).digest("hex").slice(0, 24)}`;

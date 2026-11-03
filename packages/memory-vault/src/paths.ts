@@ -39,12 +39,18 @@ export function encodeSegment(value: string): string {
   return out;
 }
 
-/** Workspace-relative source path → one segment (`/` and `\` become `__`). */
+/**
+ * Workspace-relative source path → one segment (`/` and `\` become `__`).
+ * Runs of two or more underscores inside a component are percent-encoded so
+ * `a/b` and `a__b` never collide.
+ */
 export function encodeSourcePath(path: string): string {
   return path
     .split(/[\\/]+/)
     .filter((part) => part.length > 0)
-    .map(encodeSegment)
+    .map((part) =>
+      encodeSegment(part).replace(/_{2,}/g, (run) => "%5F".repeat(run.length)),
+    )
     .join("__");
 }
 

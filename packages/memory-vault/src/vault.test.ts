@@ -1,11 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -486,7 +488,7 @@ test("derived notes are read-only mirrors", async () => {
   await exportVault(ctx, { ...common, graph: graphFixture() });
   writeFileSync(
     join(vaultDir, "projects/p.md"),
-    `${read(vaultDir, "projects/p.md")}\nhand edit\n`,
+    read(vaultDir, "projects/p.md").replace("# Project p", "# Project edited"),
   );
   writeFileSync(
     join(vaultDir, "graph/ws1/files/src__a.ts.md"),
@@ -733,4 +735,99 @@ test("frontmatter YAML subset round-trips nested values and rejects unsafe synta
   expect(() => parseYaml("a: 1\na: 2\n")).toThrow();
   expect(() => parseYaml("a: |\n  block\n")).toThrow();
   expect(() => parseNote("no frontmatter")).toThrow();
+});
+
+test("review: export refuses a vault that belongs to another scope", async () => {
+  const { common, vaultDir } = await fixture();
+  await exportVault(ctx, common);
+  const before = read(vaultDir, "facts/fact-plain.md");
+  await expect(
+    exportVault(
+      { ...ctx, scope: { owner_id: "o", project_id: "other" } },
+      common,
+    ),
+  ).rejects.toMatchObject({ code: "scope_mismatch" });
+  expect(read(vaultDir, "facts/fact-plain.md")).toBe(before);
+  expect(existsSync(join(vaultDir, "projects/other.md"))).toBe(false);
+});
+
+test("review: a literal related marker inside a fact round-trips", async () => {
+  const marker = "First line\n<!-- mars:related -->\nSecond line";
+  const { common, vaultDir, memory } = await fixture([
+    entry("fact-marker", marker),
+  ]);
+  await exportVault(ctx, common);
+  expect(parseNote(read(vaultDir, "facts/fact-marker.md")).body).toBe(marker);
+  const report = await importVault(ctx, { ...common, actor: "tester" });
+  expect(
+    report.items.find((i) => i.path === "facts/fact-marker.md")?.action,
+  ).toBe("unchanged");
+  expect(await memory.listProposals(ctx)).toHaveLength(0);
+});
+
+test("review: graph file notes never collide on `__`", () => {
+  expect(encodeSourcePath("src/a/b.ts")).toBe("src__a__b.ts");
+  expect(encodeSourcePath("src/a__b.ts")).toBe("src__a%5F%5Fb.ts");
+  expect(encodeSourcePath("src/a__b.ts")).not.toBe(
+    encodeSourcePath("src/a/b.ts"),
+  );
+  expect(encodeSourcePath("my_file.ts")).toBe("my_file.ts");
+});
+
+test("review: notes are written with private permissions", async () => {
+  if (process.platform === "win32") return;
+  const { common, vaultDir } = await fixture();
+  await exportVault(ctx, common);
+  expect(statSync(join(vaultDir, "facts/fact-plain.md")).mode & 0o777).toBe(
+    0o600,
+  );
+  expect(statSync(join(vaultDir, ".mars-vault.json")).mode & 0o777).toBe(0o600);
+  expect(statSync(join(vaultDir, "facts")).mode & 0o777).toBe(0o700);
+});
+
+test("review: a tracked note whose mars_kind was changed is invalid, not proposed", async () => {
+  const { common, vaultDir, memory, skills } = await fixture();
+  await exportVault(ctx, common);
+  writeFileSync(
+    join(vaultDir, "facts/fact-plain.md"),
+    read(vaultDir, "facts/fact-plain.md")
+      .replace("mars_kind: memory_fact", "mars_kind: skill")
+      .replace("Fridays", "Mondays"),
+  );
+  const report = await importVault(ctx, { ...common, actor: "tester" });
+  const item = report.items.find((i) => i.path === "facts/fact-plain.md");
+  expect(item?.action).toBe("invalid");
+  expect(item?.reason).toContain("mars_kind");
+  expect(await memory.listProposals(ctx)).toHaveLength(0);
+  expect((await skills.listProposals()).length).toBe(0);
+});
+
+test("review: re-export keeps a stale note whose frontmatter or Related section was edited", async () => {
+  const { common, vaultDir, memory } = await fixture();
+  await exportVault(ctx, common);
+  writeFileSync(
+    join(vaultDir, "facts/fact-plain.md"),
+    read(vaultDir, "facts/fact-plain.md").replace(
+      "mars_kind: memory_fact\n",
+      "mars_kind: memory_fact\nmy_note: keep me\n",
+    ),
+  );
+  await memory.batch(ctx, 1, [{ operation: "remove", entry_id: "fact-plain" }]);
+  const report = await exportVault(ctx, common);
+  expect(report.kept_modified).toBe(1);
+  expect(report.removed).toBe(0);
+  expect(read(vaultDir, "facts/fact-plain.md")).toContain("my_note: keep me");
+});
+
+test("review: a symlinked directory inside the vault cannot redirect the export", async () => {
+  if (process.platform === "win32") return;
+  const { common, vaultDir } = await fixture();
+  const outside = mkdtempSync(join(tmpdir(), "mars-vault-outside-"));
+  roots.push(outside);
+  mkdirSync(vaultDir, { recursive: true });
+  symlinkSync(outside, join(vaultDir, "facts"));
+  await expect(exportVault(ctx, common)).rejects.toMatchObject({
+    code: "path_escape",
+  });
+  expect(readdirSync(outside)).toEqual([]);
 });

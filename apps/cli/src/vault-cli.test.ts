@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { RequestContext } from "@mars/contracts";
@@ -128,6 +137,26 @@ test("mars vault export/status/import run against a temp state dir and only crea
     ]);
     expect(inside.exit).toBe(1);
     expect(inside.stderr).toContain("private");
+
+    if (process.platform !== "win32") {
+      mkdirSync(join(root, "src"));
+      symlinkSync(join(root, "src"), join(root, "link"));
+      const linked = await run([
+        "export",
+        "--state",
+        state,
+        "--vault",
+        join(root, "vault-linked"),
+        "--source",
+        join(root, "link"),
+        "--json",
+      ]);
+      expect(linked.exit).toBe(0);
+      const real = realpathSync(join(root, "src"));
+      expect(JSON.parse(linked.stdout).scope.project_id).toBe(
+        `project-${createHash("sha256").update(real).digest("hex").slice(0, 24)}`,
+      );
+    }
 
     const usage = await run(["bogus"]);
     expect(usage.exit).toBe(1);
