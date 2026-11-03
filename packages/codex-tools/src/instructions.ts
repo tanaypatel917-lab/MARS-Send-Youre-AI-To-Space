@@ -51,7 +51,7 @@ function directoriesRootToCwd(root: string, cwd: string): string[] {
   if (rel.length === 0) {
     return [root];
   }
-  if (rel.startsWith("..") || isAbsolute(rel)) {
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new InstructionsError(`cwd '${cwd}' is outside root '${root}'`);
   }
   const dirs = [root];
@@ -155,10 +155,17 @@ export async function discoverInstructions(
     }
     const absolute = join(dir, kind);
     const buffer = await readFile(absolute);
-    const truncated = buffer.length > remaining;
-    const text = truncated
+    let truncated = buffer.length > remaining;
+    let text = truncated
       ? truncateUtf8(buffer, remaining)
       : buffer.toString("utf8");
+    // Invalid UTF-8 decodes to U+FFFD (three bytes each), so the decoded text
+    // can outgrow the bytes read; the budget applies to what the model sees.
+    const encoded = Buffer.from(text, "utf8");
+    if (encoded.length > remaining) {
+      text = truncateUtf8(encoded, remaining);
+      truncated = true;
+    }
     const bytes = Buffer.byteLength(text, "utf8");
     totalBytes += bytes;
     const relPath = toPosix(relative(root, absolute));
