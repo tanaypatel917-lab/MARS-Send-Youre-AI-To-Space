@@ -112,9 +112,11 @@ The service tests send authenticated HTTP through the actual VS Code typed clien
 
 No live model request, paid service or real VS Code window is used for this verification. Live-model task quality and the complete master-spec Milestone 1 acceptance evidence remain outstanding. Frozen memory, journal recall, repository maps, evidence-gated specialist routing, single-agent collaboration rooms and (behind `--research-search`) the background research worker are connected; live research against a real search provider and model, specialist routing for child models, learned skills, independent evaluation and training are not verified or not connected by this increment. Delegation is verified only with a fixture child adapter; no child Oh My Pi session ran against a live model. A normal agent completion status does not claim independent acceptance tests passed.
 
-## Background research
+## Output format
 
-Sessions are asked (via the shared runtime system prompt) to write the [MARS Output Format](OUTPUT_FORMAT.md): writing blocks, app triggers, review links, follow-ups. `@mars/output-format` parses and validates that text offline; neither the workbench host nor the CLI or VS Code client calls it yet, so agent text is still shown as plain text.
+Sessions are asked (via the shared runtime system prompt) to write the [MARS Output Format](OUTPUT_FORMAT.md): writing blocks, app triggers, review links, follow-ups. `@mars/output-format` parses and validates that text offline. `bun apps/cli/src/main.ts render [file]` renders it for a terminal and the VS Code webview renders the final `text/plain` artifact (artifact panels, follow-up buttons with confirmation, review jumps on click). The workbench host itself does not call it yet and registers no `app://` connectors, so every app trigger is listed as an unresolved proposal.
+
+## Background research
 
 When `mars serve` is started with `--research-search brave|searxng|tavily`
 (or `createWorkbenchService` receives a `research` option), the service opens

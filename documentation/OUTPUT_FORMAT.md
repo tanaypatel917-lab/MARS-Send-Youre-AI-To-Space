@@ -22,8 +22,10 @@ import aliases so existing text in that shape can be read; MARS emits the
 **Status:** parser, validator, serializer and prompt fragment are implemented
 and verified offline by `packages/output-format/src/output-format.test.ts`
 against the fixtures in `packages/output-format/src/fixtures` (`bun run check`,
-`model_requests: 0`). No live model has produced this format yet; no client
-renders it yet; see section 11.
+`model_requests: 0`). The CLI (`mars render`, `renderTerminal`) and the VS
+Code webview (Inspect on the final `text/plain` artifact) render it; no live
+model has produced this format yet and no real terminal or VS Code window has
+been exercised; see section 11.
 
 ## 2. Base: Markdown
 
@@ -336,9 +338,9 @@ intentionally excluded. Change the fragment only together with the parser.
   trusts the renderer for the rest. Malformed Markdown is passed through.
 - No HTML rendering of model text in this package; clients render
   `markdown` segments with their own sanitizing renderer. The VS Code webview
-  on this branch builds its DOM with `textContent` only and does not yet
-  render writing blocks, triggers, review links or follow-up buttons; the CLI
-  does not yet show the numbered chooser. Those are host work.
+  builds its DOM with `textContent` only (`apps/vscode/src/webview`); the CLI
+  prints framed writing blocks, a numbered follow-up chooser and proposals
+  (`apps/cli/src/render.ts`). Neither executes anything on the model's behalf.
 - No connector registry yet: `connector_ids` is whatever the host passes;
   with an empty list every app trigger is `unknown_connector`.
 - `allowed_addresses` is only as good as the host's collection of
@@ -350,13 +352,15 @@ intentionally excluded. Change the fragment only together with the parser.
   fragment reliably, and how clients render the segments, remain to be
   measured.
 
-### Next steps for clients
+### Next steps for hosts
 
-1. CLI: render `markdown` segments as text, writing blocks with their id and
-   variant, follow-ups as a numbered chooser that echoes the prompt before
-   submitting, rejected items as plain text.
-2. VS Code webview: the same with `textContent`-built DOM; follow-up buttons
-   with the prompt in the tooltip, writing blocks with copy/revise actions
-   keyed by `id`, review links that open the diff only on click.
-3. Host: supply `connector_ids` from a real connector registry and
-   `allowed_addresses` from `collectAddresses` over the user's request text.
+1. Host: supply `connector_ids` from a real connector registry (today both
+   clients register none, so every `app://` trigger is `unknown_connector`)
+   and `allowed_addresses` from `collectAddresses` over the user's request
+   text; run `processOutput` on the final `text/plain` artifact in the
+   workbench host so validation errors reach every client once.
+2. Mark the final-response artifact with an explicit role in task metadata;
+   the VS Code client currently infers it from a bare `text/plain` artifact
+   listed on the task.
+3. Verify with a live model and a real terminal / VS Code window; measure how
+   reliably models follow the prompt fragment.

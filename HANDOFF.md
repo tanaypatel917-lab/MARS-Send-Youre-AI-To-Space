@@ -23,7 +23,7 @@ All 67 PRs across the three repos are merged; no open PRs. CI green on `main` he
 | 4 Measured improvement (Harbor / Terminal-Bench, GEPA, mini-swe baseline, verifiers) | **not started**; only the evidence-gated specialist registry/routing exists (#30, #35, #38, #40) | `packages/specialists` |
 | 5-8 Remote execution, SFT, vLLM serving, RL | not started | — |
 | Collaboration (bounded delegation, rooms) | library + workbench wiring; fixture child adapter only (#32, #33, #36, #37) | `packages/collaboration` |
-| Output format (model-to-UI contract) | contracts + parser/validator/serializer + prompt fragment in the shared runtime prompt + CLI renderer; VS Code rendering per `documentation/OUTPUT_FORMAT.md` next-steps | `packages/contracts/src/output-format.ts`, `packages/output-format`, `apps/cli` (`render`) |
+| Output format (model-to-UI contract) | contracts + parser/validator/serializer + prompt fragment in the shared runtime prompt + CLI `render` + VS Code webview rendering (artifact panels, confirmed follow-ups, review jumps); no host connector registry, no live-model evidence | `packages/contracts/src/output-format.ts`, `packages/output-format`, `apps/cli/src/render.ts`, `apps/vscode/src/webview` |
 | Integration trust gate | library only; no loader or approval UI (#8, #10) | `packages/integration-trust` |
 
 Everything is verified offline only: fixtures, injected model responses, `model_requests: 0`. Nothing has been run against a live model, a real search provider, a GPU, or a real IDE window.
@@ -58,7 +58,7 @@ Dispatched 2026-11-02 as parallel child sessions, each opening its own PR agains
 3. Milestone 3: bring `@mars/skills` and the proposal-only review runner from `mars-platform` into this repo behind the skill service interface, wired to workbench sessions.
 4. `MARS` site: rebase and land the `/how` landscape branches.
 
-5. Output format follow-ups: VS Code artifact panels / follow-up buttons / `mars://review` jumps if not landed with the parser PR; a host connector registry so `app://` triggers resolve to real tools (today the CLI only lists them); host-side `processOutput` on the final `text/plain` artifact so validation errors reach the UI.
+5. Output format follow-ups: a host connector registry so `app://` triggers resolve to real tools (today both clients list them as unresolved); host-side `processOutput` on the final `text/plain` artifact plus an explicit final-response role in task metadata (the VS Code client infers it from a bare `text/plain` artifact on the task); live-model and real-window verification.
 
 Parked: the MARS Shell desktop app (needs a description from the owner).
 
