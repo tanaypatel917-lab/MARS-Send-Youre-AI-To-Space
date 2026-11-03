@@ -1,0 +1,7 @@
+loop_id: lp_real_fixture
+status: passed  (iteration 1, score 90, verdict pass)
+target: http://127.0.0.1:5173/
+
+summary: Layout matches the pass criteria
+vs previous iteration: 1 fixed, 0 unchanged, 0 new, 3/4 aligned frames changed
+- FIXED: Submit button overlaps the header

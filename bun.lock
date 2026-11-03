@@ -171,6 +171,14 @@
         "zod": "3.25.76",
       },
     },
+    "packages/watch": {
+      "name": "@mars/watch",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/execution": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
     "packages/workbench": {
       "name": "@mars/workbench",
       "version": "0.0.1",
@@ -187,6 +195,7 @@
         "@mars/skills": "workspace:*",
         "@mars/specialists": "workspace:*",
         "@mars/tasks": "workspace:*",
+        "@mars/watch": "workspace:*",
         "@mars/workspaces": "workspace:*",
         "zod": "3.25.76",
       },
@@ -320,6 +329,8 @@
     "@mars/tasks": ["@mars/tasks@workspace:packages/tasks"],
 
     "@mars/vscode-client": ["@mars/vscode-client@workspace:apps/vscode"],
+
+    "@mars/watch": ["@mars/watch@workspace:packages/watch"],
 
     "@mars/workbench": ["@mars/workbench@workspace:packages/workbench"],
 

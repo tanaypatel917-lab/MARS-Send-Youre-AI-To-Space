@@ -390,3 +390,55 @@ test("resumed journal outcomes report per-attempt steps, not journal totals", as
   });
   expect(f.fetchCalls).toHaveLength(1);
 });
+
+test("children receive the host-bound watch tools bound to the parent task", async () => {
+  const f = await fixture();
+  const seen: Array<{ task_id: string; cwd: string }> = [];
+  const factoryOptions: RuntimeSessionOptions[] = [];
+  const adapter = createOhMyPiChildAdapter({
+    registry: f.registry,
+    stateRoot: f.stateRoot,
+    workspaceFor: f.workspaceFor,
+    runtimeFactory: async (options) => {
+      factoryOptions.push(options);
+      return f.runtimeFactory(options);
+    },
+    watchFor(launch, cwd) {
+      seen.push({ task_id: launch.task_id, cwd });
+      return {
+        async watch() {
+          return "[untrusted watch-skill output · mars_watch · advisory]";
+        },
+        async ask() {
+          return "";
+        },
+        async search() {
+          return "";
+        },
+        async capture() {
+          return "";
+        },
+        async extract() {
+          return "";
+        },
+        async loop() {
+          return "";
+        },
+        async verify() {
+          return "";
+        },
+        async evidence() {
+          return "";
+        },
+      };
+    },
+  });
+  const run = await adapter.start(f.launch, {
+    signal: new AbortController().signal,
+    async onProgress() {},
+  });
+  await run.outcome;
+  expect(seen).toEqual([{ task_id: f.launch.task_id, cwd: f.cwd }]);
+  expect(factoryOptions).toHaveLength(1);
+  expect(factoryOptions[0]?.watch).toBeDefined();
+});

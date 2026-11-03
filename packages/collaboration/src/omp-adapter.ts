@@ -14,6 +14,7 @@ import {
   type RuntimeSession,
   type RuntimeSessionOptions,
   type RuntimeTools,
+  type RuntimeWatch,
   selectExecutionModel,
 } from "@mars/execution";
 import type { ModelProviderRegistry } from "@mars/providers";
@@ -63,6 +64,8 @@ export interface OhMyPiAdapterOptions {
     base_revision: string | null;
   }>;
   runtimeFactory?: (options: RuntimeSessionOptions) => Promise<RuntimeSession>;
+  /** Host-bound watch-skill tools for a child, bound to the parent task's evidence. */
+  watchFor?(launch: ChildLaunch, cwd: string): RuntimeWatch | undefined;
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -379,6 +382,7 @@ export function createOhMyPiChildAdapter(
       };
       let steps = 0;
       let session: RuntimeSession;
+      const childWatch = options.watchFor?.(launch, workspace.cwd);
       try {
         session = await runtimeFactory({
           task,
@@ -389,6 +393,7 @@ export function createOhMyPiChildAdapter(
           modelId: desired.model_id,
           approvals,
           tools: workspace.tools,
+          ...(childWatch ? { watch: childWatch } : {}),
           onEvent: async (observation) => {
             if (observation.type === "turn_end") steps += 1;
             await hooks.onProgress({

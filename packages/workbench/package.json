@@ -17,6 +17,7 @@
     "@mars/skills": "workspace:*",
     "@mars/specialists": "workspace:*",
     "@mars/tasks": "workspace:*",
+    "@mars/watch": "workspace:*",
     "@mars/workspaces": "workspace:*",
     "zod": "3.25.76"
   }
