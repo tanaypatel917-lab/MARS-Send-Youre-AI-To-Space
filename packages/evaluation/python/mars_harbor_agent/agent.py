@@ -271,9 +271,11 @@ class MarsAgent(BaseAgent):
         # gets whatever is left of trial_timeout_ms, so run() as a whole stays
         # bounded even when Harbor's own agent timeout is unset.
         remaining_ms = self.trial_timeout_ms - int((self._clock() - started) * 1000)
-        if remaining_ms <= 0:
-            raise MarsAgentError("credential handover exhausted the trial timeout; refusing to start the bundle")
-        timeout_sec = max(1, remaining_ms // 1000)
+        if remaining_ms < 1000:
+            raise MarsAgentError(
+                "credential handover left less than one second of the trial timeout; refusing to start the bundle"
+            )
+        timeout_sec = remaining_ms // 1000  # whole-second floor never exceeds the budget
         command = (
             f"cd {shlex.quote(str(self.workdir))} && "
             f"exec {shlex.quote(str(CONTAINER_AGENT_DIR / BUNDLE_BINARY))} "

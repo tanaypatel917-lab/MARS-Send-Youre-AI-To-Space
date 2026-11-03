@@ -296,11 +296,12 @@ def test_credential_handover_is_charged_to_the_trial_timeout(tmp_path, bundle, m
     run_cmd = [c for c in env.commands if c["command"].startswith("cd ")][0]
     assert run_cmd["timeout_sec"] == 75
 
-    # handover stalled for the whole budget
-    agent = make_agent(tmp_path, bundle)
-    agent._clock = fake_clock(1000.0, 1120.0)
-    env = FakeEnvironment(usage=None, return_code=0)
-    asyncio.run(agent.setup(env))
-    with pytest.raises(MarsAgentError, match="exhausted the trial timeout"):
-        asyncio.run(agent.run("Do the task.", env, AgentContext()))
-    assert not any(c["command"].startswith("cd ") for c in env.commands)
+    # handover left under one second (500 ms): a 1 s floor would exceed the budget
+    for stalled_until in (1119.5, 1120.0, 1130.0):
+        agent = make_agent(tmp_path, bundle)
+        agent._clock = fake_clock(1000.0, stalled_until)
+        env = FakeEnvironment(usage=None, return_code=0)
+        asyncio.run(agent.setup(env))
+        with pytest.raises(MarsAgentError, match="less than one second of the trial timeout"):
+            asyncio.run(agent.run("Do the task.", env, AgentContext()))
+        assert not any(c["command"].startswith("cd ") for c in env.commands)
