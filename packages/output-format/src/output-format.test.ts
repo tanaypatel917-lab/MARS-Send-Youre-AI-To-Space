@@ -238,6 +238,17 @@ describe("invalid constructs", () => {
     );
   });
 
+  test("a backslash-escaped space in a bare destination is malformed", () => {
+    const document = parseOutput(
+      "[docs](docs/a\\ b.md) and [ok](<docs/a b.md>) and [esc](https://x.y/a\\)b)",
+    );
+    expect(codes(document.errors)).toEqual(["malformed_link"]);
+    expect(document.links.map((link) => link.target)).toEqual([
+      "docs/a b.md",
+      "https://x.y/a)b",
+    ]);
+  });
+
   test("destinations may contain balanced parentheses and escapes", () => {
     const document = parseOutput(
       "See [article](https://en.wikipedia.org/wiki/Function_(mathematics)) and [esc](https://a.b/x\\)y) and [app](app://cal(1)) now.",

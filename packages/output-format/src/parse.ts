@@ -275,6 +275,7 @@ function findLinks(text: string): LinkMatch[] {
       while (position < text.length) {
         const char = text[position] as string;
         if (char === "\\" && position + 1 < text.length) {
+          if (/\s/.test(text[position + 1] as string)) spaced = true;
           position += 2;
           continue;
         }

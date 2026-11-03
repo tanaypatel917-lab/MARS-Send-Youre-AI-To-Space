@@ -45,6 +45,7 @@ Lifecycle scripts stay disabled: optional `onnxruntime-node` and `protobufjs` po
 | `bun run check` | Lint, typecheck, offline source validation, tests, actual execution SDK/native initialization |
 | `bun run doctor` | JSON diagnostic with explicit unimplemented features |
 | `bun apps/cli/src/main.ts serve --help` | Local workbench service options; no provider request at startup |
+| `bun apps/cli/src/main.ts render [file] [--connectors ids] [--address a@b.com] [--follow-up N] [--json]` | Render MARS Output Format text (file or stdin) for a terminal; follow-ups, `app://` triggers and `mars://review` links are listed as proposals, nothing is executed |
 | `bun run smoke:execution` | No-provider/no-tool SDK and native search probe |
 | `bun run audit:sources` | Validate source references, spec digest, package pins, installed versions, and lockfile integrity |
 | `bun run audit:sources:remote` | Fetch immutable source/license files and emit content hashes; network required |
