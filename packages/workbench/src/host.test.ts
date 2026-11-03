@@ -20,6 +20,7 @@ import {
   type RepositoryMapProvider,
 } from "@mars/context";
 import type {
+  ArtifactRef,
   RequestContext,
   SkillRecord,
   Task,
@@ -131,6 +132,7 @@ async function fixture() {
   let diffFiles: DiffResult["files"] = [];
   const writes: string[] = [];
   const removes: string[] = [];
+  const readArtifacts = new Map<string, ArtifactRef | null>();
   const writeModes = new Map<string, boolean | undefined>();
   const artifact = await store.artifacts.put(
     context(),
@@ -150,8 +152,14 @@ async function fixture() {
     async cwd() {
       return join(root, "isolated");
     },
-    async read() {
-      return artifact;
+    async read(_context, _workspace, path) {
+      const override = readArtifacts.get(path);
+      if (override === null) {
+        throw Object.assign(new Error(`fixture: ${path} not found`), {
+          code: "not_found",
+        });
+      }
+      return override ?? artifact;
     },
     async write(_context, _workspace, path, _artifact, options) {
       writes.push(path);
@@ -418,6 +426,7 @@ async function fixture() {
     },
     writes,
     removes,
+    readArtifacts,
     writeModes,
     prepareIds,
     set diffFiles(files: DiffResult["files"]) {
@@ -3485,6 +3494,76 @@ test("hooks only run through the approval-gated sandboxed execute and a blocking
       ),
     ),
   ).toEqual([["ran:false"], ["ran:true"], ["ran:false"], ["ran:false"]]);
+  session.finish("completed");
+  await session.disposed;
+  await api.close();
+});
+
+test("a tool call the task is not allowed to make runs no hook at all", async () => {
+  const f = await fixture();
+  const calls: Array<{ event: string; tool?: string }> = [];
+  const api = await conventionsHost(
+    f,
+    {
+      hooks: {
+        async run(event, hookContext) {
+          calls.push({
+            event,
+            ...(hookContext.tool ? { tool: hookContext.tool } : {}),
+          });
+          return [];
+        },
+      },
+    },
+    true,
+  );
+  await api_start(api, "task", { read: true, write: false, execute: true });
+  const session = required(f.sessions[0]);
+  await expect(
+    session.options.tools.write("a.txt", new TextEncoder().encode("a")),
+  ).rejects.toMatchObject({ code: "forbidden" });
+  expect(f.writes).toEqual([]);
+  expect(calls.filter((call) => call.event !== "session-start")).toEqual([]);
+  await session.options.tools.read("a.txt");
+  expect(calls.filter((call) => call.event !== "session-start")).toEqual([
+    { event: "pre-tool", tool: "mars_read" },
+    { event: "post-tool", tool: "mars_read" },
+  ]);
+  session.finish("completed");
+  await session.disposed;
+  await api.close();
+});
+
+test("mars_apply_patch can delete or move a binary file: existence never decodes content", async () => {
+  const f = await fixture();
+  const png = await f.store.artifacts.put(
+    context(),
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x80]),
+    "image/png",
+  );
+  f.readArtifacts.set("assets/logo.png", png);
+  f.readArtifacts.set("missing.txt", null);
+  const api = await conventionsHost(f, {
+    async applyPatch(_patch, files) {
+      expect(await files.exists("assets/logo.png")).toBe("file");
+      expect(await files.exists("missing.txt")).toBeNull();
+      await expect(files.read("assets/logo.png")).rejects.toThrow();
+      await files.remove("assets/logo.png");
+      return {
+        ok: true,
+        applied: { added: [], modified: [], deleted: ["assets/logo.png"] },
+        summary: "Success. Updated the following files:\nD assets/logo.png",
+      };
+    },
+  });
+  await api_start(api, "task", { read: false, write: true, execute: false });
+  const session = required(f.sessions[0]);
+  expect(
+    await required(session.options.patch).apply(
+      "*** Begin Patch\n*** Delete File: assets/logo.png\n*** End Patch",
+    ),
+  ).toContain("D assets/logo.png");
+  expect(f.removes).toEqual(["assets/logo.png"]);
   session.finish("completed");
   await session.disposed;
   await api.close();

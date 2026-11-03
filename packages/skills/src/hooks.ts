@@ -28,6 +28,8 @@ export const MAX_HOOK_TIMEOUT_MS = 300_000;
 export const DEFAULT_HOOK_TIMEOUT_MS = 60_000;
 export const MAX_HOOKS_FILE_BYTES = 256 * 1024;
 export const MAX_HOOK_OUTPUT_BYTES = 4 * 1024;
+/** After `timeout_ms` the executor (which must enforce the same limit itself) gets this long to settle before the hook is reported as timed out. */
+export const HOOK_TIMEOUT_GRACE_MS = 2_000;
 /** Claude Code semantics: a pre-tool hook exiting 2 blocks the tool call. */
 export const HOOK_BLOCK_EXIT_CODE = 2;
 
@@ -302,10 +304,19 @@ export async function runHooks(
     }
     let outcome: HookExecution | { skipped: string } | typeof TIMEOUT;
     try {
-      outcome = await withTimeout(
-        executor(argv, spec.timeout_ms),
-        spec.timeout_ms,
-      );
+      const execution = executor(argv, spec.timeout_ms);
+      outcome = await withTimeout(execution, spec.timeout_ms);
+      if (outcome === TIMEOUT) {
+        // Do not run the next hook or the tool while the command may still be
+        // changing files: wait (bounded) for the executor's own kill.
+        await withTimeout(
+          execution.then(
+            () => undefined,
+            () => undefined,
+          ),
+          HOOK_TIMEOUT_GRACE_MS,
+        );
+      }
     } catch (error) {
       results.push({
         ...base,

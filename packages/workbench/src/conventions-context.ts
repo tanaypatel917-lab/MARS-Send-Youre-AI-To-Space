@@ -79,6 +79,9 @@ export function freezeInstructions(
 ): FrozenInstructions | undefined {
   const text = found.text;
   if (!text.trim() || found.files.length === 0) return undefined;
+  // Discovery may cut the file that crosses its byte budget; a partial rule
+  // can invert its meaning, so such a snapshot is omitted entirely.
+  if (found.files.some((file) => file.truncated)) return undefined;
   if (
     text.length > MAX_INSTRUCTIONS_CONTEXT_LENGTH ||
     instruction.length + INSTRUCTIONS_SEPARATOR.length + text.length >

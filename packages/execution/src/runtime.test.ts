@@ -31,7 +31,7 @@ function sse(delta: Record<string, unknown>, reason = "stop") {
   );
 }
 
-async function fixture() {
+async function fixture(contextWindow = 32000) {
   const root = await mkdtemp(join(tmpdir(), "mars-runtime-test-"));
   const cwd = join(root, "workspace");
   const home = join(root, "home");
@@ -54,21 +54,21 @@ async function fixture() {
           id: "fixture/free",
           providerId: "fixture",
           model: "stub",
-          capabilities: { tools: true, vision: false, contextWindow: 32000 },
+          capabilities: { tools: true, vision: false, contextWindow },
           pricing: { free: true },
         },
         {
           id: "fixture/paid",
           providerId: "fixture",
           model: "stub",
-          capabilities: { tools: true, vision: false, contextWindow: 32000 },
+          capabilities: { tools: true, vision: false, contextWindow },
           pricing: { free: false, inputPerMTokUsd: 1, outputPerMTokUsd: 2 },
         },
         {
           id: "fixture/unknown",
           providerId: "fixture",
           model: "stub",
-          capabilities: { tools: true, vision: false, contextWindow: 32000 },
+          capabilities: { tools: true, vision: false, contextWindow },
           pricing: { free: false },
         },
       ],
@@ -788,6 +788,52 @@ test("mars_apply_patch is a host-bound tool: Oh My Pi passes the patch text to t
     expect(JSON.stringify(requests[1])).toContain(
       "Success. Updated the following files:",
     );
+  } finally {
+    await f.cleanup();
+  }
+}, 30000);
+
+test("mars_apply_patch keeps a persisted patch successful when its summary exceeds the output limit", async () => {
+  const f = await fixture(1_000_000);
+  const requests: Record<string, unknown>[] = [];
+  const summary = `Success. Updated the following files:\n${"A a/very/long/path/to/a/generated/file.txt\n".repeat(4_000)}`;
+  expect(summary.length).toBeGreaterThan(128 * 1024);
+  try {
+    const session = await f.open({
+      task: { ...f.task, budget: { ...f.task.budget, max_tokens: 400_000 } },
+      patch: { apply: async () => summary },
+      fetch: async (_url, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return requests.length === 1
+          ? sse(
+              {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_patch",
+                    type: "function",
+                    function: {
+                      name: "mars_apply_patch",
+                      arguments: JSON.stringify({
+                        patch:
+                          "*** Begin Patch\n*** Add File: a.txt\n+a\n*** End Patch",
+                      }),
+                    },
+                  },
+                ],
+              },
+              "tool_calls",
+            )
+          : sse({ content: "Applied." });
+      },
+    });
+    const outcome = await session.run(f.task.request);
+    expect(outcome.status).toBe("completed");
+    const relayed = JSON.stringify(requests[1]);
+    expect(relayed).toContain("Success. Updated the following files:");
+    expect(relayed).toContain("[summary truncated:");
+    expect(relayed).not.toContain("exceeds tool output limit");
+    expect(relayed.length).toBeLessThan(summary.length);
   } finally {
     await f.cleanup();
   }

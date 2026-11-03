@@ -420,6 +420,31 @@ describe("runHooks", () => {
     ]);
   });
 
+  it("waits for a timed-out command to settle before the next hook runs", async () => {
+    const slow = new HooksRegistry([
+      { event: "session-start", command: ["hang"], timeout_ms: 20 },
+      { event: "session-start", command: ["after"], timeout_ms: 20 },
+    ]);
+    let hangSettled = false;
+    let afterSawHangSettled = false;
+    const results = await runHooks(slow, "session-start", {}, (argv) => {
+      if (argv[0] === "hang")
+        return new Promise((resolveHang) =>
+          setTimeout(() => {
+            hangSettled = true;
+            resolveHang({ exit_code: 137, stdout: "", stderr: "killed" });
+          }, 60),
+        );
+      afterSawHangSettled = hangSettled;
+      return Promise.resolve({ exit_code: 0, stdout: "", stderr: "" });
+    });
+    expect(results.map((r) => [r.argv[0], r.outcome])).toEqual([
+      ["hang", "timeout"],
+      ["after", "ran"],
+    ]);
+    expect(afterSawHangSettled).toBe(true);
+  });
+
   it("truncates stdout/stderr to 4 KiB and skips hooks whose argv empties out", async () => {
     const results = await runHooks(
       registry,

@@ -467,6 +467,8 @@ export interface RuntimeWatch {
  * Host-bound apply_patch: the host parses the patch and writes only through
  * the workspace provider; the model sees a rendered summary or error text.
  */
+const PATCH_OUTPUT_LIMIT = 128 * 1024;
+
 export interface RuntimePatch {
   apply(patch: string): Promise<string>;
 }
@@ -1164,10 +1166,14 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
           })
           .strict()
           .parse(params);
+        // The patch is already persisted when the summary comes back, so an
+        // oversized summary is truncated instead of failing the call.
         const text = await patch.apply(input.patch);
-        if (text.length > 128 * 1024)
-          throw new Error("Patch output exceeds tool output limit.");
-        return toolResult(text);
+        return toolResult(
+          text.length > PATCH_OUTPUT_LIMIT
+            ? `${text.slice(0, PATCH_OUTPUT_LIMIT)}\n[summary truncated: ${text.length - PATCH_OUTPUT_LIMIT} more characters omitted]`
+            : text,
+        );
       },
     });
   if (approvals.execute)

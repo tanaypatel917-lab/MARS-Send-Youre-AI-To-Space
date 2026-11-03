@@ -1288,11 +1288,15 @@ export async function createWorkbenchHost(
       await assertActive();
       return internalContext(options.scope);
     };
+    // The tool's own approval and claimed-path checks run before any hook so
+    // a denied call never launches a hook command.
     const hooked = async <T>(
       tool: string,
       path: string | undefined,
-      work: () => Promise<T>,
+      authorized: () => Promise<RequestContext>,
+      work: (context: RequestContext) => Promise<T>,
     ): Promise<T> => {
+      const context = await authorized();
       const hookContext = path === undefined ? { tool } : { tool, path };
       await dispatchHooks(
         hookTaskId,
@@ -1302,7 +1306,7 @@ export async function createWorkbenchHost(
         "pre-tool",
         hookContext,
       );
-      const result = await work();
+      const result = await work(context);
       await dispatchHooks(
         hookTaskId,
         workspace,
@@ -1315,48 +1319,64 @@ export async function createWorkbenchHost(
     };
     return {
       read: (path) =>
-        hooked("mars_read", path, async () => {
-          const context = await authorize("read");
-          return options.store.artifacts.get(
-            context,
-            await options.workspace.read(context, workspace, path),
-          );
-        }),
+        hooked(
+          "mars_read",
+          path,
+          () => authorize("read"),
+          async (context) =>
+            options.store.artifacts.get(
+              context,
+              await options.workspace.read(context, workspace, path),
+            ),
+        ),
       write: (path, bytes) =>
-        hooked("mars_write", path, async () => {
-          const context = await authorize("write");
-          if (writePaths.length > 0 && !withinClaimedPaths(path, writePaths))
-            throw new WorkbenchError("forbidden");
-          const artifact = await options.store.artifacts.put(
-            context,
-            bytes,
-            "application/octet-stream",
-          );
-          await authorize("write");
-          await options.workspace.write(context, workspace, path, artifact);
-        }),
+        hooked(
+          "mars_write",
+          path,
+          async () => {
+            const context = await authorize("write");
+            if (writePaths.length > 0 && !withinClaimedPaths(path, writePaths))
+              throw new WorkbenchError("forbidden");
+            return context;
+          },
+          async (context) => {
+            const artifact = await options.store.artifacts.put(
+              context,
+              bytes,
+              "application/octet-stream",
+            );
+            await authorize("write");
+            await options.workspace.write(context, workspace, path, artifact);
+          },
+        ),
       execute: (argv) =>
-        hooked("mars_execute", undefined, async () => {
-          // Execution cannot be confined to claimed paths, so a path-scoped
-          // child does not execute at all.
-          if (writePaths.length > 0) throw new WorkbenchError("forbidden");
-          const context = await authorize("execute");
-          const result = await options.workspace.execute(
-            context,
-            workspace,
-            argv,
-            budget,
-          );
-          return {
-            exit_code: result.exit_code,
-            stdout: new TextDecoder().decode(
-              await options.store.artifacts.get(context, result.stdout),
-            ),
-            stderr: new TextDecoder().decode(
-              await options.store.artifacts.get(context, result.stderr),
-            ),
-          };
-        }),
+        hooked(
+          "mars_execute",
+          undefined,
+          () => {
+            // Execution cannot be confined to claimed paths, so a path-scoped
+            // child does not execute at all.
+            if (writePaths.length > 0) throw new WorkbenchError("forbidden");
+            return authorize("execute");
+          },
+          async (context) => {
+            const result = await options.workspace.execute(
+              context,
+              workspace,
+              argv,
+              budget,
+            );
+            return {
+              exit_code: result.exit_code,
+              stdout: new TextDecoder().decode(
+                await options.store.artifacts.get(context, result.stdout),
+              ),
+              stderr: new TextDecoder().decode(
+                await options.store.artifacts.get(context, result.stderr),
+              ),
+            };
+          },
+        ),
       stop: () =>
         options.workspace.stop(internalContext(options.scope), workspace),
     };
@@ -1421,10 +1441,15 @@ export async function createWorkbenchHost(
         claimed(path);
         await options.workspace.remove(context, workspace, path);
       },
+      // Existence never decodes content, so binary files can be deleted or
+      // moved; only Update hunks require UTF-8 text.
       async exists(path: string) {
         try {
-          return (await readText(path)) === null ? null : ("file" as const);
+          const context = await authorize();
+          await options.workspace.read(context, workspace, path);
+          return "file" as const;
         } catch (error) {
+          if (notFound(error)) return null;
           if (
             typeof error === "object" &&
             error !== null &&
