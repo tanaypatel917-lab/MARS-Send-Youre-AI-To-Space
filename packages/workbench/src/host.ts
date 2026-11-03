@@ -262,14 +262,14 @@ export async function createWorkbenchHost(
   const watchFor = (
     taskId: string,
     cwd: string,
-    approvals: Pick<Approvals, "execute">,
+    approvals: Pick<Approvals, "read" | "execute">,
   ): RuntimeWatch | undefined => {
     const watch = options.watch;
     if (!watch) return undefined;
     return watch.toolsFor({
       task_id: taskId,
       cwd,
-      approvals: { execute: approvals.execute },
+      approvals: { read: approvals.read, execute: approvals.execute },
       evidence: watchEvidence(
         options.store,
         () => internalContext(options.scope),
@@ -280,7 +280,7 @@ export async function createWorkbenchHost(
   const watchOption = (
     taskId: string,
     cwd: string,
-    approvals: Pick<Approvals, "execute">,
+    approvals: Pick<Approvals, "read" | "execute">,
   ) => {
     const watch = watchFor(taskId, cwd, approvals);
     return watch ? { watch } : {};
@@ -1248,6 +1248,7 @@ export async function createWorkbenchHost(
               ? {
                   watchFor: (launch: ChildLaunch, cwd: string) =>
                     watchFor(launch.task_id, cwd, {
+                      read: launch.approvals.read,
                       execute:
                         launch.approvals.execute &&
                         launch.workspace_mode !== "read_only",
@@ -1284,8 +1285,10 @@ export async function createWorkbenchHost(
                 initialRequestAllowance({
                   approvals: request.approvals,
                   recall: false,
-                  // Children get only workspace tools from the child adapter.
+                  // Children get workspace tools (and watch tools when the
+                  // host has them) from the child adapter; never room tools.
                   collaboration: false,
+                  watch: Boolean(options.watch),
                   instruction: request.instruction,
                 }) + MIN_INITIAL_OUTPUT_RESERVE,
                 reviewer ? "reviewer" : "worker",

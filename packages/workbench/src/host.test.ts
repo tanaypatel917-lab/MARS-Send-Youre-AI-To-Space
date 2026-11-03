@@ -2771,13 +2771,18 @@ test("a launch that fails before the runtime still reconciles the task's researc
 
 test("watch tools are host-bound per task and their verdicts become reviewable tool.completed evidence", async () => {
   const f = await fixture();
-  const bindings: Array<{ task_id: string; cwd: string; execute: boolean }> =
-    [];
+  const bindings: Array<{
+    task_id: string;
+    cwd: string;
+    read: boolean;
+    execute: boolean;
+  }> = [];
   const watch: WorkbenchWatch = {
     toolsFor(binding) {
       bindings.push({
         task_id: binding.task_id,
         cwd: binding.cwd,
+        read: binding.approvals?.read ?? false,
         execute: binding.approvals?.execute ?? false,
       });
       const record = (
@@ -2857,7 +2862,7 @@ test("watch tools are host-bound per task and their verdicts become reviewable t
   const session = required(f.sessions[0]);
   const tools = required(session.options.watch);
   expect(bindings).toEqual([
-    { task_id: "task", cwd: session.options.cwd, execute: false },
+    { task_id: "task", cwd: session.options.cwd, read: false, execute: false },
   ]);
   expect(await tools.verify({ action: "run" })).toBe("recorded");
   expect(await tools.verify({ action: "show" })).toBe("recorded");

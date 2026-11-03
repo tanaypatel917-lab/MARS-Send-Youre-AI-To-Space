@@ -19,6 +19,8 @@ interface Rule {
   stdout?: string;
   stderr?: string;
   sleep_ms?: number;
+  /** Print stdout first, then hang this long before exiting (timeout tests). */
+  hang_after_stdout_ms?: number;
   /** Written to <data>/loops/<loop_id>/state.json before exiting. */
   loop_state?: Record<string, unknown>;
 }
@@ -80,5 +82,10 @@ if (rule.loop_state && dataDir) {
     join(dataDir, "loops", loopId, "state.json"),
     JSON.stringify(rule.loop_state),
   );
+}
+if (rule.hang_after_stdout_ms && rule.stdout) {
+  process.stdout.write(`${rule.stdout}\n`);
+  await Bun.sleep(rule.hang_after_stdout_ms);
+  finish(rule.exit ?? 0);
 }
 finish(rule.exit ?? 0, rule.stdout, rule.stderr);

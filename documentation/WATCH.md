@@ -54,7 +54,7 @@ service.doctor();  // { available, version, reason, checks, checked_at } — cac
 service.toolsFor({
   task_id,
   cwd,                       // the task workspace; file sources must resolve inside it
-  approvals?: { execute },   // gates command_exit checks in verification contracts
+  approvals?: { read, execute }, // gate read-only vs executing check types in contracts
   evidence: { append(record), list() }, // host-owned sink (workbench: watch-context.ts)
 }); // RuntimeWatch
 ```
@@ -90,6 +90,18 @@ Sandbox for every subprocess:
 - output capped at 96 KiB from the CLI, 128 KiB after rendering.
 
 ## 3. Policy
+
+Each task gets its own `WATCHSKILL_DATA_DIR` (`<dataRoot>/tasks/<sha256(task_id)>`,
+created `0700` on first use; `dataRoot` itself is created before the doctor probes
+and must lie outside the workspace), so one task's video index, loops, captures and
+verification bundles are not searchable or readable from another task's session.
+Delegated children share their parent task's directory on purpose.
+
+Known limits of the host-side guards: they check the hostname the model supplied,
+so a loopback server that redirects to an external host is followed by the CLI
+itself; and upstream has a single offline switch, so `allow_cloud_models` lifts
+`WATCHSKILL_OFFLINE` only when `allow_network_sources` is also on (with network
+off the CLI always runs offline). Keep both off unless the user opts in.
 
 ```ts
 WatchPolicy = {
@@ -130,13 +142,34 @@ under the private watch data dir and passes that path to `verify run`. The
 model never supplies a filesystem path for a contract, and `--in-process` is
 never used.
 
-Before a contract runs the host checks it against policy; any refusal records an
-`inconclusive` evidence record and the contract is **not** run: `required_assurance:
-remote_attested`; a non-loopback `allowed_origins` entry, `http_request` or
-`browser_dom` URL without `allow_network_sources`; a `command_exit` check when the
-session has no `execute` approval (children in a read-only workspace never have
-it). An upstream `pass` without at least one passed required check is recorded
-as `inconclusive`. `verify show` renders a stored run but writes no new record.
+Contract checks follow upstream's shape: `{ id, type, required?, description?,
+params: {...}, timeout_seconds? }` (strict; parameters live in `params`). Before a
+contract runs the host checks it against policy; any refusal records an
+`inconclusive` evidence record and the contract is **not** run:
+
+- `required_assurance: remote_attested`;
+- a non-loopback `allowed_origins` entry or `params.url` without `allow_network_sources`;
+- read-only check types (`file_exists`, `file_digest`, `directory_manifest`,
+  `json_schema`, `json_value`, `numeric_invariant`, `visual_absent`, `sqlite_query`)
+  when the session has no `read` approval;
+- executing check types (`command_exit`, `live_console`, `live_evidence`,
+  `browser_dom`, `http_request`) when the session has no `execute` approval
+  (children in a read-only workspace never have it); `human_approval` needs neither;
+- an unknown check type;
+- `params.path`, `params.database`, `params.cwd` or an `expected_files` entry that
+  is absolute or contains `..` (checks stay inside the `--dir` workspace);
+- `params.command` that is not a non-empty argv list of strings.
+
+A verdict is only read from a run that exited on its own: stdout captured from a
+timed-out or crashed CLI is `inconclusive` even if it already holds a passing JSON
+object (the same applies to `verify show`). An upstream `pass` without at least one
+passed required check is recorded as `inconclusive`. `verify show` renders a stored
+run but writes no new record.
+
+Loop `script` steps are validated against upstream 1.4.3's step set
+(`goto {url}`, `click {selector, timeout_ms?}`, `fill {selector, value}`,
+`press {key}`, `scroll {dy?}`, `wait {seconds<=30}`), strict fields, at most 64
+steps; `goto` URLs pass the same loopback/network guard as any source.
 
 ## 5. Verdict and assurance mapping
 
@@ -182,7 +215,8 @@ Rules:
 
 ## 6. Evidence records
 
-Every `mars_watch`, `mars_watch_capture`, `mars_loop` and `mars_verify run` call
+Every `mars_watch`, `mars_watch_capture`, `mars_loop` and `mars_verify run` call,
+including one that fails, times out or is refused by policy,
 produces a `WatchEvidenceRecord` (zod `WatchEvidenceRecordSchema`) that the
 host appends as a `tool.completed` task event with `producer: "@mars/watch"`
 and `versions: [{component:"@mars/watch",revision:"0.0.1"},{component:"watch-skill",revision:"1.4.3"}]`:

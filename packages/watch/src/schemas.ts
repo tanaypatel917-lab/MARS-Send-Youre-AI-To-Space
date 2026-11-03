@@ -154,11 +154,14 @@ export const VerificationContractInputSchema = z
       .array(
         z
           .object({
-            id: z.string().min(1).max(128),
+            id: z.string().regex(/^[A-Za-z0-9_.:-]{1,64}$/),
             type: z.string().min(1).max(64),
             required: z.boolean().optional(),
+            description: z.string().max(1024).optional(),
+            params: z.record(z.unknown()).optional(),
+            timeout_seconds: z.number().positive().max(600).optional(),
           })
-          .passthrough(),
+          .strict(),
       )
       .min(1)
       .max(64),

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import {
   createWatchService,
   type WatchEvidenceRecord,
@@ -29,6 +29,8 @@ async function fixture(input: {
   command?: string[];
   timeoutMs?: number;
   execute?: boolean;
+  read?: boolean;
+  taskId?: string;
 }) {
   const root = await mkdtemp(join(tmpdir(), "mars-watch-"));
   const cwd = join(root, "workspace");
@@ -50,9 +52,9 @@ async function fixture(input: {
     env: { FAKE_WATCH_SKILL_SCENARIO: scenarioPath, FAKE_WATCH_SKILL_LOG: log },
   });
   const tools = service.toolsFor({
-    task_id: "task",
+    task_id: input.taskId ?? "task",
     cwd,
-    approvals: { execute: input.execute ?? false },
+    approvals: { read: input.read ?? true, execute: input.execute ?? false },
     evidence: {
       async append(record) {
         records.push(record);
@@ -103,7 +105,9 @@ test("a missing CLI makes every tool unavailable and verification inconclusive, 
       contract: {
         contract_id: "c1",
         title: "t",
-        checks: [{ id: "a", type: "file_exists", path: "clip.mp4" }],
+        checks: [
+          { id: "a", type: "file_exists", params: { path: "clip.mp4" } },
+        ],
       },
     });
     expect(verify).toContain("unavailable]");
@@ -186,7 +190,12 @@ test("the subprocess runs argv-only in the workspace with an allowlisted offline
       "--transcript-only",
     ]);
     expect(watch.cwd).toBe(f.cwd);
-    expect(watch.env.WATCHSKILL_DATA_DIR).toBe(f.dataRoot);
+    expect(
+      watch.env.WATCHSKILL_DATA_DIR?.startsWith(join(f.dataRoot, "tasks", "")),
+    ).toBe(true);
+    expect(
+      calls.find((call) => call.args[0] === "version")?.env.WATCHSKILL_DATA_DIR,
+    ).toBe(f.dataRoot);
     expect(watch.env.WATCHSKILL_OFFLINE).toBe("1");
     expect(watch.env.WATCHSKILL_COST_POLICY).toBe("offline_only");
     expect(watch.env.MARS_TEST_SECRET_NEEDLE).toBeUndefined();
@@ -265,9 +274,7 @@ test("sources are bounded: no workspace escape, no network by default, no screen
       "--duration",
       "5",
     ]);
-    expect(capture?.args[5]?.startsWith(join(f.dataRoot, "captures"))).toBe(
-      true,
-    );
+    expect(capture?.args[5]?.startsWith(join(f.dataRoot, "tasks"))).toBe(true);
     expect(calls.filter((call) => call.args[0] === "watch")).toHaveLength(0);
   } finally {
     await f.cleanup();
@@ -443,11 +450,16 @@ test("verify maps upstream verdicts and assurance; only a passed required determ
     contract_id: "mars-smoke-v1",
     title: "smoke",
     checks: [
-      { id: "present", type: "file_exists", path: "clip.mp4", required: true },
+      {
+        id: "present",
+        type: "file_exists",
+        params: { path: "clip.mp4" },
+        required: true,
+      },
       {
         id: "optional",
         type: "file_exists",
-        path: "missing.txt",
+        params: { path: "missing.txt" },
         required: false,
       },
     ],
@@ -478,7 +490,8 @@ test("verify maps upstream verdicts and assurance; only a passed required determ
     });
     const call = (await f.calls()).find((item) => item.args[1] === "run");
     expect(call?.args[0]).toBe("verify");
-    expect(call?.args[2]?.startsWith(join(f.dataRoot, "contracts"))).toBe(true);
+    expect(call?.args[2]?.startsWith(join(f.dataRoot, "tasks"))).toBe(true);
+    expect(call?.args[2]?.includes(`${sep}contracts${sep}`)).toBe(true);
     expect(call?.args.slice(3)).toEqual(["--dir", f.cwd]);
     expect(call?.args).not.toContain("--in-process");
     expect(JSON.parse(call?.contract ?? "{}")).toMatchObject({
@@ -497,11 +510,16 @@ test("verify maps upstream verdicts and assurance; only a passed required determ
         allowed_origins: ["https://api.example.com"],
         checks: [
           ...contract.checks,
-          { id: "cmd", type: "command_exit", argv: ["true"], required: true },
+          {
+            id: "cmd",
+            type: "command_exit",
+            params: { command: ["true"] },
+            required: true,
+          },
           {
             id: "http",
             type: "http_request",
-            url: "https://example.com/health",
+            params: { url: "https://example.com/health" },
             required: true,
           },
         ],
@@ -576,7 +594,9 @@ test("verify never upgrades: failed, inconclusive, advisory-only and errored run
         contract: {
           contract_id: "c",
           title: "t",
-          checks: [{ id: "a", type: "file_exists", path: "clip.mp4" }],
+          checks: [
+            { id: "a", type: "file_exists", params: { path: "clip.mp4" } },
+          ],
         },
       });
       expect(rendered).toContain(`· mars_verify · ${label}]`);
@@ -612,7 +632,9 @@ test("verify never upgrades: failed, inconclusive, advisory-only and errored run
       contract: {
         contract_id: "c",
         title: "t",
-        checks: [{ id: "a", type: "file_exists", path: "clip.mp4" }],
+        checks: [
+          { id: "a", type: "file_exists", params: { path: "clip.mp4" } },
+        ],
       },
     });
     expect(rendered).toContain("· mars_verify · error]");
@@ -645,7 +667,9 @@ test("a hung CLI is killed at the host timeout and reported inconclusive", async
       contract: {
         contract_id: "c",
         title: "t",
-        checks: [{ id: "a", type: "file_exists", path: "clip.mp4" }],
+        checks: [
+          { id: "a", type: "file_exists", params: { path: "clip.mp4" } },
+        ],
       },
     });
     expect(rendered).toContain("· mars_verify · inconclusive]");
@@ -685,4 +709,339 @@ test("evidence records reject a verified flag without a passed deterministic req
       required_checks: { passed: 1, failed: 0, inconclusive: 0 },
     }).success,
   ).toBe(true);
+});
+
+test("each task gets its own watch data directory, so indexes, loops and bundles never cross tasks", async () => {
+  const a = await fixture({
+    taskId: "task-a",
+    scenario: { rules: [{ match: ["search"], stdout: "hits" }] },
+  });
+  const b = await fixture({
+    taskId: "task-b",
+    scenario: { rules: [{ match: ["search"], stdout: "hits" }] },
+  });
+  try {
+    await a.tools.search({ query: "login" });
+    await b.tools.search({ query: "login" });
+    const dirA = (await a.calls()).find((call) => call.args[0] === "search")
+      ?.env.WATCHSKILL_DATA_DIR;
+    const dirB = (await b.calls()).find((call) => call.args[0] === "search")
+      ?.env.WATCHSKILL_DATA_DIR;
+    expect(dirA).toBeDefined();
+    expect(dirA).not.toBe(dirB);
+    expect(dirA?.startsWith(join(a.dataRoot, "tasks", ""))).toBe(true);
+    expect(dirA).not.toBe(a.dataRoot);
+  } finally {
+    await a.cleanup();
+    await b.cleanup();
+  }
+  const fresh = await mkdtemp(join(tmpdir(), "mars-watch-fresh-"));
+  try {
+    const service = createWatchService({
+      command: ["bun", FAKE_CLI],
+      dataRoot: join(fresh, "does", "not", "exist", "yet"),
+    });
+    expect((await service.doctor()).available).toBe(true);
+    expect(() =>
+      service.toolsFor({
+        task_id: "t",
+        cwd: fresh,
+        evidence: { append: async () => undefined, list: async () => [] },
+      }),
+    ).toThrow("outside the task workspace");
+  } finally {
+    await rm(fresh, { recursive: true, force: true });
+  }
+});
+
+test("contract checks are gated by read/execute approval, relative paths and known check types", async () => {
+  const readOnly = await fixture({
+    read: true,
+    execute: false,
+    scenario: {
+      rules: [{ match: ["verify", "run"], stdout: JSON.stringify(PASS_RUN) }],
+    },
+  });
+  const contract = (checks: unknown[]) => ({
+    contract_id: "c",
+    title: "t",
+    checks,
+  });
+  try {
+    const escaped = await readOnly.tools.verify({
+      action: "run",
+      contract: contract([
+        { id: "abs", type: "file_exists", params: { path: "/etc/passwd" } },
+        {
+          id: "up",
+          type: "file_digest",
+          params: { path: "../outside.mp4", digest: "x" },
+        },
+        {
+          id: "dir",
+          type: "directory_manifest",
+          params: { path: "src", expected_files: ["/root/.ssh/id_rsa"] },
+        },
+        {
+          id: "db",
+          type: "sqlite_query",
+          params: { database: "/var/db.sqlite", sql: "select 1" },
+        },
+        { id: "mystery", type: "shell", params: {} },
+        { id: "live", type: "live_console", params: { session_id: "s" } },
+        { id: "shell", type: "command_exit", params: { command: "rm -rf /" } },
+      ]),
+    });
+    expect(escaped).toContain("· mars_verify · inconclusive]");
+    expect(escaped).toContain("check abs path must be relative");
+    expect(escaped).toContain("check up path must not leave");
+    expect(escaped).toContain("expected_files entry must be relative");
+    expect(escaped).toContain("check db database must be relative");
+    expect(escaped).toContain("unknown type shell");
+    expect(escaped).toContain("check live (live_console) runs something");
+    expect(escaped).toContain("check shell (command_exit) runs something");
+    expect(escaped).toContain("command must be a non-empty argv list");
+    expect(
+      (await readOnly.calls()).filter((call) => call.args[1] === "run"),
+    ).toHaveLength(0);
+    expect(readOnly.records.at(-1)).toMatchObject({
+      kind: "verify",
+      verdict: "inconclusive",
+      verified: false,
+    });
+    const ok = await readOnly.tools.verify({
+      action: "run",
+      contract: contract([
+        { id: "present", type: "file_exists", params: { path: "clip.mp4" } },
+        { id: "gate", type: "human_approval", params: {} },
+      ]),
+    });
+    expect(ok).toContain("· mars_verify · verified]");
+  } finally {
+    await readOnly.cleanup();
+  }
+  const noRead = await fixture({
+    read: false,
+    execute: false,
+    scenario: {
+      rules: [{ match: ["verify", "run"], stdout: JSON.stringify(PASS_RUN) }],
+    },
+  });
+  try {
+    const refused = await noRead.tools.verify({
+      action: "run",
+      contract: contract([
+        { id: "present", type: "file_exists", params: { path: "clip.mp4" } },
+      ]),
+    });
+    expect(refused).toContain("no read approval");
+    expect(
+      (await noRead.calls()).filter((call) => call.args[1] === "run"),
+    ).toHaveLength(0);
+  } finally {
+    await noRead.cleanup();
+  }
+  const executor = await fixture({
+    read: true,
+    execute: true,
+    scenario: {
+      rules: [{ match: ["verify", "run"], stdout: JSON.stringify(PASS_RUN) }],
+    },
+  });
+  try {
+    const ran = await executor.tools.verify({
+      action: "run",
+      contract: contract([
+        {
+          id: "cmd",
+          type: "command_exit",
+          params: { command: ["bun", "test"], exit_code: 0 },
+        },
+        {
+          id: "http",
+          type: "http_request",
+          params: { url: "http://localhost:3000/health", status: 200 },
+        },
+      ]),
+    });
+    expect(ran).toContain("· mars_verify · verified]");
+    expect(
+      (await executor.calls()).filter((call) => call.args[1] === "run"),
+    ).toHaveLength(1);
+  } finally {
+    await executor.cleanup();
+  }
+});
+
+test("loop scripts are limited to the upstream step allowlist and loopback navigation", async () => {
+  const f = await fixture({
+    scenario: {
+      rules: [{ match: ["loop", "start"], stdout: "loop_id: lp_1" }],
+    },
+  });
+  const start = (script: unknown) =>
+    f.tools.loop({
+      action: "start",
+      target: "http://localhost:5173/",
+      pass_criteria: "ok",
+      script: JSON.stringify(script),
+    });
+  try {
+    expect(
+      await start([
+        { action: "evaluate", expression: "fetch('https://evil')" },
+      ]),
+    ).toContain("script must be a JSON array of steps");
+    expect(
+      await start([{ action: "click", selector: "#a", onclick: "x" }]),
+    ).toContain("script must be a JSON array of steps");
+    expect(
+      await start([{ action: "goto", url: "https://example.com/" }]),
+    ).toContain("network sources are disabled");
+    expect(await start([{ action: "wait", seconds: 999 }])).toContain(
+      "script must be a JSON array of steps",
+    );
+    expect(
+      (await f.calls()).filter((call) => call.args[0] === "loop"),
+    ).toHaveLength(0);
+    const ok = await start([
+      { action: "goto", url: "http://127.0.0.1:5173/login" },
+      { action: "fill", selector: "#user", value: "demo" },
+      { action: "press", key: "Enter" },
+      { action: "wait", seconds: 1 },
+    ]);
+    expect(ok).toContain("· mars_loop · inconclusive]");
+    const call = (await f.calls()).find((item) => item.args[0] === "loop");
+    expect(call?.args[5]).toBe(
+      JSON.stringify([
+        { action: "goto", url: "http://127.0.0.1:5173/login" },
+        { action: "fill", selector: "#user", value: "demo" },
+        { action: "press", key: "Enter" },
+        { action: "wait", seconds: 1 },
+      ]),
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a verify run that prints a pass and then hangs is inconclusive, not verified", async () => {
+  const f = await fixture({
+    timeoutMs: 300,
+    scenario: {
+      rules: [
+        {
+          match: ["verify", "run"],
+          stdout: JSON.stringify(PASS_RUN),
+          hang_after_stdout_ms: 5_000,
+        },
+        {
+          match: ["verify", "show", "vr_fixture"],
+          stdout: JSON.stringify(PASS_RUN),
+          hang_after_stdout_ms: 5_000,
+        },
+      ],
+    },
+  });
+  try {
+    const run = await f.tools.verify({
+      action: "run",
+      contract: {
+        contract_id: "c",
+        title: "t",
+        checks: [
+          { id: "a", type: "file_exists", params: { path: "clip.mp4" } },
+        ],
+      },
+    });
+    expect(run).toContain("· mars_verify · inconclusive]");
+    expect(run).not.toContain("VERIFIED");
+    expect(f.records.at(-1)).toMatchObject({
+      kind: "verify",
+      verdict: "inconclusive",
+      verified: false,
+      assurance: "none",
+    });
+    const shown = await f.tools.verify({
+      action: "show",
+      run_id: "vr_fixture",
+    });
+    expect(shown).toContain("· mars_verify · inconclusive]");
+    expect(shown).not.toContain("VERIFIED");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("failed or timed-out perception attempts are still recorded as non-verified evidence", async () => {
+  const f = await fixture({
+    timeoutMs: 300,
+    scenario: {
+      rules: [
+        {
+          match: ["watch"],
+          exit: 1,
+          stdout: JSON.stringify({
+            error: "watch.unreadable",
+            message: "bad file",
+            fix: "use mp4",
+            details: {},
+          }),
+        },
+        { match: ["capture"], sleep_ms: 5_000, stdout: "never" },
+      ],
+    },
+  });
+  try {
+    expect(await f.tools.watch({ source: "clip.mp4" })).toContain(
+      "· mars_watch · error]",
+    );
+    expect(
+      await f.tools.capture({ target: "http://localhost:3000/" }),
+    ).toContain("· mars_watch_capture · inconclusive]");
+    expect(
+      f.records.map((record) => [
+        record.kind,
+        record.tool,
+        record.verdict,
+        record.verified,
+      ]),
+    ).toEqual([
+      ["perception", "mars_watch", "error", false],
+      ["perception", "mars_watch_capture", "inconclusive", false],
+    ]);
+    expect(await f.tools.evidence()).toContain("2 record(s), 0 verified");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("cloud models never lift the CLI's offline mode unless network sources are also allowed", async () => {
+  const cloudOnly = await fixture({
+    policy: { allow_cloud_models: true },
+    scenario: { rules: [{ match: ["search"], stdout: "x" }] },
+  });
+  try {
+    await cloudOnly.tools.search({ query: "q" });
+    const env = (await cloudOnly.calls()).find(
+      (call) => call.args[0] === "search",
+    )?.env;
+    expect(env?.WATCHSKILL_OFFLINE).toBe("1");
+    expect(env?.WATCHSKILL_COST_POLICY).toBe("offline_only");
+  } finally {
+    await cloudOnly.cleanup();
+  }
+  const both = await fixture({
+    policy: { allow_cloud_models: true, allow_network_sources: true },
+    scenario: { rules: [{ match: ["search"], stdout: "x" }] },
+  });
+  try {
+    await both.tools.search({ query: "q" });
+    const env = (await both.calls()).find(
+      (call) => call.args[0] === "search",
+    )?.env;
+    expect(env?.WATCHSKILL_OFFLINE).toBeUndefined();
+  } finally {
+    await both.cleanup();
+  }
 });

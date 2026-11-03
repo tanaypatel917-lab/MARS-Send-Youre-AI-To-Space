@@ -11,6 +11,8 @@ export interface CliInvocation {
   args: string[];
   cwd: string;
   timeoutMs: number;
+  /** Overrides the service-wide data directory (per-task isolation). */
+  dataRoot?: string;
 }
 
 export interface CliResult {
@@ -126,7 +128,10 @@ export function createCliRunner(options: CliRunnerOptions): CliRunner {
           stdin: "ignore",
           stdout: "pipe",
           stderr: "pipe",
-          env: sandboxEnvironment(options),
+          env: sandboxEnvironment({
+            ...options,
+            dataRoot: invocation.dataRoot ?? options.dataRoot,
+          }),
         });
       } catch (error) {
         return {
