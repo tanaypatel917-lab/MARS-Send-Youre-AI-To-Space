@@ -158,6 +158,10 @@ export function createOpenAICompatibleAdapter(
     body?: Record<string, unknown>,
   ): Promise<{ response: Response; cleanup: () => void; signal: AbortSignal }> {
     const headers = new Headers(provider.headers);
+    for (const [name, value] of Object.entries(options.headers ?? {})) {
+      if (name.toLowerCase() === "authorization") continue;
+      headers.set(name, value);
+    }
     headers.set("Accept", "application/json");
     if (body) headers.set("Content-Type", "application/json");
     const apiKey = provider.apiKeyEnv ? env[provider.apiKeyEnv] : undefined;

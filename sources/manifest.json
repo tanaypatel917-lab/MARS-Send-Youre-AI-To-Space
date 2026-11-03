@@ -2377,6 +2377,121 @@
         "watch/ask/search/capture/loop iterate/extract were not run against the real CLI; their wrappers are fixture-verified only."
       ],
       "integration_status": "host-bound-tools"
+    },
+    {
+      "id": "omniroute",
+      "group": "model-gateway",
+      "repository_url": "https://github.com/cheaper-inference/OmniRoute",
+      "revision": "ad6f33f66bda34eba98645d3bfdabbde294bc843",
+      "version_note": "3.8.52 (package.json); tag v3.8.52 (2026-10-19). npm omniroute@3.8.52 is the runtime artifact; FREE_CATALOG_CURATED_AT 2026-10-19.",
+      "license": {
+        "spdx": "MIT",
+        "path": "LICENSE",
+        "url": "https://github.com/cheaper-inference/OmniRoute/blob/ad6f33f66bda34eba98645d3bfdabbde294bc843/LICENSE",
+        "additional_notices": [
+          "packages/providers-omniroute/NOTICE",
+          "packages/providers-omniroute/third_party/omniroute/LICENSE.txt"
+        ],
+        "notes": "MIT at pinned LICENSE. No upstream code is vendored or ported; only the hand-curated free-tier catalog data (FREE_MODEL_BUDGETS, FREE_TIER_TOS, provider registry ids) is parsed as text into the MARS-owned catalog/free-tier-catalog.json with attribution."
+      },
+      "sources": [
+        {
+          "path": "open-sse/config/freeModelCatalog.data.ts",
+          "url": "https://github.com/cheaper-inference/OmniRoute/blob/ad6f33f66bda34eba98645d3bfdabbde294bc843/open-sse/config/freeModelCatalog.data.ts",
+          "purpose": "Machine-readable free-tier catalog (FREE_MODEL_BUDGETS, FREE_CATALOG_CURATED_AT) the MARS importer parses as text; source of provider, model, quota, free type and ToS verdict."
+        },
+        {
+          "path": "open-sse/config/freeModelCatalog.ts",
+          "url": "https://github.com/cheaper-inference/OmniRoute/blob/ad6f33f66bda34eba98645d3bfdabbde294bc843/open-sse/config/freeModelCatalog.ts",
+          "purpose": "FreeModelBudget type and FREE_REGIME_TRAITS (discontinued grants no access; daily/monthly/keyless share the steady-monthly bucket) mirrored by the MARS catalog schema."
+        },
+        {
+          "path": "open-sse/config/freeTierCatalog.ts",
+          "url": "https://github.com/cheaper-inference/OmniRoute/blob/ad6f33f66bda34eba98645d3bfdabbde294bc843/open-sse/config/freeTierCatalog.ts",
+          "purpose": "Provider-level FREE_TIER_TOS overrides (avoid list) merged as the stricter verdict."
+        },
+        {
+          "path": "src/shared/constants/providers/web-cookie.ts",
+          "url": "https://github.com/cheaper-inference/OmniRoute/blob/ad6f33f66bda34eba98645d3bfdabbde294bc843/src/shared/constants/providers/web-cookie.ts",
+          "purpose": "Registry of pasted-consumer-login providers (ChatGPT Web, Claude Web, Grok Web, Gemini Web, ...); every id is excluded by default as web-session."
+        },
+        {
+          "path": "src/shared/constants/providers/noauth.ts",
+          "url": "https://github.com/cheaper-inference/OmniRoute/blob/ad6f33f66bda34eba98645d3bfdabbde294bc843/src/shared/constants/providers/noauth.ts",
+          "purpose": "No-auth registry; browserBacked or *-web ids are excluded by default as browser-session (reverse-engineered or anonymous browser transports)."
+        },
+        {
+          "path": "docs/reference/FREE_TIERS.md",
+          "url": "https://github.com/cheaper-inference/OmniRoute/blob/ad6f33f66bda34eba98645d3bfdabbde294bc843/docs/reference/FREE_TIERS.md",
+          "purpose": "Documented free-tier methodology and caveats (approximate quotas, tos avoid excluded from automatic routing); RTK/Caveman savings claims audited and not repeated."
+        },
+        {
+          "path": "docs/reference/PROVIDER_REFERENCE.md",
+          "url": "https://github.com/cheaper-inference/OmniRoute/blob/ad6f33f66bda34eba98645d3bfdabbde294bc843/docs/reference/PROVIDER_REFERENCE.md",
+          "purpose": "Provider categories (no-auth, OAuth, web cookie) used to define the default exclusion list."
+        },
+        {
+          "path": "docs/reference/ENVIRONMENT.md",
+          "url": "https://github.com/cheaper-inference/OmniRoute/blob/ad6f33f66bda34eba98645d3bfdabbde294bc843/docs/reference/ENVIRONMENT.md",
+          "purpose": "PORT (20128) and HOST bind variables (default 0.0.0.0, MARS forces 127.0.0.1), DATA_DIR (~/.omniroute, where upstream credentials stay), compression and MCP variables."
+        },
+        {
+          "path": "docs/reference/OPENAI_COMPATIBILITY.md",
+          "url": "https://github.com/cheaper-inference/OmniRoute/blob/ad6f33f66bda34eba98645d3bfdabbde294bc843/docs/reference/OPENAI_COMPATIBILITY.md",
+          "purpose": "/v1/chat/completions and /v1/models contract (Bearer OmniRoute key, 401/403 semantics) targeted by the existing openai-compatible adapter."
+        },
+        {
+          "path": "docs/reference/API_REFERENCE.md",
+          "url": "https://github.com/cheaper-inference/OmniRoute/blob/ad6f33f66bda34eba98645d3bfdabbde294bc843/docs/reference/API_REFERENCE.md",
+          "purpose": "GET /v1/models prefix and capability filters (tool_calling, vision, context) read by capability discovery."
+        },
+        {
+          "path": "package.json",
+          "url": "https://github.com/cheaper-inference/OmniRoute/blob/ad6f33f66bda34eba98645d3bfdabbde294bc843/package.json",
+          "purpose": "Version 3.8.52, MIT, omniroute bin; Node/Next.js runtime (not installed into the Bun workspace)."
+        }
+      ],
+      "background_references": [],
+      "runtime_requirements": [
+        "Node.js runtime with npm omniroute@3.8.52 installed on PATH (external process, not a Bun workspace dependency)",
+        "OmniRoute's own data directory (~/.omniroute or DATA_DIR) holding its gateway key and upstream provider credentials; MARS never reads it",
+        "OMNIROUTE_API_KEY (OmniRoute-issued gateway key, env var name only) for /v1 requests"
+      ],
+      "integration_owner": "@mars/providers-omniroute provider target; MARS registry/router own model policy; Oh My Pi owns execution",
+      "target_milestone": "Milestone 1 model gateway (optional self-hosted provider target)",
+      "adaptation_decision": "Wrapped as one provider target, not ported: the existing openai-compatible adapter posts to http://localhost:20128/v1; a MARS-owned catalog (packages/providers-omniroute/catalog/free-tier-catalog.json, rebuilt by `bun run omniroute:catalog <checkout>`) supplies free models, quotas and terms risk; an adapter-factory guard refuses any OmniRoute model that is not a free, non-excluded catalog entry unless the MARS task carries paid consent, and sends X-MARS-Paid-Consent on every request. Excluded by default (opt-in only): all web-cookie providers, browser-session no-auth providers, every verdict other than ok (avoid never routes), discontinued tiers. OmniRoute MCP/A2A endpoints are never called (enableMCP: false stays; Oh My Pi is the only tool owner) and compression (RTK/Caveman) is not enabled or claimed. `mars serve --omniroute` attaches to or starts (--omniroute-start) a pinned instance bound to 127.0.0.1 with SIGTERM/SIGKILL shutdown.",
+      "dependencies": [
+        "External Node.js runtime with omniroute@3.8.52 when --omniroute-start is used; attach mode only needs a running instance",
+        "@mars/providers (adapter, registry, router), @mars/contracts, zod"
+      ],
+      "acceptance_plan": {
+        "offline_tests": "packages/providers-omniroute tests run a loopback fake OmniRoute (Bun.serve) and a catalog fixture: importer parsing, default exclusions, policy refusals (no request leaves MARS), consent header, process attach/start/stop with injected spawn; model_requests: 0; bun run check must pass.",
+        "policy_gate": "A route is free only when its catalog entry grants free access and survives the default exclusions; otherwise OmniRoutePolicyError (non-retryable) unless MARS classified the model as paid under allowPaid with explicit selection.",
+        "lifecycle": "start refuses non-loopback URLs and a `--version` that does not report 3.8.52; stop sends SIGTERM then SIGKILL after the grace period; child env is an allowlist (PATH, HOME, TMPDIR, LANG, DATA_DIR, PORT, HOST=127.0.0.1).",
+        "doctor": "mars doctor reports reachable/models_endpoint/authorized booleans, catalog presence, release, curated_at, age_days, stale and exclusion counts; never header or key values.",
+        "status": "Proposed and held by offline fixture tests only; see audit_checks for the only live evidence."
+      },
+      "audit_checks": {
+        "environment": "2026-11-02, Ubuntu VM, git clone of OmniRoute at tag v3.8.52 (commit ad6f33f6); catalog imported from the checkout with the pinned importer (467 rows, 35 web-cookie ids, 3 browser-session ids, 53 rows routable by default).",
+        "registry": "registry.npmjs.org/omniroute/3.8.52 resolves (sha512-R+GUs3vD...); the package was not installed or started on the audit VM.",
+        "unexecuted": [
+          "omniroute server start",
+          "any /v1/models or /v1/chat/completions call against a real OmniRoute",
+          "any upstream provider",
+          "RTK/Caveman compression",
+          "MCP or A2A endpoints",
+          "upstream test suite"
+        ]
+      },
+      "risks": [
+        "Quota figures are upstream approximations curated on 2026-10-19; actual availability can be lower and drifts until the catalog is rebuilt (doctor reports stale after 120 days).",
+        "OmniRoute defaults HOST to 0.0.0.0; MARS forces 127.0.0.1 only for processes it starts, an externally started instance may be exposed.",
+        "Capabilities (tools, vision, context) are unknown offline; without a live /v1/models discovery every catalog model is registered tool-less and the execution runtime never selects it.",
+        "OmniRoute's own routing/fallback can substitute models server-side; MARS only controls the requested model id and refuses non-catalog ids before sending.",
+        "Web-session and terms-risk providers can be opted in by an operator; the defaults, not the code, keep MARS out of consumer-session use.",
+        "No live OmniRoute call was made; the adapter path is verified against the fake server only."
+      ],
+      "integration_status": "provider-gateway"
     }
   ],
   "group_findings": [

@@ -73,6 +73,7 @@ export const ManifestSchema = z
               "journal-probe-only",
               "workbench-context-only",
               "host-bound-tools",
+              "provider-gateway",
               "not-integrated",
             ]),
           })
@@ -120,6 +121,7 @@ export const REQUIRED_COMPONENTS = [
   "agent-lightning",
   "vllm",
   "watch-skill",
+  "omniroute",
 ] as const;
 
 export function validateManifest(input: unknown): SourceManifest {

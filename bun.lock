@@ -109,6 +109,15 @@
         "@mars/contracts": "workspace:*",
       },
     },
+    "packages/providers-omniroute": {
+      "name": "@mars/providers-omniroute",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "@mars/providers": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
     "packages/research": {
       "name": "@mars/research",
       "version": "0.0.1",
@@ -315,6 +324,8 @@
     "@mars/output-format": ["@mars/output-format@workspace:packages/output-format"],
 
     "@mars/providers": ["@mars/providers@workspace:packages/providers"],
+
+    "@mars/providers-omniroute": ["@mars/providers-omniroute@workspace:packages/providers-omniroute"],
 
     "@mars/research": ["@mars/research@workspace:packages/research"],
 
