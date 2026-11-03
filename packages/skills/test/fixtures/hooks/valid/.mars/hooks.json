@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "hooks": {
+    "session-start": [{ "command": ["bun", "run", "lint"], "timeout_ms": 60000 }],
+    "pre-tool": [
+      { "matcher": "mars_write|mars_apply_patch", "command": ["bun", "run", "check:fast", "{tool}", "{path}"], "timeout_ms": 30000 },
+      { "matcher": "*", "command": ["echo", "any-tool"] }
+    ],
+    "post-tool": [{ "matcher": "mars_write", "command": ["bun", "run", "biome", "format", "--write", "{path}"] }]
+  }
+}
