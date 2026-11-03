@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
@@ -1167,36 +1168,39 @@ test("over-long refusal and contract-error messages are clipped inside the evide
 
 test("loopback URLs are pre-flighted for redirects that leave loopback", async () => {
   const seen: string[] = [];
-  const responses: Record<string, Response> = {
-    "http://localhost:3000/evil": new Response(null, {
-      status: 302,
-      headers: { location: "https://attacker.example/collect" },
-    }),
-    "http://localhost:3000/hop": new Response(null, {
-      status: 307,
-      headers: { location: "/final" },
-    }),
-    "http://localhost:3000/final": new Response(null, { status: 200 }),
-    "http://localhost:3000/head-not-allowed": new Response(null, {
-      status: 405,
-    }),
-    "http://localhost:3000/loop": new Response(null, {
-      status: 302,
-      headers: { location: "/loop" },
-    }),
-    "http://localhost:3000/ftp": new Response(null, {
-      status: 302,
-      headers: { location: "ftp://127.0.0.1/x" },
-    }),
+  const bodies: Array<{ url: string; cancelled: boolean }> = [];
+  const respond = (url: string, status: number, location?: string) => {
+    const entry = { url, cancelled: false };
+    bodies.push(entry);
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new TextEncoder().encode("streaming body chunk\n"));
+      },
+      cancel() {
+        entry.cancelled = true;
+      },
+    });
+    return new Response(body, {
+      status,
+      headers: location ? { location } : {},
+    });
+  };
+  const routes: Record<string, [number, string?]> = {
+    "http://localhost:3000/evil": [302, "https://attacker.example/collect"],
+    "http://localhost:3000/hop": [307, "/final"],
+    "http://localhost:3000/final": [200],
+    "http://localhost:3000/loop": [302, "/loop"],
+    "http://localhost:3000/ftp": [302, "ftp://127.0.0.1/x"],
   };
   const f = await fixture({
-    scenario: { rules: [{ match: ["*"], stdout: "ok" }] },
+    scenario: { rules: [{ match: ["*"], stdout: "loop_id: lp_saved" }] },
     fetch: async (input, init) => {
       const url = String(input);
       seen.push(`${init?.method ?? "GET"} ${url}`);
       if (url === "http://localhost:3000/down")
         throw new TypeError("connect ECONNREFUSED");
-      return responses[url]?.clone() ?? new Response(null, { status: 404 });
+      const [status, location] = routes[url] ?? [404];
+      return respond(url, status, location);
     },
   });
   try {
@@ -1244,17 +1248,70 @@ test("loopback URLs are pre-flighted for redirects that leave loopback", async (
       await f.tools.capture({ target: "http://localhost:3000/hop" }),
     ).toContain("· mars_watch_capture · advisory]");
     expect(
-      await f.tools.capture({
-        target: "http://localhost:3000/head-not-allowed",
-      }),
-    ).toContain("· mars_watch_capture · advisory]");
-    expect(
       await f.tools.capture({ target: "http://localhost:3000/down" }),
     ).toContain("· mars_watch_capture · advisory]");
-    expect(seen).toContain("HEAD http://localhost:3000/hop");
-    expect(seen).toContain("HEAD http://localhost:3000/final");
-    expect(seen).toContain("GET http://localhost:3000/head-not-allowed");
+    expect(seen.every((entry) => entry.startsWith("GET "))).toBe(true);
+    expect(seen).toContain("GET http://localhost:3000/hop");
+    expect(seen).toContain("GET http://localhost:3000/final");
     expect(seen.filter((entry) => entry.endsWith("/loop"))).toHaveLength(5);
+    expect(bodies.length).toBeGreaterThan(0);
+    expect(bodies.every((entry) => entry.cancelled)).toBe(true);
+
+    // A saved loop is re-checked before it is iterated: its target may now
+    // redirect off-host even though it was loopback-only when it started.
+    const seedLoop = async (
+      loopId: string,
+      target: string,
+      script: unknown,
+    ) => {
+      const dir = join(
+        f.dataRoot,
+        "tasks",
+        createHash("sha256").update("task").digest("hex").slice(0, 32),
+        "loops",
+        loopId,
+      );
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        join(dir, "state.json"),
+        JSON.stringify({
+          loop_id: loopId,
+          status: "running",
+          target,
+          script,
+          max_iterations: 3,
+          iterations: [],
+        }),
+      );
+    };
+    await seedLoop("lp_evil", "http://localhost:3000/evil", null);
+    expect(
+      await f.tools.loop({ action: "iterate", loop_id: "lp_evil" }),
+    ).toContain("saved loop target redirects to https://attacker.example");
+    await seedLoop("lp_script", "http://localhost:3000/final", [
+      { action: "goto", url: "http://localhost:3000/evil" },
+    ]);
+    expect(
+      await f.tools.loop({ action: "iterate", loop_id: "lp_script" }),
+    ).toContain(
+      "saved loop script goto url redirects to https://attacker.example",
+    );
+    await seedLoop("lp_screen", "screen:", null);
+    expect(
+      await f.tools.loop({ action: "iterate", loop_id: "lp_screen" }),
+    ).toContain("off by default");
+    expect(
+      (await f.calls()).filter((call) => call.args[1] === "iterate"),
+    ).toHaveLength(0);
+    await seedLoop("lp_saved", "http://localhost:3000/final", [
+      { action: "wait", seconds: 1 },
+    ]);
+    expect(
+      await f.tools.loop({ action: "iterate", loop_id: "lp_saved" }),
+    ).toContain("· mars_loop · inconclusive]");
+    expect(
+      (await f.calls()).filter((call) => call.args[1] === "iterate"),
+    ).toHaveLength(1);
   } finally {
     await f.cleanup();
   }

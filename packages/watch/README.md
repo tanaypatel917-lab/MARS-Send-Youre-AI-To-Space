@@ -37,7 +37,7 @@ const host = await createWorkbenchHost({ ..., watch });
 - loop `script` steps are limited to upstream's `goto|click|fill|press|scroll|wait` with only their known fields (strict), ≤64 steps, `goto` URLs guarded like any source.
 - a verdict is only read from a run that exited on its own; output captured from a timed-out or crashed process is `inconclusive` even if it already contains a passing JSON object.
 - `allow_cloud_models` only lifts the CLI's offline mode when `allow_network_sources` is also on; with network off the CLI always runs `WATCHSKILL_OFFLINE=1`.
-- known limit: URL guards see the hostname the model supplied; a loopback server that redirects to an external host is followed by the CLI itself. Keep `allow_network_sources` off and treat captured content as untrusted.
+- with network sources off, every loopback URL the CLI will open (sources, capture/loop targets, script `goto`, `browser_dom` checks, and the saved target/script of a loop being iterated) is first walked by the host with `GET` + manual redirects (bodies cancelled, 3 s timeout, ≤5 hops); a hop that leaves loopback refuses the call. Known limit: in-page navigation after the probe (JavaScript, meta refresh) is not caught; treat captured content as untrusted.
 - output capped at 96 KiB, 120 s timeout (kill), timeouts are `inconclusive`.
 - rendered text is wrapped in `[untrusted watch-skill output · <tool> · <label>]` markers and host paths are redacted.
 

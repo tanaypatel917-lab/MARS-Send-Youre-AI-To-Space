@@ -323,24 +323,27 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
     if (policy.allow_network_sources) return;
     let current = url;
     for (let hop = 0; hop < MAX_REDIRECT_HOPS; hop++) {
-      let response: Response;
+      // GET, not HEAD: a server may answer the two differently, and GET is
+      // what the CLI's browser or downloader will send. Only the status and
+      // Location header are read; the body is cancelled right away.
+      let status: number;
+      let location: string | null;
       try {
-        response = await fetchImpl(current, {
-          method: "HEAD",
+        const response = await fetchImpl(current, {
+          method: "GET",
           redirect: "manual",
           signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
         });
-        if (response.status === 405)
-          response = await fetchImpl(current, {
-            method: "GET",
-            redirect: "manual",
-            signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-          });
+        try {
+          status = response.status;
+          location = response.headers.get("location");
+        } finally {
+          await response.body?.cancel().catch(() => undefined);
+        }
       } catch {
         return;
       }
-      if (response.status < 300 || response.status >= 400) return;
-      const location = response.headers.get("location");
+      if (status < 300 || status >= 400) return;
       if (!location) return;
       let next: URL;
       try {
@@ -707,6 +710,30 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
           summary,
         });
 
+      const reguardSavedLoop = async (loopId: string) => {
+        const state = LoopStateSchema.safeParse(
+          parseJson(
+            await readFile(
+              join(taskRoot, "loops", loopId, "state.json"),
+              "utf8",
+            ).catch(() => ""),
+          ),
+        );
+        if (!state.success) return;
+        if (state.data.target)
+          await guardTarget(state.data.target, "saved loop target", true);
+        const script = LoopScriptSchema.safeParse(state.data.script ?? []);
+        if (!script.success)
+          throw new WatchPolicyError(
+            "saved loop script is not within the allowed step set.",
+          );
+        for (const step of script.data)
+          if (step.action === "goto") {
+            const url = guardUrl(step.url, "saved loop script goto url");
+            await probeRedirects(url, "saved loop script goto url");
+          }
+      };
+
       /** Host policy on a contract: anything listed here stops the run as inconclusive. */
       const contractRefusals = async (
         contract: z.infer<typeof VerificationContractInputSchema>,
@@ -930,6 +957,10 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
                   `loop ${input.action} needs loop_id.`,
                 );
               loopId = guardId(input.loop_id, "loop_id");
+              // Iterating re-captures the target saved at start; the policy
+              // and the loopback server may have changed since, so the saved
+              // target and script are checked again before the browser runs.
+              if (input.action === "iterate") await reguardSavedLoop(loopId);
               args = ["loop", input.action, loopId];
             }
           } catch (error) {

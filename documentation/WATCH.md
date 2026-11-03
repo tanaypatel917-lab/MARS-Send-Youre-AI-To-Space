@@ -99,10 +99,12 @@ Delegated children share their parent task's directory on purpose.
 
 Redirects: with network sources off, every loopback URL handed to the CLI
 (`mars_watch` source, `mars_watch_capture`/`mars_loop` target, script `goto`,
-`browser_dom` check URL) is pre-flighted by the host with manual redirects
-(`HEAD`, `GET` on 405, 3 s timeout, at most 5 hops); the first hop that leaves
-loopback, uses a non-http(s) scheme, or exceeds the hop limit refuses the call
-before the CLI runs. An unreachable server is left to the CLI, which fails
+`browser_dom` check URL, and the saved target and script of a loop when it is
+iterated) is pre-flighted by the host with `GET` and manual redirects (the
+method the CLI's browser or downloader sends; only status and `Location` are
+read and the body is cancelled; 3 s timeout, at most 5 hops); the first hop
+that leaves loopback, uses a non-http(s) scheme, or exceeds the hop limit
+refuses the call before the CLI runs. An unreachable server is left to the CLI, which fails
 locally. Upstream's `http_request` check already runs with
 `follow_redirects=False`. Remaining limit: the probe is a point-in-time check,
 so a page that later navigates away (JavaScript, meta refresh) inside the

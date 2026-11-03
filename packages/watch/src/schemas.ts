@@ -212,6 +212,8 @@ export const LoopStateSchema = z
   .object({
     loop_id: z.string().min(1),
     status: z.string(),
+    target: z.string().optional(),
+    script: z.array(z.record(z.unknown())).nullable().optional(),
     max_iterations: z.number().int().positive().optional(),
     iterations: z
       .array(
