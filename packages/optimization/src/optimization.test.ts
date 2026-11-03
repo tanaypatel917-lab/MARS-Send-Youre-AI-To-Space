@@ -9,7 +9,12 @@ import {
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { ArtifactRef, Budget, RequestContext } from "@mars/contracts";
+import type {
+  ArtifactRef,
+  Budget,
+  PromptScoringBackend,
+  RequestContext,
+} from "@mars/contracts";
 import {
   bounded,
   CANDIDATE_SCHEMA,
@@ -849,9 +854,11 @@ describe("evaluate bounds", () => {
     const root = await newRoot();
     const artifacts = createMemoryArtifactStore();
     let calls = 0;
-    const backend = {
-      async score() {
+    const signals: (AbortSignal | undefined)[] = [];
+    const backend: PromptScoringBackend = {
+      async score(_context, _request, options) {
         calls += 1;
+        signals.push(options?.signal);
         return new Promise<never>(() => undefined);
       },
     };
@@ -896,6 +903,7 @@ describe("evaluate bounds", () => {
     expect(record.status).toBe("cancelled");
     expect(calls).toBe(1);
     expect(record.metric_calls).toBe(0);
+    expect(signals[0]?.aborted).toBe(true);
 
     const deadlineJob = await service.evaluate(
       context,
@@ -914,15 +922,17 @@ describe("evaluate bounds", () => {
     const finished = await service.waitForJob(context, deadlineJob.job_id);
     expect(finished.status).toBe("failed");
     expect(finished.stop_reason).toBe("deadline");
+    expect(signals).toHaveLength(2);
+    expect(signals[1]?.aborted).toBe(true);
   }, 20_000);
 
-  test("a reused seed baseline still wins over a worse candidate", async () => {
+  test("the seed is re-scored under every evaluate request instead of reusing a stale baseline", async () => {
     const { service, targetId, put, readJson } = await setup({
       score: (candidate) =>
         candidate.components.system_prompt === SEED ? 0.8 : 0.3,
     });
     const target = await service.target(context, targetId);
-    const evaluate = async (suffix: string) => {
+    const evaluate = async (suffix: string, repeats: number) => {
       const components = { system_prompt: `${SEED} ${suffix}` };
       const job = await service.evaluate(
         context,
@@ -935,25 +945,43 @@ describe("evaluate bounds", () => {
             parent_candidate_id: target.seed_candidate_id,
             created_at: "2026-01-01T00:00:00.000Z",
           },
+          repeats,
           budget,
         }),
       );
       await service.waitForJob(context, job.job_id);
-      return ProposalReportSchema.parse(
-        await readJson(await service.publish(context, job.job_id)),
-      );
+      return {
+        jobId: job.job_id,
+        report: ProposalReportSchema.parse(
+          await readJson(await service.publish(context, job.job_id)),
+        ),
+      };
     };
-    const first = await evaluate("first");
-    expect(first.recommendation).toBe("no_improvement");
-    expect(first.best.candidate.candidate_id).toBe(target.seed_candidate_id);
-    const second = await evaluate("second");
-    expect(second.seed.validation_mean_score).toBeCloseTo(0.8);
-    expect(second.best.candidate.candidate_id).toBe(target.seed_candidate_id);
-    expect(second.best.validation_mean_score).toBeCloseTo(0.8);
-    expect(second.recommendation).toBe("no_improvement");
-    expect(second.per_instance_deltas.every((d) => d.delta === 0)).toBe(true);
-    expect(second.limitations.some((l) => l.includes("earlier job"))).toBe(
-      true,
+    const first = await evaluate("first", 1);
+    expect(first.report.recommendation).toBe("no_improvement");
+    const second = await evaluate("second", 2);
+    expect(second.report.seed.validation_mean_score).toBeCloseTo(0.8);
+    expect(second.report.best.candidate.candidate_id).toBe(
+      target.seed_candidate_id,
+    );
+    expect(second.report.recommendation).toBe("no_improvement");
+    expect(
+      second.report.limitations.some((l) => l.includes("earlier job")),
+    ).toBe(false);
+    const seed = (await service.candidates(context, targetId)).find(
+      (record) => record.candidate.candidate_id === target.seed_candidate_id,
+    );
+    if (!seed) throw new Error("seed record missing");
+    const seedJobs = seed.scores
+      .filter((score) => score.split === "validation")
+      .map((score) => score.job_id);
+    expect(seedJobs).toEqual([first.jobId, second.jobId]);
+    expect(seed.job_ids).toEqual([first.jobId, second.jobId]);
+    const seedScores = seed.scores.filter(
+      (score) => score.split === "validation",
+    );
+    expect(seedScores[1]?.request_sha256).not.toBe(
+      seedScores[0]?.request_sha256,
     );
   });
 });

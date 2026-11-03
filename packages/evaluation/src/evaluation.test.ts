@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { claimCredential } from "../agent/credential";
 import {
   buildEvaluationReport,
   COMPARISON_MANIFEST_MEDIA_TYPE,
@@ -777,6 +778,9 @@ test("harbor scoring backend scores the MARS arm only and refuses holdout instan
     await expect(
       backend.score(context, { ...request, instance_ids: ["chess-best-move"] }),
     ).rejects.toThrow(/not in the train split/);
+    await expect(
+      backend.score(context, request, { signal: AbortSignal.abort() }),
+    ).rejects.toThrow();
     const result = await backend.score(context, request);
     expect(result.simulated).toBe(false);
     expect(result.request_sha256).toBe(requestSha256(request));
@@ -926,4 +930,74 @@ test("control agents and dry runs drop model flags and never masquerade as an ar
   } finally {
     await f.cleanup();
   }
+});
+
+test("harbor scoring backend forwards the abort signal to the Harbor runner", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-eval-signal-"));
+  const bundleDir = join(root, "bundle");
+  await mkdir(bundleDir);
+  await writeFile(join(bundleDir, "mars-agent"), "#!/bin/sh\nexit 0\n");
+  const manifest = await sampleManifest(
+    {},
+    {
+      path: bundleDir,
+      sha256: sha256Hex(
+        new Uint8Array(await readFile(join(bundleDir, "mars-agent"))),
+      ),
+    },
+  );
+  const runner = createHarborRunner({
+    pythonPath: await fakeVenv(root, GOOD_PROBE),
+    harborPath: FAKE_HARBOR,
+    agentPythonPath: join(FIXTURES, "..", "python"),
+    jobsDir: join(root, "jobs"),
+    dockerPath: null,
+    env: {
+      PATH: process.env.PATH,
+      FAKE_HARBOR_FIXTURE: join(HARBOR_FIXTURES, "synthetic-candidate"),
+    },
+  });
+  let seen: AbortSignal | undefined;
+  const spy: typeof runner = {
+    ...runner,
+    run: (request) => {
+      seen = request.signal;
+      return runner.run(request);
+    },
+  };
+  const backend = createHarborScoringBackend({
+    manifest,
+    runner: spy,
+    artifacts: new MemoryArtifacts(),
+    candidateDir: join(root, "cands"),
+    splits: { train: ["regex-log"], validation: ["chess-best-move"] },
+  });
+  const controller = new AbortController();
+  try {
+    await backend.score(
+      context,
+      {
+        candidate: manifest.arms.candidate.candidate,
+        split: "train",
+        instance_ids: ["regex-log"],
+        repeats: 1,
+        budget: manifest.budget,
+      },
+      { signal: controller.signal },
+    );
+    expect(seen).toBe(controller.signal);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the agent bundle removes the model credential from its own environment", () => {
+  const env: Record<string, string | undefined> = {
+    HARBOR_KEY: "secret-value",
+    PATH: "/usr/bin",
+  };
+  expect(claimCredential(env, "HARBOR_KEY")).toBe("secret-value");
+  expect("HARBOR_KEY" in env).toBe(false);
+  expect(env.PATH).toBe("/usr/bin");
+  expect(claimCredential(env, "HARBOR_KEY")).toBeUndefined();
 });

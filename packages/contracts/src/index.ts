@@ -483,9 +483,15 @@ export const ScoringResultSchema = z
   .strict();
 export type ScoringResult = z.infer<typeof ScoringResultSchema>;
 
+export interface PromptScoringOptions {
+  /** Aborting cancels the underlying evaluation run (e.g. kills the Harbor job). */
+  signal?: AbortSignal;
+}
+
 export interface PromptScoringBackend {
   score(
     context: RequestContext,
     request: ScoringRequest,
+    options?: PromptScoringOptions,
   ): Promise<ScoringResult>;
 }

@@ -225,6 +225,7 @@ export function createOptimizationService(
       origin,
       status: "draft",
       job_id: jobId,
+      job_ids: jobId === null ? [] : [jobId],
       scores: [],
       history: [
         {
@@ -302,6 +303,7 @@ export function createOptimizationService(
       jobId,
       request.candidate.parent_candidate_id,
     );
+    if (!record.job_ids.includes(jobId)) record.job_ids.push(jobId);
     record.scores.push(provenance);
     record.updated_at = provenance.recorded_at;
     await store.writeCandidate(context, record);
@@ -625,22 +627,24 @@ export function createOptimizationService(
         max_duration_ms: Math.max(1, remainingMs),
       },
     };
+    const scoringAbort = new AbortController();
     const result = await new Promise<ScoringResult>((resolve, reject) => {
-      const timer = setTimeout(
-        () =>
-          reject(
-            new EvaluateStop(
-              "deadline",
-              "max_duration_ms elapsed during scoring",
-            ),
+      const timer = setTimeout(() => {
+        scoringAbort.abort();
+        reject(
+          new EvaluateStop(
+            "deadline",
+            "max_duration_ms elapsed during scoring",
           ),
-        remainingMs,
-      );
-      const onAbort = () =>
+        );
+      }, remainingMs);
+      const onAbort = () => {
+        scoringAbort.abort();
         reject(new EvaluateStop("cancelled", "cancelled during scoring"));
+      };
       abort.signal.addEventListener("abort", onAbort, { once: true });
       options.backend
-        .score(context, scoringRequest)
+        .score(context, scoringRequest, { signal: scoringAbort.signal })
         .then(
           (value) => resolve(ScoringResultSchema.parse(value)),
           (cause) => reject(cause),
@@ -683,7 +687,7 @@ export function createOptimizationService(
         target.target_id,
         job.seed_candidate_id,
       );
-      if (!latestValidation(seed))
+      if (!latestValidation(seed, job.job_id))
         await scoreValidation(
           context,
           job,

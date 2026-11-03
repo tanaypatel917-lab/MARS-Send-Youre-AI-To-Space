@@ -26,6 +26,7 @@ import {
 import { openRuntimeSession, type RuntimeTools } from "@mars/execution";
 import { loadModelRegistry } from "@mars/providers";
 import { z } from "zod";
+import { claimCredential } from "./credential";
 
 const ConfigSchema = z
   .object({
@@ -227,10 +228,12 @@ async function main(): Promise<number> {
         policy: { allowPaid: config.pricing !== null },
       }),
     );
+    const apiKey = claimCredential(process.env, config.api_key_env);
     const env: Record<string, string | undefined> = {
       ...process.env,
       HOME: config.state_dir,
       MARS_HOME: resolve(home, ".mars"),
+      ...(apiKey === undefined ? {} : { [config.api_key_env]: apiKey }),
     };
     const registry = await loadModelRegistry({
       cwd: config.state_dir,

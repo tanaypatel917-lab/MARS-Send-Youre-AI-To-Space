@@ -24,6 +24,8 @@ evidence.
 | Baseline agent | mini-swe-agent 2.4.6 via Harbor's installed adapter | Same task, environment, verifier and model endpoint as the candidate. |
 | Comparison, repeatability, regressions, trajectories | `@mars/evaluation` | Implements `EvaluationService` and `PromptScoringBackend` from `@mars/contracts`. |
 | Prompt optimisation | GEPA 0.1.4 in a separate pinned Python worker, driven by `@mars/optimization` | Implements `OptimizationService`; scores only through `PromptScoringBackend`; candidates are proposals. |
+
+`PromptScoringBackend.score(context, request, { signal })` carries an optional `AbortSignal`: when an optimisation job is cancelled or reaches its deadline the Harbor run behind the score is killed (process group), so no evaluation outlives the job that requested it. The seed candidate is re-scored under every `evaluate` request (same repeats and backend as the candidate); earlier baselines are never compared against a new candidate. Inside the task container the agent bundle removes the model credential from its own `process.env` after handing it to the runtime, so task commands cannot recover it through `/proc`.
 | Model configuration | `@mars/providers` registry (`~/.mars/models.json` or `$MARS_HOME/models.json`) | Includes the built-in `ollama` provider for local models. |
 
 ## Packages

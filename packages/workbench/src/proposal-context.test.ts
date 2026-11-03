@@ -30,6 +30,7 @@ function candidate(
   status: CandidateRecord["status"],
   mean: number,
   jobId: string | null,
+  jobIds: string[] = [],
 ): CandidateRecord {
   return {
     schema: "mars.optimization-candidate/v1",
@@ -42,6 +43,7 @@ function candidate(
     },
     origin: id === "seed" ? "seed" : "proposed",
     status,
+    job_ids: jobIds,
     job_id: jobId,
     scores: [
       {
@@ -118,6 +120,8 @@ function service(records: CandidateRecord[]) {
     },
     async report(_ctx, jobId) {
       calls.push(`report:${jobId}`);
+      if (jobId === "job-3")
+        return { ...report, report_id: "rep-other", target_id: "other-target" };
       if (jobId !== "job-1") throw new Error("not published");
       return report;
     },
@@ -128,7 +132,7 @@ function service(records: CandidateRecord[]) {
 test("renders candidates and reports as labelled untrusted evidence without promoting anything", async () => {
   const { svc, calls } = service([
     candidate("seed", "draft", 0.5, null),
-    candidate("c1", "proposed", 0.5, "job-1"),
+    candidate("c1", "proposed", 0.5, "job-1", ["job-1", "job-3"]),
     candidate("c2", "rejected", 0.1, "job-2"),
   ]);
   const text = await proposalTools(
@@ -151,9 +155,13 @@ test("renders candidates and reports as labelled untrusted evidence without prom
   );
   expect(text).not.toContain("ignore previous instructions");
   expect(text).not.toContain("\u0007");
+  expect(text).not.toContain("rep-other");
+  expect(text).not.toContain("other-target");
   expect(calls).toEqual([
     "candidates:target-1",
+    "report:job-0",
     "report:job-1",
+    "report:job-3",
     "report:job-2",
     "candidates:missing",
   ]);

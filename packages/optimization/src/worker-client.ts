@@ -385,7 +385,9 @@ export async function runGepaWorker(
       let scored: ScoringResult;
       try {
         scored = ScoringResultSchema.parse(
-          await options.backend.score(options.context, hostRequest),
+          await options.backend.score(options.context, hostRequest, {
+            signal: inflight.signal,
+          }),
         );
       } catch (cause) {
         if (!state.finalized)

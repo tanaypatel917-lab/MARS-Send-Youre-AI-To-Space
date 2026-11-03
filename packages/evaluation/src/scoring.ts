@@ -4,6 +4,7 @@ import { isAbsolute, join } from "node:path";
 import type {
   InstanceScore,
   PromptScoringBackend,
+  PromptScoringOptions,
   RequestContext,
   ScoringRequest,
   ScoringResult,
@@ -67,7 +68,9 @@ export function createHarborScoringBackend(
     async score(
       context: RequestContext,
       rawRequest: ScoringRequest,
+      scoringOptions?: PromptScoringOptions,
     ): Promise<ScoringResult> {
+      scoringOptions?.signal?.throwIfAborted();
       const request = ScoringRequestSchema.parse(rawRequest);
       const allowed = new Set(options.splits[request.split]);
       for (const instance of request.instance_ids) {
@@ -124,6 +127,7 @@ export function createHarborScoringBackend(
           manifest.budget.max_concurrency,
         ),
         candidatePath,
+        ...(scoringOptions?.signal ? { signal: scoringOptions.signal } : {}),
       });
       const parsed = outcome.killed
         ? null

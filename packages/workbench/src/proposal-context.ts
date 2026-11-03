@@ -86,15 +86,18 @@ export function proposalTools(
         }
         const jobIds = [
           ...new Set(
-            candidates
-              .map((record) => record.job_id)
-              .filter((id): id is string => id !== null),
+            candidates.flatMap((record) => [
+              ...(record.job_id === null ? [] : [record.job_id]),
+              ...record.job_ids,
+              ...record.scores.map((score) => score.job_id),
+            ]),
           ),
         ];
         const reports: ProposalReport[] = [];
         for (const jobId of jobIds) {
           try {
-            reports.push(await optimization.service.report(ctx, jobId));
+            const report = await optimization.service.report(ctx, jobId);
+            if (report.target_id === targetId) reports.push(report);
           } catch {
             // A job without a published report is not an error for the reader.
           }

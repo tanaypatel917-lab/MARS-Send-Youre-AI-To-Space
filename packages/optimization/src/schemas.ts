@@ -204,6 +204,8 @@ export const CandidateRecordSchema = z
     origin: z.enum(["seed", "proposed", "submitted"]),
     status: CandidateStatusSchema,
     job_id: IdSchema.nullable(),
+    /** Every job that created or scored this candidate; readers find reports through it. */
+    job_ids: z.array(IdSchema).default([]),
     scores: z.array(ScoreProvenanceSchema),
     history: z.array(
       z
