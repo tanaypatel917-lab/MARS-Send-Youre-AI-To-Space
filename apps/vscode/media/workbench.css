@@ -225,3 +225,16 @@ pre.artifact {
 .message {
   margin: 4px 0;
 }
+.writing {
+  border: 1px solid var(--vscode-panel-border, transparent);
+  border-radius: 3px;
+  padding: 6px 8px;
+  margin: 6px 0;
+}
+.tone h4 {
+  margin-bottom: 0.2em;
+}
+.follow-ups button {
+  white-space: normal;
+  text-align: left;
+}

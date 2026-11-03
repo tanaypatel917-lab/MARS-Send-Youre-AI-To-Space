@@ -23,6 +23,7 @@ All 67 PRs across the three repos are merged; no open PRs. CI green on `main` he
 | 4 Measured improvement (Harbor / Terminal-Bench, GEPA, mini-swe baseline, verifiers) | **code complete, acceptance unverified**: `@mars/evaluation` (Harbor 0.25.0 adapter, TB2 pins, result/reward parsing, N-repeat variance, regressions, trajectories, `mars_harbor_agent` Oh My Pi agent) and `@mars/optimization` (GEPA 0.1.4 in a bounded Python worker, train/validation/final-holdout, proposal-only candidates) behind the existing contracts; Ollama + Qwen3-Coder path documented with real-run evidence; no real-model TB2 comparison yet (M4 PR) | `packages/{evaluation,optimization}`, `documentation/EVALUATION.md`, `documentation/evidence/local-model-run.txt` |
 | 5-8 Remote execution, SFT, vLLM serving, RL | not started | — |
 | Collaboration (bounded delegation, rooms) | library + workbench wiring; fixture child adapter only (#32, #33, #36, #37) | `packages/collaboration` |
+| Output format (model-to-UI contract) | contracts + parser/validator/serializer + prompt fragment in the shared runtime prompt + CLI `render` + VS Code webview rendering (artifact panels, confirmed follow-ups, review jumps); no host connector registry, no live-model evidence | `packages/contracts/src/output-format.ts`, `packages/output-format`, `apps/cli/src/render.ts`, `apps/vscode/src/webview` |
 | Integration trust gate | library only; no loader or approval UI (#8, #10) | `packages/integration-trust` |
 
 Everything is verified offline only: fixtures, injected model responses, `model_requests: 0`. Nothing has been run against a live model, a real search provider, a GPU, or a real IDE window.
@@ -46,6 +47,9 @@ Everything is verified offline only: fixtures, injected model responses, `model_
 - Memory proposals are scoped to the exact review context and revision-fenced (`expected_revision` checked at submission and again at acceptance); skill proposals likewise carry `expectedRevision`. Review can only submit; humans/host accept.
 - The SKILL.md frontmatter parser is a flat `key: value` subset with no YAML dependency (anchors, aliases, block scalars, nesting rejected).
 - Free-first model routing (`allowPaid: false`) stays the default; no live provider keys are stored in repos.
+- The MARS Output Format is MARS-owned (`documentation/OUTPUT_FORMAT.md`), modelled on an unverified description of a third-party format; it claims no compatibility with OpenAI products. `codex://review` and `:codex-followup` are accepted on parse as import aliases; the serializer preserves a follow-up's original tag and never rewrites review links inside Markdown text.
+- Model output is untrusted: writing-block addresses are validated against addresses the user supplied in the request, `app://` connector ids against the host registry, review ranges against a line cap. Follow-ups, app triggers and review links are proposals; the host never runs a tool because the model emitted a link.
+- `OUTPUT_FORMAT_PROMPT` is appended once to the execution runtime system prompt, so coordinator, workers, reviewer and delegated children all receive it. The research worker's extraction model is deliberately excluded: its contract is a single JSON object, not Markdown.
 - Claims of "improvement" require independent evidence (holdout, baseline, cost) — a finished job is not evidence (spec sections 16-17).
 - Milestone 4 layout: Harbor, mini-swe-agent and GEPA run in a pinned Python 3.12 venv (`harbor==0.25.0`, `mini-swe-agent==2.4.6`, `gepa==0.1.4`, no DSPy) launched and bounded by Bun-side services; Harbor result/reward/error records are parsed, exit codes are never trusted; Terminal-Bench 2 is consumed through Harbor datasets pinned to task commits (`sources/manifest.json` `terminal-bench-2`), never vendored.
 - Prompt optimisation scores only through the additive `PromptScoringBackend` contract (`train`/`validation` splits; no holdout value exists in the type), final-holdout ids live in a separate record, and GEPA candidates are stored proposals (`draft -> proposed -> accepted|rejected|archived`); "no improvement" is a valid reported outcome. The live `SYSTEM_PROMPT` is never mutated by a run.
@@ -59,6 +63,8 @@ Dispatched 2026-11-02 as parallel child sessions, each opening its own PR agains
 2. Milestone 4 (delivered in the M4 PR; follow-ups): run a baseline-vs-candidate `terminal-bench-sample@2.0` comparison with a real tool-calling model and record it under `documentation/evidence/`; run one bounded GEPA optimisation with a real reflection model and publish the proposal report (improvement or not); evaluate a system-prompt proposal that restores Qwen3-Coder tool calling through the proposal gate instead of editing `SYSTEM_PROMPT` directly.
 3. ~~Milestone 3: bring `@mars/skills` and the proposal-only review runner into this repo~~ — landed by the Milestone 3 PR (offline-verified only).
 4. `MARS` site: rebase and land the `/how` landscape branches.
+
+5. Output format follow-ups: a host connector registry so `app://` triggers resolve to real tools (today both clients list them as unresolved); host-side `processOutput` on the final `text/plain` artifact plus an explicit final-response role in task metadata (the VS Code client infers it from a bare `text/plain` artifact on the task); live-model and real-window verification.
 
 Milestone 3 follow-ups:
 

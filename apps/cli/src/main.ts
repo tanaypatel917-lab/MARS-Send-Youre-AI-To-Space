@@ -6,6 +6,7 @@ import {
   loadModelRegistry,
   ModelRouter,
 } from "@mars/providers";
+import { runRender } from "./render";
 import { RESEARCH_SEARCH_PROVIDERS, runServer, ServeUsageError } from "./serve";
 
 function requiredString(value: unknown, name: string): string {
@@ -259,6 +260,8 @@ try {
     console.log(JSON.stringify(await probeExecution(), null, 2));
   } else if (command === "models") {
     await runModels(process.argv.slice(3));
+  } else if (command === "render") {
+    await runRender(process.argv.slice(3));
   } else if (command === "serve") {
     try {
       await runServer(process.argv.slice(3));
@@ -272,7 +275,7 @@ try {
     }
   } else {
     console.error(
-      "Usage: bun apps/cli/src/main.ts <doctor|smoke|models|serve>",
+      "Usage: bun apps/cli/src/main.ts <doctor|smoke|models|serve|render>",
     );
     process.exitCode = 2;
   }

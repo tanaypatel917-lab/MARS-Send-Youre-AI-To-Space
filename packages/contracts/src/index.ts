@@ -595,6 +595,8 @@ export interface ModelRegistry {
 
 export * from "./models";
 
+export * from "./output-format";
+
 /**
  * Milestone 4 additive contracts: prompt-target scoring shared by
  * `@mars/evaluation` (producer) and `@mars/optimization` (consumer).

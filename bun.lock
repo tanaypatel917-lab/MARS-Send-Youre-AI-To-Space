@@ -17,6 +17,7 @@
       "dependencies": {
         "@mars/contracts": "workspace:*",
         "@mars/execution": "workspace:*",
+        "@mars/output-format": "workspace:*",
         "@mars/providers": "workspace:*",
         "@mars/research-worker": "workspace:*",
         "@mars/workbench": "workspace:*",
@@ -27,6 +28,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@mars/contracts": "workspace:*",
+        "@mars/output-format": "workspace:*",
         "zod": "3.25.76",
       },
       "devDependencies": {
@@ -75,6 +77,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@mars/contracts": "workspace:*",
+        "@mars/output-format": "workspace:*",
         "@mars/providers": "workspace:*",
         "@oh-my-pi/pi-ai": "18.14.0",
         "@oh-my-pi/pi-coding-agent": "18.14.0",
@@ -107,6 +110,14 @@
       "dependencies": {
         "@mars/contracts": "workspace:*",
         "@mars/providers": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
+    "packages/output-format": {
+      "name": "@mars/output-format",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
         "zod": "3.25.76",
       },
     },
@@ -315,6 +326,8 @@
     "@mars/memory": ["@mars/memory@workspace:packages/memory"],
 
     "@mars/optimization": ["@mars/optimization@workspace:packages/optimization"],
+
+    "@mars/output-format": ["@mars/output-format@workspace:packages/output-format"],
 
     "@mars/providers": ["@mars/providers@workspace:packages/providers"],
 
