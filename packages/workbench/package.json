@@ -12,6 +12,7 @@
     "@mars/memory": "workspace:*",
     "@mars/optimization": "workspace:*",
     "@mars/providers": "workspace:*",
+    "@mars/providers-omniroute": "workspace:*",
     "@mars/research": "workspace:*",
     "@mars/research-worker": "workspace:*",
     "@mars/review": "workspace:*",
