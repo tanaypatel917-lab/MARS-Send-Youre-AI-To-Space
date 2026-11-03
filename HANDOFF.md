@@ -24,6 +24,7 @@ All 67 PRs across the three repos are merged; no open PRs. CI green on `main` he
 | 5-8 Remote execution, SFT, vLLM serving, RL | not started | — |
 | Collaboration (bounded delegation, rooms) | library + workbench wiring; fixture child adapter only (#32, #33, #36, #37) | `packages/collaboration` |
 | Output format (model-to-UI contract) | contracts + parser/validator/serializer + prompt fragment in the shared runtime prompt + CLI `render` + VS Code webview rendering (artifact panels, confirmed follow-ups, review jumps); no host connector registry, no live-model evidence | `packages/contracts/src/output-format.ts`, `packages/output-format`, `apps/cli/src/render.ts`, `apps/vscode/src/webview` |
+| UI specification (interactive `mars session` terminal client, MARS Shell desktop, VS Code secondary) | **specification only, no code**: `documentation/UI_PROMPT.md` (design principles, IA for both surfaces, visual tokens mapped onto `@oh-my-pi/pi-tui` 18.14.0 themes, keymap, approval/consent flows, offline acceptance criteria, PR 1/2/3 plan, verbatim build prompt) with evidence-tagged product research under `documentation/ui-research/` | `documentation/UI_PROMPT.md`, `documentation/ui-research/*/REPORT.md` |
 | Integration trust gate | library only; no loader or approval UI (#8, #10) | `packages/integration-trust` |
 | Perception & verification (watch-skill) | `@mars/watch` host-bound tools for every session type, THE LOOP + deterministic `verify` mapped to task evidence, ten vendored SKILL.md files; **offline fixture only** — real `watch`, `capture`, `loop` and model critique never run here | `packages/watch`, `skills/vendor/watch-skill`, `documentation/WATCH.md` |
 
@@ -32,7 +33,7 @@ Everything is verified offline only: fixtures, injected model responses, `model_
 ### Lost work (previous Devin account hit its limit before pushing)
 
 - Workflow `mars-source-integration` child tasks: *Run local Qwen3-Coder*, *Refine GEPA feedback*, *Verify TB2 grader repeatability*, *Wire real-model GEPA*. Rebuilt from zero in the Milestone 4 PR (see status table); the real-model GEPA run and a real-model TB2 comparison remain unverified.
-- *Build the MARS Shell desktop* — no code anywhere; intent unknown until the owner describes it.
+- *Build the MARS Shell desktop* — still no code; its first specification is now `documentation/UI_PROMPT.md` §3 (a projection over the loopback workbench RPC and the same `packages/output-format` renderer, no second agent loop).
 - *Create Agent Context File* — no AGENTS.md in any repo.
 
 ### Unmerged branches worth knowing about
@@ -41,6 +42,8 @@ Everything is verified offline only: fixtures, injected model responses, `model_
 
 ## Decisions
 
+- UI (from `documentation/UI_PROMPT.md`): every MARS client — interactive `mars session`, MARS Shell, VS Code — is a projection over `tasks.events`/`tasks.artifact`/`tasks.diff` and never a runtime; the terminal client is built from `@oh-my-pi/pi-tui` components and theme JSON (`src/theme/dark.json`, `light.json` are the token source of truth), with `@oh-my-pi/pi-coding-agent`/`pi-agent-core`/`pi-ai` imports forbidden in client code by lint. Usability conventions were taken from Codex CLI and Claude Code (approval card anatomy with `✔/✗` decision log, collapsed tool output with explicit expansion, footer hints by state, `Tab` queue vs `Enter` steer); visual language from Hermes and Oh My Pi. Where they conflict the document says which side won and why (§1.1). No `Full Access`/bypass mode and no LLM-as-approver exist in any client; paid models and screen capture are opt-in cards.
+- Research correction: the Codex CLI source at `rust-v0.166.0` has no `codex://review` link or follow-up syntax (only `codex://threads/*`); the output format's `codex://review`/`:codex-followup` aliases stay as import aliases for text written against the earlier third-party description and are not presented as Codex compatibility.
 - One owner per responsibility (spec section 3). Oh My Pi stays the only live session/tool owner; everything else connects through host-bound tools and contracts.
 - `mars-platform` and this repo both ship a `@mars/memory`. This repo's `packages/memory` (scoped durable MemoryService + journal index) is the one wired into sessions; the Hermes threat scanner and proposal API were ported into it in Milestone 3.
 - `mars-platform` is reference-only once Milestone 3 lands; it is not modified, and future changes to memory, skills and review happen in this repo.
@@ -78,7 +81,9 @@ Milestone 3 follow-ups:
 - Scope the skill store by owner/project (it is per state directory) and add relevance-based selection instead of size-bounded `list()`.
 - Evaluation gate between proposal and acceptance (spec: evaluate before accept) once Milestone 4 provides verifiers.
 
-Parked: the MARS Shell desktop app (needs a description from the owner). Open product decision: which agent roles, if any, may run `mars_watch_capture` on the user's screen by default (currently none).
+8. Build the UI from `documentation/UI_PROMPT.md` §9 in three PRs: PR 1 `packages/ui-core` + read-only `mars session`; PR 2 write path (start card with approvals, paid consent, steer/queue, diff viewer, `mars://review`, follow-ups, cancel/resume); PR 3 `apps/shell` MVP. Each PR is verified offline against the fixtures and snapshot matrix in §8; live-terminal and real-window evidence remain follow-ups.
+
+MARS Shell desktop: specified in `documentation/UI_PROMPT.md` §3; owner sign-off on the open questions listed there (window framework, notification policy) is needed before PR 3. Open product decision: which agent roles, if any, may run `mars_watch_capture` on the user's screen by default (currently none).
 
 ## How to verify locally
 
