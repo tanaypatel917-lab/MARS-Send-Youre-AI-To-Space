@@ -134,7 +134,11 @@ edges as wikilinks to the other file notes.
 - Reads `memory.snapshot(ctx)` (non-deleted entries), `skills.list()`,
   `getRevision()`, `listVersions()`, and zero or more already-parsed
   `KnowledgeGraphArtifact` objects (`graph` option; the CLI reads them from
-  `--graph FILE` and validates them against the artifact schema).
+  `--graph FILE` and validates them against the artifact schema). `FILE` may be
+  the bare artifact or the derived-store envelope `mars_graph_build` writes at
+  `<state>/knowledge-graph/artifacts/knowledge-graph.<digest>.json`; the graph
+  is a rebuildable cache, so a missing or stale file simply means no graph
+  notes.
 - Deterministic: stable sort, stable key order, LF newlines, store timestamps.
   Only `exported_at` in the manifest changes between runs.
 - Atomic: each file is written to a temporary sibling and renamed; the manifest

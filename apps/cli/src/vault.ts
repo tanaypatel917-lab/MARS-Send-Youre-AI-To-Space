@@ -39,11 +39,34 @@ function requiredString(value: unknown, name: string): string {
   return value;
 }
 
-async function readGraph(file: string): Promise<VaultGraphArtifact> {
+/**
+ * Reads a knowledge-graph artifact for `--graph`: either the bare artifact or
+ * the `@mars/context` derived-store envelope (`{ schema_version, key,
+ * revision, stored_at, value }`) that `mars_graph_build` writes under
+ * `<state>/knowledge-graph/artifacts/`.
+ */
+export async function readGraphArtifactFile(
+  file: string,
+): Promise<VaultGraphArtifact> {
   const source = Bun.file(file);
   if (!(await source.exists()))
     throw new VaultUsageError(`Cannot read graph artifact "${file}".`);
-  const parsed = VaultGraphArtifactSchema.safeParse(await source.json());
+  let raw: unknown;
+  try {
+    raw = await source.json();
+  } catch {
+    throw new VaultUsageError(`Graph artifact "${file}" is not valid JSON.`);
+  }
+  const candidate =
+    raw !== null &&
+    typeof raw === "object" &&
+    !Array.isArray(raw) &&
+    "value" in raw &&
+    "key" in raw &&
+    (raw as { key?: { kind?: unknown } }).key?.kind === "knowledge-graph"
+      ? (raw as { value: unknown }).value
+      : raw;
+  const parsed = VaultGraphArtifactSchema.safeParse(candidate);
   if (!parsed.success)
     throw new VaultUsageError(
       `Graph artifact "${file}" does not match the knowledge-graph schema: ${parsed.error.issues[0]?.message ?? "invalid"}.`,
@@ -164,7 +187,9 @@ export async function runVault(args: string[]): Promise<void> {
     },
     request_id: `vault-${subcommand}-${Date.now().toString(36)}`,
   };
-  const graph = await Promise.all((values.graph ?? []).map(readGraph));
+  const graph = await Promise.all(
+    (values.graph ?? []).map(readGraphArtifactFile),
+  );
   const memory = createMemoryStore({
     rootDir: memoryRoot,
     hostPrivateRoots: [source, state, memoryRoot, skillsRoot],
