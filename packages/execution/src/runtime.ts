@@ -93,6 +93,14 @@ const TOOLS = {
     loadMode: "essential" as const,
     parameters: defineSchema({ path: "string", content: "string" }),
   },
+  mars_apply_patch: {
+    name: "mars_apply_patch",
+    label: "Apply a patch to workspace files",
+    description:
+      "Apply one patch in the apply_patch format to the isolated task workspace: '*** Begin Patch', then hunks '*** Add File: path' (+lines), '*** Delete File: path', '*** Update File: path' (optional '*** Move to: newpath', then '@@ context' sections of ' ' context, '-' removed and '+' added lines, optionally '*** End of File'), then '*** End Patch'. Paths are relative to the workspace; writes go through the workspace provider, never the user's source directory. Hunks apply in order and stop at the first failure.",
+    loadMode: "essential" as const,
+    parameters: defineSchema({ patch: "string" }),
+  },
   mars_execute: {
     name: "mars_execute",
     label: "Run approved workspace command",
@@ -121,6 +129,7 @@ export function initialRequestAllowance(options: {
   delegation?: boolean;
   research?: boolean;
   watch?: boolean;
+  patch?: boolean;
   instruction: string;
 }): number {
   const tools = [
@@ -131,6 +140,9 @@ export function initialRequestAllowance(options: {
     ...(options.research ? RESEARCH_TOOLS : []),
     ...(options.watch ? WATCH_TOOLS : []),
     ...(options.approvals.write ? [TOOLS.mars_write] : []),
+    ...(options.approvals.write && options.patch
+      ? [TOOLS.mars_apply_patch]
+      : []),
     ...(options.approvals.execute ? [TOOLS.mars_execute] : []),
   ];
   const request = toChatRequest({
@@ -156,6 +168,7 @@ export function optionalInstructionCapacity(options: {
   delegation?: boolean;
   research?: boolean;
   watch?: boolean;
+  patch?: boolean;
   instruction: string;
 }): number {
   const allowance = initialRequestAllowance(options);
@@ -430,6 +443,14 @@ export interface RuntimeWatch {
   evidence(): Promise<string>;
 }
 
+/**
+ * Host-bound apply_patch: the host parses the patch and writes only through
+ * the workspace provider; the model sees a rendered summary or error text.
+ */
+export interface RuntimePatch {
+  apply(patch: string): Promise<string>;
+}
+
 export interface DelegationRequest {
   role_label: string;
   instruction: string;
@@ -487,6 +508,8 @@ export interface RuntimeSessionOptions {
   collaboration?: RuntimeCollaboration;
   research?: RuntimeResearch;
   watch?: RuntimeWatch;
+  /** Declared only with write approval; absent means no mars_apply_patch tool. */
+  patch?: RuntimePatch;
   onEvent?(observation: RuntimeObservation): Promise<void>;
   env?: Record<string, string | undefined>;
   fetch?: (input: string, init?: RequestInit) => Promise<Response>;
@@ -1073,6 +1096,22 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
         return toolResult(
           `Wrote ${bytes.length} bytes to the isolated workspace.`,
         );
+      },
+    });
+  const patch = options.patch;
+  if (approvals.write && patch)
+    customTools.push({
+      ...TOOLS.mars_apply_patch,
+      async execute(_id, params, _update, _ctx, signal) {
+        await checkTool("write", signal);
+        const input = z
+          .object({ patch: z.string().min(1).max(1024 * 1024) })
+          .strict()
+          .parse(params);
+        const text = await patch.apply(input.patch);
+        if (text.length > 128 * 1024)
+          throw new Error("Patch output exceeds tool output limit.");
+        return toolResult(text);
       },
     });
   if (approvals.execute)
