@@ -83,6 +83,16 @@
         "@mars/contracts": "workspace:*",
       },
     },
+    "packages/knowledge-graph": {
+      "name": "@mars/knowledge-graph",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/context": "workspace:*",
+        "@mars/contracts": "workspace:*",
+        "@mars/execution": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
     "packages/memory": {
       "name": "@mars/memory",
       "version": "0.0.1",
@@ -309,6 +319,8 @@
     "@mars/execution": ["@mars/execution@workspace:packages/execution"],
 
     "@mars/integration-trust": ["@mars/integration-trust@workspace:packages/integration-trust"],
+
+    "@mars/knowledge-graph": ["@mars/knowledge-graph@workspace:packages/knowledge-graph"],
 
     "@mars/memory": ["@mars/memory@workspace:packages/memory"],
 
