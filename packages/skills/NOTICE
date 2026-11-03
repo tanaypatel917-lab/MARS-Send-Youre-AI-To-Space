@@ -1,0 +1,14 @@
+This package adapts skill lifecycle semantics from openclaw/openclaw at
+revision 7d9677ce36db4aeea2ce36a3bb78588829e80933:
+src/skills/workshop/skill-versions.ts (versions keep the newest 10),
+drafts.ts, review-undo.ts (changes.jsonl + undoReview), unused-archive.ts
+(stale after 14 days, archived after 30, pinned exempt) and changes.ts,
+via the MARS reference port in mars-platform/packages/skills.
+Copyright (c) 2026 OpenClaw Foundation.
+
+The adapted material is licensed under the MIT License.
+The license text is included at third_party/openclaw/LICENSE.txt.
+
+Modified by MARS: ported to Bun/TypeScript, single-writer directory lock,
+transactional persistence, proposal queue, threat scanning via @mars/memory,
+scoped @mars/contracts SkillService adapter.
