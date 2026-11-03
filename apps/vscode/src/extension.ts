@@ -13,6 +13,7 @@ import { type DiffOpenerHost, type DiffSide, openFileDiff } from "./diffOpener";
 import { checkServerUrl, DEFAULT_SERVER_URL } from "./endpoint";
 import { buildWebviewHtml } from "./html";
 import type { HostMessage } from "./messages";
+import { openReviewTarget, type ReviewOpenerHost } from "./reviewOpener";
 import { HttpRpcTransport } from "./rpc";
 
 const TOKEN_KEY = "mars.serverToken";
@@ -222,6 +223,40 @@ class WorkbenchViewProvider
         await vscode.window.showTextDocument(doc, { preview: true });
       },
     };
+    const reviewHost: ReviewOpenerHost = {
+      folders: host.folders,
+      realpath: host.realpath,
+      inspect: async (fsPath) => {
+        const uri = vscode.Uri.file(fsPath);
+        const stat = await vscode.workspace.fs.stat(uri);
+        if (stat.type & vscode.FileType.Directory)
+          return { kind: "directory", lines: 0 };
+        if (!(stat.type & vscode.FileType.File))
+          return { kind: "other", lines: 0 };
+        const doc = await vscode.workspace.openTextDocument(uri);
+        return { kind: "file", lines: doc.lineCount };
+      },
+      showRange: async (fsPath, lineStart, lineEnd, title) => {
+        const doc = await vscode.workspace.openTextDocument(
+          vscode.Uri.file(fsPath),
+        );
+        const last = Math.max(doc.lineCount - 1, 0);
+        const start = Math.min(lineStart - 1, last);
+        const end = Math.min(lineEnd - 1, last);
+        const range = new vscode.Range(
+          start,
+          0,
+          end,
+          doc.lineAt(end).text.length,
+        );
+        const editor = await vscode.window.showTextDocument(doc, {
+          preview: true,
+        });
+        editor.selection = new vscode.Selection(range.start, range.end);
+        editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+        void vscode.window.setStatusBarMessage(title, 10_000);
+      },
+    };
     return {
       confirm: async (message, detail, action) =>
         (await vscode.window.showWarningMessage(
@@ -231,6 +266,11 @@ class WorkbenchViewProvider
         )) === action,
       promptToken: () => promptForToken(this.context),
       openDiff: (server, file) => openFileDiff(host, server, file),
+      copyText: async (text) => {
+        await vscode.env.clipboard.writeText(text);
+      },
+      openReview: (server, target) =>
+        openReviewTarget(reviewHost, server, target),
       openArtifact: async (artifact: VerifiedArtifact, title: string) => {
         let text: string;
         try {

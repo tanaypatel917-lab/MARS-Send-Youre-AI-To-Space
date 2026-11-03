@@ -23,6 +23,7 @@ All 67 PRs across the three repos are merged; no open PRs. CI green on `main` he
 | 4 Measured improvement (Harbor / Terminal-Bench, GEPA, mini-swe baseline, verifiers) | **not started**; only the evidence-gated specialist registry/routing exists (#30, #35, #38, #40) | `packages/specialists` |
 | 5-8 Remote execution, SFT, vLLM serving, RL | not started | — |
 | Collaboration (bounded delegation, rooms) | library + workbench wiring; fixture child adapter only (#32, #33, #36, #37) | `packages/collaboration` |
+| Output format (model-to-UI contract) | contracts + parser/validator/serializer + prompt fragment in the shared runtime prompt + CLI `render` + VS Code webview rendering (artifact panels, confirmed follow-ups, review jumps); no host connector registry, no live-model evidence | `packages/contracts/src/output-format.ts`, `packages/output-format`, `apps/cli/src/render.ts`, `apps/vscode/src/webview` |
 | Integration trust gate | library only; no loader or approval UI (#8, #10) | `packages/integration-trust` |
 
 Everything is verified offline only: fixtures, injected model responses, `model_requests: 0`. Nothing has been run against a live model, a real search provider, a GPU, or a real IDE window.
@@ -46,6 +47,9 @@ Everything is verified offline only: fixtures, injected model responses, `model_
 - Memory proposals are scoped to the exact review context and revision-fenced (`expected_revision` checked at submission and again at acceptance); skill proposals likewise carry `expectedRevision`. Review can only submit; humans/host accept.
 - The SKILL.md frontmatter parser is a flat `key: value` subset with no YAML dependency (anchors, aliases, block scalars, nesting rejected).
 - Free-first model routing (`allowPaid: false`) stays the default; no live provider keys are stored in repos.
+- The MARS Output Format is MARS-owned (`documentation/OUTPUT_FORMAT.md`), modelled on an unverified description of a third-party format; it claims no compatibility with OpenAI products. `codex://review` and `:codex-followup` are accepted on parse as import aliases; the serializer preserves a follow-up's original tag and never rewrites review links inside Markdown text.
+- Model output is untrusted: writing-block addresses are validated against addresses the user supplied in the request, `app://` connector ids against the host registry, review ranges against a line cap. Follow-ups, app triggers and review links are proposals; the host never runs a tool because the model emitted a link.
+- `OUTPUT_FORMAT_PROMPT` is appended once to the execution runtime system prompt, so coordinator, workers, reviewer and delegated children all receive it. The research worker's extraction model is deliberately excluded: its contract is a single JSON object, not Markdown.
 - Claims of "improvement" require independent evidence (holdout, baseline, cost) — a finished job is not evidence (spec sections 16-17).
 - Research in `mars serve` is opt-in (`--research-search`), credentials are referenced by environment variable name only, the worker uses the registry's free default model and refuses paid ones (no CLI paid opt-in), and startup fails fast when no free model is configured rather than queuing requests that cannot run. The research store's private needles are the sibling state directories (`memory`, `sessions`, `tasks`, `workspaces`) plus the source checkout, because the store refuses a private root that contains it.
 
@@ -57,6 +61,8 @@ Dispatched 2026-11-02 as parallel child sessions, each opening its own PR agains
 2. Milestone 4: Harbor / Terminal-Bench 2 adapter and GEPA prompt-optimisation worker behind the spec's evaluation and optimisation interfaces, with a documented local-model (Qwen3-Coder via Ollama) path.
 3. ~~Milestone 3: bring `@mars/skills` and the proposal-only review runner into this repo~~ — landed by the Milestone 3 PR (offline-verified only).
 4. `MARS` site: rebase and land the `/how` landscape branches.
+
+5. Output format follow-ups: a host connector registry so `app://` triggers resolve to real tools (today both clients list them as unresolved); host-side `processOutput` on the final `text/plain` artifact plus an explicit final-response role in task metadata (the VS Code client infers it from a bare `text/plain` artifact on the task); live-model and real-window verification.
 
 Milestone 3 follow-ups:
 
