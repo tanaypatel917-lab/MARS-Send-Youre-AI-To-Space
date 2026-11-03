@@ -137,7 +137,8 @@ Full transcript: [`evidence/local-model-run.txt`](evidence/local-model-run.txt).
 | `mars models test ollama/qwen3-coder` | `MARS model test OK`, 16 in / 6 out tokens, 2.5 s warm, **verified** |
 | `scripts/local-model-run.ts` (real runtime session, 3 identical runs) | status `completed`, 1 model request, but `greet.txt` **not written**: the model returned its tool call as text, **verified failure** |
 | Replay of the exact request without the MARS system prompt | structured `tool_calls` for `mars_write`, **verified** |
-| Any Terminal-Bench task with this model | **unverified** (not run) |
+| MARS agent (`mars_harbor_agent.agent:MarsAgent`, compiled bundle) inside a real TB2 container on `regex-log`, two variants (default prompt, minimal prompt candidate) | both ran end to end, reward 0.0, `status: failed`, 2 model requests each cut at the 60 s per-request cap; **verified failure** ([`evidence/harbor-mars-agent-live.txt`](evidence/harbor-mars-agent-live.txt)) |
+| mini-swe-agent 2.4.6 baseline inside a TB2 container with this model | **unverified**: Harbor's installed adapter started it but `litellm` failed to import (`No module named 'mcp'`) in a retry loop; no request reached the model |
 
 Interpretation: with `qwen3-coder:30b` through Ollama, the fixed MARS system
 prompt in `packages/execution/src/runtime.ts` deterministically (temperature 0)
@@ -146,9 +147,13 @@ OpenAI-compatible parser does not convert, so the runtime sees prose instead of
 a tool call. Removing the `i` intent parameter or the `<system-reminder>`
 preamble does not change this; removing the system prompt does. The system
 prompt is precisely the explicit prompt target that `@mars/optimization`
-treats as a proposal, so it was **not** changed here. A real-model comparison
-on this machine therefore needs either an accepted prompt proposal or a
-different local model; both remain unverified.
+treats as a proposal, so it was **not** changed here. Inside Harbor task
+containers a second limit dominates on this CPU-only machine: the runtime caps
+each provider request at 60 s (`packages/execution/src/model-bridge.ts`), and
+qwen3-coder:30b on CPU does not finish a ~2k-token TB2 request in that time,
+so both live MARS trials failed before any tool call. A real-model comparison
+therefore needs a faster endpoint (GPU) or a configurable per-request timeout,
+plus an accepted prompt proposal or a different model; all remain unverified.
 
 ## What is verified and what is not (this increment)
 
@@ -164,7 +169,9 @@ Verified (commands and outputs recorded above or in the package READMEs):
 
 Unverified:
 
-- A full baseline-vs-candidate Terminal-Bench 2 comparison with a real model.
+- A full baseline-vs-candidate Terminal-Bench 2 comparison with a real model
+  (the MARS arm ran live but failed at the 60 s request cap; the
+  mini-swe-agent arm did not start).
 - Grader repeatability on real TB2 containers beyond the single `regex-log`
   nop/oracle check above and what the package README reports.
 - A GEPA optimisation run with a real reflection model producing an improved
