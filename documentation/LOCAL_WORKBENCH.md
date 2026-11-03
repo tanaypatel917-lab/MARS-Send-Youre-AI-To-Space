@@ -114,6 +114,8 @@ No live model request, paid service or real VS Code window is used for this veri
 
 ## Background research
 
+Sessions are asked (via the shared runtime system prompt) to write the [MARS Output Format](OUTPUT_FORMAT.md): writing blocks, app triggers, review links, follow-ups. `@mars/output-format` parses and validates that text offline; neither the workbench host nor the CLI or VS Code client calls it yet, so agent text is still shown as plain text.
+
 When the host is created with a parent-owned `research` service (the
 `@mars/research` control plane; no production worker ships yet, so this is
 test-injected only), every session is given two host-bound tools:
