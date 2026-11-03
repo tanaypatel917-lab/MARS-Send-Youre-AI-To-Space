@@ -1,0 +1,70 @@
+MARS Milestone 4 local-model path: Ollama + Qwen3-Coder (actual runs, CPU-only)
+
+Machine: 8 vCPU, 31 GiB RAM, no GPU (nvidia-smi absent). Ollama installed with `curl -fsSL https://ollama.com/install.sh | sh` (CPU-only mode warning). Model: `ollama pull qwen3-coder:30b` (18 GB).
+
+All model requests below are LIVE model requests, labelled as such. Offline tests in this repository still report model_requests: 0.
+
+$ curl -s http://127.0.0.1:11434/v1/chat/completions -d '{"model":"qwen3-coder:30b","messages":[{"role":"user","content":"Reply with exactly: MARS-OK"}],"max_tokens":16,"temperature":0}'
+{"id":"chatcmpl-738","object":"chat.completion","created":1793662620,"model":"qwen3-coder:30b","system_fingerprint":"fp_ollama","choices":[{"index":0,"message":{"role":"assistant","content":"MARS-OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":16,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens":5,"total_tokens":21}}
+
+real	0m26.372s
+user	0m0.002s
+sys	0m0.004s
+
+$ MARS_HOME=~/m4py/mars-home bun apps/cli/src/main.ts models add --provider ollama --model qwen3-coder:30b --id ollama/qwen3-coder --tools --context 32768 --free
+(added ollama/qwen3-coder to models.json; provider `ollama` is the built-in openai-compatible preset at http://localhost:11434/v1, no API key)
+
+$ MARS_HOME=~/m4py/mars-home bun apps/cli/src/main.ts models test ollama/qwen3-coder
+{
+  "content": "MARS model test OK",
+  "toolCalls": [],
+  "finishReason": "stop",
+  "usage": {
+    "inputTokens": 16,
+    "outputTokens": 6
+  },
+  "model": "qwen3-coder:30b",
+  "providerId": "ollama",
+  "routing": {
+    "selected": "ollama/qwen3-coder",
+    "reason": "Selected from explicit model.",
+    "attempts": []
+  }
+}
+
+real	0m2.484s
+user	0m1.155s
+sys	0m0.218s
+
+$ MARS_HOME=~/m4py/mars-home bun scripts/local-model-run.ts ollama/qwen3-coder   (real Oh My Pi runtime session; write approval only; run 1 of 3 identical runs, all 3 produced the same shape)
+{
+  "label": "live-model-run",
+  "model_id": "ollama/qwen3-coder",
+  "status": "completed",
+  "content": "I'll create a file named greet.txt with the content \"Hello\".\n\n<function=mars_write>\n<parameter=path>\ngreet.txt\n</parameter>\n<parameter=content>\nHello\n</parameter>\n<parameter=i>\nCreate greet.txt with Hello text\n</parameter>\n</function>\n</tool_call>",
+  "error": null,
+  "usage": {
+    "deadline": 1793663507500,
+    "reserved_tokens": 5993,
+    "reserved_usd": 0,
+    "input_tokens": 1897,
+    "output_tokens": 4096
+  },
+  "model_requests": 1,
+  "greet_txt": null,
+  "duration_ms": 9148,
+  "cwd": "/tmp/mars-local-run-c7Ii6Q"
+}
+
+real	0m10.086s
+user	0m1.448s
+sys	0m0.212s
+exit_status=1 (greet.txt was not written)
+
+Diagnosis (replaying the exact dumped request body with stream=false, temperature=0 against Ollama directly):
+  full MARS request (system prompt + tools + system-reminder) -> finish_reason=stop, tool_calls=null, content contains a malformed native tool call (`<function=mars_write>...</function>\n</tool_call>` without an opening `<tool_call>`)
+  same request without the MARS system prompt            -> finish_reason=tool_calls, tool_calls=[mars_write {path: greet.txt, content: Hello, i: ...}]
+  same request without the `i` (intent) parameter         -> still malformed text
+  same request without the <system-reminder> preamble     -> still malformed text
+  bare request (no system prompt, no reminder, no `i`)    -> finish_reason=tool_calls, structured tool call
+Interpretation: with this model the fixed MARS system prompt (packages/execution/src/runtime.ts SYSTEM_PROMPT) deterministically triggers Qwen3-Coder's text tool-call format that Ollama's OpenAI-compatible parser does not convert. The system prompt is exactly the explicit prompt target the optimisation package treats as a proposal; it was NOT changed in this increment. No Terminal-Bench task was run with this model.

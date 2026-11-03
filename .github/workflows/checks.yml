@@ -20,6 +20,14 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile --ignore-scripts
+      - name: GEPA worker venv (gepa 0.1.4, Python 3.12) and worker tests
+        working-directory: packages/optimization/python
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/bin/python -r requirements.lock
+          .venv/bin/python -m pytest -q
       - run: bun run check
       - run: bun run doctor
       - name: VS Code client typecheck, build and Node smoke

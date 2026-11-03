@@ -50,6 +50,7 @@ import type {
   ChildWorkspaceBinder,
   WorkbenchCollaboration,
 } from "./collaboration-context";
+import type { WorkbenchKnowledgeGraph } from "./graph-context";
 import {
   createWorkbenchHost,
   type WorkbenchHostOptions,
@@ -226,7 +227,10 @@ async function fixture() {
     specialists?: WorkbenchSpecialists,
     collaboration?: WorkbenchCollaboration,
     research?: WorkbenchResearch,
-    extras: Pick<WorkbenchHostOptions, "skills" | "review" | "watch"> = {},
+    extras: Pick<
+      WorkbenchHostOptions,
+      "skills" | "review" | "watch" | "knowledgeGraph"
+    > = {},
   ) =>
     createWorkbenchHost({
       ...extras,
@@ -3098,6 +3102,173 @@ test("read-denied tasks never reach background review, even when completed", asy
   expect(calls.map((call) => call.kind)).toEqual(["begin", "end"]);
   await api.close();
 });
+
+test.skipIf(process.platform !== "linux")(
+  "knowledge graph summary is injected only for the current revision and graph tools are host-bound",
+  async () => {
+    const f = await fixture();
+    await repositoryFixture(f.root);
+    const bindings: Array<Record<string, unknown>> = [];
+    let lookupStatus: "ready" | "stale" | "not_built" = "ready";
+    const artifact = (workspaceId: string, revision: string) => ({
+      schema_version: 1 as const,
+      producer: {
+        name: "graphify" as const,
+        version: "0.9.101",
+        wrapper: "@mars/knowledge-graph" as const,
+        wrapper_version: "0.0.1",
+      },
+      workspace: { workspace_id: workspaceId, revision },
+      built_at: "2026-01-01T00:00:00.000Z",
+      content_digest: "b".repeat(64),
+      complete: true,
+      nodes: [
+        {
+          id: "src/verifier.ts::OriginalMapVerifier",
+          label: "OriginalMapVerifier",
+          kind: "symbol" as const,
+          source_file: "src/verifier.ts",
+          source_location: "L1",
+          community: 0,
+          callable: true,
+        },
+      ],
+      edges: [],
+      communities: [
+        {
+          id: 0,
+          label: "verifier core",
+          cohesion: 1,
+          members: ["src/verifier.ts::OriginalMapVerifier"],
+        },
+      ],
+      stats: {
+        files: 1,
+        nodes: 1,
+        edges: 0,
+        communities: 1,
+        dropped_nodes: 0,
+        dropped_edges: 0,
+      },
+    });
+    const knowledgeGraph: WorkbenchKnowledgeGraph = {
+      async lookup(binding) {
+        bindings.push({ op: "lookup", ...binding, evidence: undefined });
+        if (lookupStatus === "ready")
+          return {
+            status: "ready",
+            artifact: artifact(binding.workspace_id, binding.revision),
+          };
+        if (lookupStatus === "stale")
+          return { status: "stale", built_for: "r0" };
+        return { status: "not_built" };
+      },
+      toolsFor(binding) {
+        bindings.push({ op: "tools", ...binding, evidence: undefined });
+        return {
+          async build() {
+            await binding.evidence?.append({
+              schema_version: 1,
+              operation: "graph.build",
+              status: "built",
+              workspace_id: binding.workspace_id,
+              revision: binding.revision,
+              content_digest: "b".repeat(64),
+              graphify_version: "0.9.101",
+              stats: artifact(binding.workspace_id, binding.revision).stats,
+              limitations: [],
+              summary: "code graph built",
+              recorded_at: "2026-01-01T00:00:00.000Z",
+            });
+            return "[derived evidence · code knowledge graph · mars_graph_build · built]";
+          },
+          async query(input) {
+            return `query:${input.kind}:${binding.revision}`;
+          },
+        };
+      },
+    };
+    const api = await f.makeHost(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { knowledgeGraph },
+    );
+    await api.create(context(), task());
+    await api.start(context(), {
+      task_id: "task",
+      expected_revision: 0,
+      approvals: { read: true, write: false, execute: false },
+    });
+    const session = required(f.sessions[0]);
+    const instruction = required(session.instructions[0]);
+    expect(instruction).toContain("Code knowledge graph summary at launch");
+    expect(instruction).toContain("derived evidence");
+    expect(instruction).toContain(
+      "- c0 verifier core [1]: OriginalMapVerifier",
+    );
+    expect(instruction).not.toContain(f.root);
+    const launch = JSON.parse(
+      await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+    );
+    expect(launch.knowledge_graph).toMatchObject({
+      scope,
+      workspace: { revision: "r1" },
+      content_digest: "b".repeat(64),
+      graphify_version: "0.9.101",
+    });
+    expect(launch.knowledge_graph.text).not.toContain(f.root);
+    const lookup = bindings.find((b) => b.op === "lookup");
+    expect(lookup).toMatchObject({
+      task_id: "task",
+      owner_id: scope.owner_id,
+      project_id: scope.project_id,
+      cwd: session.options.cwd,
+      revision: "r1",
+      approvals: { read: true },
+    });
+    const tools = required(session.options.knowledgeGraph);
+    expect(await tools.query({ kind: "communities" })).toBe(
+      "query:communities:r1",
+    );
+    expect(await tools.build()).toContain("mars_graph_build · built");
+    const events: Array<{ event_type: string; producer: string }> = [];
+    for await (const event of f.store.events(context(), "task"))
+      events.push({ event_type: event.event_type, producer: event.producer });
+    expect(
+      events.filter(
+        (event) =>
+          event.event_type === "tool.completed" &&
+          event.producer === "@mars/knowledge-graph",
+      ),
+    ).toHaveLength(1);
+    session.finish("completed");
+    await session.disposed;
+
+    lookupStatus = "stale";
+    await api.create(context(), task("task-2"));
+    await api.start(context(), {
+      task_id: "task-2",
+      expected_revision: 0,
+      approvals: { read: true, write: false, execute: false },
+    });
+    const second = required(f.sessions[1]);
+    expect(required(second.instructions[0])).not.toContain(
+      "Code knowledge graph summary",
+    );
+    const secondLaunch = JSON.parse(
+      await readFile(join(second.options.stateDir, "launch.json"), "utf8"),
+    );
+    expect(secondLaunch.knowledge_graph).toBeUndefined();
+    expect(second.options.knowledgeGraph).toBeDefined();
+    second.finish("completed");
+    await second.disposed;
+    await api.close();
+  },
+);
 
 test("watch tools are host-bound per task and their verdicts become reviewable tool.completed evidence", async () => {
   const f = await fixture();

@@ -64,7 +64,7 @@ function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
 export function resolveNodes(
   index: GraphIndex,
   query: string,
-  limit = QUERY_LIMITS.default_results,
+  limit: number = QUERY_LIMITS.default_results,
 ): GraphNode[] {
   const exact = index.nodes.get(query);
   if (exact) return [exact];

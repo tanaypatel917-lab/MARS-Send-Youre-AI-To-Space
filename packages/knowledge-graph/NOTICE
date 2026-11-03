@@ -1,0 +1,14 @@
+@mars/knowledge-graph
+
+This package wraps the external `graphify` command-line tool
+(https://github.com/Graphify-Labs/graphify), pinned to release v0.9.101,
+commit ab26b1ec1da995743ef5a165a07b0d45ad3314c8, as a sandboxed subprocess.
+No graphify source code is copied, vendored or ported into this repository;
+only its JSON output is read.
+
+Graphify is licensed under the Apache License, Version 2.0, with portions
+available under the MIT License (see upstream LICENSE, LICENSE-MIT and NOTICE
+at the pinned commit). Upstream notice:
+
+  Graphify
+  Copyright 2026 Safi Shamsi and the Graphify contributors.

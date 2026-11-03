@@ -1,3 +1,9 @@
+export type {
+  DerivedArtifactEntry,
+  DerivedArtifactKey,
+  DerivedArtifactStore,
+} from "./derived";
+export { createDerivedArtifactStore } from "./derived";
 export {
   ContextCancelledError,
   ContextClosedError,
