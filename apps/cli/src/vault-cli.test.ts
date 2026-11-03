@@ -1,0 +1,138 @@
+import { expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import type { RequestContext } from "@mars/contracts";
+import { createMemoryStore } from "@mars/memory";
+import { SkillStore } from "@mars/skills";
+
+const entrypoint = resolve(import.meta.dir, "main.ts");
+const ctx: RequestContext = {
+  schema_version: 1,
+  scope: { owner_id: "local", project_id: "demo" },
+  request_id: "vault-cli-seed",
+};
+
+async function run(args: string[]) {
+  const child = Bun.spawn([process.execPath, entrypoint, "vault", ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exit] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  return { stdout, stderr, exit };
+}
+
+async function seed(state: string) {
+  const memory = createMemoryStore({ rootDir: join(state, "memory") });
+  await memory.batch(ctx, 0, [
+    {
+      operation: "add",
+      entry: {
+        entry_id: "fact-1",
+        scope: ctx.scope,
+        target: "project",
+        fact: "Releases ship from the release branch.",
+        revision: 0,
+        source_event_ids: ["event-1"],
+        observed_at: "2026-01-01T00:00:00.000Z",
+        verified_at: null,
+        supersedes: null,
+        deleted: false,
+      },
+    },
+  ]);
+  await memory.close();
+  const skills = new SkillStore(join(state, "skills"));
+  await skills.create(
+    "release",
+    "---\nname: release\ndescription: Release checklist\n---\n\n# Release\n\n1. Tag.\n",
+    { actor: "seed", source: "test" },
+  );
+}
+
+test("mars vault export/status/import run against a temp state dir and only create proposals", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mars-vault-cli-"));
+  const state = join(root, "state");
+  const vault = join(root, "vault");
+  try {
+    await seed(state);
+    const base = ["--state", state, "--vault", vault, "--project", "demo"];
+
+    const missing = await run(["status", ...base]);
+    expect(missing.exit).toBe(1);
+    expect(missing.stdout).toBe("");
+    expect(missing.stderr).toContain("manifest");
+
+    const exported = await run(["export", ...base, "--json"]);
+    expect(exported.stderr).toBe("");
+    expect(exported.exit).toBe(0);
+    const exportReport = JSON.parse(exported.stdout);
+    expect(exportReport.notes).toEqual({
+      memory_fact: 1,
+      project: 1,
+      skill: 1,
+    });
+    expect(readFileSync(join(vault, "facts/fact-1.md"), "utf8")).toContain(
+      "mars_kind: memory_fact",
+    );
+    expect(readFileSync(join(vault, "skills/release.md"), "utf8")).toContain(
+      "<!-- mars:body -->",
+    );
+
+    const human = await run(["status", ...base]);
+    expect(human.exit).toBe(0);
+    expect(human.stdout).toContain("memory: exported revision 1, current 1");
+    expect(human.stdout).toContain("unchanged 1");
+
+    const factPath = join(vault, "facts/fact-1.md");
+    writeFileSync(
+      factPath,
+      readFileSync(factPath, "utf8").replace("release branch", "main branch"),
+    );
+    const imported = await run(["import", ...base, "--json"]);
+    expect(imported.stderr).toBe("");
+    expect(imported.exit).toBe(0);
+    const importReport = JSON.parse(imported.stdout);
+    expect(importReport.summary).toEqual({ unchanged: 2, proposed: 1 });
+    expect(importReport.proposals.memory).toHaveLength(1);
+
+    const memory = createMemoryStore({ rootDir: join(state, "memory") });
+    const snapshot = await memory.snapshot(ctx);
+    expect(snapshot.revision).toBe(1);
+    expect(snapshot.entries[0]?.fact).toBe(
+      "Releases ship from the release branch.",
+    );
+    const pending = await memory.listProposals(ctx, "pending");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.source).toBe("memory-vault");
+    await memory.close();
+
+    const status = await run(["status", ...base, "--json"]);
+    expect(status.exit).toBe(0);
+    const statusReport = JSON.parse(status.stdout);
+    expect(statusReport.memory.pending_vault_proposals).toBe(1);
+    expect(statusReport.memory.notes.modified).toBe(1);
+
+    const inside = await run([
+      "export",
+      "--state",
+      state,
+      "--vault",
+      join(state, "vault"),
+      "--project",
+      "demo",
+    ]);
+    expect(inside.exit).toBe(1);
+    expect(inside.stderr).toContain("private");
+
+    const usage = await run(["bogus"]);
+    expect(usage.exit).toBe(1);
+    expect(usage.stderr).toContain("Usage: mars vault");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 60_000);
