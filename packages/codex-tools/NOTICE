@@ -1,0 +1,26 @@
+@mars/codex-tools — third-party notices
+
+This package contains code and test fixtures derived from OpenAI Codex
+(https://github.com/openai/codex), revision f58acd6ede312266a7a0eaa63fd8dadacb4de239.
+
+  Copyright 2025 OpenAI
+  Licensed under the Apache License, Version 2.0.
+  License text: third_party/codex/LICENSE.txt
+  Upstream notice: third_party/codex/NOTICE.txt
+
+Derived files (each carries an attribution header naming the upstream file):
+  src/apply-patch/parser.ts        <- codex-rs/apply-patch/src/parser.rs,
+                                      codex-rs/apply-patch/src/streaming_parser.rs
+  src/apply-patch/seek-sequence.ts <- codex-rs/apply-patch/src/seek_sequence.rs
+  src/apply-patch/file-update.ts   <- codex-rs/apply-patch/src/file_update.rs
+  src/apply-patch/source-file.ts   <- codex-rs/apply-patch/src/text_file.rs
+  src/apply-patch/apply.ts         <- codex-rs/apply-patch/src/lib.rs
+  test/fixtures/apply-patch/0*/    <- codex-rs/apply-patch/tests/fixtures/scenarios/ (verbatim)
+
+MARS modifications: TypeScript port; filesystem-agnostic applier over
+`PatchFileSystem`; relative-path-only policy; 1 MiB / 4096-hunk bounds; the
+`renderApplyPatchInstructions` text is MARS-authored. `src/policy.ts` and
+`src/instructions.ts` reuse only names and documented semantics from codex
+(`protocol.rs`, `agents_md.rs`); no code was copied into them. The CLAUDE.md
+file-name convention comes from Claude Code documentation; no Claude Code source
+was consulted or copied.
