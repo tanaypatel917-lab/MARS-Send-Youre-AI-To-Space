@@ -41,6 +41,7 @@ import {
   WorkspaceNotFoundError,
 } from "@mars/workspaces";
 import type { WorkbenchCollaboration } from "./collaboration-context";
+import type { WorkbenchConventions } from "./conventions-context";
 import { createWorkbenchHost, type WorkbenchHostOptions } from "./host";
 import { serveWorkbench, WorkbenchError } from "./server";
 import type { WorkbenchSpecialists } from "./specialist-routing";
@@ -97,6 +98,8 @@ export interface WorkbenchServiceOptions {
   collaboration?: WorkbenchCollaboration;
   /** Background research worker and control plane; sessions get no research tools without it. */
   research?: WorkbenchResearchOptions;
+  /** Repository conventions (instruction files, skill folders, hooks, slash commands, apply_patch) loaded by the caller from the trusted checkout. */
+  conventions?: WorkbenchConventions;
   runtimeFactory?: WorkbenchHostOptions["runtimeFactory"];
 }
 
@@ -280,6 +283,7 @@ export async function createWorkbenchService(
         ? { collaboration: options.collaboration }
         : {}),
       ...(research ? { research } : {}),
+      ...(options.conventions ? { conventions: options.conventions } : {}),
       hostPrivateRoots: [
         memoryRoot,
         skillsRoot,
