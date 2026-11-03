@@ -4,6 +4,7 @@ import {
   cp,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   writeFile,
@@ -30,6 +31,7 @@ import {
   type TrialRecord,
   toTrialRecord,
 } from "./index";
+import { EvaluationJobStore, type JobRecord } from "./service";
 import {
   context,
   FAKE_HARBOR,
@@ -1000,4 +1002,51 @@ test("the agent bundle removes the model credential from its own environment", (
   expect("HARBOR_KEY" in env).toBe(false);
   expect(env.PATH).toBe("/usr/bin");
   expect(claimCredential(env, "HARBOR_KEY")).toBeUndefined();
+});
+
+test("EvaluationJobStore serializes overlapping writes for one job (regression: onSpawn update raced the temp file)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mars-eval-store-"));
+  const store = new EvaluationJobStore(dir);
+  await store.init();
+  const base: JobRecord = {
+    schema: "mars.evaluation-job/v1",
+    job_id: "a".repeat(32),
+    scope: { owner_id: "owner", project_id: "project" },
+    input_manifest: {
+      artifact_id: "manifest",
+      sha256: "0".repeat(64),
+      media_type: "application/json",
+      byte_length: 2,
+    },
+    comparison_id: "cmp",
+    budget: {
+      max_tokens: 1000,
+      max_usd: 1,
+      max_duration_ms: 60_000,
+      max_depth: 0,
+      max_concurrency: 1,
+    },
+    status: "running",
+    created_at: "2026-11-02T00:00:00.000Z",
+    updated_at: "2026-11-02T00:00:00.000Z",
+    deadline_ms: 1,
+    runs: [],
+    active_pids: [],
+    report: null,
+    trajectories: [],
+    cost_usd: null,
+    error: null,
+  };
+  const writes: Promise<void>[] = [];
+  for (let i = 0; i < 25; i += 1) {
+    writes.push(
+      store.write({ ...base, active_pids: [i], updated_at: `t${i}` }),
+    );
+  }
+  await Promise.all(writes);
+  const stored = await store.read(base.job_id);
+  expect(stored?.active_pids).toEqual([24]);
+  expect(stored?.updated_at).toBe("t24");
+  expect((await readdir(dir)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  await rm(dir, { recursive: true, force: true });
 });

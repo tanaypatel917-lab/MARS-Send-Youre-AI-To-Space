@@ -103,12 +103,28 @@ export class EvaluationJobStore {
   async init(): Promise<void> {
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
   }
-  async write(record: JobRecord): Promise<void> {
+  private readonly chains = new Map<string, Promise<void>>();
+  private sequence = 0;
+  /** Writes for one job are serialized so overlapping updates never race over the temp file or reorder. */
+  write(record: JobRecord): Promise<void> {
     JobRecordSchema.parse(record);
     const target = this.path(record.job_id);
-    const tmp = `${target}.${process.pid}.tmp`;
-    await writeFile(tmp, JSON.stringify(record, null, 2), { mode: 0o600 });
-    await rename(tmp, target);
+    const snapshot = JSON.stringify(record, null, 2);
+    const previous = this.chains.get(record.job_id) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        this.sequence += 1;
+        const tmp = `${target}.${process.pid}.${this.sequence}.tmp`;
+        await writeFile(tmp, snapshot, { mode: 0o600 });
+        await rename(tmp, target);
+      });
+    this.chains.set(record.job_id, next);
+    next.finally(() => {
+      if (this.chains.get(record.job_id) === next)
+        this.chains.delete(record.job_id);
+    });
+    return next;
   }
   async read(jobId: string): Promise<JobRecord | null> {
     try {
@@ -195,6 +211,7 @@ export function createEvaluationService(
       const runArm = async (arm: "baseline" | "candidate") => {
         controller.signal.throwIfAborted();
         const jobName = `${record.job_id}-${arm}`;
+        const pending: Promise<void>[] = [];
         const outcome = await options.runner.run({
           manifest,
           arm,
@@ -207,9 +224,10 @@ export function createEvaluationService(
           candidatePath,
           onSpawn: (pid) => {
             record.active_pids.push(pid);
-            void update({});
+            pending.push(update({}).catch(() => undefined));
           },
         });
+        await Promise.all(pending);
         record.active_pids = [];
         record.runs.push({ arm, job_name: jobName, outcome, error: null });
         await update({});
