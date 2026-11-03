@@ -25,6 +25,7 @@ All 67 PRs across the three repos are merged; no open PRs. CI green on `main` he
 | Collaboration (bounded delegation, rooms) | library + workbench wiring; fixture child adapter only (#32, #33, #36, #37) | `packages/collaboration` |
 | Output format (model-to-UI contract) | contracts + parser/validator/serializer + prompt fragment in the shared runtime prompt + CLI `render` + VS Code webview rendering (artifact panels, confirmed follow-ups, review jumps); no host connector registry, no live-model evidence | `packages/contracts/src/output-format.ts`, `packages/output-format`, `apps/cli/src/render.ts`, `apps/vscode/src/webview` |
 | Integration trust gate | library only; no loader or approval UI (#8, #10) | `packages/integration-trust` |
+| Perception & verification (watch-skill) | `@mars/watch` host-bound tools for every session type, THE LOOP + deterministic `verify` mapped to task evidence, ten vendored SKILL.md files; **offline fixture only** — real `watch`, `capture`, `loop` and model critique never run here | `packages/watch`, `skills/vendor/watch-skill`, `documentation/WATCH.md` |
 
 Everything is verified offline only: fixtures, injected model responses, `model_requests: 0`. Nothing has been run against a live model, a real search provider, a GPU, or a real IDE window.
 
@@ -54,6 +55,8 @@ Everything is verified offline only: fixtures, injected model responses, `model_
 - Milestone 4 layout: Harbor, mini-swe-agent and GEPA run in a pinned Python 3.12 venv (`harbor==0.25.0`, `mini-swe-agent==2.4.6`, `gepa==0.1.4`, no DSPy) launched and bounded by Bun-side services; Harbor result/reward/error records are parsed, exit codes are never trusted; Terminal-Bench 2 is consumed through Harbor datasets pinned to task commits (`sources/manifest.json` `terminal-bench-2`), never vendored.
 - Prompt optimisation scores only through the additive `PromptScoringBackend` contract (`train`/`validation` splits; no holdout value exists in the type), final-holdout ids live in a separate record, and GEPA candidates are stored proposals (`draft -> proposed -> accepted|rejected|archived`); "no improvement" is a valid reported outcome. The live `SYSTEM_PROMPT` is never mutated by a run.
 - Local models: register them with `mars models add --provider ollama ...`; nothing local goes into `BUILTIN_MODELS` because the default route would then hit an unreachable endpoint. Finding recorded in `documentation/evidence/local-model-run.txt`: with `qwen3-coder:30b` the fixed MARS system prompt deterministically produces text-form tool calls that Ollama does not parse, so a real-model comparison on CPU needs an accepted prompt proposal or another model.
+- watch-skill (MIT, Python 3.11+) is an external runtime, never a second loop: `@mars/watch` drives the CLI as an argv-only subprocess with an env allowlist, bounded roots, offline flags and a doctor gate (`version` must be 1.4.3, `doctor --no-fix --json` must be ok); if either fails the tools are `unavailable`/`inconclusive`, never `pass`. THE LOOP is `visual_advisory` and never `verified`; only a `verify` run with a passed required deterministic check at `deterministic_local`/`isolated_local` is. Screen/window capture is off for every role until the user sets `allow_screen_capture`; which roles may capture by default is an open product decision for the owner. `remote_attested` is refused because upstream does not implement it.
+- Vendored upstream text is allowed when copied verbatim with its license and a NOTICE (`skills/vendor/watch-skill`); the skill service (`@mars/skills`, ported on a separate branch) loads it as a read-only library — see the loader note there.
 
 ## Next steps
 
@@ -65,6 +68,8 @@ Dispatched 2026-11-02 as parallel child sessions, each opening its own PR agains
 4. `MARS` site: rebase and land the `/how` landscape branches.
 
 5. Output format follow-ups: a host connector registry so `app://` triggers resolve to real tools (today both clients list them as unresolved); host-side `processOutput` on the final `text/plain` artifact plus an explicit final-response role in task metadata (the VS Code client infers it from a bare `text/plain` artifact on the task); live-model and real-window verification.
+6. Wire `@mars/watch` into `mars serve`: a `--watch-command`/venv option, a `WATCH_DATA_DIR` under the state root, policy flags (`allow_screen_capture`, `allow_network_sources`, `allow_cloud_models`), then run the real CLI end to end (`watch` on a local file, `loop start` on a loopback URL with Playwright) and record the commands and results in `documentation/WATCH.md`. Done so far through the wrapper against the real 1.4.3 CLI: doctor gate, `verify checks/run/show`, `loop status` (`packages/watch/src/real-cli.test.ts`, opt-in via `MARS_WATCH_REAL_CLI`).
+7. Make the skill service load `skills/vendor/watch-skill` and let the reviewer require a `verify` record for visual work (reviewer policy, not yet enforced anywhere).
 
 Milestone 3 follow-ups:
 
@@ -73,7 +78,7 @@ Milestone 3 follow-ups:
 - Scope the skill store by owner/project (it is per state directory) and add relevance-based selection instead of size-bounded `list()`.
 - Evaluation gate between proposal and acceptance (spec: evaluate before accept) once Milestone 4 provides verifiers.
 
-Parked: the MARS Shell desktop app (needs a description from the owner).
+Parked: the MARS Shell desktop app (needs a description from the owner). Open product decision: which agent roles, if any, may run `mars_watch_capture` on the user's screen by default (currently none).
 
 ## How to verify locally
 

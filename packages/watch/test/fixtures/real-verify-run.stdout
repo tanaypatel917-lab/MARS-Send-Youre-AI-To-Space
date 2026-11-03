@@ -1,0 +1,21 @@
+{
+  "run_id": "vr_f1f4428153c1",
+  "verdict": "pass",
+  "assurance": "isolated_local",
+  "limitations": [],
+  "signature_status": "unsigned_hash_bound",
+  "checks": [
+    {
+      "id": "present",
+      "status": "pass",
+      "required": true,
+      "summary": "present.txt exists"
+    },
+    {
+      "id": "absent",
+      "status": "fail",
+      "required": false,
+      "summary": "missing.txt does not exist"
+    }
+  ]
+}

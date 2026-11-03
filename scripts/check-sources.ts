@@ -73,6 +73,7 @@ export const ManifestSchema = z
               "journal-probe-only",
               "workbench-context-only",
               "python-worker",
+              "host-bound-tools",
               "not-integrated",
             ]),
           })
@@ -120,6 +121,7 @@ export const REQUIRED_COMPONENTS = [
   "peft",
   "agent-lightning",
   "vllm",
+  "watch-skill",
 ] as const;
 
 export function validateManifest(input: unknown): SourceManifest {

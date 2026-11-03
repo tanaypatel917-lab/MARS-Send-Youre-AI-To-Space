@@ -6,7 +6,17 @@ const manifest = validateManifest(raw);
 
 describe("source manifest validation", () => {
   test("validates the complete manifest and installed artifact/lock pins", async () => {
-    expect((await checkSources()).components).toHaveLength(26);
+    expect((await checkSources()).components).toHaveLength(27);
+  });
+  test("accepts the host-bound-tools status and rejects unknown statuses", () => {
+    const watch = manifest.components.find((c) => c.id === "watch-skill");
+    expect(watch?.integration_status).toBe("host-bound-tools");
+    expect(watch?.group).toBe("perception-verification");
+    const changed = structuredClone(manifest);
+    const target = changed.components.find((c) => c.id === "watch-skill");
+    if (!target) throw new Error("Fixture missing");
+    (target as { integration_status: string }).integration_status = "wrapped";
+    expect(() => validateManifest(changed)).toThrow();
   });
   test("rejects floating revisions and mutable source references", () => {
     const changed = structuredClone(manifest);
