@@ -77,6 +77,7 @@ import {
   type WorkbenchMemory,
   withFrozenMemory,
 } from "./memory-context";
+import { proposalTools, type WorkbenchOptimization } from "./proposal-context";
 import {
   type Approvals,
   ApprovalsSchema,
@@ -180,6 +181,8 @@ export interface WorkbenchHostOptions {
   specialists?: WorkbenchSpecialists;
   collaboration?: WorkbenchCollaboration;
   research?: WorkbenchResearch;
+  /** Read-only prompt-optimisation proposals exposed to sessions as untrusted text. */
+  optimization?: WorkbenchOptimization;
   /** Host-owned watch-skill perception and verification; absent means no watch tools. */
   watch?: WorkbenchWatch;
   /** Repository conventions (instruction files, skill folders, hooks, slash commands, apply_patch). */
@@ -346,6 +349,14 @@ export async function createWorkbenchHost(
       ),
     };
   };
+  const proposalsFor = () =>
+    options.optimization
+      ? {
+          proposals: proposalTools(options.optimization, () =>
+            internalContext(options.scope),
+          ),
+        }
+      : {};
   const staleResearch = async (taskId: string) => {
     if (!options.research) return;
     await staleTaskResearch(
@@ -1706,6 +1717,7 @@ export async function createWorkbenchHost(
               collaboration: Boolean(options.collaboration),
               delegation: Boolean(delegation),
               research: Boolean(options.research),
+              proposals: Boolean(options.optimization),
               watch: Boolean(options.watch),
               patch: Boolean(options.conventions?.applyPatch),
               instruction: baseInstruction,
@@ -1727,6 +1739,7 @@ export async function createWorkbenchHost(
         collaboration: Boolean(options.collaboration),
         delegation: Boolean(delegation),
         research: Boolean(options.research),
+        proposals: Boolean(options.optimization),
         watch: Boolean(options.watch),
         patch: Boolean(options.conventions?.applyPatch),
         instruction: baseInstruction,
@@ -1921,6 +1934,7 @@ export async function createWorkbenchHost(
             : {}),
           ...(params.approvals.read ? historyFor(context) : {}),
           ...researchFor(task.task_id, () => launchDeadline),
+          ...proposalsFor(),
           ...watchOption(task.task_id, cwd, params.approvals),
           onEvent: async (event) => {
             if (!bound) {
@@ -2102,6 +2116,7 @@ export async function createWorkbenchHost(
             task.task_id,
             () => launch.deadline ?? Date.now() + task.budget.max_duration_ms,
           ),
+          ...proposalsFor(),
           ...watchOption(task.task_id, cwd, launch.approvals),
           onEvent: observe(taskId),
         });

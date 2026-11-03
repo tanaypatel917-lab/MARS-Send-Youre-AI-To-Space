@@ -1,0 +1,5 @@
+# Exact pins verified in this package's uv venv (Python 3.12.13):
+#   uv venv --python 3.12 .venv && uv pip install -r requirements.lock
+harbor==0.25.0
+mini-swe-agent==2.4.6
+pytest==8.4.2

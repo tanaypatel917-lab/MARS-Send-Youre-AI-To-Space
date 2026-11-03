@@ -1,0 +1,16 @@
+MARS Milestone 4: live Harbor 0.25.0 Docker runs on this VM (no model; grader repeatability check)
+Machine: 8 vCPU / 31 GiB, Docker 29.7.2, Python 3.12 venv with harbor==0.25.0. Dataset terminal-bench-sample@2.0 pinned to laude-institute/terminal-bench-2-0-sample @ 7e917f35c281188532772312d4ad91ca9274febc. No LLM was involved: `nop` does nothing, `oracle` applies the reference solution. Both runs exited 0; the numbers below come from the parsed result.json records, not the exit code.
+
+$ harbor run -d terminal-bench-sample@2.0 -i regex-log -a nop -k 2 -n 2 -o jobs --job-name nop-regex-log-k2 -y
+job result.json: n_completed_trials=2 n_errored_trials=0 cost_usd=None evals={"nop__terminal-bench-sample": {"n_trials": 2, "n_errors": 0, "metrics": [{"mean": 0.0}], "pass_at_k": {"2": 0.0}, "reward_stats": {"reward": {"0.0": ["regex-log__bZW35Vm", "regex-log__4fZJKte"]}}, "exception_stats": {}}}
+trial regex-log__4fZJKte: agent=nop@1.0.0 task_commit=7e917f35c281 task_checksum=4dd947b5c60d rewards={'reward': 0.0} exception=None agent_execution={'started_at': '2026-11-02T23:52:27.894816Z', 'finished_at': '2026-11-02T23:52:27.894969Z'} files=['agent', 'artifacts', 'config.json', 'lock.json', 'result.json', 'trial.log', 'verifier']
+trial regex-log__bZW35Vm: agent=nop@1.0.0 task_commit=7e917f35c281 task_checksum=4dd947b5c60d rewards={'reward': 0.0} exception=None agent_execution={'started_at': '2026-11-02T23:52:26.994271Z', 'finished_at': '2026-11-02T23:52:26.996198Z'} files=['agent', 'artifacts', 'config.json', 'lock.json', 'result.json', 'trial.log', 'verifier']
+repeatability over 2 identical trials: rewards=[0.0, 0.0] mean=0.000 variance=0.000 min=0.0 max=0.0
+
+$ harbor run -d terminal-bench-sample@2.0 -i regex-log -a oracle -k 2 -n 2 -o jobs --job-name oracle-regex-log-k2 -y
+job result.json: n_completed_trials=2 n_errored_trials=0 cost_usd=None evals={"oracle__terminal-bench-sample": {"n_trials": 2, "n_errors": 0, "metrics": [{"mean": 1.0}], "pass_at_k": {"2": 1.0}, "reward_stats": {"reward": {"1.0": ["regex-log__qUhAbnd", "regex-log__giJzAT2"]}}, "exception_stats": {}}}
+trial regex-log__giJzAT2: agent=oracle@1.0.0 task_commit=7e917f35c281 task_checksum=4dd947b5c60d rewards={'reward': 1.0} exception=None agent_execution={'started_at': '2026-11-02T23:52:59.501509Z', 'finished_at': '2026-11-02T23:52:59.785362Z'} files=['agent', 'artifacts', 'config.json', 'lock.json', 'result.json', 'trial.log', 'verifier']
+trial regex-log__qUhAbnd: agent=oracle@1.0.0 task_commit=7e917f35c281 task_checksum=4dd947b5c60d rewards={'reward': 1.0} exception=None agent_execution={'started_at': '2026-11-02T23:52:59.474159Z', 'finished_at': '2026-11-02T23:52:59.769075Z'} files=['agent', 'artifacts', 'config.json', 'lock.json', 'result.json', 'trial.log', 'verifier']
+repeatability over 2 identical trials: rewards=[1.0, 1.0] mean=1.000 variance=0.000 min=1.0 max=1.0
+
+Interpretation: the verifier discriminates (nop 0.0, oracle 1.0) and is repeatable (variance 0 over 2 identical trials) on this deterministic task. This is grader evidence only; no MARS or mini-swe-agent trial was run with a model in this increment.
