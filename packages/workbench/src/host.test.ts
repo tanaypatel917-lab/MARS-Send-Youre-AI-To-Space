@@ -129,6 +129,7 @@ async function fixture() {
   let restoreCalls = 0;
   let diffFiles: DiffResult["files"] = [];
   const writes: string[] = [];
+  const removes: string[] = [];
   const writeModes = new Map<string, boolean | undefined>();
   const artifact = await store.artifacts.put(
     context(),
@@ -154,6 +155,9 @@ async function fixture() {
     async write(_context, _workspace, path, _artifact, options) {
       writes.push(path);
       writeModes.set(path, options?.executable);
+    },
+    async remove(_context, _workspace, path) {
+      removes.push(path);
     },
     async execute() {
       return {

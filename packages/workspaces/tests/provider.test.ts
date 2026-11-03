@@ -2078,3 +2078,52 @@ test("Docker args are constrained and include the fixed hardening flags [stub ru
     ),
   ).toThrow();
 });
+
+test("remove deletes one regular file through the provider, advances the revision and refuses directories, symlinks and missing paths [stub runner — not isolation evidence]", async () => {
+  const fixture = await makeFixture();
+  try {
+    const before = fixture.workspace;
+    const baseline = first(await fixture.provider.checkpoints(context, before));
+    const artifact = await putText(fixture, "doomed\n");
+    await fixture.provider.write(
+      context,
+      before,
+      "nested/doomed.txt",
+      artifact,
+    );
+    const written = await fixture.provider.inspect(
+      context,
+      before.workspace_id,
+    );
+    const tree = join(
+      fixture.rootDir,
+      "workspaces",
+      before.workspace_id,
+      "tree",
+    );
+    await fixture.provider.remove(context, written, "nested/doomed.txt");
+    const removed = await fixture.provider.inspect(
+      context,
+      before.workspace_id,
+    );
+    expect(removed.revision).not.toBe(written.revision);
+    await expect(lstat(join(tree, "nested", "doomed.txt"))).rejects.toThrow();
+    expect(
+      (await fixture.provider.diff(context, removed, { base: baseline })).files,
+    ).not.toContainEqual(
+      expect.objectContaining({ path: "nested/doomed.txt" }),
+    );
+    await expect(
+      fixture.provider.remove(context, removed, "nested/doomed.txt"),
+    ).rejects.toBeInstanceOf(WorkspaceNotFoundError);
+    await expect(
+      fixture.provider.remove(context, removed, "nested"),
+    ).rejects.toBeInstanceOf(WorkspacePolicyError);
+    await expect(
+      fixture.provider.remove(context, removed, "../escape.txt"),
+    ).rejects.toBeInstanceOf(WorkspacePolicyError);
+    expect(await readdir(join(fixture.rootDir, "staging"))).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});

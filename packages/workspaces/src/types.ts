@@ -123,6 +123,12 @@ export interface LocalWorkspaceProvider extends ExecutionProvider {
     artifact: ArtifactRef,
     options?: { executable?: boolean },
   ): Promise<void>;
+  /** Removes one regular file; the revision advances and the file shows as deleted in diffs. */
+  remove(
+    context: RequestContext,
+    workspace: WorkspaceRef,
+    relativePath: string,
+  ): Promise<void>;
   diff(
     context: RequestContext,
     workspace: WorkspaceRef,

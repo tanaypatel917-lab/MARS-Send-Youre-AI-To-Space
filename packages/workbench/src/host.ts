@@ -131,6 +131,12 @@ export interface WorkspaceHost extends ExecutionProvider {
     artifact: ArtifactRef,
     options?: { executable?: boolean },
   ): Promise<void>;
+  /** Removes one regular file from the private workspace (apply_patch deletes and moves). */
+  remove(
+    context: RequestContext,
+    workspace: WorkspaceRef,
+    relativePath: string,
+  ): Promise<void>;
 }
 
 /**

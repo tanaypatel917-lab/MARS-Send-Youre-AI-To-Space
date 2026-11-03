@@ -291,6 +291,7 @@ export async function createWorkbenchService(
         prepare: provider.prepare.bind(provider),
         read: provider.read.bind(provider),
         write: provider.write.bind(provider),
+        remove: provider.remove.bind(provider),
         execute: provider.execute.bind(provider),
         checkpoint: provider.checkpoint.bind(provider),
         restore: provider.restore.bind(provider),
