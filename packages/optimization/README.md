@@ -142,7 +142,7 @@ uv pip install --python .venv/bin/python -r requirements.lock
 ```
 
 Pins (`src/pins.ts`): `gepa==0.1.4` (tag commit
-`8b0ce6cd99a234f6b74daf37558a2ac0ce18f975`, Apache-2.0), Python 3.12.x.
+`8b0ce6cd99a234f6b74daf37558a2ac0ce18f975`, MIT), Python 3.12.x.
 `requirements.lock` is the exact `uv pip freeze` (gepa 0.1.4 has no required
 dependencies; `litellm`/`wandb`/`mlflow` extras are deliberately not installed,
 and DSPy is not installed because MILESTONE_0 records its GEPA pin mismatch).
