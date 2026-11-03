@@ -453,6 +453,51 @@ describe("runHooks", () => {
     expect(truncateOutput("abc")).toBe("abc");
   });
 
+  it.each([
+    "../../etc/passwd",
+    "/etc/passwd",
+    "C:/secrets.txt",
+    "a\\b.txt",
+    "src/./a.txt",
+    "src//a.txt",
+    "a\u0000.txt",
+    "",
+  ])(
+    "refuses to hand a hook a path that is not workspace-relative: %j",
+    async (path) => {
+      let called = false;
+      await expect(
+        runHooks(
+          registry,
+          "pre-tool",
+          { tool: "mars_write", path },
+          async () => {
+            called = true;
+            return { exit_code: 0, stdout: "", stderr: "" };
+          },
+        ),
+      ).rejects.toMatchObject({ code: "invalid" });
+      expect(called).toBe(false);
+    },
+  );
+
+  it("passes ordinary relative paths (including spaces) through unchanged", async () => {
+    const { calls, executor } = recording(() => ({
+      exit_code: 0,
+      stdout: "",
+      stderr: "",
+    }));
+    await runHooks(
+      registry,
+      "post-tool",
+      { tool: "mars_write", path: "docs/my notes/..notes.md" },
+      executor,
+    );
+    expect(calls.map((call) => call.argv)).toEqual([
+      ["format", "docs/my notes/..notes.md"],
+    ]);
+  });
+
   it("rejects malformed tool names before anything runs", async () => {
     await expect(
       runHooks(registry, "pre-tool", { tool: "bad tool" }, async () => {

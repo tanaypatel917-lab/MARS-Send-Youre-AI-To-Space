@@ -56,6 +56,19 @@ const TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const MATCHER =
   /^(?:\*|[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}(?:\|[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})*)$/;
 
+/** Same shape the workspace provider accepts: relative, forward slashes, no `.`/`..`/empty segments, no control characters. */
+const isWorkspaceRelativePath = (path: string) =>
+  path.length > 0 &&
+  !hasControlCharacter(path) &&
+  !path.includes("\\") &&
+  !path.startsWith("/") &&
+  !/^[A-Za-z]:/.test(path) &&
+  path
+    .split("/")
+    .every(
+      (segment) => segment.length > 0 && segment !== "." && segment !== "..",
+    );
+
 const hasControlCharacter = (token: string) =>
   [...token].some((char) => {
     const code = char.codePointAt(0) ?? 0;
@@ -271,6 +284,9 @@ async function withTimeout<T>(
  * code of 2 marks the result `blocked` and stops the remaining pre-tool hooks;
  * other non-zero exits are recorded only. A missing executor result (`skipped`),
  * an exceeded `timeout_ms` or a thrown error are recorded as such outcomes.
+ * A `path` that is not workspace-relative (absolute, `..`, backslashes,
+ * control characters) is refused before any hook runs, so a hook can never be
+ * pointed outside the task workspace by the tool call it wraps.
  */
 export async function runHooks(
   registry: HooksRegistry,
@@ -280,6 +296,11 @@ export async function runHooks(
 ): Promise<HookResult[]> {
   if (context.tool !== undefined && !TOOL_NAME.test(context.tool))
     throw new HooksError("invalid", `invalid tool name "${context.tool}"`);
+  if (context.path !== undefined && !isWorkspaceRelativePath(context.path))
+    throw new HooksError(
+      "invalid",
+      `hook path must be workspace-relative: "${context.path}"`,
+    );
   const results: HookResult[] = [];
   for (const spec of registry.select(event, context.tool)) {
     const argv = renderHookArgv(spec, context);
