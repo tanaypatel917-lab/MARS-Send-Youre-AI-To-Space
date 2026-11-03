@@ -1,0 +1,2 @@
+# Harbor trial fixtures include trial.log files that the root *.log rule would drop.
+!*.log

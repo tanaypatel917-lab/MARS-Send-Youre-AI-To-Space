@@ -62,6 +62,16 @@
         "zod": "3.25.76",
       },
     },
+    "packages/evaluation": {
+      "name": "@mars/evaluation",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "@mars/execution": "workspace:*",
+        "@mars/providers": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
     "packages/execution": {
       "name": "@mars/execution",
       "version": "0.0.1",
@@ -92,6 +102,15 @@
       },
       "devDependencies": {
         "@oh-my-pi/pi-coding-agent": "18.14.0",
+      },
+    },
+    "packages/optimization": {
+      "name": "@mars/optimization",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "@mars/providers": "workspace:*",
+        "zod": "3.25.76",
       },
     },
     "packages/output-format": {
@@ -188,6 +207,7 @@
         "@mars/contracts": "workspace:*",
         "@mars/execution": "workspace:*",
         "@mars/memory": "workspace:*",
+        "@mars/optimization": "workspace:*",
         "@mars/providers": "workspace:*",
         "@mars/research": "workspace:*",
         "@mars/research-worker": "workspace:*",
@@ -306,11 +326,15 @@
 
     "@mars/contracts": ["@mars/contracts@workspace:packages/contracts"],
 
+    "@mars/evaluation": ["@mars/evaluation@workspace:packages/evaluation"],
+
     "@mars/execution": ["@mars/execution@workspace:packages/execution"],
 
     "@mars/integration-trust": ["@mars/integration-trust@workspace:packages/integration-trust"],
 
     "@mars/memory": ["@mars/memory@workspace:packages/memory"],
+
+    "@mars/optimization": ["@mars/optimization@workspace:packages/optimization"],
 
     "@mars/output-format": ["@mars/output-format@workspace:packages/output-format"],
 
