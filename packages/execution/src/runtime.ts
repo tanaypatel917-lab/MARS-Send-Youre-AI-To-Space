@@ -348,6 +348,23 @@ export interface RuntimeSessionOptions {
   onEvent?(observation: RuntimeObservation): Promise<void>;
   env?: Record<string, string | undefined>;
   fetch?: (input: string, init?: RequestInit) => Promise<Response>;
+  /**
+   * Replaces the fixed MARS system prompt for this session only. Used by the
+   * evaluation harness to score explicit prompt candidates; absent means the
+   * default prompt, unchanged.
+   */
+  systemPromptOverride?: string;
+}
+
+export const MAX_SYSTEM_PROMPT_CHARS = 16_000;
+
+export function resolveSystemPrompt(override: string | undefined): string {
+  if (override === undefined) return SYSTEM_PROMPT;
+  const trimmed = override.trim();
+  if (trimmed.length === 0) throw new Error("System prompt override is empty.");
+  if (trimmed.length > MAX_SYSTEM_PROMPT_CHARS)
+    throw new Error("System prompt override exceeds the size limit.");
+  return trimmed;
 }
 
 export interface RuntimeOutcome {
@@ -369,6 +386,7 @@ function inside(root: string, path: string): boolean {
 
 export async function openRuntimeSession(options: RuntimeSessionOptions) {
   const task = TaskSchema.parse(options.task);
+  const systemPrompt = resolveSystemPrompt(options.systemPromptOverride);
   const approvals = { ...options.approvals };
   const selected = selectExecutionModel(
     options.registry,
@@ -862,7 +880,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
       agentId: providerId,
       allowSessionModelFallback: false,
       rebindModelAfterDiscovery: false,
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt: systemPrompt,
     });
   } catch (error) {
     models.unregisterProvider(providerId);
