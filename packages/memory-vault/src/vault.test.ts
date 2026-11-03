@@ -831,3 +831,35 @@ test("review: a symlinked directory inside the vault cannot redirect the export"
   });
   expect(readdirSync(outside)).toEqual([]);
 });
+
+test("review: encoded graph file names stay within file-name limits", () => {
+  const underscores = `a${"_".repeat(85)}.ts`;
+  const encoded = encodeSourcePath(`src/${underscores}`);
+  expect(encoded.length).toBeLessThanOrEqual(200);
+  expect(encoded).not.toBe(encodeSourcePath(`src/b${"_".repeat(85)}.ts`));
+  const deep = Array.from({ length: 30 }, (_, i) => `dir${i}`).join("/");
+  expect(encodeSourcePath(`${deep}/file.ts`).length).toBeLessThanOrEqual(200);
+  expect(encodeSourcePath(`${deep}/file.ts`)).not.toBe(
+    encodeSourcePath(`${deep}/other.ts`),
+  );
+});
+
+test("review: manifests written without file_digest still open and clean up by body digest", async () => {
+  const { common, vaultDir, memory } = await fixture();
+  await exportVault(ctx, common);
+  const manifestPath = join(vaultDir, ".mars-vault.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  for (const note of manifest.notes) delete note.file_digest;
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const status = await vaultStatus(ctx, common);
+  expect(status.memory.notes.unchanged).toBeGreaterThan(0);
+  await memory.batch(ctx, 1, [{ operation: "remove", entry_id: "fact-plain" }]);
+  const report = await exportVault(ctx, common);
+  expect(report.removed).toBe(1);
+  expect(existsSync(join(vaultDir, "facts/fact-plain.md"))).toBe(false);
+  expect(
+    JSON.parse(readFileSync(manifestPath, "utf8")).notes.every(
+      (note: { file_digest?: string }) => typeof note.file_digest === "string",
+    ),
+  ).toBe(true);
+});

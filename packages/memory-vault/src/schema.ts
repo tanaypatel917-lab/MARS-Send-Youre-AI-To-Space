@@ -31,7 +31,8 @@ export const ManifestNoteSchema = z
     id: z.string().min(1),
     revision: z.union([z.number().int().nonnegative(), z.string().min(1)]),
     content_digest: digest,
-    file_digest: digest,
+    /** Whole-file digest; absent in manifests written before it was recorded. */
+    file_digest: digest.optional(),
   })
   .strict();
 export type ManifestNote = z.infer<typeof ManifestNoteSchema>;

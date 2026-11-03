@@ -3,6 +3,18 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 const SAFE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const KEEP = /[A-Za-z0-9._-]/;
 const MAX_SEGMENT = 128;
+/** Whole graph-note file name budget (before `.md`), under the 255-byte limit. */
+const MAX_FILE_NAME = 200;
+
+/** Truncates an encoded name with a digest of the original so it stays unique. */
+function bound(original: string, encoded: string, limit: number): string {
+  if (encoded.length <= limit) return encoded;
+  const digest = new Bun.CryptoHasher("sha256")
+    .update(original)
+    .digest("hex")
+    .slice(0, 16);
+  return `${encoded.slice(0, limit - 17)}-${digest}`;
+}
 
 function percentEncode(char: string): string {
   return Array.from(new TextEncoder().encode(char))
@@ -29,14 +41,7 @@ export function encodeSegment(value: string): string {
         : percentEncode(char);
     index += 1;
   }
-  if (out.length > MAX_SEGMENT) {
-    const digest = new Bun.CryptoHasher("sha256")
-      .update(value)
-      .digest("hex")
-      .slice(0, 16);
-    out = `${out.slice(0, MAX_SEGMENT - 17)}-${digest}`;
-  }
-  return out;
+  return bound(value, out, MAX_SEGMENT);
 }
 
 /**
@@ -45,13 +50,20 @@ export function encodeSegment(value: string): string {
  * `a/b` and `a__b` never collide.
  */
 export function encodeSourcePath(path: string): string {
-  return path
+  const joined = path
     .split(/[\\/]+/)
     .filter((part) => part.length > 0)
     .map((part) =>
-      encodeSegment(part).replace(/_{2,}/g, (run) => "%5F".repeat(run.length)),
+      bound(
+        part,
+        encodeSegment(part).replace(/_{2,}/g, (run) =>
+          "%5F".repeat(run.length),
+        ),
+        MAX_SEGMENT,
+      ),
     )
     .join("__");
+  return bound(path, joined, MAX_FILE_NAME);
 }
 
 export class VaultPathError extends Error {
