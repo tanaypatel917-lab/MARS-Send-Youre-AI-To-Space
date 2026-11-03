@@ -60,7 +60,12 @@ export function fixtureArtifact(): KnowledgeGraphArtifact {
       edge("b::parse", "b::emit"),
     ],
     communities: [
-      { id: 0, label: "entry", cohesion: 0.5, members: ["a::main", "a::helper"] },
+      {
+        id: 0,
+        label: "entry",
+        cohesion: 0.5,
+        members: ["a::main", "a::helper"],
+      },
       { id: 1, label: null, cohesion: null, members: ["b::parse", "b::emit"] },
       { id: 2, label: null, cohesion: null, members: ["c::lonely"] },
     ],
@@ -79,7 +84,9 @@ describe("graph queries", () => {
   const index = indexGraph(fixtureArtifact());
 
   test("resolves by id, label and path fragment deterministically", () => {
-    expect(resolveNodes(index, "a::main").map((n) => n.id)).toEqual(["a::main"]);
+    expect(resolveNodes(index, "a::main").map((n) => n.id)).toEqual([
+      "a::main",
+    ]);
     expect(resolveNodes(index, "PARSE").map((n) => n.id)).toEqual(["b::parse"]);
     expect(resolveNodes(index, "b.py").map((n) => n.id)).toEqual([
       "b::emit",
@@ -91,13 +98,12 @@ describe("graph queries", () => {
   test("neighbours walk both directions with bounded depth and limit", () => {
     const start = index.nodes.get("a::helper");
     if (!start) throw new Error("missing");
-    expect(neighbours(index, start).map((h) => `${h.node.id}@${h.distance}`)).toEqual([
-      "b::parse@1",
-      "a::main@1",
-    ]);
-    expect(neighbours(index, start, { depth: 99 }).map((h) => h.node.id)).toEqual(
-      ["b::parse", "a::main", "b::emit"],
-    );
+    expect(
+      neighbours(index, start).map((h) => `${h.node.id}@${h.distance}`),
+    ).toEqual(["b::parse@1", "a::main@1"]);
+    expect(
+      neighbours(index, start, { depth: 99 }).map((h) => h.node.id),
+    ).toEqual(["b::parse", "a::main", "b::emit"]);
     expect(neighbours(index, start, { depth: 2, limit: 1 })).toHaveLength(1);
   });
 

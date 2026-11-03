@@ -93,7 +93,9 @@ export const KnowledgeGraphArtifactSchema = z
     complete: z.boolean(),
     nodes: z.array(GraphNodeSchema).max(GRAPH_LIMITS.max_nodes),
     edges: z.array(GraphEdgeSchema).max(GRAPH_LIMITS.max_edges),
-    communities: z.array(GraphCommunitySchema).max(GRAPH_LIMITS.max_communities),
+    communities: z
+      .array(GraphCommunitySchema)
+      .max(GRAPH_LIMITS.max_communities),
     stats: z
       .object({
         files: z.number().int().nonnegative(),
@@ -106,7 +108,9 @@ export const KnowledgeGraphArtifactSchema = z
       .strict(),
   })
   .strict();
-export type KnowledgeGraphArtifact = z.infer<typeof KnowledgeGraphArtifactSchema>;
+export type KnowledgeGraphArtifact = z.infer<
+  typeof KnowledgeGraphArtifactSchema
+>;
 
 /** `graphify --version` and import probe result; cached by the service. */
 export const GraphDoctorSchema = z
@@ -127,7 +131,10 @@ export const GraphBuildRecordSchema = z
     status: z.enum(["built", "unavailable", "failed", "stale", "refused"]),
     workspace_id: z.string().min(1),
     revision: z.string().min(1),
-    content_digest: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+    content_digest: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable(),
     graphify_version: z.string().nullable(),
     stats: KnowledgeGraphArtifactSchema.shape.stats.nullable(),
     limitations: z.array(z.string().max(512)).max(32),

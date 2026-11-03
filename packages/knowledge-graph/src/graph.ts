@@ -143,8 +143,9 @@ export function paths(
   const limit = clamp(options.limit ?? 3, 1, QUERY_LIMITS.max_path_results);
   if (from.id === to.id) return [{ nodes: [from], edges: [] }];
   const found: GraphPath[] = [];
-  const queue: Array<{ id: string; nodes: GraphNode[]; edges: GraphEdge[] }> =
-    [{ id: from.id, nodes: [from], edges: [] }];
+  const queue: Array<{ id: string; nodes: GraphNode[]; edges: GraphEdge[] }> = [
+    { id: from.id, nodes: [from], edges: [] },
+  ];
   const depthSeen = new Map<string, number>([[from.id, 0]]);
   let shortest: number | null = null;
   let expansions = 0;
@@ -214,7 +215,8 @@ export function communities(
 
 export function degree(index: GraphIndex, id: string): number {
   return (
-    (index.outgoing.get(id)?.length ?? 0) + (index.incoming.get(id)?.length ?? 0)
+    (index.outgoing.get(id)?.length ?? 0) +
+    (index.incoming.get(id)?.length ?? 0)
   );
 }
 
