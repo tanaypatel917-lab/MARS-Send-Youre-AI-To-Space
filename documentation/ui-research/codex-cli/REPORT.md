@@ -204,7 +204,7 @@ Notable version drift vs. the question list: in 0.166.0 there is no `--full-auto
 | `Tab` | queue message for next turn | source/docs |
 | `Shift+Enter`, `Ctrl+J` | newline (`insert_newline`) | source |
 | `Esc` | interrupt turn; `Esc Esc` on empty composer = edit previous message (fork) | source/docs |
-| `Ctrl+C` | first press shows `⌃c again to quit`; second quits | source [ran] |
+| `Ctrl+C` | during a turn: interrupts (`■ Conversation interrupted …` [ran]); on idle composer first press shows `⌃c again to quit`, second quits | source |
 | `Ctrl+D` | delete-forward in the editor (not quit) | source L1778 |
 | `Ctrl+T` | open transcript overlay; `F3` find; `PgUp/PgDn`; `Ctrl+Home/End`; `Ctrl+Space` start selection; `⇧⌥,`/`⇧⌥.` top/latest | source |
 | `Ctrl+V` | paste image | overlay |
@@ -265,7 +265,7 @@ Bindings are remappable via `/keymap` → `tui.keymap.*` in `config.toml` using 
 - Auth `[ran]`: `codex doctor` → `✗ auth  no Codex credentials were found - Run codex login or provide an API key through a supported auth env var.`; invalid key in TUI → `◦ Reconnecting... 5/5 (7s • esc to interrupt)` with `└ Unexpected status 401 Unauthorized: Incorrect API key provided: sk-proj-****…0000. You can find your API key at https://platform.openai.com/account/api-keys., url: wss://api.openai.com/v1/responses, cf-ray: …, request id: req_…, auth error:…` (key masked by Codex; 5 retries; screenshot `12-error-fake-key.png`). `/status` → `Account: API key configured (run codex login to use ChatGPT)`.
 - Rate limit `[source]`: `■ rate limit exceeded: Please try again in 10s.`; `Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex.`; `/status` `Limits: data not available yet` `[ran]`.
 - Network/transport `[ran]`: `warning: Falling back from WebSockets to HTTPS transport. unexpected status 401 …`; `ERROR: Reconnecting... N/5`; `[source]` `Reconnecting to server…` status header, `Automatic reconnect could not restore this session. Your draft is still editable. Copy it before quitting with Ctrl+C, then reconnect with the same command.` (`chatwidget/reconnect.rs` L51, L259); `codex doctor` `⚠ websocket Responses WebSocket failed; HTTPS fallback may still work`.
-- Interrupt `[source]`: `■ Conversation interrupted - use /feedback if something went wrong`.
+- Interrupt `[ran]`: Ctrl+C during a turn → `■ Conversation interrupted - use /feedback if something went wrong` (screenshot `13-ctrl-c-footer.png`).
 - Sandbox `[ran]`: startup warning text in §1; `[source]` approval reason `command failed; retry without sandbox?`; `warning: Code Mode is unavailable because failed to spawn code-mode host … Code mode will fail closed; enable \`features.code_mode_host\` …` `[ran]`.
 - Busy state `[source]`: `■ '/resume' is disabled while a task is in progress.`
 
@@ -312,7 +312,7 @@ gh release download rust-v0.166.0 -R openai/codex -p 'codex-x86_64-unknown-linux
 ./codex doctor; ./codex features list
 git clone https://github.com/openai/codex src && git -C src checkout rust-v0.166.0   # 6ff1e1ca3b30fc8b914720681fcf5fe62e95f856
 xterm -e 'codex --no-daemon'  (CODEX_HOME=fresh dir; first without any key, then with an invalid OPENAI_API_KEY)
-  keys sent: 3 ⏎ ⏎ (API key), ? , / , /status ⏎ , /permissions ⏎ , /model ⏎ , @ , F2 , "say hi" ⏎ , ^C
+  keys sent: 3 ⏎ ⏎ (API key), ? , / , /status ⏎ , /permissions ⏎ , /model ⏎ , @ , F2 , "say hi" ⏎ , ^C (during the retrying turn)
 RUST_LOG=error codex exec --skip-git-repo-check "say hi"   (invalid key → header + 401 path)
 ```
 
@@ -352,4 +352,4 @@ RUST_LOG=error codex exec --skip-git-repo-check "say hi"   (invalid key → head
 | `10-mention-popup.png` | `@` Mentions popup with tabs and kind column |
 | `11-warnings.png` | F2 warnings view (bubblewrap missing) |
 | `12-error-fake-key.png` | 401 auth error with `◦ Reconnecting... 5/5 (7s • esc to interrupt)` |
-| `13-ctrl-c-footer.png` | After one Ctrl+C: `⌃c again to quit` footer hint |
+| `13-ctrl-c-footer.png` | After Ctrl+C during the failing turn: `■ Conversation interrupted - use /feedback if something went wrong`; footer badge now `⚠ 2 warnings · f2 to view` (the transient `⌃c again to quit` hint had already expired when captured) |
