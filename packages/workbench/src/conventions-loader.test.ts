@@ -116,7 +116,7 @@ test("a trusted checkout also loads hooks and instruction files, and hooks only 
     },
   );
   expect(executed).toEqual([["bun", "run", "lint", "src/a.ts"]]);
-  expect(results.map((r) => r.outcome)).toEqual(["ran"]);
+  expect(results?.map((r) => r.outcome)).toEqual(["ran"]);
   expect(
     await report.conventions.hooks?.run(
       "pre-tool",
