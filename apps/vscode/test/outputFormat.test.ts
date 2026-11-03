@@ -6,11 +6,12 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { realpath } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkbenchController } from "../src/controller";
 import { WebviewMessageSchema } from "../src/messages";
+import type { LocalFileInfo } from "../src/reviewOpener";
 import { openReviewTarget, type ReviewOpenerHost } from "../src/reviewOpener";
 import { buildOutputView, tonePreamble } from "../src/webview/outputView";
 import {
@@ -149,6 +150,7 @@ describe("review links", () => {
     const host: ReviewOpenerHost = {
       folders: () => [{ name: "demo", fsPath: root }],
       realpath,
+      inspect,
       showRange: async (fsPath, start, end, title) => {
         shown.push([fsPath, start, end, title]);
       },
@@ -193,7 +195,83 @@ describe("review links", () => {
     ).toMatchObject({ ok: false });
     expect(shown).toHaveLength(1);
   });
+
+  test("directories, missing lines and editor failures are refused, never thrown", async () => {
+    const shown: Array<[number, number]> = [];
+    const host: ReviewOpenerHost = {
+      folders: () => [{ name: "demo", fsPath: root }],
+      realpath,
+      inspect,
+      showRange: async (_fsPath, start, end) => {
+        shown.push([start, end]);
+      },
+    };
+    const target = {
+      path: "src/a.ts",
+      segments: ["src", "a.ts"],
+      line_start: 100,
+      line_end: 105,
+      side: "right" as const,
+      pr: PR,
+    };
+    expect(await openReviewTarget(host, describeResult, target)).toEqual({
+      ok: false,
+      reason: "The local file has 4 lines; the link names 100-105.",
+    });
+    expect(
+      await openReviewTarget(host, describeResult, {
+        ...target,
+        path: "src",
+        segments: ["src"],
+        line_start: 1,
+        line_end: 1,
+      }),
+    ).toEqual({ ok: false, reason: "The path is a directory, not a file." });
+    expect(
+      await openReviewTarget(host, describeResult, {
+        ...target,
+        line_start: 2,
+        line_end: 9,
+      }),
+    ).toEqual({
+      ok: true,
+      note: "the local file ends at line 4, so lines 5-9 were not selected",
+    });
+    expect(shown).toEqual([[2, 4]]);
+    expect(
+      await openReviewTarget(
+        {
+          ...host,
+          showRange: async () => {
+            throw new Error("cannot open");
+          },
+        },
+        describeResult,
+        { ...target, line_start: 1, line_end: 2 },
+      ),
+    ).toEqual({ ok: false, reason: "The editor could not open the file." });
+    expect(
+      await openReviewTarget(
+        {
+          ...host,
+          inspect: async () => {
+            throw new Error("EACCES");
+          },
+        },
+        describeResult,
+        { ...target, line_start: 1, line_end: 2 },
+      ),
+    ).toEqual({ ok: false, reason: "The local file could not be read." });
+  });
 });
+
+async function inspect(fsPath: string): Promise<LocalFileInfo> {
+  const info = await stat(fsPath);
+  if (info.isDirectory()) return { kind: "directory", lines: 0 };
+  if (!info.isFile()) return { kind: "other", lines: 0 };
+  const text = await readFile(fsPath, "utf8");
+  return { kind: "file", lines: text.split("\n").length };
+}
 
 describe("copy and schema bounds", () => {
   test("copyText goes to the host clipboard hook", async () => {

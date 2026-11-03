@@ -226,6 +226,16 @@ class WorkbenchViewProvider
     const reviewHost: ReviewOpenerHost = {
       folders: host.folders,
       realpath: host.realpath,
+      inspect: async (fsPath) => {
+        const uri = vscode.Uri.file(fsPath);
+        const stat = await vscode.workspace.fs.stat(uri);
+        if (stat.type & vscode.FileType.Directory)
+          return { kind: "directory", lines: 0 };
+        if (!(stat.type & vscode.FileType.File))
+          return { kind: "other", lines: 0 };
+        const doc = await vscode.workspace.openTextDocument(uri);
+        return { kind: "file", lines: doc.lineCount };
+      },
       showRange: async (fsPath, lineStart, lineEnd, title) => {
         const doc = await vscode.workspace.openTextDocument(
           vscode.Uri.file(fsPath),

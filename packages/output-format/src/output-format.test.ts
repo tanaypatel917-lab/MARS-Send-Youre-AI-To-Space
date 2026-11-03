@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { OutputDocumentSchema, type OutputErrorCode } from "@mars/contracts";
+import {
+  MAX_FOLLOW_UP_PROMPT_LENGTH,
+  OutputDocumentSchema,
+  type OutputErrorCode,
+} from "@mars/contracts";
 import {
   canonicalAddress,
   collectAddresses,
@@ -299,6 +303,16 @@ describe("invalid constructs", () => {
     expect(Object.getPrototypeOf(parseAttributes('a="1"'))).toBe(
       Object.prototype,
     );
+  });
+
+  test("follow-up prompts longer than the cap are malformed, not buttons", () => {
+    const long = "x".repeat(MAX_FOLLOW_UP_PROMPT_LENGTH + 1);
+    const document = parseOutput(
+      `- :mars-followup[Go]{prompt="${long}"}\n- :mars-followup[Ok]{prompt="${"y".repeat(MAX_FOLLOW_UP_PROMPT_LENGTH)}"}`,
+    );
+    expect(codes(document.errors)).toEqual(["malformed_followup"]);
+    expect(followUps(document).map((item) => item.label)).toEqual(["Ok"]);
+    expect(OutputDocumentSchema.safeParse(document).success).toBe(true);
   });
 
   test("codex review links import with the same keys", () => {

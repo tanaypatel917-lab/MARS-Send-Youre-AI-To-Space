@@ -57,11 +57,14 @@ export const WritingBlockSchema = z
   .strict();
 export type WritingBlock = z.infer<typeof WritingBlockSchema>;
 
+/** Longest hidden prompt a follow-up may carry; longer ones are malformed. */
+export const MAX_FOLLOW_UP_PROMPT_LENGTH = 8000;
+
 export const FollowUpSchema = z
   .object({
     kind: z.literal("follow_up"),
     label: z.string().min(1),
-    prompt: z.string().min(1),
+    prompt: z.string().min(1).max(MAX_FOLLOW_UP_PROMPT_LENGTH),
     tag: z.enum(["mars-followup", "codex-followup"]),
     span: SourceSpanSchema,
   })

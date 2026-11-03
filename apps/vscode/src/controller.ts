@@ -892,7 +892,7 @@ export class WorkbenchController {
     if (outcome.ok)
       this.setNotice(
         "info",
-        `Opened ${label} (${message.side} side of ${message.pr}; the PR itself was not fetched).`,
+        `Opened ${label} (${message.side} side of ${message.pr}; the PR itself was not fetched${outcome.note ? `; ${outcome.note}` : ""}).`,
       );
     else this.setNotice("error", `Refused to open ${label}: ${outcome.reason}`);
     this.emit();

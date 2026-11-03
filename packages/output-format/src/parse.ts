@@ -3,6 +3,7 @@ import {
   type EmailHeader,
   type FollowUp,
   type LinkKind,
+  MAX_FOLLOW_UP_PROMPT_LENGTH,
   type MarkdownSegment,
   OUTPUT_FORMAT_VERSION,
   type OutputDocument,
@@ -648,6 +649,17 @@ export function parseOutput(text: string): OutputDocument {
         error(
           "malformed_followup",
           'Follow-ups must be list items of the form - :mars-followup[visible phrase]{prompt="..."}.',
+          line,
+          null,
+        );
+        pushMarkdown(line, content);
+        scan(null);
+        continue;
+      }
+      if (prompt.length > MAX_FOLLOW_UP_PROMPT_LENGTH) {
+        error(
+          "malformed_followup",
+          `Follow-up prompts must be at most ${MAX_FOLLOW_UP_PROMPT_LENGTH} characters.`,
           line,
           null,
         );

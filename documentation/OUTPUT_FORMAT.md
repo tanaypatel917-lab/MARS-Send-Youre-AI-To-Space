@@ -198,6 +198,12 @@ and the link is not added to `document.review_links`. The validator reports
 `context.max_review_lines` (default `DEFAULT_MAX_REVIEW_LINES`, 40); the link
 stays in `review_links`.
 
+A host that opens a review link checks the local file first: a path that
+is a directory or not a regular file, a file shorter than `line_start`, or an
+editor failure is refused with a visible reason instead of selecting
+unrelated lines; a range that runs past the end of the local file is clamped
+and the notice says which lines were not selected.
+
 `codex://review?...` is accepted on import with the same keys:
 
 | Import form | Parsed as |
@@ -215,8 +221,10 @@ A follow-up is a whole list item: `-` or `*`, one space, then
 `:mars-followup[label]{prompt="..."}`, optionally followed by trailing
 whitespace only. `:codex-followup` is accepted as an alias and recorded in
 `tag`. The label and the prompt are trimmed and must be non-empty; the prompt
-uses the attribute grammar of section 3 (so `\"` escapes a quote) and other
-keys in the braces are ignored. Each follow-up becomes its own `follow_up`
+is at most `MAX_FOLLOW_UP_PROMPT_LENGTH` (8,000) characters, the same bound
+the clients accept for a steering message, so every rendered button can be
+sent; it uses the attribute grammar of section 3 (so `\"` escapes a quote) and
+other keys in the braces are ignored. Each follow-up becomes its own `follow_up`
 segment `{ label, prompt, tag, span }`; `followUps(document)` lists them.
 
 Any line that starts with an optional bullet and `:mars-followup` or
