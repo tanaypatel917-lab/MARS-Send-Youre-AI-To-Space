@@ -60,7 +60,7 @@ test("an untrusted checkout yields skills and commands but no hooks or instructi
   expect(report.conventions.instructions).toBeUndefined();
   expect(report.conventions.applyPatch).toBeUndefined();
   expect(
-    report.conventions.commands?.expand("/review src/app.ts")?.prompt,
+    report.conventions.commands?.expand("/review src/app.ts")?.prompt.trim(),
   ).toBe("Review src/app.ts for defects.");
   expect(report.conventions.commands?.expand("/unknown")).toBeNull();
   expect(report.conventions.repositorySkills?.map((s) => s.name)).toEqual([
@@ -107,7 +107,7 @@ test("a trusted checkout also loads hooks and instruction files, and hooks only 
     apply_patch: true,
   });
   const executed: string[][] = [];
-  const results = await report.conventions.hooks!.run(
+  const results = await report.conventions.hooks?.run(
     "post-tool",
     { tool: "mars_write", path: "src/a.ts" },
     async (argv) => {
@@ -118,7 +118,7 @@ test("a trusted checkout also loads hooks and instruction files, and hooks only 
   expect(executed).toEqual([["bun", "run", "lint", "src/a.ts"]]);
   expect(results.map((r) => r.outcome)).toEqual(["ran"]);
   expect(
-    await report.conventions.hooks!.run(
+    await report.conventions.hooks?.run(
       "pre-tool",
       { tool: "mars_read" },
       async () => {

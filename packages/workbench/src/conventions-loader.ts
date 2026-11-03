@@ -81,9 +81,7 @@ export async function loadWorkbenchConventions(
   if (options.trustProject) {
     const hooks: HooksRegistry | null = await loadHooks(root);
     if (hooks) {
-      const count = (["session-start", "pre-tool", "post-tool"] as const)
-        .map((event) => hooks.select(event).length)
-        .reduce((sum, n) => sum + n, 0);
+      const count = hooks.size;
       if (count > 0) {
         conventions.hooks = {
           run: (event, context, executor) =>
