@@ -2563,12 +2563,13 @@
           "RTK/Caveman compression",
           "MCP or A2A endpoints",
           "upstream test suite"
-        ]
+        ],
+        "models_response_shape": "src/app/api/v1/models/catalog.ts at the pin emits rows {id, object: 'model', owned_by, context_length, max_input_tokens, max_output_tokens, input_modalities, capabilities: {tool_calling, reasoning, vision?, ...}}; the MARS discovery reader uses exactly these names (source-verified, no live response observed)."
       },
       "risks": [
         "Quota figures are upstream approximations curated on 2026-10-19; actual availability can be lower and drifts until the catalog is rebuilt (doctor reports stale after 120 days).",
         "OmniRoute defaults HOST to 0.0.0.0; MARS forces 127.0.0.1 only for processes it starts, an externally started instance may be exposed.",
-        "Capabilities (tools, vision, context) are unknown offline; without a live /v1/models discovery every catalog model is registered tool-less and the execution runtime never selects it.",
+        "Capabilities (tools, vision, context) are unknown offline; without a live /v1/models discovery every catalog model is registered tool-less and the execution runtime never selects it. Discovery field names are verified against the pinned source only; a live response was not observed.",
         "OmniRoute's own routing/fallback can substitute models server-side; MARS only controls the requested model id and refuses non-catalog ids before sending.",
         "Web-session and terms-risk providers can be opted in by an operator; the defaults, not the code, keep MARS out of consumer-session use.",
         "No live OmniRoute call was made; the adapter path is verified against the fake server only."

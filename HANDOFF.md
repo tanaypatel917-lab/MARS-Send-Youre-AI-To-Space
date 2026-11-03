@@ -83,7 +83,7 @@ Milestone 3 follow-ups:
 
 Parked: the MARS Shell desktop app (needs a description from the owner). Open product decision: which agent roles, if any, may run `mars_watch_capture` on the user's screen by default (currently none).
 
-- OmniRoute: run a real `omniroute@3.8.52` locally (no upstream keys) and record only what is observed (`/v1/models` reachable, auth behaviour, model id form, capability fields); confirm the `capabilities`/`context_length` field names discovery reads; decide whether to add a `mars models omniroute` operator command for opt-ins; rebuild the catalog when upstream bumps `FREE_CATALOG_CURATED_AT` (doctor reports stale after 120 days).
+- OmniRoute: run a real `omniroute@3.8.52` locally (no upstream keys) and record only what is observed (`/v1/models` reachable, auth behaviour, model id form, capability fields); confirm live that `/v1/models` rows match the pinned source shape discovery reads (`capabilities.tool_calling`, `context_length`, `max_input_tokens`, `input_modalities`); decide whether to add a `mars models omniroute` operator command for opt-ins; rebuild the catalog when upstream bumps `FREE_CATALOG_CURATED_AT` (doctor reports stale after 120 days).
 
 ## How to verify locally
 

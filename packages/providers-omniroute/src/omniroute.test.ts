@@ -179,6 +179,52 @@ describe("omniroute provider target", () => {
     expect(response.content).toBe("fake reply from goodapi/clean-2");
   });
 
+  test("discovery reads the upstream /v1/models field names (source-verified at the pin)", async () => {
+    const payload = {
+      object: "list",
+      data: [
+        {
+          id: "deepseek/deepseek-v4-pro",
+          object: "model",
+          owned_by: "deepseek",
+          context_length: 128000,
+          max_input_tokens: 128000,
+          max_output_tokens: 8192,
+          input_modalities: ["text", "image"],
+          capabilities: { tool_calling: true, reasoning: false, vision: true },
+        },
+        {
+          id: "glm/glm-5",
+          object: "model",
+          owned_by: "glm",
+          max_input_tokens: 64000,
+          capabilities: { tool_calling: false, reasoning: true },
+        },
+        { id: "combo/auto", object: "model", owned_by: "combo" },
+      ],
+    };
+    const discovered = await discoverOmniRouteCapabilities({
+      url: "http://127.0.0.1:1",
+      env: {},
+      fetch: async () => Response.json(payload),
+    });
+    expect([...(discovered?.listed ?? [])]).toEqual([
+      "deepseek/deepseek-v4-pro",
+      "glm/glm-5",
+      "combo/auto",
+    ]);
+    expect(discovered?.toolCapable.has("deepseek/deepseek-v4-pro")).toBe(true);
+    expect(discovered?.toolCapable.has("glm/glm-5")).toBe(false);
+    expect(discovered?.visionCapable.has("deepseek/deepseek-v4-pro")).toBe(
+      true,
+    );
+    expect(discovered?.contextWindows.get("deepseek/deepseek-v4-pro")).toBe(
+      128000,
+    );
+    expect(discovered?.contextWindows.get("glm/glm-5")).toBe(64000);
+    expect(discovered?.contextWindows.has("combo/auto")).toBe(false);
+  });
+
   test("probe and discovery use only GET /v1/models and report booleans", async () => {
     fake.requests.length = 0;
     const probe = await probeOmniRoute({ url: fake.url, env: env() });

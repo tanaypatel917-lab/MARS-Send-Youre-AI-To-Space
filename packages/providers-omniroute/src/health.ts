@@ -38,6 +38,12 @@ export interface OmniRouteProbe {
   api_key_env_present: boolean;
 }
 
+/**
+ * Field names match OmniRoute's `/v1/models` catalog at the pinned revision
+ * (`src/app/api/v1/models/catalog.ts`: `capabilities.tool_calling`,
+ * `capabilities.vision`, `context_length`, `max_input_tokens`,
+ * `input_modalities`); verified against source, not against a live gateway.
+ */
 interface ModelRow {
   id: string;
   tools: boolean;
@@ -59,17 +65,23 @@ function readModelRows(payload: unknown): ModelRow[] {
         ? (record.capabilities as Record<string, unknown>)
         : {};
     const context = [
-      record.context_window,
       record.context_length,
-      record.max_context,
+      record.max_input_tokens,
+      record.context_window,
     ].find((value) => typeof value === "number" && value > 0);
+    const inputModalities = Array.isArray(record.input_modalities)
+      ? record.input_modalities
+      : [];
     rows.push({
       id: record.id,
       tools:
         capabilities.tool_calling === true ||
         capabilities.tools === true ||
         record.tool_calling === true,
-      vision: capabilities.vision === true || record.vision === true,
+      vision:
+        capabilities.vision === true ||
+        record.vision === true ||
+        inputModalities.includes("image"),
       contextWindow: typeof context === "number" ? context : undefined,
     });
   }
