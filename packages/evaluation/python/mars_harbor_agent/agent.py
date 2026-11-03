@@ -28,6 +28,7 @@ import os
 import re
 import shlex
 import tempfile
+import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -49,6 +50,8 @@ RESERVED_ENV_PREFIX = "MARS_AGENT_"
 # Adapter commands resolve binaries only here, never through a PATH the task image controls.
 SYSTEM_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 SYSTEM_ENV = {"PATH": SYSTEM_PATH}
+# Adapter-side commands (mkdir/chmod/id/chown/test) are short; none may stall a trial.
+SETUP_COMMAND_TIMEOUT_SEC = 60
 USAGE_FILE = "mars-usage.json"
 RESULT_FILE = "mars-result.json"
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
@@ -105,6 +108,7 @@ def load_candidate_components(path: Path) -> dict[str, str]:
 
 
 class MarsAgent(BaseAgent):
+    _clock = staticmethod(time.monotonic)  # injectable for tests
     capabilities = AgentCapabilities(base_url=True)
     # Harbor validates `--base-url/--api-key-name/--api-format` against this
     # spec; the bundle speaks OpenAI chat completions only.
@@ -214,12 +218,18 @@ class MarsAgent(BaseAgent):
         if not natives:
             raise MarsAgentConfigError("bundle is missing the pi_natives addon")
         await environment.exec(
-            f"mkdir -p {shlex.quote(str(CONTAINER_AGENT_DIR))} {shlex.quote(str(CONTAINER_STATE_DIR))}", env=SYSTEM_ENV
+            f"mkdir -p {shlex.quote(str(CONTAINER_AGENT_DIR))} {shlex.quote(str(CONTAINER_STATE_DIR))}",
+            env=SYSTEM_ENV,
+            timeout_sec=SETUP_COMMAND_TIMEOUT_SEC,
         )
         await environment.upload_file(binary, str(CONTAINER_AGENT_DIR / BUNDLE_BINARY))
         for native in natives:
             await environment.upload_file(native, str(CONTAINER_AGENT_DIR / native.name))
-        await environment.exec(f"chmod 0755 {shlex.quote(str(CONTAINER_AGENT_DIR / BUNDLE_BINARY))}", env=SYSTEM_ENV)
+        await environment.exec(
+            f"chmod 0755 {shlex.quote(str(CONTAINER_AGENT_DIR / BUNDLE_BINARY))}",
+            env=SYSTEM_ENV,
+            timeout_sec=SETUP_COMMAND_TIMEOUT_SEC,
+        )
         config_path = self.logs_dir / "mars-agent-config.json"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(self.provider_config(), indent=2, sort_keys=True), "utf-8")
@@ -252,11 +262,18 @@ class MarsAgent(BaseAgent):
         # argv: it is uploaded as a 0600 file that the bundle reads and unlinks
         # before any task command runs. (Deleting a variable inside a process
         # would not scrub /proc/<pid>/environ.)
+        started = self._clock()
         if key_value:
             credential_path = CONTAINER_STATE_DIR / CREDENTIAL_FILE
             await self._upload_credential(environment, key_value, credential_path)
             env["MARS_AGENT_CREDENTIAL"] = str(credential_path)
-        timeout_sec = max(1, self.trial_timeout_ms // 1000)
+        # The credential handover is charged to the trial budget: the bundle
+        # gets whatever is left of trial_timeout_ms, so run() as a whole stays
+        # bounded even when Harbor's own agent timeout is unset.
+        remaining_ms = self.trial_timeout_ms - int((self._clock() - started) * 1000)
+        if remaining_ms <= 0:
+            raise MarsAgentError("credential handover exhausted the trial timeout; refusing to start the bundle")
+        timeout_sec = max(1, remaining_ms // 1000)
         command = (
             f"cd {shlex.quote(str(self.workdir))} && "
             f"exec {shlex.quote(str(CONTAINER_AGENT_DIR / BUNDLE_BINARY))} "
@@ -287,21 +304,26 @@ class MarsAgent(BaseAgent):
         finally:
             os.unlink(host_path)
         quoted = shlex.quote(str(credential_path))
-        ident = await environment.exec("id -u && id -g", env=SYSTEM_ENV)
+        ident = await environment.exec("id -u && id -g", env=SYSTEM_ENV, timeout_sec=SETUP_COMMAND_TIMEOUT_SEC)
         if ident.return_code != 0 or len(ident.stdout.split()) != 2:
             raise MarsAgentError(f"could not determine the trial exec user: {ident.stderr.strip()}")
         uid, gid = ident.stdout.split()
         if not (uid.isdigit() and gid.isdigit()):
             raise MarsAgentError(f"unexpected id output: {ident.stdout!r}")
         secured = await environment.exec(
-            f"chown {uid}:{gid} {quoted} && chmod 0600 {quoted}", env=SYSTEM_ENV, user="root"
+            f"chown {uid}:{gid} {quoted} && chmod 0600 {quoted}",
+            env=SYSTEM_ENV,
+            timeout_sec=SETUP_COMMAND_TIMEOUT_SEC,
+            user="root",
         )
         if secured.return_code != 0:
             # No root exec available: fall back to the exec user's own chmod.
-            secured = await environment.exec(f"chmod 0600 {quoted}", env=SYSTEM_ENV)
+            secured = await environment.exec(
+                f"chmod 0600 {quoted}", env=SYSTEM_ENV, timeout_sec=SETUP_COMMAND_TIMEOUT_SEC
+            )
         if secured.return_code != 0:
             raise MarsAgentError(f"could not secure the credential file: {secured.stderr.strip()}")
-        readable = await environment.exec(f"test -r {quoted}", env=SYSTEM_ENV)
+        readable = await environment.exec(f"test -r {quoted}", env=SYSTEM_ENV, timeout_sec=SETUP_COMMAND_TIMEOUT_SEC)
         if readable.return_code != 0:
             raise MarsAgentError(f"credential file is not readable by uid {uid}; refusing to start the trial")
 

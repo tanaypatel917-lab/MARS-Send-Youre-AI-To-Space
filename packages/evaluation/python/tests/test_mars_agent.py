@@ -16,6 +16,7 @@ from mars_harbor_agent.agent import (
     MarsAgent,
     MarsAgentConfigError,
     MarsAgentError,
+    SETUP_COMMAND_TIMEOUT_SEC,
     SYSTEM_PATH,
 )
 
@@ -163,14 +164,17 @@ def test_run_passes_instruction_only_and_reports_usage(tmp_path, bundle, monkeyp
         {
             "command": f"chown 1000:1000 {cred} && chmod 0600 {cred}",
             "env": {"PATH": SYSTEM_PATH},
-            "timeout_sec": None,
+            "timeout_sec": SETUP_COMMAND_TIMEOUT_SEC,
             "user": "root",
         }
     ]
-    # Every adapter-side command resolves binaries through the fixed system PATH only.
+    # Every adapter-side command resolves binaries through the fixed system PATH
+    # only and is individually bounded; the bundle gets the trial budget.
     for c in env.commands:
         if c is not run_cmd:
             assert c["env"] == {"PATH": SYSTEM_PATH}, c
+            assert c["timeout_sec"] == SETUP_COMMAND_TIMEOUT_SEC, c
+    assert run_cmd["timeout_sec"] == 120
     assert "PATH" not in run_cmd["env"]
     assert [c["command"] for c in env.commands if c["command"].startswith("test -r ")] == [f"test -r {cred}"]
     assert env.commands.index(secure[0]) < env.commands.index(run_cmd)
@@ -271,5 +275,32 @@ def test_run_refuses_unreadable_credential(tmp_path, bundle, monkeypatch):
 
     asyncio.run(agent.setup(env))
     with pytest.raises(MarsAgentError, match="not readable by uid 1000"):
+        asyncio.run(agent.run("Do the task.", env, AgentContext()))
+    assert not any(c["command"].startswith("cd ") for c in env.commands)
+
+
+def test_credential_handover_is_charged_to_the_trial_timeout(tmp_path, bundle, monkeypatch):
+    monkeypatch.setenv("MARS_EVAL_API_KEY", "sk-not-real-secret")
+    import asyncio
+
+    def fake_clock(*samples: float):
+        it = iter(samples)
+        return lambda: next(it)
+
+    # handover took 45 s of a 120 s trial budget
+    agent = make_agent(tmp_path, bundle)
+    agent._clock = fake_clock(1000.0, 1045.0)
+    env = FakeEnvironment(usage=None, return_code=0)
+    asyncio.run(agent.setup(env))
+    asyncio.run(agent.run("Do the task.", env, AgentContext()))
+    run_cmd = [c for c in env.commands if c["command"].startswith("cd ")][0]
+    assert run_cmd["timeout_sec"] == 75
+
+    # handover stalled for the whole budget
+    agent = make_agent(tmp_path, bundle)
+    agent._clock = fake_clock(1000.0, 1120.0)
+    env = FakeEnvironment(usage=None, return_code=0)
+    asyncio.run(agent.setup(env))
+    with pytest.raises(MarsAgentError, match="exhausted the trial timeout"):
         asyncio.run(agent.run("Do the task.", env, AgentContext()))
     assert not any(c["command"].startswith("cd ") for c in env.commands)
