@@ -39,6 +39,7 @@ import {
   optionalInstructionCapacity,
   type RuntimeObservation,
   type RuntimeOutcome,
+  type RuntimePatch,
   type RuntimeSession,
   type RuntimeSessionOptions,
   type RuntimeTools,
@@ -56,6 +57,17 @@ import {
   FrozenCollaborationSchema,
   type WorkbenchCollaboration,
 } from "./collaboration-context";
+import {
+  type FrozenInstructions,
+  FrozenInstructionsSchema,
+  freezeInstructions,
+  hookBlockMessage,
+  hookResultRecord,
+  renderPatchResult,
+  repositorySkillsSource,
+  type WorkbenchConventions,
+  withFrozenInstructions,
+} from "./conventions-context";
 import {
   FrozenMemorySchema,
   freezeMemory,
@@ -114,6 +126,7 @@ const launchSchema = z
     memory: FrozenMemorySchema.optional(),
     skills: FrozenSkillsSchema.optional(),
     repository_map: FrozenRepositoryMapSchema.optional(),
+    instructions: FrozenInstructionsSchema.optional(),
     routing: FrozenRoutingSchema.optional(),
     collaboration: FrozenCollaborationSchema.optional(),
   })
@@ -169,6 +182,8 @@ export interface WorkbenchHostOptions {
   research?: WorkbenchResearch;
   /** Host-owned watch-skill perception and verification; absent means no watch tools. */
   watch?: WorkbenchWatch;
+  /** Repository conventions (instruction files, skill folders, hooks, slash commands, apply_patch). */
+  conventions?: WorkbenchConventions;
   hostPrivateRoots?: string[];
   runtimeFactory?: (options: RuntimeSessionOptions) => Promise<RuntimeSession>;
 }
@@ -1182,12 +1197,76 @@ export async function createWorkbenchHost(
     if ((await options.store.inspect(context, taskId)).status !== "running")
       throw new WorkbenchError("conflict");
   };
+  /**
+   * Repository hooks run through the same approval-gated sandboxed execute
+   * path as the model's own commands; without execute approval they are
+   * recorded as skipped. Every result lands in the task's events, and a
+   * pre-tool hook exiting 2 blocks the tool call (Claude Code semantics).
+   */
+  const HOOK_BUDGET_MAX_MS = 300_000;
+  const dispatchHooks = async (
+    taskId: string | undefined,
+    workspace: WorkspaceRef,
+    approvals: Approvals,
+    budget: Budget,
+    event: "session-start" | "pre-tool" | "post-tool",
+    hookContext: { tool?: string; path?: string },
+  ): Promise<void> => {
+    const hooks = options.conventions?.hooks;
+    if (!hooks) return;
+    const context = internalContext(options.scope);
+    const decode = async (ref: ArtifactRef) =>
+      new TextDecoder().decode(await options.store.artifacts.get(context, ref));
+    const results = await hooks.run(
+      event,
+      hookContext,
+      async (argv, timeoutMs) => {
+        if (!approvals.execute || !options.canExecute)
+          return { skipped: "execute approval not granted" };
+        const result = await options.workspace.execute(
+          context,
+          workspace,
+          argv,
+          {
+            ...budget,
+            max_duration_ms: Math.max(
+              1,
+              Math.min(timeoutMs, HOOK_BUDGET_MAX_MS, budget.max_duration_ms),
+            ),
+          },
+        );
+        return {
+          exit_code: result.exit_code,
+          stdout: await decode(result.stdout),
+          stderr: await decode(result.stderr),
+        };
+      },
+    );
+    if (taskId && results.length > 0)
+      await options.store
+        .appendEvent(context, taskId, {
+          event_type: "tool.completed",
+          producer: "@mars/workbench",
+          run_id: randomUUID(),
+          versions: [{ component: "@mars/workbench", revision: "0.0.1" }],
+          payload: {
+            operation: "hook.completed",
+            event,
+            ...(hookContext.tool ? { tool: hookContext.tool } : {}),
+            results: results.map(hookResultRecord),
+          },
+        })
+        .catch(() => undefined);
+    if (event === "pre-tool" && results.some((result) => result.blocked))
+      throw new Error(hookBlockMessage(results));
+  };
   const toolsFor = (
     workspace: WorkspaceRef,
     approvals: Approvals,
     budget: Budget,
     assertActive: () => Promise<void>,
     writePaths: readonly string[] = [],
+    hookTaskId?: string,
   ): RuntimeTools => {
     const authorize = async (permission: keyof Approvals) => {
       if (
@@ -1198,49 +1277,179 @@ export async function createWorkbenchHost(
       await assertActive();
       return internalContext(options.scope);
     };
+    const hooked = async <T>(
+      tool: string,
+      path: string | undefined,
+      work: () => Promise<T>,
+    ): Promise<T> => {
+      const hookContext = path === undefined ? { tool } : { tool, path };
+      await dispatchHooks(
+        hookTaskId,
+        workspace,
+        approvals,
+        budget,
+        "pre-tool",
+        hookContext,
+      );
+      const result = await work();
+      await dispatchHooks(
+        hookTaskId,
+        workspace,
+        approvals,
+        budget,
+        "post-tool",
+        hookContext,
+      );
+      return result;
+    };
     return {
-      async read(path) {
-        const context = await authorize("read");
-        return options.store.artifacts.get(
-          context,
-          await options.workspace.read(context, workspace, path),
-        );
-      },
-      async write(path, bytes) {
-        const context = await authorize("write");
-        if (writePaths.length > 0 && !withinClaimedPaths(path, writePaths))
-          throw new WorkbenchError("forbidden");
-        const artifact = await options.store.artifacts.put(
-          context,
-          bytes,
-          "application/octet-stream",
-        );
-        await authorize("write");
-        await options.workspace.write(context, workspace, path, artifact);
-      },
-      async execute(argv) {
-        // Execution cannot be confined to claimed paths, so a path-scoped
-        // child does not execute at all.
-        if (writePaths.length > 0) throw new WorkbenchError("forbidden");
-        const context = await authorize("execute");
-        const result = await options.workspace.execute(
-          context,
-          workspace,
-          argv,
-          budget,
-        );
-        return {
-          exit_code: result.exit_code,
-          stdout: new TextDecoder().decode(
-            await options.store.artifacts.get(context, result.stdout),
-          ),
-          stderr: new TextDecoder().decode(
-            await options.store.artifacts.get(context, result.stderr),
-          ),
-        };
-      },
+      read: (path) =>
+        hooked("mars_read", path, async () => {
+          const context = await authorize("read");
+          return options.store.artifacts.get(
+            context,
+            await options.workspace.read(context, workspace, path),
+          );
+        }),
+      write: (path, bytes) =>
+        hooked("mars_write", path, async () => {
+          const context = await authorize("write");
+          if (writePaths.length > 0 && !withinClaimedPaths(path, writePaths))
+            throw new WorkbenchError("forbidden");
+          const artifact = await options.store.artifacts.put(
+            context,
+            bytes,
+            "application/octet-stream",
+          );
+          await authorize("write");
+          await options.workspace.write(context, workspace, path, artifact);
+        }),
+      execute: (argv) =>
+        hooked("mars_execute", undefined, async () => {
+          // Execution cannot be confined to claimed paths, so a path-scoped
+          // child does not execute at all.
+          if (writePaths.length > 0) throw new WorkbenchError("forbidden");
+          const context = await authorize("execute");
+          const result = await options.workspace.execute(
+            context,
+            workspace,
+            argv,
+            budget,
+          );
+          return {
+            exit_code: result.exit_code,
+            stdout: new TextDecoder().decode(
+              await options.store.artifacts.get(context, result.stdout),
+            ),
+            stderr: new TextDecoder().decode(
+              await options.store.artifacts.get(context, result.stderr),
+            ),
+          };
+        }),
       stop: () =>
         options.workspace.stop(internalContext(options.scope), workspace),
+    };
+  };
+  /**
+   * Host-bound apply_patch: the applier only sees a filesystem seam whose
+   * every operation re-authorizes against the task's write approval and
+   * claimed paths and goes through the workspace provider. Declared only for
+   * write-approved sessions when the host has an applier.
+   */
+  const patchFor = (
+    workspace: WorkspaceRef,
+    approvals: Approvals,
+    budget: Budget,
+    assertActive: () => Promise<void>,
+    taskId: string,
+    writePaths: readonly string[] = [],
+  ): { patch: RuntimePatch } | Record<string, never> => {
+    const applyPatch = options.conventions?.applyPatch;
+    if (!applyPatch || !approvals.write) return {};
+    const authorize = async () => {
+      if (!approvals.write) throw new WorkbenchError("forbidden");
+      await assertActive();
+      return internalContext(options.scope);
+    };
+    const claimed = (path: string) => {
+      if (writePaths.length > 0 && !withinClaimedPaths(path, writePaths))
+        throw new WorkbenchError("forbidden");
+    };
+    const notFound = (error: unknown) =>
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code: unknown }).code === "not_found";
+    const readText = async (path: string): Promise<string | null> => {
+      const context = await authorize();
+      let ref: ArtifactRef;
+      try {
+        ref = await options.workspace.read(context, workspace, path);
+      } catch (error) {
+        if (notFound(error)) return null;
+        throw error;
+      }
+      const bytes = await options.store.artifacts.get(context, ref);
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    };
+    const files = {
+      read: readText,
+      async write(path: string, text: string) {
+        const context = await authorize();
+        claimed(path);
+        const artifact = await options.store.artifacts.put(
+          context,
+          new TextEncoder().encode(text),
+          "application/octet-stream",
+        );
+        await authorize();
+        await options.workspace.write(context, workspace, path, artifact);
+      },
+      async remove(path: string) {
+        const context = await authorize();
+        claimed(path);
+        await options.workspace.remove(context, workspace, path);
+      },
+      async exists(path: string) {
+        try {
+          return (await readText(path)) === null ? null : ("file" as const);
+        } catch (error) {
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            (error as { code: unknown }).code === "policy"
+          )
+            return "directory" as const;
+          throw error;
+        }
+      },
+    };
+    return {
+      patch: {
+        async apply(patch) {
+          await authorize();
+          const hookContext = { tool: "mars_apply_patch" };
+          await dispatchHooks(
+            taskId,
+            workspace,
+            approvals,
+            budget,
+            "pre-tool",
+            hookContext,
+          );
+          const result = await applyPatch(patch, files);
+          await dispatchHooks(
+            taskId,
+            workspace,
+            approvals,
+            budget,
+            "post-tool",
+            hookContext,
+          );
+          return renderPatchResult(result);
+        },
+      },
     };
   };
 
@@ -1464,7 +1673,11 @@ export async function createWorkbenchHost(
         throw new WorkbenchError("conflict");
       if (params.approvals.execute && !options.canExecute)
         throw new WorkbenchError("forbidden");
-      const baseInstruction = `${task.request}\n\nAcceptance criteria:\n${task.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
+      // A request that names a repository slash command (`/name args`) is
+      // expanded from the command file; the durable task keeps the original.
+      const expanded = options.conventions?.commands?.expand(task.request);
+      const request = expanded ? expanded.prompt : task.request;
+      const baseInstruction = `${request}\n\nAcceptance criteria:\n${task.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
       if (baseInstruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH)
         throw new WorkbenchError("too_large");
       // The coordinator runs under the room budget minus the delegation pool
@@ -1494,6 +1707,7 @@ export async function createWorkbenchHost(
               delegation: Boolean(delegation),
               research: Boolean(options.research),
               watch: Boolean(options.watch),
+              patch: Boolean(options.conventions?.applyPatch),
               instruction: baseInstruction,
             }) + MIN_INITIAL_OUTPUT_RESERVE,
           );
@@ -1514,6 +1728,7 @@ export async function createWorkbenchHost(
         delegation: Boolean(delegation),
         research: Boolean(options.research),
         watch: Boolean(options.watch),
+        patch: Boolean(options.conventions?.applyPatch),
         instruction: baseInstruction,
       });
       let memory: z.infer<typeof FrozenMemorySchema> | undefined;
@@ -1531,10 +1746,14 @@ export async function createWorkbenchHost(
       }
       let instruction = withFrozenMemory(baseInstruction, memory);
       let skills: FrozenSkills | undefined;
-      if (options.skills && params.approvals.read) {
+      const skillsSource = repositorySkillsSource(
+        options.skills,
+        options.conventions?.repositorySkills,
+      );
+      if (skillsSource && params.approvals.read) {
         try {
           skills = await freezeCurrentSkills(
-            options.skills,
+            skillsSource,
             instruction,
             capacity -
               (serializedBytes(instruction) - serializedBytes(baseInstruction)),
@@ -1543,6 +1762,20 @@ export async function createWorkbenchHost(
           throw new WorkbenchError("unavailable");
         }
         instruction = withFrozenSkills(instruction, skills);
+      }
+      // Repository instructions come from the trusted checkout, not from the
+      // workspace, so they do not depend on read approval; they are frozen
+      // whole or omitted.
+      let instructions: FrozenInstructions | undefined;
+      const foundInstructions = options.conventions?.instructions;
+      if (foundInstructions) {
+        instructions = freezeInstructions(
+          foundInstructions,
+          instruction,
+          capacity -
+            (serializedBytes(instruction) - serializedBytes(baseInstruction)),
+        );
+        instruction = withFrozenInstructions(instruction, instructions);
       }
       const remainingCapacity =
         capacity -
@@ -1668,6 +1901,15 @@ export async function createWorkbenchHost(
             params.approvals,
             running.budget,
             activeTask(running.task_id),
+            [],
+            task.task_id,
+          ),
+          ...patchFor(
+            workspace,
+            params.approvals,
+            running.budget,
+            activeTask(running.task_id),
+            task.task_id,
           ),
           ...(collaboration
             ? roomToolsFor(
@@ -1704,6 +1946,7 @@ export async function createWorkbenchHost(
           ...(memory ? { memory } : {}),
           ...(skills ? { skills } : {}),
           ...(repositoryMap ? { repository_map: repositoryMap } : {}),
+          ...(instructions ? { instructions } : {}),
           ...(routing ? { routing } : {}),
           ...(collaboration ? { collaboration } : {}),
         });
@@ -1721,6 +1964,36 @@ export async function createWorkbenchHost(
         for (const observation of initialObservations)
           await persistObservation(observation);
         bound = true;
+        if (options.conventions) {
+          const omittedInstructions =
+            Boolean(foundInstructions) && !instructions;
+          if (expanded || omittedInstructions)
+            await options.store
+              .appendEvent(internalContext(options.scope), task.task_id, {
+                event_type: "tool.completed",
+                producer: "@mars/workbench",
+                run_id: randomUUID(),
+                versions: [{ component: "@mars/workbench", revision: "0.0.1" }],
+                payload: {
+                  operation: "conventions.applied",
+                  ...(expanded ? { command: expanded.name } : {}),
+                  instructions: instructions
+                    ? "frozen"
+                    : foundInstructions
+                      ? "omitted"
+                      : "none",
+                },
+              })
+              .catch(() => undefined);
+          await dispatchHooks(
+            task.task_id,
+            workspace,
+            params.approvals,
+            running.budget,
+            "session-start",
+            {},
+          );
+        }
         run(
           running,
           workspace,
@@ -1806,6 +2079,15 @@ export async function createWorkbenchHost(
             launch.approvals,
             running.budget,
             activeTask(running.task_id),
+            [],
+            task.task_id,
+          ),
+          ...patchFor(
+            workspace,
+            launch.approvals,
+            running.budget,
+            activeTask(running.task_id),
+            task.task_id,
           ),
           ...(launch.collaboration
             ? roomToolsFor(

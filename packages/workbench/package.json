@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@mars/codex-tools": "workspace:*",
     "@mars/collaboration": "workspace:*",
     "@mars/context": "workspace:*",
     "@mars/contracts": "workspace:*",
