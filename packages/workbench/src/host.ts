@@ -45,6 +45,7 @@ import {
   selectExecutionModel,
 } from "@mars/execution";
 import type { ModelProviderRegistry } from "@mars/providers";
+import type { Turn } from "@mars/review";
 import type { DurableTaskStore } from "@mars/tasks";
 import { z } from "zod";
 import { chooseChildModel, isReviewerRole } from "./child-model";
@@ -85,6 +86,14 @@ import {
 } from "./research-context";
 import { WorkbenchError, type WorkbenchOperations } from "./server";
 import {
+  type FrozenSkills,
+  FrozenSkillsSchema,
+  freezeCurrentSkills,
+  validateFrozenSkills,
+  type WorkbenchSkills,
+  withFrozenSkills,
+} from "./skills-context";
+import {
   type FrozenRouting,
   FrozenRoutingSchema,
   routeLaunch,
@@ -102,6 +111,7 @@ const launchSchema = z
     workspace: WorkspaceRefSchema,
     cwd: z.string().min(1).refine(isAbsolute),
     memory: FrozenMemorySchema.optional(),
+    skills: FrozenSkillsSchema.optional(),
     repository_map: FrozenRepositoryMapSchema.optional(),
     routing: FrozenRoutingSchema.optional(),
     collaboration: FrozenCollaborationSchema.optional(),
@@ -122,6 +132,19 @@ export interface WorkspaceHost extends ExecutionProvider {
   ): Promise<void>;
 }
 
+/**
+ * Background review hooks. The host only reports foreground turns; the
+ * service owns the runner and its lifecycle, so `close()` never stops it.
+ */
+export interface WorkbenchReview {
+  beginLiveTurn(sessionId: string): void;
+  endLiveTurn(sessionId: string): void;
+  recordTurn(turn: Turn): void;
+}
+
+/** Bound on each transcript message handed to background review. */
+const REVIEW_TRANSCRIPT_LENGTH = 8_000;
+
 export interface WorkbenchHostOptions {
   scope: Scope;
   workspaceLabel: string;
@@ -131,6 +154,8 @@ export interface WorkbenchHostOptions {
   registry: ModelProviderRegistry;
   canExecute: boolean;
   memory?: WorkbenchMemory;
+  skills?: WorkbenchSkills;
+  review?: WorkbenchReview;
   repositoryMap?: Pick<RepositoryMapProvider, "map">;
   specialists?: WorkbenchSpecialists;
   collaboration?: WorkbenchCollaboration;
@@ -335,6 +360,10 @@ export async function createWorkbenchHost(
           value.memory.scope.workspace_id !== task.scope.workspace_id
         )
           throw new WorkbenchError("internal_error");
+      }
+      if (value.skills) {
+        validateFrozenSkills(value.skills);
+        if (!value.approvals.read) throw new WorkbenchError("internal_error");
       }
       if (
         value.task_id !== task.task_id ||
@@ -907,6 +936,54 @@ export async function createWorkbenchHost(
     }
     await rename(temporary, join(dir, "launch.json"));
   };
+  /**
+   * Only successful foreground turns reach background review; `run` is never
+   * used for delegated children, which execute under the child runner.
+   */
+  /** Model iterations = assistant messages in the Oh My Pi journal. */
+  const modelIterations = (runtime: RuntimeSession): number => {
+    try {
+      return runtime.journalSnapshot().entries.filter((entry) => {
+        const record = entry as {
+          type?: unknown;
+          message?: { role?: unknown };
+        } | null;
+        return (
+          record?.type === "message" && record.message?.role === "assistant"
+        );
+      }).length;
+    } catch {
+      return 0;
+    }
+  };
+  const recordReviewTurn = (
+    runtime: RuntimeSession,
+    instruction: string,
+    content: string,
+    iterationsBefore: number,
+  ) => {
+    if (!options.review) return;
+    try {
+      options.review.recordTurn({
+        sessionId: runtime.sessionId,
+        origin: "foreground",
+        iterations: Math.max(1, modelIterations(runtime) - iterationsBefore),
+        transcript: [
+          {
+            role: "user",
+            content: instruction.slice(0, REVIEW_TRANSCRIPT_LENGTH),
+          },
+          {
+            role: "assistant",
+            content: content.slice(0, REVIEW_TRANSCRIPT_LENGTH),
+          },
+        ],
+        success: true,
+      });
+    } catch {
+      // Review is advisory; it never affects the task.
+    }
+  };
   const run = (
     task: Task,
     workspace: WorkspaceRef,
@@ -915,6 +992,7 @@ export async function createWorkbenchHost(
     steeringEventIds: string[] = [],
     remainingSteering = false,
     collaboration?: FrozenCollaboration,
+    reviewable = false,
   ) => {
     const closeRoom = (mode: "drain" | "cancel") =>
       collaboration
@@ -923,6 +1001,12 @@ export async function createWorkbenchHost(
     active.set(task.task_id, runtime);
     const job = (async () => {
       try {
+        try {
+          options.review?.beginLiveTurn(runtime.sessionId);
+        } catch {
+          // Review is advisory; it never affects the task.
+        }
+        const iterationsBefore = reviewable ? modelIterations(runtime) : 0;
         const outcome = await runtime.run(instruction);
         if (options.memory) {
           const context = internalContext(options.scope);
@@ -977,6 +1061,15 @@ export async function createWorkbenchHost(
         });
         if (status !== "paused")
           await closeRoom(status === "cancelled" ? "cancel" : "drain");
+        // Read-denied tasks never feed review: the reviewer would otherwise
+        // see saved memory and skills the task itself was not allowed to read.
+        if (status === "completed" && reviewable)
+          recordReviewTurn(
+            runtime,
+            instruction,
+            outcome.content,
+            iterationsBefore,
+          );
         await reconcileResearch(task.task_id);
       } catch {
         await closeRoom("cancel");
@@ -992,6 +1085,11 @@ export async function createWorkbenchHost(
             .catch(() => undefined);
         await reconcileResearch(task.task_id);
       } finally {
+        try {
+          options.review?.endLiveTurn(runtime.sessionId);
+        } catch {
+          // Review is advisory; it never affects the task.
+        }
         await runtime.dispose().catch(() => undefined);
         if (active.get(task.task_id) === runtime) {
           active.delete(task.task_id);
@@ -1390,6 +1488,20 @@ export async function createWorkbenchHost(
         }
       }
       let instruction = withFrozenMemory(baseInstruction, memory);
+      let skills: FrozenSkills | undefined;
+      if (options.skills && params.approvals.read) {
+        try {
+          skills = await freezeCurrentSkills(
+            options.skills,
+            instruction,
+            capacity -
+              (serializedBytes(instruction) - serializedBytes(baseInstruction)),
+          );
+        } catch {
+          throw new WorkbenchError("unavailable");
+        }
+        instruction = withFrozenSkills(instruction, skills);
+      }
       const remainingCapacity =
         capacity -
         (serializedBytes(instruction) - serializedBytes(baseInstruction));
@@ -1548,6 +1660,7 @@ export async function createWorkbenchHost(
           approvals: params.approvals,
           workspace: WorkspaceRefSchema.parse(workspace),
           ...(memory ? { memory } : {}),
+          ...(skills ? { skills } : {}),
           ...(repositoryMap ? { repository_map: repositoryMap } : {}),
           ...(routing ? { routing } : {}),
           ...(collaboration ? { collaboration } : {}),
@@ -1566,7 +1679,16 @@ export async function createWorkbenchHost(
         for (const observation of initialObservations)
           await persistObservation(observation);
         bound = true;
-        run(running, workspace, runtime, instruction, [], false, collaboration);
+        run(
+          running,
+          workspace,
+          runtime,
+          instruction,
+          [],
+          false,
+          collaboration,
+          params.approvals.read,
+        );
         return running;
       } catch (error) {
         await runtime?.dispose().catch(() => undefined);
@@ -1674,6 +1796,7 @@ export async function createWorkbenchHost(
           steeringEventIds,
           steeringEventIds.length < queued.length,
           launch.collaboration,
+          launch.approvals.read,
         );
         return running;
       } catch (error) {

@@ -15,7 +15,7 @@ The local workbench connects the VS Code client and CLI to durable tasks, isolat
 - Offline integration tests using the actual SDK with injected model responses; these are **not** live-model or real VS Code UI acceptance evidence.
 - A CLI diagnostic, source-pin validator, tests, and CI.
 
-The memory service, skill service, datasets, training, and specialist serving are **not implemented**. Independent evaluation (`@mars/evaluation`, Harbor / Terminal-Bench 2) and prompt optimisation (`@mars/optimization`, GEPA worker) exist with offline tests and recorded live checks, but no real-model baseline/candidate comparison has passed yet ([documentation/EVALUATION.md](documentation/EVALUATION.md)). Research has a durable control plane and an offline-verified worker that `mars serve --research-search brave|searxng|tavily` runs for every session ([documentation/RESEARCH_WORKER.md](documentation/RESEARCH_WORKER.md)); no live search provider or model run has been verified. The integration trust gate is a library, not an enabled third-party loader or approval UI. Real-model and real IDE acceptance remain unverified. See [local workbench setup and evidence limits](documentation/LOCAL_WORKBENCH.md) and [milestone gates](documentation/MILESTONE_0.md).
+Datasets, training, and specialist serving are **not implemented**. Independent evaluation (`@mars/evaluation`, Harbor / Terminal-Bench 2) and prompt optimisation (`@mars/optimization`, GEPA worker) exist with offline tests and recorded live checks, but no real-model baseline/candidate comparison has passed yet ([documentation/EVALUATION.md](documentation/EVALUATION.md)). The memory service is wired into sessions as frozen, untrusted-labelled context; the skill store and proposal-only background review exist with offline evidence only (see [Milestone 3](#milestone-3-skills-and-background-review-offline-only)). Research has a durable control plane and an offline-verified worker that `mars serve --research-search brave|searxng|tavily` runs for every session ([documentation/RESEARCH_WORKER.md](documentation/RESEARCH_WORKER.md)); no live search provider or model run has been verified. The integration trust gate is a library, not an enabled third-party loader or approval UI. Real-model and real IDE acceptance remain unverified. See [local workbench setup and evidence limits](documentation/LOCAL_WORKBENCH.md) and [milestone gates](documentation/MILESTONE_0.md).
 
 ## Setup
 
@@ -115,11 +115,15 @@ The registry layers built-in presets, user configuration, and—only with explic
 
 - **Oh My Pi** is the sole live execution/session/tool owner. Its append-only journal will be the canonical history; any MARS history index is a rebuildable projection, not a second transcript writer.
 - **One MARS memory service** owns profile/project facts and scoped recall, adapting Hermes semantics. Knowledge artifacts and procedures are separate stores.
-- **One MARS skill service** owns procedure revisions/drafts/undo; **one review scheduler** proposes learning changes. Do not run upstream memory/review daemons independently beside them.
+- **One MARS skill service** (`@mars/skills`) owns procedure revisions/drafts/undo; **one review scheduler** (`@mars/review`) proposes learning changes and can never accept them. Do not run upstream memory/review daemons independently beside them.
 - **Cline patterns** inform editor presentation/checkpoints, not another live execution engine.
 - Evaluation, optimization, remote workspaces, browser work, training, and serving are versioned worker/provider adapters. A workspace interface is not an OS sandbox.
 
 The exact [source manifest](sources/manifest.json) distinguishes audited source HEADs from installed release artifacts. A matching version string is not proof of source/binary equivalence. No upstream source is vendored; retain artifact-specific notices before redistribution.
+
+## Milestone 3: skills and background review (offline only)
+
+`@mars/skills` stores `SKILL.md` procedures under the private state directory (`<state>/skills`, default `~/.mars/workbench/<project-id>/skills`) with versions, drafts, proposals, a change journal and `undoReview`; `@mars/review` is the single proposal-only background reviewer, scheduled after completed foreground tasks and logging hashes only to `<state>/review/review.jsonl`. Review proposals go into `@mars/memory` and `@mars/skills` proposal queues; a human (or the host) accepts or rejects them, and acceptance is revision-fenced. Review models are selected through the provider registry free-first and a paid model is refused. All of this is verified by offline tests with injected fake model gateways; no review has run against a live model and no CLI command accepts, rejects or undoes proposals yet. See [documentation/SKILLS.md](documentation/SKILLS.md).
 
 ## Next gate
 
