@@ -10,9 +10,19 @@ Covers all three repositories:
 
 Authoritative spec: `documentation/MASTER_SPECIFICATION.md` (10 milestones, section 16).
 
-## Status (2026-11-02)
+## Status (2026-11-03)
 
-All 67 PRs across the three repos are merged; no open PRs. CI green on `main` here (`Foundation checks`) and in `mars-platform` (`CI`). `MARS` builds on Vercel only.
+Merged since the recovery started (2026-11-02): #42 HANDOFF, #43 research worker in `mars serve`, #44 MARS Output Format, #48 Milestone 3 skills/review/threat scanner, #49 `@mars/watch`, #52 Milestone 4 evaluation + GEPA; `MARS` #24 `/how` landscape. CI green on `main` here (`Foundation checks`) and in `mars-platform` (`CI`). `MARS` builds on Vercel only.
+
+### In flight (child sessions, one PR each against `main`, none merged)
+
+| Workstream | PR | State |
+| --- | --- | --- |
+| Codex tooling (`@mars/codex-tools`: attributed `apply_patch` port, sandbox/approval policy mapping, `AGENTS.md`/`CLAUDE.md` discovery) + Claude Code conventions in `@mars/skills` (skill discovery across `.claude/.codex/.agents`, `.mars/hooks.json`, slash commands), `documentation/COMPATIBILITY.md` | #53 | open, review in progress |
+| graphify code knowledge graph (`@mars/knowledge-graph`, derived artifact in `@mars/context`, `mars_graph_build`/`mars_graph_query`) | #54 | open, CI green, review findings fixed |
+| Obsidian-compatible memory vault (`@mars/memory-vault`, `mars vault export\|import\|status`, `documentation/MEMORY_VAULT.md`) | #56 → #54 branch | open, folding into #54 |
+| OmniRoute as an optional self-hosted provider gateway + free-tier catalog importer | #55 | open, in progress |
+| UI design prompt and specification (`documentation/UI_PROMPT.md`: terminal client + first MARS Shell spec; Claude Code/Codex usability, Hermes/Oh My Pi design) | — | drafting, five product-research children running |
 
 | Spec milestone | State | Where |
 | --- | --- | --- |
@@ -37,7 +47,7 @@ Everything is verified offline only: fixtures, injected model responses, `model_
 
 ### Unmerged branches worth knowing about
 
-- `MARS`: `origin/devin/v5-landscape{,-ground,-sky,-colony,-flora}` — a full Martian landscape for `/how` (~1.9k lines, last commit 2026-11-01, 34 commits behind `main`). `devin/v5-passes`, `devin/v5-carousel` are abandoned alternatives.
+- `MARS`: the `/how` landscape (`v5-landscape` + `v5-landscape-ground`) landed in #24 with quality tiers, phone layout and reduced motion; a recorded end-to-end run (five review frames, carousel, stele, orbit, rewind, sound, phone) is attached to that PR. `devin/v5-passes`, `devin/v5-carousel` remain abandoned alternatives. Frame times were measured on software GL only; real low-end hardware is unverified.
 
 ## Decisions
 
@@ -57,6 +67,10 @@ Everything is verified offline only: fixtures, injected model responses, `model_
 - Local models: register them with `mars models add --provider ollama ...`; nothing local goes into `BUILTIN_MODELS` because the default route would then hit an unreachable endpoint. Finding recorded in `documentation/evidence/local-model-run.txt`: with `qwen3-coder:30b` the fixed MARS system prompt deterministically produces text-form tool calls that Ollama does not parse, so a real-model comparison on CPU needs an accepted prompt proposal or another model.
 - watch-skill (MIT, Python 3.11+) is an external runtime, never a second loop: `@mars/watch` drives the CLI as an argv-only subprocess with an env allowlist, bounded roots, offline flags and a doctor gate (`version` must be 1.4.3, `doctor --no-fix --json` must be ok); if either fails the tools are `unavailable`/`inconclusive`, never `pass`. THE LOOP is `visual_advisory` and never `verified`; only a `verify` run with a passed required deterministic check at `deterministic_local`/`isolated_local` is. Screen/window capture is off for every role until the user sets `allow_screen_capture`; which roles may capture by default is an open product decision for the owner. `remote_attested` is refused because upstream does not implement it.
 - Vendored upstream text is allowed when copied verbatim with its license and a NOTICE (`skills/vendor/watch-skill`); the skill service (`@mars/skills`, ported on a separate branch) loads it as a read-only library — see the loader note there.
+- Screen capture shipped with #49 as off for every role; the owner has not widened it. Any change is a `WatchPolicy` default, not a per-tool exception.
+- Outside tooling is adopted by licence: Apache-2.0 code (openai/codex `apply_patch`, graphify) may be ported or pinned with attribution and NOTICE; Claude Code is proprietary, so only its file formats and conventions are implemented; Obsidian is proprietary, so the vault is plain Markdown we write ourselves. SQLite memory and the skill store stay the only owners; graphs and vaults are derived or mirrors.
+- OmniRoute (cheaper-inference/OmniRoute, MIT) is approved by the owner as an optional, self-hosted, loopback-bound provider gateway. MARS keeps model policy and paid consent; OmniRoute's MCP/A2A features, web-session providers (ChatGPT/Claude/Grok/Gemini Web) and anything it flags as terms-risk are excluded by default; its token-compression savings are unverified and off.
+- UI direction from the owner: usability of Claude Code and Codex, visual design of Hermes and Oh My Pi, for both the terminal client and the MARS Shell desktop app. `documentation/UI_PROMPT.md` (in progress) is the first MARS Shell specification.
 
 ## Next steps
 
@@ -65,7 +79,7 @@ Dispatched 2026-11-02 as parallel child sessions, each opening its own PR agains
 1. ~~Wire `@mars/research-worker` into `mars serve`~~ — done (`WorkbenchServiceOptions.research`, `mars serve --research-search`, `mars doctor` research section). Remaining: a human run with a real Brave/Tavily/SearXNG endpoint and a free model to verify live mode; recorded provider responses as fixtures.
 2. Milestone 4 (delivered in the M4 PR; follow-ups): run a baseline-vs-candidate `terminal-bench-sample@2.0` comparison with a real tool-calling model and record it under `documentation/evidence/`; run one bounded GEPA optimisation with a real reflection model and publish the proposal report (improvement or not); evaluate a system-prompt proposal that restores Qwen3-Coder tool calling through the proposal gate instead of editing `SYSTEM_PROMPT` directly.
 3. ~~Milestone 3: bring `@mars/skills` and the proposal-only review runner into this repo~~ — landed by the Milestone 3 PR (offline-verified only).
-4. `MARS` site: rebase and land the `/how` landscape branches.
+4. ~~`MARS` site: rebase and land the `/how` landscape branches~~ — done (#24). Remaining: lite/mid tier cut-offs on real low-end hardware.
 
 5. Output format follow-ups: a host connector registry so `app://` triggers resolve to real tools (today both clients list them as unresolved); host-side `processOutput` on the final `text/plain` artifact plus an explicit final-response role in task metadata (the VS Code client infers it from a bare `text/plain` artifact on the task); live-model and real-window verification.
 6. Wire `@mars/watch` into `mars serve`: a `--watch-command`/venv option, a `WATCH_DATA_DIR` under the state root, policy flags (`allow_screen_capture`, `allow_network_sources`, `allow_cloud_models`), then run the real CLI end to end (`watch` on a local file, `loop start` on a loopback URL with Playwright) and record the commands and results in `documentation/WATCH.md`. Done so far through the wrapper against the real 1.4.3 CLI: doctor gate, `verify checks/run/show`, `loop status` (`packages/watch/src/real-cli.test.ts`, opt-in via `MARS_WATCH_REAL_CLI`).
@@ -78,7 +92,9 @@ Milestone 3 follow-ups:
 - Scope the skill store by owner/project (it is per state directory) and add relevance-based selection instead of size-bounded `list()`.
 - Evaluation gate between proposal and acceptance (spec: evaluate before accept) once Milestone 4 provides verifiers.
 
-Parked: the MARS Shell desktop app (needs a description from the owner). Open product decision: which agent roles, if any, may run `mars_watch_capture` on the user's screen by default (currently none).
+Dispatched 2026-11-03 (see "In flight"): Codex tooling + Claude conventions (#53), graphify + memory vault (#54/#56), OmniRoute gateway (#55), UI prompt. After they land: wire `mars_apply_patch`, hooks and the knowledge graph into the default `mars serve` path; `mars vault` round-trip on a real vault; a live `omniroute` route with a real free tier.
+
+MARS Shell desktop: no longer parked for lack of a description — `documentation/UI_PROMPT.md` becomes its spec; implementation starts once that PR lands. Open product decision still with the owner: which agent roles, if any, may run `mars_watch_capture` on the user's screen by default (currently none).
 
 ## How to verify locally
 
