@@ -38,6 +38,7 @@ import { createMemoryStore } from "@mars/memory";
 import type { ModelProviderRegistry } from "@mars/providers";
 import { loadModelRegistry } from "@mars/providers";
 import type { Turn } from "@mars/review";
+import { CommandError } from "@mars/skills";
 import type { RoutingRequest } from "@mars/specialists";
 import { createTaskStore } from "@mars/tasks";
 import {
@@ -3405,6 +3406,30 @@ test("oversized instruction files are omitted whole and recorded, never truncate
   session.finish("completed");
   await session.disposed;
   await api.close();
+});
+
+test("an oversized slash-command expansion is rejected as too_large, not an internal error", async () => {
+  const f = await fixture();
+  const conventions: WorkbenchConventions = {
+    commands: {
+      expand() {
+        throw new CommandError(
+          "too-large",
+          "expanded prompt exceeds 65536 bytes",
+        );
+      },
+    },
+  };
+  const api = await conventionsHost(f, conventions);
+  await api.create(context(), { ...task(), request: "/huge x" });
+  await expect(
+    api.start(context(), {
+      task_id: "task",
+      expected_revision: 0,
+      approvals: { read: true, write: false, execute: false },
+    }),
+  ).rejects.toMatchObject({ code: "too_large" });
+  expect(f.sessions).toHaveLength(0);
 });
 
 test("hooks only run through the approval-gated sandboxed execute and a blocking pre-tool hook refuses the write", async () => {

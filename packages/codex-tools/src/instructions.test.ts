@@ -128,4 +128,34 @@ describe("discoverInstructions on a temp tree", () => {
     });
     expect(found.omitted).toBe(0);
   });
+
+  test("a non-UTF-8 file cannot inflate past the byte budget when decoded", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-instructions-"));
+    // 3,000 invalid bytes decode to 3,000 U+FFFD characters (9,000 UTF-8 bytes).
+    await writeFile(join(root, "AGENTS.md"), Buffer.alloc(3_000, 0xff));
+    const found = await discoverInstructions({ root, maxTotalBytes: 4_000 });
+    expect(found.files.map((f) => f.path)).toEqual(["AGENTS.md"]);
+    const [agents] = found.files;
+    expect(agents?.truncated).toBe(true);
+    expect(Buffer.byteLength(agents?.text ?? "", "utf8")).toBeLessThanOrEqual(
+      4_000,
+    );
+    expect(agents?.bytes).toBe(Buffer.byteLength(agents?.text ?? "", "utf8"));
+    expect(found.total_bytes).toBeLessThanOrEqual(4_000);
+    expect(Buffer.byteLength(found.text, "utf8")).toBeLessThan(4_200);
+  });
+
+  test("a directory whose name starts with '..' is still inside the root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-instructions-"));
+    await mkdir(join(root, "..hidden"));
+    await writeFile(join(root, "..hidden", "AGENTS.md"), "dotdot\n");
+    const found = await discoverInstructions({
+      root,
+      cwd: join(root, "..hidden"),
+    });
+    expect(found.files.map((f) => f.path)).toEqual(["..hidden/AGENTS.md"]);
+    await expect(
+      discoverInstructions({ root, cwd: join(root, "..") }),
+    ).rejects.toBeInstanceOf(InstructionsError);
+  });
 });
