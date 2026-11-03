@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import type {
@@ -10,6 +11,7 @@ import type {
 import { ScoringRequestSchema, ScoringResultSchema } from "@mars/contracts";
 import { readHarborJob, type TrialRecord } from "./harbor-records";
 import { type ComparisonManifest, canonicalJson, sha256Hex } from "./manifest";
+import { MARS_AGENT_NAME } from "./pins";
 import type { HarborRunner } from "./runner";
 import {
   type ArtifactSink,
@@ -110,7 +112,7 @@ export function createHarborScoringBackend(
         arm: "candidate",
         tasks: request.instance_ids,
         repeats: request.repeats,
-        jobName: `score-${hash.slice(0, 24)}`,
+        jobName: `score-${hash.slice(0, 16)}-${started}-${randomUUID().slice(0, 8)}`,
         deadlineMs:
           started +
           Math.min(
@@ -127,10 +129,16 @@ export function createHarborScoringBackend(
         ? null
         : await readHarborJob(outcome.job_dir).catch(() => null);
       const byTask = new Map<string, TrialRecord[]>();
+      const requested = new Set(request.instance_ids);
       for (const trial of parsed?.trials ?? []) {
+        // Same acceptance rule as buildEvaluationReport: only MARS trials of
+        // the requested tasks from the pinned source may contribute a score.
         if (
+          !requested.has(trial.task_id) ||
+          trial.task_source.git_url !== manifest.dataset.tasks_source.git_url ||
           trial.task_source.git_commit_id !==
-          manifest.dataset.tasks_source.git_commit_id
+            manifest.dataset.tasks_source.git_commit_id ||
+          trial.agent.name !== MARS_AGENT_NAME
         )
           continue;
         byTask.set(trial.task_id, [

@@ -14,7 +14,15 @@
  */
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { openRuntimeSession, type RuntimeTools } from "@mars/execution";
 import { loadModelRegistry } from "@mars/providers";
 import { z } from "zod";
@@ -25,6 +33,14 @@ const ConfigSchema = z
     model_id: z.string().min(1),
     base_url: z.string().url(),
     api_key_env: z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/),
+    pricing: z
+      .object({
+        input_per_mtok_usd: z.number().finite().nonnegative(),
+        output_per_mtok_usd: z.number().finite().nonnegative(),
+      })
+      .strict()
+      .nullable()
+      .default(null),
     api_format: z.literal("openai_chat_completions"),
     context_window: z.number().int().positive(),
     max_tokens: z.number().int().positive(),
@@ -62,19 +78,49 @@ function inside(root: string, path: string): boolean {
   );
 }
 
-function localTools(root: string, timeoutMs: number): RuntimeTools {
-  const resolveInside = (path: string) => {
+function localTools(
+  root: string,
+  timeoutMs: number,
+  secretEnvNames: readonly string[],
+): RuntimeTools {
+  const escapeError = (path: string) =>
+    new Error(`Path escapes the task workspace: ${path}`);
+  // Resolve symlinks on the deepest existing ancestor so a link inside the
+  // workspace cannot point file tools outside `root` (which is a realpath).
+  const resolveInside = async (path: string) => {
     const target = resolve(root, path);
-    if (!inside(root, target))
-      throw new Error(`Path escapes the task workspace: ${path}`);
-    return target;
+    if (!inside(root, target)) throw escapeError(path);
+    let probe = target;
+    const missing: string[] = [];
+    for (;;) {
+      try {
+        const real = await realpath(probe);
+        const resolved = join(real, ...[...missing].reverse());
+        if (!inside(root, resolved)) throw escapeError(path);
+        return resolved;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        const parent = dirname(probe);
+        if (parent === probe) throw error;
+        missing.push(basename(probe));
+        probe = parent;
+      }
+    }
   };
+  // Task commands never inherit the model credential or the adapter's
+  // control-file locations.
+  const childEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (secretEnvNames.includes(key) || key.startsWith("MARS_AGENT_")) continue;
+    childEnv[key] = value;
+  }
   return {
     async read(path) {
-      return new Uint8Array(await readFile(resolveInside(path)));
+      return new Uint8Array(await readFile(await resolveInside(path)));
     },
     async write(path, content) {
-      const target = resolveInside(path);
+      const target = await resolveInside(path);
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, content);
     },
@@ -82,6 +128,7 @@ function localTools(root: string, timeoutMs: number): RuntimeTools {
       if (argv.length === 0) throw new Error("Empty command.");
       const proc = Bun.spawn(argv, {
         cwd: root,
+        env: childEnv,
         stdout: "pipe",
         stderr: "pipe",
         stdin: "ignore",
@@ -164,11 +211,20 @@ async function main(): Promise<number> {
               vision: false,
               contextWindow: config.context_window,
             },
-            pricing: { free: true },
+            // Paid rates from the manifest flow into the runtime ledger so
+            // `cost_usd` reflects them; without rates the model is declared
+            // free and paid use stays disabled.
+            pricing: config.pricing
+              ? {
+                  free: false,
+                  inputPerMTokUsd: config.pricing.input_per_mtok_usd,
+                  outputPerMTokUsd: config.pricing.output_per_mtok_usd,
+                }
+              : { free: true },
           },
         ],
         routes: { default: ["harbor/model"] },
-        policy: { allowPaid: false },
+        policy: { allowPaid: config.pricing !== null },
       }),
     );
     const env: Record<string, string | undefined> = {
@@ -211,7 +267,9 @@ async function main(): Promise<number> {
       registry,
       modelId: "harbor/model",
       approvals: { read: true, write: true, execute: true },
-      tools: localTools(cwd, Math.min(config.timeout_ms, 10 * 60 * 1000)),
+      tools: localTools(cwd, Math.min(config.timeout_ms, 10 * 60 * 1000), [
+        config.api_key_env,
+      ]),
       env,
       onEvent: async (event) => {
         // Oh My Pi emits one `message_start` per assistant turn, i.e. per

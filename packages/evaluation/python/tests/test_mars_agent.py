@@ -166,3 +166,22 @@ def test_config_validation(tmp_path, bundle):
         make_agent(tmp_path, bundle, trial_timeout_ms="soon")
     with pytest.raises(MarsAgentConfigError, match="model name"):
         make_agent(tmp_path, bundle, model_name=None)
+
+
+def test_pricing_passes_through_only_when_both_rates_are_given(tmp_path, bundle):
+    agent = make_agent(tmp_path, bundle)
+    assert agent.provider_config()["pricing"] is None
+    paid = make_agent(
+        tmp_path,
+        bundle,
+        pricing_input_per_mtok_usd="1.5",
+        pricing_output_per_mtok_usd=2,
+    )
+    assert paid.provider_config()["pricing"] == {
+        "input_per_mtok_usd": 1.5,
+        "output_per_mtok_usd": 2.0,
+    }
+    with pytest.raises(MarsAgentConfigError, match="pricing_input_per_mtok_usd"):
+        make_agent(tmp_path, bundle, pricing_input_per_mtok_usd=1.0)
+    with pytest.raises(MarsAgentConfigError, match="pricing_output_per_mtok_usd"):
+        make_agent(tmp_path, bundle, pricing_input_per_mtok_usd=1.0, pricing_output_per_mtok_usd="free")

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   chmod,
+  cp,
   mkdir,
   mkdtemp,
   readFile,
@@ -296,6 +297,37 @@ test("report computes per-arm aggregates, regressions, repeatability and holdout
 
 // -------------------------------------------------------------- trajectory
 
+test("report completeness is judged per task, not by aggregate trial counts", async () => {
+  const manifest = await sampleManifest();
+  const baseline = await readHarborJob(
+    join(HARBOR_FIXTURES, "synthetic-baseline"),
+  );
+  // Same number of valid trials (6), but qemu-startup has none and
+  // chess-best-move has four: aggregate counts match, the comparison is not complete.
+  const chess = baseline.trials.filter((t) => t.task_id === "chess-best-move");
+  const skewed = [
+    ...baseline.trials.filter((t) => t.task_id !== "qemu-startup"),
+    ...chess.map((t) => ({ ...t, trial_name: `${t.trial_name}-dup` })),
+  ];
+  const arm = (trials: typeof skewed) => ({
+    agent: { name: "mini-swe-agent", version: "2.4.6" },
+    trials,
+    harbor: baseline.job.stats,
+  });
+  const skewedReport = buildEvaluationReport(
+    manifest,
+    { baseline: arm(skewed), candidate: arm(skewed) },
+    () => 0,
+  );
+  expect(skewedReport.arms.baseline.n_valid).toBe(6);
+  expect(skewedReport.verdict.complete).toBe(false);
+  const evenReport = buildEvaluationReport(
+    manifest,
+    { baseline: arm(baseline.trials), candidate: arm(baseline.trials) },
+    () => 0,
+  );
+  expect(evenReport.verdict.complete).toBe(true);
+});
 test("trial bundles capture agent/verifier output but never verifier test sources", async () => {
   const candidate = await readHarborJob(
     join(HARBOR_FIXTURES, "synthetic-candidate"),
@@ -759,6 +791,47 @@ test("harbor scoring backend scores the MARS arm only and refuses holdout instan
     expect(result.scores[0]?.trajectory?.media_type).toBe(
       "application/vnd.mars.harbor-trial+json",
     );
+    // Identical requests keep the same request hash but get a fresh Harbor
+    // job directory, so repeated scoring never collides.
+    const again = await backend.score(context, request);
+    expect(again.request_sha256).toBe(result.request_sha256);
+    expect(again.scores[0]?.score).toBe(1);
+    // A trial from another agent never contributes to the candidate score:
+    // a perfect foreign reward is dropped, which leaves one of the two
+    // expected repeats missing (strict score 0.5, reward not valid).
+    const foreign = join(root, "foreign-fixture");
+    await cp(join(HARBOR_FIXTURES, "synthetic-candidate"), foreign, {
+      recursive: true,
+    });
+    const foreignTrial = join(foreign, "regex-log__c2", "result.json");
+    const record = JSON.parse(await readFile(foreignTrial, "utf8"));
+    record.agent_info.name = "nop";
+    record.verifier_result.rewards = { reward: 1 };
+    await writeFile(foreignTrial, JSON.stringify(record));
+    const foreignRunner = createHarborRunner({
+      pythonPath: await fakeVenv(root, GOOD_PROBE),
+      harborPath: FAKE_HARBOR,
+      agentPythonPath: join(FIXTURES, "..", "python"),
+      jobsDir: join(root, "jobs-foreign"),
+      dockerPath: null,
+      env: {
+        PATH: process.env.PATH,
+        FAKE_HARBOR_FIXTURE: foreign,
+        FAKE_HARBOR_MARKER: marker,
+      },
+    });
+    const filtered = await createHarborScoringBackend({
+      manifest,
+      runner: foreignRunner,
+      artifacts,
+      candidateDir: join(root, "cands"),
+      splits: { train: ["regex-log"], validation: ["chess-best-move"] },
+    }).score(context, request);
+    expect(filtered.scores[0]).toMatchObject({
+      score: 0.5,
+      reward_valid: false,
+    });
+    expect(filtered.scores[0]?.feedback).not.toContain("regex-log__c2");
     expect(result.scores[0]?.feedback).toContain(
       "[untrusted evaluation evidence",
     );

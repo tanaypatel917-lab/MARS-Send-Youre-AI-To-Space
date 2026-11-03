@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import type {
@@ -58,6 +59,8 @@ export const JobRecordSchema = z
     updated_at: z.string(),
     deadline_ms: z.number().int(),
     runs: z.array(RunStateSchema),
+    /** Process-group ids of Harbor runs still believed to be alive. */
+    active_pids: z.array(z.number().int()),
     report: ArtifactRefSchema.nullable(),
     trajectories: z.array(ArtifactRefSchema),
     cost_usd: z.number().nullable(),
@@ -67,6 +70,22 @@ export const JobRecordSchema = z
 export type JobRecord = z.infer<typeof JobRecordSchema>;
 
 const JOB_ID_PATTERN = /^[a-f0-9]{32}$/;
+
+function killProcessGroup(pid: number): void {
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  const escalate = setTimeout(() => {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }, 5000);
+  escalate.unref();
+}
 
 function scopeKey(context: RequestContext): string {
   return `${context.scope.owner_id}/${context.scope.project_id}`;
@@ -186,7 +205,12 @@ export function createEvaluationService(
           maxConcurrency: record.budget.max_concurrency,
           signal: controller.signal,
           candidatePath,
+          onSpawn: (pid) => {
+            record.active_pids.push(pid);
+            void update({});
+          },
         });
+        record.active_pids = [];
         record.runs.push({ arm, job_name: jobName, outcome, error: null });
         await update({});
         if (outcome.killed === "cancelled") throw new Error("cancelled");
@@ -304,6 +328,7 @@ export function createEvaluationService(
             context.request_id,
             immutableManifest.sha256,
             createdAt,
+            randomUUID(),
           ]),
         ),
       ).slice(0, 32);
@@ -322,6 +347,7 @@ export function createEvaluationService(
         updated_at: new Date(createdAt).toISOString(),
         deadline_ms: createdAt + effective.max_duration_ms,
         runs: [],
+        active_pids: [],
         report: null,
         trajectories: [],
         cost_usd: null,
@@ -355,6 +381,11 @@ export function createEvaluationService(
         return;
       }
       if (record.status === "pending" || record.status === "running") {
+        // No in-memory controller: this instance did not start the job (the
+        // service restarted). Kill the persisted Harbor process groups
+        // directly before recording the cancellation.
+        for (const pid of record.active_pids) killProcessGroup(pid);
+        record.active_pids = [];
         record.status = "cancelled";
         record.error = "cancelled";
         record.updated_at = new Date(now()).toISOString();

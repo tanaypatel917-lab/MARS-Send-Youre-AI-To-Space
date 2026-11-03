@@ -340,9 +340,15 @@ export function buildEvaluationReport(
   }
   if (pinMismatches.length)
     notes.push(`${pinMismatches.length} trial(s) excluded for pin mismatches.`);
+  // Completeness is judged per task: every manifest task needs exactly
+  // `repeats` valid trials in each arm, so a surplus on one task can never
+  // mask a task that produced no records.
   const complete =
-    aggregates.baseline.n_valid === expected &&
-    aggregates.candidate.n_valid === expected &&
+    perTask.every(
+      (entry) =>
+        entry.baseline.n_valid === manifest.repeats &&
+        entry.candidate.n_valid === manifest.repeats,
+    ) &&
     pinMismatches.length === 0 &&
     (arms.baseline.unreadable_trials?.length ?? 0) === 0 &&
     (arms.candidate.unreadable_trials?.length ?? 0) === 0;

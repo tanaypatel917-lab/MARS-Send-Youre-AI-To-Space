@@ -116,6 +116,8 @@ class MarsAgent(BaseAgent):
         max_tokens: Any = 200_000,
         max_usd: Any = 1.0,
         context_window: Any = 32_000,
+        pricing_input_per_mtok_usd: Any = None,
+        pricing_output_per_mtok_usd: Any = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(logs_dir, model_name, **kwargs)
@@ -135,6 +137,16 @@ class MarsAgent(BaseAgent):
         self.max_tokens = _coerce_int("max_tokens", max_tokens)
         self.max_usd = _coerce_float("max_usd", max_usd)
         self.context_window = _coerce_int("context_window", context_window, 1024)
+        if (pricing_input_per_mtok_usd is None) != (pricing_output_per_mtok_usd is None):
+            raise MarsAgentConfigError("pricing_input_per_mtok_usd and pricing_output_per_mtok_usd must be passed together")
+        self.pricing: dict[str, float] | None = (
+            None
+            if pricing_input_per_mtok_usd is None
+            else {
+                "input_per_mtok_usd": _coerce_float("pricing_input_per_mtok_usd", pricing_input_per_mtok_usd),
+                "output_per_mtok_usd": _coerce_float("pricing_output_per_mtok_usd", pricing_output_per_mtok_usd),
+            }
+        )
         self.components: dict[str, str] = (
             load_candidate_components(self.candidate_path) if self.candidate_path else {}
         )
@@ -169,6 +181,7 @@ class MarsAgent(BaseAgent):
             "api_key_env": self._api_key_env(),
             "api_format": str(self._model_api_format.value if self._model_api_format else "openai_chat_completions"),
             "context_window": self.context_window,
+            "pricing": self.pricing,
             "max_tokens": self.max_tokens,
             "max_usd": self.max_usd,
             "timeout_ms": self.trial_timeout_ms,

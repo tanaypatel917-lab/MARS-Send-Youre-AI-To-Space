@@ -55,6 +55,12 @@ export interface HarborRunRequest {
   controlAgent?: "nop" | "oracle";
   /** Pass `--dry-run`: Harbor resolves and validates but runs nothing. */
   dryRun?: boolean;
+  /**
+   * Called with the Harbor process id (= its process-group id under setsid) as
+   * soon as it starts, so callers can persist it and kill the group later even
+   * if this process does not survive.
+   */
+  onSpawn?: (pid: number) => void;
 }
 
 export interface HarborRunOutcome {
@@ -370,6 +376,14 @@ export function createHarborRunner(options: HarborRunnerOptions) {
         "--ak",
         `context_window=${manifest.model.context_window}`,
       );
+      if (manifest.model.pricing) {
+        argv.push(
+          "--ak",
+          `pricing_input_per_mtok_usd=${manifest.model.pricing.input_per_mtok_usd}`,
+          "--ak",
+          `pricing_output_per_mtok_usd=${manifest.model.pricing.output_per_mtok_usd}`,
+        );
+      }
     }
     return argv;
   }
@@ -423,6 +437,7 @@ export function createHarborRunner(options: HarborRunnerOptions) {
         MARS_EVALUATION_ARM: request.arm,
       },
     });
+    request.onSpawn?.(proc.pid);
     let killed: HarborRunOutcome["killed"] = null;
     const killTree = (reason: NonNullable<HarborRunOutcome["killed"]>) => {
       if (killed) return;

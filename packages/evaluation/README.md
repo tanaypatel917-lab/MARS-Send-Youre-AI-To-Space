@@ -146,12 +146,24 @@ to start if the local file or any task's repo/commit differ from the pin.
   directory (only `mars-usage.json` and stdout/stderr are).
 * No upstream Harbor adapter exists for Oh My Pi; `MarsAgent` is ours and is
   not registered in Harbor's agent table — always select it by import path.
+* Budget metering is per trial plus a wall-clock deadline: every trial receives
+  `per_trial.max_tokens` / `per_trial.max_usd` and the whole comparison is
+  killed at `Budget.max_duration_ms`, but Harbor exposes no hook to stop
+  dispatch when the *aggregate* `max_usd` / `max_tokens` is reached mid-run.
+  The manifest validation only guarantees `per_trial ≤ total`; size
+  `per_trial` so that `trials × per_trial` fits the total if the aggregate cap
+  must be hard.
+* GEPA `feedback` deliberately contains the verifier's stdout tail (labelled as
+  untrusted evidence). If a task's verifier prints its own test code or the
+  expected answer, that text reaches prompt optimisation; final-holdout tasks
+  are never scored for exactly this reason, and the trajectory bundles still
+  exclude `tests/` and `solution/`.
 
 ## Verified
 
 Run on this package's development VM (Bun 1.4.4, Python 3.12.13, Docker 29.7.2):
 
-* `bun test packages/evaluation` — 14 offline tests, `model_requests: 0`:
+* `bun test packages/evaluation` — 15 offline tests, `model_requests: 0`:
   manifest validation, real nop/oracle record parsing, exit-0-but-errored and
   null-reward trials, agent-timeout validity, report aggregates / regressions /
   repeatability / holdout flag / pin exclusion, trajectory bundle excludes
@@ -162,7 +174,7 @@ Run on this package's development VM (Bun 1.4.4, Python 3.12.13, Docker 29.7.2):
 * `packages/execution/src/runtime.test.ts` — `systemPromptOverride` applies
   only when supplied; default prompt unchanged; empty/oversized overrides
   rejected.
-* `python -m pytest packages/evaluation/python/tests` — 6 tests with a fake
+* `python -m pytest packages/evaluation/python/tests` — 7 tests with a fake
   environment: identity, bundle upload + sha check, config without secrets,
   instruction-only run, usage reporting, missing-usage handling, kwarg
   validation.
