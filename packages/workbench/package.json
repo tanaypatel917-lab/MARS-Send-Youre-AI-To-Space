@@ -10,6 +10,7 @@
     "@mars/contracts": "workspace:*",
     "@mars/execution": "workspace:*",
     "@mars/memory": "workspace:*",
+    "@mars/optimization": "workspace:*",
     "@mars/providers": "workspace:*",
     "@mars/providers-omniroute": "workspace:*",
     "@mars/research": "workspace:*",

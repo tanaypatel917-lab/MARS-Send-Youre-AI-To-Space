@@ -1,0 +1,38 @@
+{
+  "id": "synthetic-candidate",
+  "started_at": "2026-11-02T23:47:14.269701",
+  "updated_at": "2026-11-02T23:48:00.738593",
+  "finished_at": "2026-11-02T23:48:00.738593",
+  "n_total_trials": 6,
+  "stats": {
+    "n_completed_trials": 4,
+    "n_errored_trials": 2,
+    "n_cancelled_trials": 0,
+    "evals": {
+      "mars-oh-my-pi__qwen3-coder:30b__terminal-bench-sample": {
+        "n_trials": 6,
+        "n_errors": 2,
+        "metrics": [],
+        "pass_at_k": {},
+        "reward_stats": {
+          "reward": {
+            "1.0": [
+              "regex-log__c1",
+              "regex-log__c2",
+              "chess-best-move__c1",
+              "chess-best-move__c2",
+              "qemu-startup__c1"
+            ]
+          }
+        },
+        "exception_stats": {
+          "VerifierTimeoutError": ["qemu-startup__c1"]
+        }
+      }
+    },
+    "n_input_tokens": 7200,
+    "n_cache_tokens": 0,
+    "n_output_tokens": 2040,
+    "cost_usd": 0.0
+  }
+}
