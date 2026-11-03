@@ -29,6 +29,7 @@ This is an audit baseline, not a list of implemented integrations; the Owner col
 | agent-lightning | [d38199539627](https://github.com/microsoft/agent-lightning/tree/d381995396274039f2bb1cbe5ff42ac8067f4e47) | MIT | services/training (RL backend adapter) with evaluations/ owning reward verifiers |
 | vllm | [5df63a7203cd](https://github.com/vllm-project/vllm/tree/5df63a7203cdb9328d824a27b682e77c7b9928be) | Apache-2.0 | packages/providers (inference adapter) + model registry/router |
 | watch-skill | [f1317c8fe647](https://github.com/oxbshw/watch-skill/tree/f1317c8fe64744a606c31867b05fbbe3144268c6) | MIT | packages/watch (@mars/watch): host-bound tools wrapping the pinned `watch-skill==1.4.3` CLI as a sandboxed subprocess (perception, THE LOOP advisory critique, verification evidence); Oh My Pi owns execution. Ten upstream SKILL.md files vendored verbatim under `skills/vendor/watch-skill/`. No human owner assigned. |
+| graphify | [ab26b1ec1da9](https://github.com/Graphify-Labs/graphify/tree/ab26b1ec1da995743ef5a165a07b0d45ad3314c8) | Apache-2.0 | packages/knowledge-graph (@mars/knowledge-graph): host-bound tools `mars_graph_build` / `mars_graph_query` wrapping the pinned `graphifyy==0.9.101` CLI (`extract --code-only` only) as a sandboxed offline subprocess; the graph is a derived, rebuildable artifact next to the repository map, never a memory owner. Nothing vendored. No human owner assigned. |
 
 ## Interpretation
 
