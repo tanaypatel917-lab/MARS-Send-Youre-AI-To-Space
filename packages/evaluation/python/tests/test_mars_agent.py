@@ -131,6 +131,14 @@ def test_run_passes_instruction_only_and_reports_usage(tmp_path, bundle, monkeyp
     assert run_cmd["timeout_sec"] == 120
     assert run_cmd["command"].startswith("cd /app && ")
     assert run_cmd["env"]["MARS_EVAL_API_KEY"] == "sk-not-real-secret"
+    assert run_cmd["env"]["MARS_AGENT_CREDENTIAL"] == str(CONTAINER_STATE_DIR / "credential")
+    # Credential handover: written to a 0600 file, unset, then exec so the
+    # bundle's /proc/<pid>/environ never contains it.
+    assert "sk-not-real-secret" not in run_cmd["command"]
+    assert (
+        f"umask 077 && printf '%s' \"$MARS_EVAL_API_KEY\" > {CONTAINER_STATE_DIR / 'credential'} && "
+        "unset MARS_EVAL_API_KEY && exec /opt/mars-agent/mars-agent "
+    ) in run_cmd["command"]
     assert "tests" not in run_cmd["command"]
     assert env.files[str(CONTAINER_STATE_DIR / "instruction.txt")] == b"Fix the regex in /app/filter.py so the tests pass."
     assert context.n_input_tokens == 1200
@@ -185,3 +193,18 @@ def test_pricing_passes_through_only_when_both_rates_are_given(tmp_path, bundle)
         make_agent(tmp_path, bundle, pricing_input_per_mtok_usd=1.0)
     with pytest.raises(MarsAgentConfigError, match="pricing_output_per_mtok_usd"):
         make_agent(tmp_path, bundle, pricing_input_per_mtok_usd=1.0, pricing_output_per_mtok_usd="free")
+
+
+def test_run_without_key_skips_credential_handover(tmp_path, bundle, monkeypatch):
+    monkeypatch.delenv("MARS_EVAL_API_KEY", raising=False)
+    agent = make_agent(tmp_path, bundle)
+    env = FakeEnvironment(usage=None, return_code=0)
+    import asyncio
+
+    asyncio.run(agent.setup(env))
+    asyncio.run(agent.run("Do the task.", env, AgentContext()))
+    run_cmd = [c for c in env.commands if c["command"].startswith("cd ")][0]
+    assert "MARS_EVAL_API_KEY" not in run_cmd["env"]
+    assert "MARS_AGENT_CREDENTIAL" not in run_cmd["env"]
+    assert "printf" not in run_cmd["command"]
+    assert "&& exec /opt/mars-agent/mars-agent " in run_cmd["command"]

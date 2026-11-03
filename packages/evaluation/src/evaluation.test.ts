@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claimCredential } from "../agent/credential";
+import { claimCredential, claimCredentialFile } from "../agent/credential";
 import {
   buildEvaluationReport,
   COMPARISON_MANIFEST_MEDIA_TYPE,
@@ -1098,5 +1098,15 @@ test("EvaluationJobStore: a failed write rejects only its caller and later write
   }
   expect(unhandled).toEqual([]);
   expect((await store.read(record.job_id))?.status).toBe("running");
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("claimCredentialFile reads the handed-over credential once and deletes the file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mars-eval-cred-"));
+  const path = join(dir, "credential");
+  await writeFile(path, "sk-handover-value\n", { mode: 0o600 });
+  expect(await claimCredentialFile(path)).toBe("sk-handover-value");
+  expect((await readdir(dir)).includes("credential")).toBe(false);
+  expect(await claimCredentialFile(path)).toBeUndefined();
   await rm(dir, { recursive: true, force: true });
 });
