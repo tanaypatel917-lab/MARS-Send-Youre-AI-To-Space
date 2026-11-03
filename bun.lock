@@ -17,6 +17,7 @@
       "dependencies": {
         "@mars/contracts": "workspace:*",
         "@mars/execution": "workspace:*",
+        "@mars/output-format": "workspace:*",
         "@mars/providers": "workspace:*",
         "@mars/workbench": "workspace:*",
       },
