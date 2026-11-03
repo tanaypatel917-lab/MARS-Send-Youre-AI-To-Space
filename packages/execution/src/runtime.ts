@@ -1105,7 +1105,12 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
       async execute(_id, params, _update, _ctx, signal) {
         await checkTool("write", signal);
         const input = z
-          .object({ patch: z.string().min(1).max(1024 * 1024) })
+          .object({
+            patch: z
+              .string()
+              .min(1)
+              .max(1024 * 1024),
+          })
           .strict()
           .parse(params);
         const text = await patch.apply(input.patch);

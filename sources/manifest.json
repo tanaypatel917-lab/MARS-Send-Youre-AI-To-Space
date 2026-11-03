@@ -2377,6 +2377,109 @@
         "watch/ask/search/capture/loop iterate/extract were not run against the real CLI; their wrappers are fixture-verified only."
       ],
       "integration_status": "host-bound-tools"
+    },
+    {
+      "id": "codex-tooling",
+      "group": "execution-ide",
+      "repository_url": "https://github.com/openai/codex",
+      "revision": "f58acd6ede312266a7a0eaa63fd8dadacb4de239",
+      "version_note": "HEAD of main at audit (2026-11-02); no release tag resolved for this commit",
+      "license": {
+        "spdx": "Apache-2.0",
+        "path": "LICENSE",
+        "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/LICENSE",
+        "additional_notices": [
+          "packages/codex-tools/NOTICE",
+          "packages/codex-tools/third_party/codex/LICENSE.txt",
+          "packages/codex-tools/third_party/codex/NOTICE.txt"
+        ],
+        "notes": "Apache-2.0 with an upstream NOTICE ('OpenAI Codex, Copyright 2025 OpenAI'; Ratatui-derived code is noted upstream but not copied). packages/codex-tools/src/apply-patch/* is a MARS TypeScript port of codex-rs/apply-patch (parser, streaming parser, seek_sequence, file_update, text_file) and carries per-file Apache-2.0 headers naming the upstream file and this revision; upstream LICENSE and NOTICE are copied verbatim under packages/codex-tools/third_party/codex/. The apply_patch test scenarios are copied from codex-rs/apply-patch/tests/fixtures/scenarios with their origin recorded in packages/codex-tools/test/fixtures/apply-patch/README.md. No Codex agent loop, prompt text, TUI, sandbox or MCP code is copied."
+      },
+      "sources": [
+        {
+          "path": "codex-rs/apply-patch/src/parser.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/apply-patch/src/parser.rs",
+          "purpose": "Patch grammar, hunk model and strict/lenient boundary rules ported to packages/codex-tools/src/apply-patch/parser.ts."
+        },
+        {
+          "path": "codex-rs/apply-patch/src/streaming_parser.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/apply-patch/src/streaming_parser.rs",
+          "purpose": "Line-by-line hunk state machine and error messages ported."
+        },
+        {
+          "path": "codex-rs/apply-patch/src/seek_sequence.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/apply-patch/src/seek_sequence.rs",
+          "purpose": "Exact → rtrim → trim → Unicode-punctuation-normalised context matching ported."
+        },
+        {
+          "path": "codex-rs/apply-patch/src/file_update.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/apply-patch/src/file_update.rs",
+          "purpose": "compute_replacements and chunk application semantics ported."
+        },
+        {
+          "path": "codex-rs/apply-patch/src/text_file.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/apply-patch/src/text_file.rs",
+          "purpose": "Per-line line-ending preservation ported."
+        },
+        {
+          "path": "codex-rs/apply-patch/tests/fixtures/scenarios",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/apply-patch/tests/fixtures/scenarios",
+          "purpose": "Scenario fixtures copied verbatim as the port's characterization tests."
+        },
+        {
+          "path": "codex-rs/core/assets/tools/apply_patch.lark",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/core/assets/tools/apply_patch.lark",
+          "purpose": "Official apply_patch grammar used to check the port's acceptance set."
+        },
+        {
+          "path": "codex-rs/core/src/agents_md.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/core/src/agents_md.rs",
+          "purpose": "AGENTS.md / AGENTS.override.md discovery (root-to-cwd concatenation, byte budget, untrusted projects skipped) mirrored by packages/codex-tools/src/instructions.ts; MARS adds CLAUDE.md and reads only the trusted checkout root."
+        },
+        {
+          "path": "codex-rs/protocol/src/protocol.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/protocol/src/protocol.rs",
+          "purpose": "AskForApproval (untrusted | on-request | never | granular) and SandboxPolicy (read-only | workspace-write | danger-full-access | external-sandbox) definitions mapped onto MARS read/write/execute approvals in packages/codex-tools/src/policy.ts."
+        }
+      ],
+      "background_references": [
+        {
+          "url": "https://developers.openai.com/codex/guides/agents-md",
+          "notes": "Official AGENTS.md guidance referenced by docs/agents_md.md at the pinned revision."
+        },
+        {
+          "url": "https://developers.openai.com/codex/security",
+          "notes": "Official sandbox and approval documentation referenced by docs/sandbox.md at the pinned revision."
+        }
+      ],
+      "runtime_requirements": "None at runtime: the TypeScript port runs inside the Bun workspace with zod only. The upstream Rust crate is not built or installed.",
+      "integration_owner": "MARS workbench host (packages/workbench/src/host.ts) owns the mars_apply_patch tool binding, approval gating and instruction freezing; @mars/codex-tools owns the pure parser/applier, policy mapping and discovery loader. Oh My Pi remains the sole execution owner. No human owner assigned.",
+      "target_milestone": "Milestone 1 usability (coding workbench ergonomics); no milestone acceptance claim.",
+      "adaptation_decision": "PORT, not wrap: the apply_patch format and applier are ported to TypeScript behind a filesystem seam so the workbench writes only through the workspace provider; the Codex agent loop, tool router, sandbox and MCP layers are not adopted. Sandbox policies and approval modes are mapped onto the existing workbench approvals (danger-full-access refused, never ≡ on-request because MARS approvals are fixed at launch). AGENTS.md discovery is reimplemented against the trusted checkout root (plus CLAUDE.md) and the text is bounded and frozen into the launch, labelled as repository instructions.",
+      "dependencies": [
+        "No upstream runtime dependency; zod 3.25.76 (already pinned in the workspace)."
+      ],
+      "acceptance_plan": {
+        "offline_tests": "bun test packages/codex-tools runs the copied upstream scenarios and MARS cases through an in-memory PatchFileSystem; packages/workbench host tests cover tool binding, approval gating and hooks; model_requests: 0; bun run check must pass.",
+        "privacy": "The applier never touches node:fs; every path goes through WorkspaceHost.read/write/remove and is re-validated by the provider.",
+        "status": "Offline-verified only; no live model has emitted a patch through mars_apply_patch."
+      },
+      "audit_checks": {
+        "environment": "2026-11-02, Ubuntu VM, git clone --depth 1 of openai/codex at f58acd6ede312266a7a0eaa63fd8dadacb4de239; no Rust toolchain used, upstream tests not run.",
+        "license": "LICENSE is Apache-2.0; NOTICE names OpenAI Codex (Copyright 2025 OpenAI) and Ratatui-derived code.",
+        "grammar": "codex-rs/core/assets/tools/apply_patch.lark read; parser.rs doc comment adds the optional '*** Environment ID:' preamble and lenient heredoc stripping.",
+        "unexecuted": [
+          "cargo test for codex-rs/apply-patch",
+          "Codex CLI itself",
+          "any live model run"
+        ]
+      },
+      "risks": [
+        "Port drift: upstream apply_patch semantics may change after this revision; the copied scenarios pin the behaviour we claim.",
+        "Repository instruction files are model-steering text; they are loaded only from the trusted checkout (--trust-project), bounded, frozen whole-or-omitted and labelled, and never grant tool permissions.",
+        "A hook or command file is also repository text: hooks run only through the approval-gated sandbox and are skipped otherwise; slash commands only expand prompt text."
+      ],
+      "integration_status": "host-bound-tools"
     }
   ],
   "group_findings": [

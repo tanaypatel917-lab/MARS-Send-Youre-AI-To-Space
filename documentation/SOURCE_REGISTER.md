@@ -29,6 +29,7 @@ This is an audit baseline, not a list of implemented integrations; the Owner col
 | agent-lightning | [d38199539627](https://github.com/microsoft/agent-lightning/tree/d381995396274039f2bb1cbe5ff42ac8067f4e47) | MIT | services/training (RL backend adapter) with evaluations/ owning reward verifiers |
 | vllm | [5df63a7203cd](https://github.com/vllm-project/vllm/tree/5df63a7203cdb9328d824a27b682e77c7b9928be) | Apache-2.0 | packages/providers (inference adapter) + model registry/router |
 | watch-skill | [f1317c8fe647](https://github.com/oxbshw/watch-skill/tree/f1317c8fe64744a606c31867b05fbbe3144268c6) | MIT | packages/watch (@mars/watch): host-bound tools wrapping the pinned `watch-skill==1.4.3` CLI as a sandboxed subprocess (perception, THE LOOP advisory critique, verification evidence); Oh My Pi owns execution. Ten upstream SKILL.md files vendored verbatim under `skills/vendor/watch-skill/`. No human owner assigned. |
+| codex-tooling | [f58acd6ede31](https://github.com/openai/codex/tree/f58acd6ede312266a7a0eaa63fd8dadacb4de239) | Apache-2.0 | packages/codex-tools (@mars/codex-tools): TypeScript port of `codex-rs/apply-patch` behind a filesystem seam (host-bound `mars_apply_patch` writes only through the workspace provider), sandbox-policy/approval-mode mapping onto workbench approvals, AGENTS.md/CLAUDE.md discovery for the trusted checkout. Notices in `packages/codex-tools/NOTICE`, `third_party/codex/{LICENSE,NOTICE}.txt`. Oh My Pi owns execution. No human owner assigned. |
 
 ## Interpretation
 

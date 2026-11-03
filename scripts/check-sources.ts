@@ -120,6 +120,7 @@ export const REQUIRED_COMPONENTS = [
   "agent-lightning",
   "vllm",
   "watch-skill",
+  "codex-tooling",
 ] as const;
 
 export function validateManifest(input: unknown): SourceManifest {
