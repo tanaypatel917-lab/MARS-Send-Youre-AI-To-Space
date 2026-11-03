@@ -7,7 +7,7 @@ import {
   ModelRouter,
 } from "@mars/providers";
 import { runRender } from "./render";
-import { runServer } from "./serve";
+import { RESEARCH_SEARCH_PROVIDERS, runServer, ServeUsageError } from "./serve";
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -229,9 +229,29 @@ try {
         arch: process.arch,
       },
       execution: await probeExecution(),
+      research: {
+        control_plane:
+          "@mars/research (durable store under the serve state root)",
+        worker: "@mars/research-worker",
+        enabled_by: "mars serve --research-search <brave|searxng|tavily>",
+        search_providers: Object.entries(RESEARCH_SEARCH_PROVIDERS).map(
+          ([id, provider]) => ({
+            id,
+            api_key_env: provider.api_key_env,
+            credential_present:
+              provider.api_key_env === null
+                ? null
+                : process.env[provider.api_key_env] !== undefined,
+            docs_url: provider.docs_url,
+          }),
+        ),
+        verified: "offline only (fixtures and injected model responses)",
+        live_verified: false,
+      },
       limitations: [
         "Initialization probe only; no agent task or model request was run.",
         "Live-provider and real IDE workbench acceptance remain unverified; memory, learning, and training are not implemented.",
+        "Background research runs only when mars serve is started with --research-search; no live search provider or model run has been verified.",
         "Python services must use separate versioned environments.",
       ],
     };
@@ -245,9 +265,11 @@ try {
   } else if (command === "serve") {
     try {
       await runServer(process.argv.slice(3));
-    } catch {
+    } catch (error) {
       console.error(
-        "MARS workbench could not start or stop safely. Check the source, private state directory, port, and optional pinned local image.",
+        error instanceof ServeUsageError
+          ? error.message
+          : "MARS workbench could not start or stop safely. Check the source, private state directory, port, optional pinned local image, and research model/search configuration.",
       );
       process.exitCode = 1;
     }

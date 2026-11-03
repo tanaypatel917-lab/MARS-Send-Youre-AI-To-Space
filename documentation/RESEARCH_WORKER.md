@@ -7,10 +7,12 @@ planning, web search, guarded fetching, extraction, verification and
 publishing. It implements `ResearchWorker` / `ResearchWorkerContext` /
 `FindingProposal` from `@mars/research` without changing those contracts.
 
-**Status:** verified offline only. Every test runs against recorded fixtures
-and fakes; `bun run check` makes no network or model call and the execution
-probe stays at `model_requests: 0`. Live mode (`live: true`) exists but is
-**unverified until a human runs it** against a real search provider and model.
+**Status:** wired into `mars serve` (`--research-search brave|searxng|tavily`)
+and verified offline only. Every test runs against recorded fixtures and fakes;
+`bun run check` makes no network or model call and the execution probe stays at
+`model_requests: 0`. Live mode (`live: true`, which `mars serve` enables) exists
+but is **unverified until a human runs it** against a real search provider and
+model with their own credentials; no key was used during development.
 
 ## Architecture
 
@@ -66,66 +68,88 @@ Improvements over the surveyed open-source agents:
 | `deadline_margin_ms` (5000) | Time kept free before the request deadline for publishing. |
 | `private_needles` | Extra strings to redact from all emitted text. |
 
-## Wiring into the workbench host
+## Running from `mars serve`
 
-The workbench host (`createWorkbenchHost` on branch
-`devin/1793573824-workbench-research`, PR #39) accepts a parent-owned
-`research?: WorkbenchResearch` service (`submit`, `readFindings`, `inspect`,
-`reconcileTask`). Build the worker, hand it to `createResearchService`, and pass
-the service to the host:
+`createWorkbenchService` (`packages/workbench/src/service.ts`) accepts an
+optional `research: WorkbenchResearchOptions` and `mars serve` fills it from
+flags. When present the service opens the durable `@mars/research` store at
+`<state>/research` (mode `0700`, refused if it overlaps a private root), builds
+this worker, runs the control plane's lease/claim loop for as long as the
+service runs, and hands the service to `createWorkbenchHost` as its `research`
+option, so every session gets `mars_research` / `mars_findings`. Without the
+option nothing changes: no store, no worker, no research tools.
+
+```sh
+# Brave Search (free tier; key read from BRAVE_SEARCH_API_KEY at startup, never stored)
+BRAVE_SEARCH_API_KEY=... bun apps/cli/src/main.ts serve --research-search brave
+
+# Tavily (TAVILY_API_KEY) or a different variable name
+bun apps/cli/src/main.ts serve --research-search tavily --research-api-key-env MY_TAVILY_KEY
+
+# Self-hosted SearXNG (JSON format enabled); no credential
+bun apps/cli/src/main.ts serve --research-search searxng --research-searxng-url http://127.0.0.1:8080
+
+# Optional: pin a free registry model and deny hosts
+... --research-model openrouter/free --research-deny-host '*.internal.example'
+```
+
+| Flag | Meaning |
+|---|---|
+| `--research-search brave\|searxng\|tavily` | Enables research with that search provider. |
+| `--research-api-key-env NAME` | Environment variable holding the provider key (default `BRAVE_SEARCH_API_KEY` / `TAVILY_API_KEY`). Only the *name* is ever printed; startup fails with a message naming the variable when it is unset. |
+| `--research-searxng-url URL` | SearXNG base URL (required for `searxng`). |
+| `--research-model ID` | Registry model for planning/extraction; defaults to the registry's free default route. Paid models are refused (`PaidModelConsentError`) — there is no CLI paid opt-in. |
+| `--research-deny-host PATTERN` | Repeatable; exact host or `*.suffix`. |
+
+The CLI configures the worker with `live: true`, the global `fetch`, real DNS
+through the SSRF guard, `createRegistryModelGateway` over the same model
+registry Oh My Pi uses (reading provider keys from the process environment),
+and `hostPrivateRoots` covering the source checkout and the sibling state
+directories (`memory`, `sessions`, `tasks`, `workspaces`) for both the worker
+and the control plane. Startup fails when no eligible free model is configured,
+because the worker cannot run without one; the plain `mars serve` path is
+unaffected and still makes no model request at startup. The `listening` line
+reports `"research": {"search": "brave", "live": true}` (or `null`). Shutdown
+drains running requests for `drainMs` (default 5 s) and re-queues the rest
+before the task store closes; the host still reconciles research after every
+task outcome as documented in `LOCAL_WORKBENCH.md`.
+
+Programmatic wiring, e.g. for tests or another host:
 
 ```ts
-import { registerRuntimeCleanup } from "@mars/execution";
-import { loadModelRegistry } from "@mars/providers";
-import { createResearchService } from "@mars/research";
-import {
-  createRegistryModelGateway,
-  createResearchWorker,
-  createSearxngSearch,
-} from "@mars/research-worker";
-import { createTaskStore } from "@mars/tasks";
-import { createWorkbenchHost } from "@mars/workbench";
+import { createWorkbenchService } from "@mars/workbench";
 
-const store = await createTaskStore({ rootDir: taskRoot, workspaceRoots });
-const registry = await loadModelRegistry({ trustProjectConfig });
-
-const worker = createResearchWorker({
-  config: { live: true, deny_hosts: ["*.internal.example"] },
-  search: createSearxngSearch({ baseUrl: process.env.MARS_SEARXNG_URL ?? "", fetch }),
-  model: createRegistryModelGateway({ registry, fetch, env: process.env }),
-  fetch,
-  hostPrivateRoots: [stateRoot, ompSessionDir],
-  log: (event) => logger.info(event),
+const service = await createWorkbenchService({
+  sourceRoot,
+  stateRoot,
+  scope,
+  research: {
+    search,                       // any SearchProvider (createBraveSearch, createSearxngSearch, a fake, ...)
+    worker: { live: false, deny_hosts: ["*.internal.example"] },  // ResearchWorkerConfigInput
+    fetch,                        // required unless worker.live
+    resolveHost,                  // required unless worker.live
+    model,                        // optional ModelGateway; default = registry free route
+    service: { maxConcurrency: 2, pollMs: 250 },  // control-plane limits
+    drainMs: 5000,
+  },
 });
-
-const research = await createResearchService({
-  rootDir: researchRoot,
-  tasks: store,
-  artifacts: store.artifacts,
-  events: store,
-  worker,
-  hostPrivateRoots: [stateRoot, ompSessionDir],
-});
-registerRuntimeCleanup("research", () => research.close({ drainMs: 5000 }));
-
-const host = await createWorkbenchHost({ ...hostOptions, store, registry, research });
 ```
+
+`model_requests` stays 0 in `bun run check` because the offline end-to-end test
+(`packages/workbench/src/research-service.test.ts`) answers both the Oh My Pi
+session and the worker's registry gateway through injected HTTP responses and
+serves fixture pages through an injected `fetch`.
 
 Notes:
 
-- `hostPrivateRoots` must list the same roots given to the control plane so
-  the worker redacts them before `publish` would reject them.
-- Pass the host's `fetch` explicitly even in live mode so tests and sandboxes
-  can swap it. Search adapters (`createSearxngSearch`, `createBraveSearch`,
-  `createTavilySearch`) are optional; any object implementing
-  `SearchProvider` works. API keys are passed as values read by the host from
-  its environment and are never logged or stored by the worker.
+- `hostPrivateRoots` must list the same roots for the worker and the control
+  plane so the worker redacts them before `publish` would reject them.
 - The host already bounds each request's budget and deadline
   (`researchTools` in `packages/workbench/src/research-context.ts`); the worker
   enforces them again from its own ledger.
-- For an auditable run, pass `journal: createRecordingJournal()` and persist
-  `journal.entries()`; replay with `createReplayJournal(entries)` and a
-  throwing `fetch`/search/model to reproduce the findings offline.
+- For an auditable run, pass `journal: createRecordingJournal()` to
+  `createResearchWorker` directly and persist `journal.entries()`; the
+  `mars serve` path does not persist journals.
 
 ## Verification
 
@@ -142,8 +166,13 @@ private, IPv6, `localhost`, DNS to private, redirect to link-local, mixed
 public/private answers), allow/deny lists, `robots.txt` rules, crawl delay and
 5xx handling, byte and media-type caps, cancellation, redaction, idempotent
 finding keys, deterministic replay, the registry model gateway (free model via
-injected fetch, paid refusal), and an end-to-end run through the real
-`@mars/research` service and `@mars/tasks` artifact store.
+injected fetch, paid refusal), an end-to-end run through the real
+`@mars/research` service and `@mars/tasks` artifact store, and (in
+`packages/workbench`) a `mars_research` → worker → `mars_findings` round trip
+through `createWorkbenchService`, the authenticated RPC server and the actual
+Oh My Pi SDK with injected model responses. CLI tests cover the research flags:
+missing credential (names only the variable), startup with a configured free
+model and clean shutdown, and `--help`.
 
 ## Contract change
 
@@ -151,8 +180,11 @@ injected fetch, paid refusal), and an end-to-end run through the real
 
 ## Known gaps
 
-- Live mode is unverified: no human has run the worker against a real search
-  provider or model yet.
+- Live mode is unverified: no human has run `mars serve --research-search`
+  against a real search provider or model yet. Provider response shapes are
+  implemented from public documentation, not from recorded live responses.
+- `mars serve` cannot opt into paid research models; use the programmatic
+  option with `worker.paid_consent` if that is ever wanted.
 - DNS is checked before the request, but `fetch` resolves the hostname again;
   a DNS-rebinding attacker could race the two. Firecrawl shares this limit and
   delegates it to a proxy; a pinned-IP dispatcher is future work.

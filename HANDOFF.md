@@ -18,7 +18,7 @@ All 67 PRs across the three repos are merged; no open PRs. CI green on `main` he
 | --- | --- | --- |
 | 0 Source baseline | done | `packages/contracts`, `sources/manifest.json`, `documentation/SOURCE_REGISTER.md` (#1) |
 | 1 Coding workbench | code complete; **acceptance unverified** (no live model run, no real VS Code window) | `packages/{providers,execution,tasks,workspaces,workbench}`, `apps/{cli,vscode}` (#2-#20, #23) |
-| 2 Memory & research | partial: memory service + frozen recall (#22-#29), Aider-style repo map (#28, #31, #34), research control plane wired to sessions (#26, #39), research worker package (#41) **not wired into `mars serve`**; no browser worker | `packages/{memory,context,research,research-worker}` |
+| 2 Memory & research | partial: memory service + frozen recall (#22-#29), Aider-style repo map (#28, #31, #34), research control plane wired to sessions (#26, #39), research worker package (#41) wired into `mars serve --research-search brave\|searxng\|tavily` (offline e2e verified; **live search/model run unverified**); no browser worker | `packages/{memory,context,research,research-worker}`, `apps/cli/src/serve.ts` |
 | 3 Skill learning | **not in this repo**; `mars-platform` has `@mars/skills` + `@mars/review` with no link to this repo | `mars-platform/packages/skills`, `mars-platform/services/review` |
 | 4 Measured improvement (Harbor / Terminal-Bench, GEPA, mini-swe baseline, verifiers) | **not started**; only the evidence-gated specialist registry/routing exists (#30, #35, #38, #40) | `packages/specialists` |
 | 5-8 Remote execution, SFT, vLLM serving, RL | not started | — |
@@ -47,12 +47,13 @@ Everything is verified offline only: fixtures, injected model responses, `model_
 - Model output is untrusted: writing-block addresses are validated against addresses the user supplied in the request, `app://` connector ids against the host registry, review ranges against a line cap. Follow-ups, app triggers and review links are proposals; the host never runs a tool because the model emitted a link.
 - `OUTPUT_FORMAT_PROMPT` is appended once to the execution runtime system prompt, so coordinator, workers, reviewer and delegated children all receive it. The research worker's extraction model is deliberately excluded: its contract is a single JSON object, not Markdown.
 - Claims of "improvement" require independent evidence (holdout, baseline, cost) — a finished job is not evidence (spec sections 16-17).
+- Research in `mars serve` is opt-in (`--research-search`), credentials are referenced by environment variable name only, the worker uses the registry's free default model and refuses paid ones (no CLI paid opt-in), and startup fails fast when no free model is configured rather than queuing requests that cannot run. The research store's private needles are the sibling state directories (`memory`, `sessions`, `tasks`, `workspaces`) plus the source checkout, because the store refuses a private root that contains it.
 
 ## Next steps
 
 Dispatched 2026-11-02 as parallel child sessions, each opening its own PR against `main`:
 
-1. Wire `@mars/research-worker` into `mars serve` (host option, config, docs) so `mars_research` can retrieve live evidence when a search provider is configured.
+1. ~~Wire `@mars/research-worker` into `mars serve`~~ — done (`WorkbenchServiceOptions.research`, `mars serve --research-search`, `mars doctor` research section). Remaining: a human run with a real Brave/Tavily/SearXNG endpoint and a free model to verify live mode; recorded provider responses as fixtures.
 2. Milestone 4: Harbor / Terminal-Bench 2 adapter and GEPA prompt-optimisation worker behind the spec's evaluation and optimisation interfaces, with a documented local-model (Qwen3-Coder via Ollama) path.
 3. Milestone 3: bring `@mars/skills` and the proposal-only review runner from `mars-platform` into this repo behind the skill service interface, wired to workbench sessions.
 4. `MARS` site: rebase and land the `/how` landscape branches.

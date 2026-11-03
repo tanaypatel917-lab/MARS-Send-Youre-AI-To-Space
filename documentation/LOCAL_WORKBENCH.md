@@ -110,15 +110,24 @@ bun test packages/workbench/src/service.test.ts packages/workspaces
 
 The service tests send authenticated HTTP through the actual VS Code typed client and actual Oh My Pi SDK, using injected model HTTP responses and dummy keys. They cover private file writes, progress/artifact/diff retrieval, checkpoint/restore, source immutability, shutdown/restart with the same journal/workspace, steering, cancellation and token rotation. The optional Docker flow has the SDK write a file and invoke a real sandbox command that verifies its contents and non-root identity. CLI tests cover private connection credentials, no-credential startup, sanitized failures and signal cleanup releasing the provider lock. These tests demonstrate harness integration, **not model quality**.
 
-No live model request, paid service or real VS Code window is used for this verification. Live-model task quality and the complete master-spec Milestone 1 acceptance evidence remain outstanding. Frozen memory, journal recall, repository maps, evidence-gated specialist routing and single-agent collaboration rooms are connected; live research, specialist routing for child models, learned skills, independent evaluation and training are not connected by this increment. Delegation is verified only with a fixture child adapter; no child Oh My Pi session ran against a live model. A normal agent completion status does not claim independent acceptance tests passed.
+No live model request, paid service or real VS Code window is used for this verification. Live-model task quality and the complete master-spec Milestone 1 acceptance evidence remain outstanding. Frozen memory, journal recall, repository maps, evidence-gated specialist routing, single-agent collaboration rooms and (behind `--research-search`) the background research worker are connected; live research against a real search provider and model, specialist routing for child models, learned skills, independent evaluation and training are not verified or not connected by this increment. Delegation is verified only with a fixture child adapter; no child Oh My Pi session ran against a live model. A normal agent completion status does not claim independent acceptance tests passed.
 
 ## Background research
 
 Sessions are asked (via the shared runtime system prompt) to write the [MARS Output Format](OUTPUT_FORMAT.md): writing blocks, app triggers, review links, follow-ups. `@mars/output-format` parses and validates that text offline; neither the workbench host nor the CLI or VS Code client calls it yet, so agent text is still shown as plain text.
 
-When the host is created with a parent-owned `research` service (the
-`@mars/research` control plane; no production worker ships yet, so this is
-test-injected only), every session is given two host-bound tools:
+When `mars serve` is started with `--research-search brave|searxng|tavily`
+(or `createWorkbenchService` receives a `research` option), the service opens
+the durable `@mars/research` store under `<state>/research`, runs the
+`@mars/research-worker` claim loop with the chosen search provider and the
+registry's free default model, and hands the control plane to the host; see
+[RESEARCH_WORKER.md](RESEARCH_WORKER.md) for flags, credentials (environment
+variable names only) and limits. Without the flag nothing is opened and no
+research tools exist. Live search and model runs remain **unverified**; the
+offline test `packages/workbench/src/research-service.test.ts` drives a
+request from `mars_research` through the real worker to `mars_findings` with a
+fake search provider, fixture pages and injected model responses. When the host
+has a `research` service, every session is given two host-bound tools:
 `mars_research` queues a sourced question scoped to the task's current
 durable revision, with the task budget as its ceiling and a deadline no later
 than ten minutes or the task's remaining duration (the launch deadline is

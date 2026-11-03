@@ -16,7 +16,7 @@ The local workbench connects the VS Code client and CLI to durable tasks, isolat
 - A CLI diagnostic, source-pin validator, tests, and CI.
 - The [MARS Output Format](documentation/OUTPUT_FORMAT.md): a deterministic, host-validated model-to-UI contract (`@mars/output-format`) for writing blocks, typed links, `app://` triggers, `mars://review` locations and `:mars-followup` buttons. Parsed output is untrusted text; follow-ups, app triggers and review links are proposals the host validates and the user confirms, never auto-run.
 
-The memory service, skill service, evaluation, datasets, training, and specialist serving are **not implemented**. Research has a durable control plane and an offline-verified worker ([documentation/RESEARCH_WORKER.md](documentation/RESEARCH_WORKER.md)) that no host wires yet. The integration trust gate is a library, not an enabled third-party loader or approval UI. Real-model and real IDE acceptance remain unverified. See [local workbench setup and evidence limits](documentation/LOCAL_WORKBENCH.md) and [milestone gates](documentation/MILESTONE_0.md).
+The memory service, skill service, evaluation, datasets, training, and specialist serving are **not implemented**. Research has a durable control plane and an offline-verified worker that `mars serve --research-search brave|searxng|tavily` runs for every session ([documentation/RESEARCH_WORKER.md](documentation/RESEARCH_WORKER.md)); no live search provider or model run has been verified. The integration trust gate is a library, not an enabled third-party loader or approval UI. Real-model and real IDE acceptance remain unverified. See [local workbench setup and evidence limits](documentation/LOCAL_WORKBENCH.md) and [milestone gates](documentation/MILESTONE_0.md).
 
 ## Setup
 
@@ -45,6 +45,7 @@ Lifecycle scripts stay disabled: optional `onnxruntime-node` and `protobufjs` po
 | `bun run check` | Lint, typecheck, offline source validation, tests, actual execution SDK/native initialization |
 | `bun run doctor` | JSON diagnostic with explicit unimplemented features |
 | `bun apps/cli/src/main.ts serve --help` | Local workbench service options; no provider request at startup |
+| `bun apps/cli/src/main.ts serve --research-search brave` | Same service with background research; reads `BRAVE_SEARCH_API_KEY` (name configurable) at startup, needs a configured free model, live mode unverified |
 | `bun apps/cli/src/main.ts render [file] [--connectors ids] [--address a@b.com] [--follow-up N] [--json]` | Render MARS Output Format text (file or stdin) for a terminal; follow-ups, `app://` triggers and `mars://review` links are listed as proposals, nothing is executed |
 | `bun run smoke:execution` | No-provider/no-tool SDK and native search probe |
 | `bun run audit:sources` | Validate source references, spec digest, package pins, installed versions, and lockfile integrity |
