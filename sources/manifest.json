@@ -656,10 +656,7 @@
       "integration_owner": "packages/skills (@mars/skills): stale/archive transitions in SkillStore.runCurator and usage counters via recordUse; no separate curator process.",
       "target_milestone": "Milestone 3",
       "adaptation_decision": "Adapt usage signals + deterministic stale/archive transitions as inputs to the MARS skill service (OpenClaw-derived); do not run Hermes curator as a second skill owner. LLM consolidation becomes a proposal, evaluated before acceptance.",
-      "dependencies": [
-        "hermes skills dir layout",
-        "cron job registry"
-      ],
+      "dependencies": ["hermes skills dir layout", "cron job registry"],
       "acceptance_plan": "Seed skill service with 3 skills (unused 15d, unused 31d, pinned unused 60d) and a cron ref; run transitions with frozen clock; assert stale/archived/untouched respectively, archived one restorable, no file deleted.",
       "audit_checks": {
         "inspected_test_commands": [
@@ -669,9 +666,7 @@
         "executed_checks": [
           "scripts/run_tests.sh (auto-bootstraps Python 3.14 env via scripts/run-in-hermes-env) tests/agent/test_curator.py -> 38 passed"
         ],
-        "not_executed": [
-          "curator LLM review pass"
-        ]
+        "not_executed": ["curator LLM review pass"]
       },
       "risks": [
         "Curator archive semantics overlap OpenClaw unused-archive; must pick one implementation (OpenClaw) to avoid dual owners"
@@ -708,14 +703,10 @@
       "integration_owner": "packages/providers (external-memory adapter) under services/memory",
       "target_milestone": "Milestone 2 interface; providers later hardening",
       "adaptation_decision": "Port the ABC shape as a TypeScript/Python transport schema for MARS packages/providers external-memory adapter; one active provider at a time, built-in memory remains authoritative (matches blueprint). Do not vendor Honcho/Hindsight code (outside repo, separate licensing unverified).",
-      "dependencies": [
-        "agent/memory_manager.py"
-      ],
+      "dependencies": ["agent/memory_manager.py"],
       "acceptance_plan": "Implement a fake in-memory provider against the adapter contract; assert on_memory_write mirror receives every accepted write from the memory service, provider failure (is_available=false) leaves built-in memory writes succeeding, and provider cannot write MEMORY.md directly.",
       "audit_checks": {
-        "inspected_test_commands": [
-          "tests/agent/test_memory_provider*.py"
-        ],
+        "inspected_test_commands": ["tests/agent/test_memory_provider*.py"],
         "executed_checks": [
           "scripts/run_tests.sh (auto-bootstraps Python 3.14 env via scripts/run-in-hermes-env) tests/agent/test_memory_provider.py -> 65 passed"
         ],
@@ -799,9 +790,7 @@
       ],
       "acceptance_plan": "vitest against packages/skills: propose draft -> not loadable by runtime; accept after passing check -> runtime loads exact revision id; patch then undo restores byte-identical prior version; 11 patches keep newest 10 versions; tampered saved version refuses restore; archive then restore round-trips.",
       "audit_checks": {
-        "inspected_test_commands": [
-          "pnpm exec vitest run <file>"
-        ],
+        "inspected_test_commands": ["pnpm exec vitest run <file>"],
         "executed_checks": [
           "pnpm install --frozen-lockfile --ignore-scripts (ok, 9.4s)",
           "pnpm exec vitest run src/skills/workshop/experience-review-scheduler.test.ts src/skills/workshop/drafts.test.ts src/skills/workshop/library.test.ts -> 3 files, 34 passed"
@@ -862,9 +851,7 @@
       "integration_owner": "packages/review (@mars/review ReviewRunner): the ONE background review scheduler, host-scheduled after completed foreground tasks; emits proposals only.",
       "target_milestone": "Milestone 3",
       "adaptation_decision": "Port scheduler (counter + idle debounce + single-flight + backoff) as the ONE MARS background review scheduler; plug Hermes-derived review prompt/whitelist into its runReview dependency; reviewer outputs proposals only.",
-      "dependencies": [
-        "openclaw-skill-workshop"
-      ],
+      "dependencies": ["openclaw-skill-workshop"],
       "acceptance_plan": "Fake-timer vitest: 10 iterations -> exactly one review queued after idle window; review's own skill edit resets counter and does not enqueue a review (no recursion); two sessions -> reviews serialized (never 2 in flight); live activity defers review.",
       "audit_checks": {
         "inspected_test_commands": [
@@ -874,9 +861,7 @@
           "experience-review-scheduler.test.ts (in the 34 passed run)",
           "experience-review.test.ts (in 4 files / 51 passed run)"
         ],
-        "not_executed": [
-          "model-backed review"
-        ]
+        "not_executed": ["model-backed review"]
       },
       "risks": [
         "In-process timers; MARS needs persistence across restarts (scheduler state is in-memory Maps)",
@@ -934,10 +919,7 @@
       "integration_owner": "services/memory (retrieval); consolidation proposals via memory write service",
       "target_milestone": "Milestone 2 retrieval; Milestone 3 consolidation",
       "adaptation_decision": "Port hybrid merge/MMR/temporal-decay as pure ranking functions into services/memory retrieval over the derived index (explicit relevance/recency/importance/diversity settings). Dreaming consolidation adapted to emit PROPOSED durable facts to the memory write service - it must not write MEMORY files directly (OpenClaw memory-core writes workspace Markdown itself; that conflicts with single-writer rule).",
-      "dependencies": [
-        "memory-host-sdk (src/memory-host-sdk)",
-        "SQLite FTS5"
-      ],
+      "dependencies": ["memory-host-sdk (src/memory-host-sdk)", "SQLite FTS5"],
       "acceptance_plan": "Golden-ranking test: fixture corpus of 20 notes with known timestamps/duplicates; assert hybrid+MMR top-5 matches expected ids and contains no near-duplicate pair; consolidation run over 3 daily observations yields proposals only (memory file hash unchanged until accept).",
       "audit_checks": {
         "inspected_test_commands": [
@@ -992,18 +974,12 @@
       "integration_owner": "Platform API (task/session owner) with channel adapters",
       "target_milestone": "Product hardening (full product)",
       "adaptation_decision": "Reference patterns only (connection lifecycle, versioned JSON frames, presence, shutdown budget); build thin channel adapters into MARS platform API. Do not run OpenClaw gateway as an independent session owner. gateway-protocol package may be reused as schema reference if extraction is clean.",
-      "dependencies": [
-        "packages/gateway-protocol"
-      ],
+      "dependencies": ["packages/gateway-protocol"],
       "acceptance_plan": "Start MARS API + one WebSocket channel adapter; from adapter start a task, inspect, steer, cancel; assert same task id/session visible in CLI and IDE client and no separate agent history created per channel.",
       "audit_checks": {
-        "inspected_test_commands": [
-          "src/gateway/*.test.ts (many)"
-        ],
+        "inspected_test_commands": ["src/gateway/*.test.ts (many)"],
         "executed_checks": [],
-        "not_executed": [
-          "all gateway tests (not run in this audit)"
-        ]
+        "not_executed": ["all gateway tests (not run in this audit)"]
       },
       "risks": [
         "Gateway owns sessions/approvals/secrets in OpenClaw - large surface; only patterns transferable",
@@ -1222,11 +1198,7 @@
       "integration_owner": "MARS evaluation group (baseline owner)",
       "target_milestone": "M4",
       "adaptation_decision": "Use unmodified as independent baseline. Primary path: Harbor's built-in installed adapter (`-a mini-swe-agent --ak version=2.4.6`) so baseline and MARS candidate share task, environment, verifier and resource limits. Pin version explicitly (adapter installs latest when version omitted). Standalone CLI path only for cross-checks, with differences recorded.",
-      "dependencies": [
-        "litellm",
-        "Harbor installed-agent adapter",
-        "Docker"
-      ],
+      "dependencies": ["litellm", "Harbor installed-agent adapter", "Docker"],
       "acceptance_plan": [
         "B1 (cheap, requires approved model key): `uv run harbor run -p <fixed 5-task slice> -a mini-swe-agent -m <pinned model> --ak version=2.4.6 --ak cost_limit=<cap> --jobs-dir jobs/b1` and same slice with -a mars.harbor_agent:MarsAgent; assert identical task SHAs/verifier, per-trial reward, cost_usd and token counts recorded, trajectory.json validates as ATIF v1.7, and --n-attempts fixed.",
         "B2 (no LLM): unit test that Harbor mini_swe_agent adapter renders install command with ==2.4.6 and converts a fixture .traj.json into ATIF (existing tests/unit/agents/installed/test_mini_swe_agent.py covers this)."
@@ -1301,18 +1273,13 @@
       "integration_owner": "MARS evaluation group (prompt-optimization owner)",
       "target_milestone": "M4",
       "adaptation_decision": "Use as-is for optimizing explicit prompt targets of DSPy modules. MARS must always pass an explicit valset and keep final test set outside compile(); no fork.",
-      "dependencies": [
-        "gepa 0.1.4",
-        "litellm"
-      ],
+      "dependencies": ["gepa 0.1.4", "litellm"],
       "acceptance_plan": [
         "C1 (no LLM): with dspy.utils.DummyLM, compile a 1-predictor program via dspy.GEPA(metric=..., max_metric_calls=20, reflection_lm=DummyLM) on disjoint train/val ids; instrument metric to log example ids and assert no final-test id is ever seen; then score baseline and optimized program on final test outside the optimizer and record both.",
         "C2: assert compile() without valset emits the reuse warning and that MARS wrapper refuses to proceed."
       ],
       "audit_checks": {
-        "inspected_not_executed": [
-          "full uv run pytest suite"
-        ],
+        "inspected_not_executed": ["full uv run pytest suite"],
         "executed": [
           {
             "cmd": "uv sync --extra dev && uv run pytest tests/teleprompt/test_gepa.py tests/teleprompt/test_gepa_instruction_proposer.py tests/teleprompt/test_gepa_builtin_instruction_proposer.py -q",
@@ -1492,9 +1459,7 @@
         "pass_criteria": "Smoke returns ranked_symbol from the non-chat library. Adapter gate: run twice, then edit a symbol while restoring mtime; change git revision and unsaved-buffer content independently. All changes must invalidate cache. A symlink outside root and a secret fixture must never appear; exact target-model token count must stay <= requested cap. These adapter checks require future MARS code; they are not supplied by upstream tests."
       },
       "audit_checks": {
-        "instructions_read": [
-          "CONTRIBUTING.md"
-        ],
+        "instructions_read": ["CONTRIBUTING.md"],
         "inspected_test_commands": [
           "pytest (CONTRIBUTING.md)",
           "pytest tests/basic/test_repomap.py (path-scoped audit recipe; file inspected)"
@@ -1595,10 +1560,7 @@
         "pass_criteria": "Local navigation yields screenshot/state and denied.invalid action returns an error without remote access. Future adapter gate: separate profiles must not share cookie/localStorage; redirect/new-tab and forbidden subresource/metadata destinations must produce zero forbidden fixture requests under external egress enforcement; unapproved upload/download paths/actions rejected; cancel hung page and prove browser process/profile cleanup within deadline. Upstream domain tests alone do not establish these guarantees."
       },
       "audit_checks": {
-        "instructions_read": [
-          "AGENTS.md",
-          "CLAUDE.md"
-        ],
+        "instructions_read": ["AGENTS.md", "CLAUDE.md"],
         "inspected_test_commands": [
           "uv run pytest -vxs tests/ci (AGENTS.md)",
           "bin/test.sh invokes uv run pytest --numprocesses auto tests/ci",
@@ -2262,12 +2224,7 @@
         "model_control": "Server instructions and _instructions output steer the calling model. Error path fabricates a caution verdict with signals_analyzed 100+.",
         "state": "Module-level mutable _mcpSource/_callerHash/_mcpClient globals shared across server instances.",
         "purpose": "Consumer brand/shop reputation tool, NOT an MCP/code security scanner. README M8ven Verified MCP trust score is a remote service with no source in this repo.",
-        "unexecuted": [
-          "install",
-          "build",
-          "tests",
-          "remote endpoint"
-        ]
+        "unexecuted": ["install", "build", "tests", "remote endpoint"]
       },
       "risks": [
         "Service-role key bypasses RLS; free-text context/details sent to Supabase.",
@@ -2431,10 +2388,7 @@
         "spdx": "Apache-2.0",
         "path": "LICENSE",
         "url": "https://github.com/Graphify-Labs/graphify/blob/ab26b1ec1da995743ef5a165a07b0d45ad3314c8/LICENSE",
-        "additional_notices": [
-          "LICENSE-MIT",
-          "NOTICE"
-        ],
+        "additional_notices": ["LICENSE-MIT", "NOTICE"],
         "notes": "Apache-2.0 at the pinned LICENSE with an upstream NOTICE and a LICENSE-MIT for parts relicensed from the original MIT release. Nothing is copied or vendored: MARS runs the pinned CLI as an external subprocess and parses its JSON output; packages/knowledge-graph/NOTICE records the attribution."
       },
       "sources": [
