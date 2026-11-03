@@ -946,7 +946,7 @@ export class WorkbenchController {
       );
       return;
     }
-    selected.artifact = artifactView(artifact);
+    selected.artifact = artifactView(artifact, isFinalText(selected.task, ref));
     this.emit();
   }
 
@@ -1045,11 +1045,27 @@ function diffView(file: DiffFile, index: number): DiffFileView {
   };
 }
 
-export function artifactView(artifact: VerifiedArtifact): ArtifactView {
+/**
+ * The host stores the model's final text as a bare `text/plain` artifact on
+ * the task itself; command stdout/stderr are `text/plain; charset=utf-8` and
+ * only ever appear as event payloads, so they stay raw text.
+ */
+export function isFinalText(task: Task, ref: ArtifactRef): boolean {
+  return (
+    ref.media_type === "text/plain" &&
+    task.artifacts.some((item) => item.artifact_id === ref.artifact_id)
+  );
+}
+
+export function artifactView(
+  artifact: VerifiedArtifact,
+  finalText: boolean,
+): ArtifactView {
   const base = {
     artifact_id: artifact.ref.artifact_id,
     media_type: artifact.media_type,
     byte_length: artifact.bytes.byteLength,
+    final_text: finalText,
   };
   if (!TEXT_TYPES.test(artifact.media_type))
     return {

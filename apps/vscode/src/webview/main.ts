@@ -9,7 +9,6 @@ import type {
 } from "../messages";
 import { button, h } from "./dom";
 import { renderOutput } from "./output";
-import { isFinalText } from "./outputView";
 
 interface VsCodeApi {
   postMessage(message: WebviewMessage): void;
@@ -508,7 +507,7 @@ function renderSelected(s: ViewState, sel: SelectedView): HTMLElement {
         ),
         ...(sel.artifact.text === null
           ? []
-          : isFinalText(sel.artifact.media_type)
+          : sel.artifact.final_text
             ? renderOutput(task, sel.artifact.text, (message) =>
                 vscode.postMessage(message),
               )

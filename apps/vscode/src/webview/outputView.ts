@@ -84,11 +84,6 @@ export function blockErrors(
   return errors.filter((error) => error.block_id === blockId);
 }
 
-/** Only the model's final text is MARS Output Format; other text artifacts stay raw. */
-export function isFinalText(mediaType: string): boolean {
-  return /^text\/plain(?:\s*;|$)/i.test(mediaType.trim());
-}
-
 /**
  * Body lines before the first `::tone` marker (outside code fences). The
  * parser assigns them to no tone, so a tone-aware panel must show them

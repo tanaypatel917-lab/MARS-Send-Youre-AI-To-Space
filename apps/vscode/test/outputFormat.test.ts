@@ -12,12 +12,15 @@ import { join } from "node:path";
 import { WorkbenchController } from "../src/controller";
 import { WebviewMessageSchema } from "../src/messages";
 import { openReviewTarget, type ReviewOpenerHost } from "../src/reviewOpener";
+import { buildOutputView, tonePreamble } from "../src/webview/outputView";
 import {
-  buildOutputView,
-  isFinalText,
-  tonePreamble,
-} from "../src/webview/outputView";
-import { describeResult, harness, makeTask } from "./fixtures";
+  artifactFor,
+  describeResult,
+  FakeServer,
+  harness,
+  makeEvent,
+  makeTask,
+} from "./fixtures";
 
 const base = mkdtempSync(join(tmpdir(), "mars-review-"));
 const root = join(base, "demo");
@@ -314,12 +317,51 @@ describe("output view model", () => {
       tonePreamble({ ...block, body: "::tone[Formal]\nHello" }),
     ).toBeNull();
   });
+});
 
-  test("only text/plain artifacts are treated as output format", () => {
-    expect(isFinalText("text/plain")).toBe(true);
-    expect(isFinalText("text/plain; charset=utf-8")).toBe(true);
-    expect(isFinalText("application/yaml")).toBe(false);
-    expect(isFinalText("text/x-diff")).toBe(false);
-    expect(isFinalText("text/plainish")).toBe(false);
+describe("final-text provenance", () => {
+  const followUp = '- :mars-followup[Retry]{prompt="Retry the task"}';
+
+  async function inspect(
+    mediaType: string,
+    onTask: boolean,
+  ): Promise<boolean | undefined> {
+    const server = new FakeServer();
+    const payload = artifactFor(followUp, "a-1", mediaType);
+    server.events = [makeEvent("e1", { payload: payload.ref })];
+    server.artifacts.set("a-1", payload.data_base64);
+    server.tasks.set(
+      "task-1",
+      makeTask({ status: "completed", artifacts: onTask ? [payload.ref] : [] }),
+    );
+    const ctx = harness(server);
+    const controller = new WorkbenchController({
+      connect: ctx.connect,
+      ui: ctx.ui,
+      post: (state) => ctx.states.push(state),
+      modelId: () => null,
+      newId: () => "id",
+      poller: { minDelayMs: 50, maxDelayMs: 50 },
+    });
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({ type: "selectTask", taskId: "task-1" });
+    for (let i = 0; i < 20 && !ctx.last().selected?.events.length; i++)
+      await new Promise((r) => setTimeout(r, 5));
+    await controller.handleMessage({
+      type: "inspectArtifact",
+      taskId: "task-1",
+      artifactId: "a-1",
+    });
+    const artifact = ctx.last().selected?.artifact;
+    controller.dispose();
+    expect(artifact?.text).toBe(followUp);
+    return artifact?.final_text;
+  }
+
+  test("only the task's bare text/plain artifact is output format", async () => {
+    expect(await inspect("text/plain", true)).toBe(true);
+    expect(await inspect("text/plain; charset=utf-8", true)).toBe(false);
+    expect(await inspect("text/plain", false)).toBe(false);
+    expect(await inspect("application/yaml", true)).toBe(false);
   });
 });

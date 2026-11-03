@@ -153,6 +153,8 @@ export interface ArtifactView {
   text: string | null;
   truncated: boolean;
   note: string | null;
+  /** The model's final text (a `text/plain` artifact listed on the task), the only artifact rendered as MARS Output Format. */
+  final_text: boolean;
 }
 
 export interface SelectedView {
