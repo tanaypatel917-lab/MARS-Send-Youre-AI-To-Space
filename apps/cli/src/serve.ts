@@ -16,7 +16,10 @@ import {
 } from "@mars/workbench";
 
 /** A configuration mistake whose message is safe to print: it names flags and environment variable names only. */
-export class ServeUsageError extends Error {}
+import { omnirouteFromFlags } from "./omniroute";
+import { ServeUsageError } from "./serve-errors";
+
+export { ServeUsageError };
 
 /** Search providers `mars serve` can drive; credentials are read from the named environment variable at startup only. */
 export const RESEARCH_SEARCH_PROVIDERS = {
@@ -138,6 +141,10 @@ export async function runServer(args: string[]): Promise<void> {
       "research-deny-host": { type: "string", multiple: true },
       graphify: { type: "string", multiple: true },
       "graphify-os-wrapper": { type: "boolean" },
+      omniroute: { type: "boolean" },
+      "omniroute-url": { type: "string" },
+      "omniroute-start": { type: "boolean" },
+      "omniroute-allow": { type: "string", multiple: true },
       help: { type: "boolean" },
     },
   });
@@ -146,9 +153,11 @@ export async function runServer(args: string[]): Promise<void> {
       [
         "Usage: mars serve [--source DIR] [--state PRIVATE_DIR] [--port 7331] [--owner ID] [--project ID] [--image REPO@sha256:DIGEST] [--trust-project]",
         "                  [--research-search brave|searxng|tavily] [--research-api-key-env NAME] [--research-searxng-url URL] [--research-model ID] [--research-deny-host PATTERN]... [--graphify ARG]... [--graphify-os-wrapper]",
+        "                  [--omniroute] [--omniroute-url http://localhost:20128] [--omniroute-start] [--omniroute-allow web-session|browser-session|caution|ambiguous|unknown]...",
         "Without a pre-pulled digest-pinned image, command execution is disabled. No model request is made at startup. Connection credentials are written only to the private connection file.",
         "Code knowledge graph tools (mars_graph_build, mars_graph_query) are offered only with --graphify ARG (repeatable; the argv prefix of the pinned graphify 0.9.101 executable from a uv/venv install, optionally behind an OS sandbox such as bwrap, then pass --graphify-os-wrapper). Confinement without a wrapper is process-level only (argv, env allowlist, offline flags); the graph is a derived, rebuildable artifact.",
         "Background research runs only with --research-search. The search credential is read from BRAVE_SEARCH_API_KEY / TAVILY_API_KEY (or --research-api-key-env NAME) at startup and never stored; the worker uses the free default model unless --research-model names another free model. Live research is unverified.",
+        "--omniroute adds a self-hosted OmniRoute gateway as the `omniroute` provider target (attach to a running instance; --omniroute-start spawns the pinned omniroute CLI on 127.0.0.1). Only free, non-excluded catalog models route; MARS keeps policy and sends its paid-consent state. OMNIROUTE_API_KEY (OmniRoute's own key) is read by name; upstream credentials stay in OmniRoute. Live OmniRoute use is unverified.",
       ].join("\n"),
     );
     return;
@@ -173,6 +182,18 @@ export async function runServer(args: string[]): Promise<void> {
     },
     process.env,
   );
+  const omniroute = omnirouteFromFlags({
+    ...(values.omniroute !== undefined ? { enabled: values.omniroute } : {}),
+    ...(values["omniroute-url"] !== undefined
+      ? { url: values["omniroute-url"] }
+      : {}),
+    ...(values["omniroute-start"] !== undefined
+      ? { start: values["omniroute-start"] }
+      : {}),
+    ...(values["omniroute-allow"] !== undefined
+      ? { allow: values["omniroute-allow"] }
+      : {}),
+  });
   const source = await realpath(resolve(values.source ?? process.cwd()));
   const project =
     values.project ??
@@ -195,6 +216,7 @@ export async function runServer(args: string[]): Promise<void> {
           },
         }
       : {}),
+    ...(omniroute ? { omniroute } : {}),
     trustProjectConfig:
       values["trust-project"] === true ||
       process.env.MARS_TRUST_PROJECT_CONFIG === "1",
@@ -223,6 +245,7 @@ export async function runServer(args: string[]): Promise<void> {
                 : "process_env",
             }
           : null,
+        omniroute: service.omniroute,
       }),
     );
   });

@@ -10,6 +10,12 @@ export interface AdapterOptions {
   env?: Record<string, string | undefined>;
   fetch?: (input: string, init?: RequestInit) => Promise<Response>;
   timeoutMs?: number;
+  /**
+   * Extra request headers merged after the provider's own headers. The
+   * adapter still owns `Authorization`, so a caller cannot smuggle a credential
+   * or override the configured one through this hook.
+   */
+  headers?: Record<string, string>;
 }
 
 export interface ProviderAdapter {

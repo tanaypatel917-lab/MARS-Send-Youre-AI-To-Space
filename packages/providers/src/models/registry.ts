@@ -15,6 +15,7 @@ import {
   ModelsFileSchema,
   ProviderConfigSchema,
 } from "@mars/contracts";
+import type { AdapterFactory } from "./adapter-types";
 import { BUILTIN_MODELS, BUILTIN_PROVIDERS, BUILTIN_ROUTES } from "./presets";
 
 export interface LoadModelRegistryOptions {
@@ -26,6 +27,21 @@ export interface LoadModelRegistryOptions {
 
 export interface AddConfigOptions {
   force?: boolean;
+}
+
+/**
+ * In-memory additions layered over the loaded configuration by
+ * `ModelProviderRegistry.extend()`. Nothing here is written to disk.
+ */
+export interface RegistryExtension {
+  providers?: ProviderConfig[];
+  models?: ModelConfig[];
+  routes?: Record<string, string[]>;
+  /** Adapter factory every `ModelRouter` over the extended registry uses by default. */
+  adapterFactory?: AdapterFactory;
+  /** Credential environment merged over the loaded one (variable names resolve here first). */
+  env?: Record<string, string | undefined>;
+  notice?: string;
 }
 
 interface ParsedModelFile {
@@ -201,6 +217,8 @@ export class ModelProviderRegistry {
   private readonly env: Record<string, string | undefined>;
   private readonly trustProjectConfig: boolean;
   private file: ModelsFile;
+  /** Set by `extend()`; `ModelRouter` falls back to it when given no factory. */
+  readonly adapterFactory: AdapterFactory | undefined;
 
   constructor(
     userFilePath: string,
@@ -208,6 +226,7 @@ export class ModelProviderRegistry {
     merged: MergedModelFiles,
     env: Record<string, string | undefined>,
     trustProjectConfig: boolean,
+    adapterFactory?: AdapterFactory,
   ) {
     this.userFilePath = userFilePath;
     this.projectFilePath = projectFilePath;
@@ -216,6 +235,44 @@ export class ModelProviderRegistry {
     this.notices = merged.notices;
     this.env = env;
     this.trustProjectConfig = trustProjectConfig;
+    this.adapterFactory = adapterFactory;
+  }
+
+  /**
+   * Returns a new registry with additional providers, models and routes
+   * merged in memory (by id, additions win). The user's `policy.allowPaid`
+   * is kept as is: an extension can add targets, never consent to paid use.
+   * An extension provider cannot redefine a configured one.
+   */
+  extend(extension: RegistryExtension): ModelProviderRegistry {
+    const existing = new Set(this.file.providers.map(({ id }) => id));
+    for (const provider of extension.providers ?? []) {
+      if (existing.has(provider.id))
+        throw new Error(
+          `Registry extension cannot redefine configured provider "${provider.id}".`,
+        );
+    }
+    const config = ModelsFileSchema.parse({
+      version: 1,
+      providers: mergeById(this.file.providers, extension.providers ?? []),
+      models: mergeById(this.file.models, extension.models ?? []),
+      routes: { ...this.file.routes, ...extension.routes },
+      policy: { allowPaid: this.file.policy.allowPaid },
+    });
+    return new ModelProviderRegistry(
+      this.userFilePath,
+      this.projectFilePath,
+      {
+        config,
+        notices: extension.notice
+          ? [...this.notices, extension.notice]
+          : [...this.notices],
+        ignoredProjectConfig: this.ignoredProjectConfig,
+      },
+      extension.env ? { ...this.env, ...extension.env } : this.env,
+      this.trustProjectConfig,
+      extension.adapterFactory ?? this.adapterFactory,
+    );
   }
 
   get providers(): ProviderConfig[] {

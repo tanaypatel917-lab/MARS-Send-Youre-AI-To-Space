@@ -19,6 +19,18 @@ import { createKnowledgeGraphService } from "@mars/knowledge-graph";
 import { createMemoryStore, type DurableMemoryStore } from "@mars/memory";
 import { loadModelRegistry, type ModelProviderRegistry } from "@mars/providers";
 import {
+  createOmniRouteProcess,
+  discoverOmniRouteCapabilities,
+  type ExclusionOverrides,
+  extendRegistryWithOmniRoute,
+  type FreeTierCatalog,
+  loadFreeTierCatalog,
+  OMNIROUTE_DEFAULT_URL,
+  type OmniRouteProcess,
+  type OmniRouteProcessOptions,
+  type OmniRouteProcessStatus,
+} from "@mars/providers-omniroute";
+import {
   createResearchService,
   type DurableResearchService,
   type ResearchServiceOptions,
@@ -85,6 +97,36 @@ export interface WorkbenchResearchOptions {
   drainMs?: number;
 }
 
+/**
+ * Optional self-hosted OmniRoute gateway as one more provider target. MARS
+ * keeps model policy: only free, non-excluded catalog entries are
+ * registered, the user's `allowPaid` is untouched, and every request carries
+ * the task's paid-consent state. OmniRoute's own configuration, gateway key
+ * and upstream credentials stay in its data directory; MARS never reads them.
+ */
+export interface WorkbenchOmniRouteOptions {
+  /** Origin or `/v1` URL; default `http://localhost:20128`. */
+  url?: string;
+  /** Start a pinned instance on loopback when none answers (default: attach only). */
+  start?: boolean;
+  command?: string[];
+  allowVersionMismatch?: boolean;
+  /** Opt-ins over the default exclusions (web-session, browser-session, terms risk). */
+  overrides?: ExclusionOverrides;
+  /**
+   * Paid consent carried to OmniRoute for non-free routes. Default false:
+   * the user's `allowPaid` alone never counts as task consent.
+   */
+  paidConsent?: boolean;
+  /** Catalog to use instead of the bundled `free-tier-catalog.json`. */
+  catalog?: FreeTierCatalog;
+  env?: Record<string, string | undefined>;
+  fetch?: OmniRouteProcessOptions["fetch"];
+  spawn?: OmniRouteProcessOptions["spawn"];
+  run?: OmniRouteProcessOptions["run"];
+  log?: OmniRouteProcessOptions["log"];
+}
+
 export interface WorkbenchServiceOptions {
   sourceRoot: string;
   stateRoot: string;
@@ -106,13 +148,64 @@ export interface WorkbenchServiceOptions {
     /** `command` wraps graphify in an OS sandbox (bwrap, firejail, …). */
     osWrapper?: boolean;
   };
+  /** OmniRoute provider target; absent means no OmniRoute models exist. */
+  omniroute?: WorkbenchOmniRouteOptions;
   runtimeFactory?: WorkbenchHostOptions["runtimeFactory"];
 }
 
 export interface WorkbenchService {
   readonly url: string;
   readonly connectionFile: string;
+  /** Null unless the service was started with `omniroute`. */
+  readonly omniroute: OmniRouteProcessStatus | null;
   close(): Promise<void>;
+}
+
+async function openOmniRoute(
+  registry: ModelProviderRegistry,
+  options: WorkbenchOmniRouteOptions,
+): Promise<{ process: OmniRouteProcess; registry: ModelProviderRegistry }> {
+  const url = options.url ?? OMNIROUTE_DEFAULT_URL;
+  const env = options.env ?? process.env;
+  const omniroute = createOmniRouteProcess({
+    mode: options.start ? "start" : "attach",
+    url,
+    env,
+    ...(options.command ? { command: options.command } : {}),
+    ...(options.allowVersionMismatch
+      ? { allowVersionMismatch: options.allowVersionMismatch }
+      : {}),
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+    ...(options.spawn ? { spawn: options.spawn } : {}),
+    ...(options.run ? { run: options.run } : {}),
+    ...(options.log ? { log: options.log } : {}),
+  });
+  await omniroute.start();
+  try {
+    const catalog = options.catalog ?? (await loadFreeTierCatalog());
+    // One GET /v1/models refines tools/vision/context; never a model request.
+    const discovered = await discoverOmniRouteCapabilities({
+      url,
+      env,
+      ...(options.fetch ? { fetch: options.fetch } : {}),
+    });
+    return {
+      process: omniroute,
+      registry: extendRegistryWithOmniRoute(registry, {
+        catalog,
+        url,
+        ...(options.overrides ? { overrides: options.overrides } : {}),
+        ...(discovered ? { discovered } : {}),
+        // The registry resolves OMNIROUTE_API_KEY from the same environment
+        // the probe used, so a discovered gateway is also routable.
+        ...(options.env ? { env: options.env } : {}),
+        policy: { paidConsent: options.paidConsent === true },
+      }),
+    };
+  } catch (error) {
+    await omniroute.stop().catch(() => undefined);
+    throw error;
+  }
 }
 
 async function privateSubdirectory(
@@ -170,17 +263,30 @@ export async function createWorkbenchService(
   const reviewRoot = await privateSubdirectory(root, "review");
   const hostRoot = join(root, "sessions");
   await mkdir(hostRoot, { recursive: true, mode: 0o700 });
-  const registry =
+  const baseRegistry =
     options.registry ??
     (await loadModelRegistry({
       cwd: source,
       trustProjectConfig: options.trustProjectConfig === true,
     }));
-  const store = await createTaskStore({
-    rootDir: join(root, "tasks"),
-    workspaceRoots: [source],
-    hostPrivateRoots: [root, memoryRoot, skillsRoot, reviewRoot],
-  });
+  let omniroute: OmniRouteProcess | undefined;
+  let registry = baseRegistry;
+  if (options.omniroute) {
+    const opened = await openOmniRoute(baseRegistry, options.omniroute);
+    omniroute = opened.process;
+    registry = opened.registry;
+  }
+  let store: Awaited<ReturnType<typeof createTaskStore>>;
+  try {
+    store = await createTaskStore({
+      rootDir: join(root, "tasks"),
+      workspaceRoots: [source],
+      hostPrivateRoots: [root, memoryRoot, skillsRoot, reviewRoot],
+    });
+  } catch (error) {
+    await omniroute?.stop().catch(() => undefined);
+    throw error;
+  }
   let workspace:
     | Awaited<ReturnType<typeof createLocalWorkspaceProvider>>
     | undefined;
@@ -372,6 +478,7 @@ export async function createWorkbenchService(
     return {
       url,
       connectionFile,
+      omniroute: omniroute?.status() ?? null,
       close() {
         closing ??= (async () => {
           const outcomes = [
@@ -389,6 +496,7 @@ export async function createWorkbenchService(
             await Promise.allSettled([
               runningReview?.stop() ?? Promise.resolve(),
             ]),
+            await Promise.allSettled([omniroute?.stop() ?? Promise.resolve()]),
             await Promise.allSettled([runningRepositoryMap.close()]),
             await Promise.allSettled([runningMemory.close()]),
             await Promise.allSettled([provider.close()]),
@@ -405,6 +513,7 @@ export async function createWorkbenchService(
     if (host) await host.close().catch(() => undefined);
     if (research) await research.close({ drainMs: 0 }).catch(() => undefined);
     if (review) await review.stop().catch(() => undefined);
+    if (omniroute) await omniroute.stop().catch(() => undefined);
     if (repositoryMap) await repositoryMap.close().catch(() => undefined);
     if (workspace) await workspace.close().catch(() => undefined);
     if (memory) await memory.close().catch(() => undefined);
