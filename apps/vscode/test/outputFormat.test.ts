@@ -128,7 +128,7 @@ describe("review links", () => {
     ctx.controller.dispose();
   });
 
-  test("traversal, absolute paths and inverted ranges never reach the opener", async () => {
+  test("traversal, absolute paths, inverted and over-wide ranges never reach the opener", async () => {
     const ctx = await connectedWithTask();
     for (const bad of [
       { ...review, path: "../x" },
@@ -136,6 +136,7 @@ describe("review links", () => {
       { ...review, path: "src/../../x" },
       { ...review, path: "C:/Windows/x" },
       { ...review, line_start: 5, line_end: 2 },
+      { ...review, line_start: 1, line_end: 41 },
     ]) {
       await ctx.controller.handleMessage(bad);
       expect(ctx.last().notice?.kind).toBe("error");

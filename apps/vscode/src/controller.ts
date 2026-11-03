@@ -7,6 +7,7 @@ import type {
   TaskStatus,
   WorkspaceRef,
 } from "@mars/contracts";
+import { DEFAULT_MAX_REVIEW_LINES } from "@mars/output-format";
 import type { MarsClient, VerifiedArtifact } from "./client";
 import type { OpenOutcome } from "./diffOpener";
 import type {
@@ -878,6 +879,15 @@ export class WorkbenchController {
     }
     if (message.line_end < message.line_start) {
       this.setNotice("error", `Refused to open ${label}: empty line range.`);
+      this.emit();
+      return;
+    }
+    const span = message.line_end - message.line_start + 1;
+    if (span > DEFAULT_MAX_REVIEW_LINES) {
+      this.setNotice(
+        "error",
+        `Refused to open ${label}: range spans ${span} lines; the limit is ${DEFAULT_MAX_REVIEW_LINES}.`,
+      );
       this.emit();
       return;
     }
