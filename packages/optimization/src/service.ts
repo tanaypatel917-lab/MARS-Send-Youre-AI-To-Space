@@ -344,6 +344,17 @@ export function createOptimizationService(
     return validation.at(-1) ?? null;
   }
 
+  /** Latest validation score for a record in this job; the seed may fall back to an earlier job's baseline. */
+  function jobValidation(
+    record: CandidateRecord,
+    job: JobRecord,
+  ): ScoreProvenance | null {
+    const own = latestValidation(record, job.job_id);
+    if (own || record.candidate.candidate_id !== job.seed_candidate_id)
+      return own;
+    return latestValidation(record);
+  }
+
   async function bestCandidateId(
     context: RequestContext,
     job: JobRecord,
@@ -351,20 +362,14 @@ export function createOptimizationService(
     const records = await store.listCandidates(context, job.target_id);
     let best: { id: string; mean: number } | null = null;
     for (const record of records) {
-      const score = latestValidation(record, job.job_id);
+      const score = jobValidation(record, job);
       if (!score) continue;
+      const isSeed = record.candidate.candidate_id === job.seed_candidate_id;
       if (
         !best ||
         score.mean_score > best.mean ||
-        (score.mean_score === best.mean &&
-          record.candidate.candidate_id === job.seed_candidate_id)
+        (score.mean_score === best.mean && isSeed)
       ) {
-        if (
-          best &&
-          score.mean_score === best.mean &&
-          best.id === job.seed_candidate_id
-        )
-          continue;
         best = { id: record.candidate.candidate_id, mean: score.mean_score };
       }
     }
@@ -465,6 +470,7 @@ export function createOptimizationService(
       hardMetricCalls:
         cap + target.split.validation.length + start.reflection_minibatch_size,
       maxReflectionTokens: manifest.max_reflection_tokens,
+      estimatedUsdPerMetricCall: manifest.estimated_usd_per_metric_call,
       signal: abort.signal,
       now,
       candidateMeta(id) {
@@ -569,24 +575,91 @@ export function createOptimizationService(
     }
   }
 
+  class EvaluateStop extends Error {
+    constructor(
+      readonly reason: StopReason,
+      message: string,
+    ) {
+      super(message);
+    }
+  }
+
+  /**
+   * Scores one candidate on the validation split with the budget gated before
+   * the call (worst-case USD when an estimate is known), a hard deadline, and
+   * cancellation; a stalled or late backend result is abandoned, not recorded.
+   */
   async function scoreValidation(
     context: RequestContext,
     job: JobRecord,
     target: StoredTarget,
     candidate: PromptCandidate,
-    repeats: number,
-    budget: Budget,
+    request: EvaluateRequest,
+    startedAt: number,
+    abort: AbortController,
   ): Promise<ScoringResult> {
-    const request: ScoringRequest = {
+    const count = target.split.validation.length;
+    const remainingUsd = job.budget.max_usd - job.cost_usd;
+    const remainingMs = job.budget.max_duration_ms - (now() - startedAt);
+    if (abort.signal.aborted)
+      throw new EvaluateStop("cancelled", "cancelled by caller");
+    if (remainingMs <= 0)
+      throw new EvaluateStop("deadline", "max_duration_ms elapsed");
+    if (job.budget.max_usd > 0) {
+      const estimate = request.estimated_usd_per_metric_call;
+      const worstCase = estimate === null ? null : estimate * count;
+      if (remainingUsd <= 0 || (worstCase !== null && worstCase > remainingUsd))
+        throw new EvaluateStop(
+          "budget_usd",
+          `scoring ${count} validation instance(s) would exceed the remaining ${remainingUsd.toFixed(6)} USD`,
+        );
+    }
+    const scoringRequest: ScoringRequest = {
       candidate,
       split: "validation",
       instance_ids: [...target.split.validation],
-      repeats,
-      budget,
+      repeats: request.repeats,
+      budget: {
+        ...job.budget,
+        max_usd: Math.max(0, remainingUsd),
+        max_duration_ms: Math.max(1, remainingMs),
+      },
     };
-    const result = await options.backend.score(context, request);
-    await recordScore(context, target.target_id, job.job_id, request, result);
-    job.metric_calls += request.instance_ids.length;
+    const result = await new Promise<ScoringResult>((resolve, reject) => {
+      const timer = setTimeout(
+        () =>
+          reject(
+            new EvaluateStop(
+              "deadline",
+              "max_duration_ms elapsed during scoring",
+            ),
+          ),
+        remainingMs,
+      );
+      const onAbort = () =>
+        reject(new EvaluateStop("cancelled", "cancelled during scoring"));
+      abort.signal.addEventListener("abort", onAbort, { once: true });
+      options.backend
+        .score(context, scoringRequest)
+        .then(
+          (value) => resolve(ScoringResultSchema.parse(value)),
+          (cause) => reject(cause),
+        )
+        .finally(() => {
+          clearTimeout(timer);
+          abort.signal.removeEventListener("abort", onAbort);
+        });
+    });
+    if (abort.signal.aborted)
+      throw new EvaluateStop("cancelled", "cancelled during scoring");
+    await recordScore(
+      context,
+      target.target_id,
+      job.job_id,
+      scoringRequest,
+      result,
+    );
+    job.metric_calls += count;
     if (result.cost_usd === null) job.cost_unmeasured_scores += 1;
     else job.cost_usd += result.cost_usd;
     job.simulated ||= result.simulated;
@@ -604,63 +677,22 @@ export function createOptimizationService(
     job.started_at = isoNow(now);
     await store.writeJob(context, job);
     const startedAt = now();
-    const remaining = (): Budget => ({
-      ...job.budget,
-      max_usd: Math.max(0, job.budget.max_usd - job.cost_usd),
-      max_duration_ms: Math.max(
-        1,
-        job.budget.max_duration_ms - (now() - startedAt),
-      ),
-    });
     try {
       const seed = await store.readCandidate(
         context,
         target.target_id,
         job.seed_candidate_id,
       );
-      if (!latestValidation(seed)) {
+      if (!latestValidation(seed))
         await scoreValidation(
           context,
           job,
           target,
           seed.candidate,
-          request.repeats,
-          remaining(),
+          request,
+          startedAt,
+          abort,
         );
-      }
-      if (abort.signal.aborted) {
-        await finishJob(
-          context,
-          job,
-          null,
-          "cancelled",
-          "cancelled",
-          "cancelled by caller",
-        );
-        return;
-      }
-      if (job.budget.max_usd > 0 && job.cost_usd >= job.budget.max_usd) {
-        await finishJob(
-          context,
-          job,
-          null,
-          "failed",
-          "budget_usd",
-          "max_usd exhausted after scoring the seed",
-        );
-        return;
-      }
-      if (now() - startedAt >= job.budget.max_duration_ms) {
-        await finishJob(
-          context,
-          job,
-          null,
-          "failed",
-          "deadline",
-          "max_duration_ms elapsed after scoring the seed",
-        );
-        return;
-      }
       const record = await store.readCandidate(
         context,
         target.target_id,
@@ -671,8 +703,9 @@ export function createOptimizationService(
         job,
         target,
         record.candidate,
-        request.repeats,
-        remaining(),
+        request,
+        startedAt,
+        abort,
       );
       const refreshed = await store.readCandidate(
         context,
@@ -686,15 +719,26 @@ export function createOptimizationService(
           "proposed",
           `validation-scored by job ${job.job_id}`,
         );
+      if (abort.signal.aborted)
+        throw new EvaluateStop("cancelled", "cancelled before completion");
       job.best_candidate_id = await bestCandidateId(context, job);
       const stop: StopReason =
-        now() - startedAt > job.budget.max_duration_ms
-          ? "deadline"
-          : job.budget.max_usd > 0 && job.cost_usd > job.budget.max_usd
-            ? "budget_usd"
-            : "finished";
+        job.budget.max_usd > 0 && job.cost_usd > job.budget.max_usd
+          ? "budget_usd"
+          : "finished";
       await finishJob(context, job, null, "completed", stop, null);
     } catch (error) {
+      if (error instanceof EvaluateStop) {
+        await finishJob(
+          context,
+          job,
+          null,
+          error.reason === "cancelled" ? "cancelled" : "failed",
+          error.reason,
+          error.message,
+        );
+        return;
+      }
       await finishJob(
         context,
         job,
@@ -784,9 +828,8 @@ export function createOptimizationService(
     const best =
       (job.best_candidate_id ? byId.get(job.best_candidate_id) : undefined) ??
       seed;
-    const seedScore =
-      latestValidation(seed, job.job_id) ?? latestValidation(seed);
-    const bestScore = latestValidation(best, job.job_id);
+    const seedScore = jobValidation(seed, job);
+    const bestScore = jobValidation(best, job);
     const view = (record: CandidateRecord, score: ScoreProvenance | null) => ({
       candidate: record.candidate,
       status: record.status,
@@ -917,14 +960,22 @@ export function createOptimizationService(
           context,
           registration.target_id,
         );
-        if (existing.registration.sha256 === ref.sha256)
+        if (existing.registration_sha256 === ref.sha256)
           return existing.target_id;
         throw new OptimizationError("target_exists", registration.target_id);
       }
-      const split = splitInstances(
-        registration.instances.map((item) => item.instance_id),
-        registration.split,
-      );
+      let split: ReturnType<typeof splitInstances>;
+      try {
+        split = splitInstances(
+          registration.instances.map((item) => item.instance_id),
+          registration.split,
+        );
+      } catch (cause) {
+        throw new OptimizationError(
+          "invalid_input",
+          cause instanceof Error ? cause.message : "split_failed",
+        );
+      }
       const split_sha256 = sha256(canonicalJson(split));
       const seedId = candidateId(registration.components);
       const target: StoredTarget = {
@@ -939,7 +990,7 @@ export function createOptimizationService(
         split: { train: split.train, validation: split.validation },
         split_sha256,
         seed_candidate_id: seedId,
-        registration: ref,
+        registration_sha256: ref.sha256,
         registered_at: isoNow(now),
       };
       const holdout: HoldoutRecord = {

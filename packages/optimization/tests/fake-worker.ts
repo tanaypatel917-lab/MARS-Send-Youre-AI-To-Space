@@ -68,6 +68,25 @@ if (mode === "foreign") {
   out(request(0, start.seed_candidate, ["not-in-any-split"]));
   await forever();
 }
+if (mode === "burst") {
+  // Many overlapping score requests at once: the host must reserve before admitting.
+  const ids = start.validation.map((item) => item.instance_id);
+  for (let i = 0; i < 8; i += 1) {
+    out(
+      request(
+        i,
+        Object.fromEntries(
+          Object.entries(start.seed_candidate).map(([key, value]) => [
+            key,
+            `${value} burst${i}`,
+          ]),
+        ),
+        ids,
+      ),
+    );
+  }
+  await forever();
+}
 if (mode === "loop") {
   const ids = start.validation.map((item) => item.instance_id);
   for (let i = 0; i < 1000; i += 1) {

@@ -17,7 +17,6 @@ import {
   workerAvailable,
 } from "./pins";
 import type { ReflectionResponder } from "./reflection";
-import { estimateTokens } from "./reflection";
 import {
   type HostMessage,
   type StopReason,
@@ -25,6 +24,7 @@ import {
   WorkerMessageSchema,
   type WorkerStart,
 } from "./schemas";
+import { scrubSecrets } from "./scrub";
 
 export interface WorkerProcess {
   write(line: string): void;
@@ -41,6 +41,9 @@ export interface WorkerLauncher {
 
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const LOG_TAIL = 200;
+/** How long to wait for in-flight backend calls after the worker was stopped. */
+export const DRAIN_GRACE_MS = 2000;
+
 /** Worker environment is minimal: it never sees host secrets. */
 function workerEnvironment(): Record<string, string> {
   return {
@@ -120,6 +123,8 @@ export interface RunWorkerOutcome extends WorkerUsage {
   stop_reason: StopReason;
   error: string | null;
   result: DoneResult | null;
+  /** Backend calls still pending when the run was abandoned (deadline/cancel). */
+  abandoned_calls: number;
   worker: {
     gepa_version: string | null;
     python_version: string | null;
@@ -138,6 +143,12 @@ export interface RunWorkerOptions {
   /** Hard ceiling on scored instances; GEPA gets the softer `start.max_metric_calls`. */
   hardMetricCalls: number;
   maxReflectionTokens: number;
+  /**
+   * Worst-case USD per scored instance, reserved before each backend call.
+   * When null and `max_usd > 0`, scoring is serialised so every call is
+   * admitted against settled usage.
+   */
+  estimatedUsdPerMetricCall: number | null;
   signal?: AbortSignal;
   now?: () => number;
   /** Resolves candidate identity for a score request so stored records line up. */
@@ -154,6 +165,7 @@ export interface RunWorkerOptions {
   }): Promise<void>;
 }
 
+/** Splits a byte stream into lines; each line (complete or partial) is capped individually. */
 async function* lines(
   stream: ReadableStream<Uint8Array>,
 ): AsyncGenerator<string> {
@@ -165,14 +177,17 @@ async function* lines(
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      if (buffer.length > MAX_LINE_BYTES)
-        throw new Error("worker line exceeds 4 MiB");
       let index = buffer.indexOf("\n");
       while (index >= 0) {
-        yield buffer.slice(0, index);
+        const line = buffer.slice(0, index);
         buffer = buffer.slice(index + 1);
+        if (line.length > MAX_LINE_BYTES)
+          throw new Error("worker line exceeds 4 MiB");
+        yield line;
         index = buffer.indexOf("\n");
       }
+      if (buffer.length > MAX_LINE_BYTES)
+        throw new Error("worker line exceeds 4 MiB");
     }
     if (buffer.trim()) yield buffer;
   } finally {
@@ -199,10 +214,19 @@ class Semaphore {
   }
 }
 
+const STOPPED_REASONS: readonly StopReason[] = [
+  "deadline",
+  "budget_usd",
+  "budget_tokens",
+  "metric_calls",
+];
+
 /**
  * Drives one worker run. Every bound (deadline, USD, tokens, metric calls,
  * concurrency, cancel) is enforced here; the worker is untrusted and is killed
- * as soon as a bound is crossed.
+ * as soon as a bound is crossed. Concurrent calls reserve their metric calls,
+ * tokens and worst-case USD before they start so in-flight work can never
+ * collectively exceed a limit.
  */
 export async function runGepaWorker(
   options: RunWorkerOptions,
@@ -218,6 +242,7 @@ export async function runGepaWorker(
     tokens: 0,
     simulated: options.reflection.simulated,
   };
+  const reserved = { metric_calls: 0, usd: 0, tokens: 0 };
   const worker: RunWorkerOutcome["worker"] = {
     gepa_version: null,
     python_version: null,
@@ -229,7 +254,10 @@ export async function runGepaWorker(
     if (worker.log_tail.length > LOG_TAIL) worker.log_tail.shift();
   };
 
-  const state: { reason: StopReason | null } = { reason: null };
+  const state: { reason: StopReason | null; finalized: boolean } = {
+    reason: null,
+    finalized: false,
+  };
   let error: string | null = null;
   let result: DoneResult | null = null;
   const inflight = new AbortController();
@@ -257,9 +285,14 @@ export async function runGepaWorker(
       stop("protocol_error", `failed to write to worker: ${String(cause)}`);
     }
   };
+  const maxUsd = options.budget.max_usd;
+  const usdRemaining = () => maxUsd - usage.cost_usd - reserved.usd;
   const remainingBudget = (): Budget => ({
-    max_tokens: Math.max(1, options.budget.max_tokens - usage.tokens),
-    max_usd: Math.max(0, options.budget.max_usd - usage.cost_usd),
+    max_tokens: Math.max(
+      1,
+      options.budget.max_tokens - usage.tokens - reserved.tokens,
+    ),
+    max_usd: Math.max(0, usdRemaining()),
     max_duration_ms: Math.max(1, deadline - now()),
     max_depth: options.budget.max_depth,
     max_concurrency: options.budget.max_concurrency,
@@ -270,17 +303,32 @@ export async function runGepaWorker(
       options.start.validation.map((item) => item.instance_id),
     ),
   };
-  const scoring = new Semaphore(Math.max(1, options.budget.max_concurrency));
+  const perCall = options.estimatedUsdPerMetricCall;
+  const serialise = perCall === null && maxUsd > 0;
+  const scoring = new Semaphore(
+    serialise ? 1 : Math.max(1, options.budget.max_concurrency),
+  );
   const pending = new Set<Promise<void>>();
   const track = (task: Promise<void>) => {
     pending.add(task);
-    void task.finally(() => pending.delete(task));
+    void task.then(
+      () => pending.delete(task),
+      (cause) => {
+        pending.delete(task);
+        stop(
+          "worker_error",
+          `host callback failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+      },
+    );
   };
 
   const handleScore = async (
     message: Extract<WorkerMessage, { type: "score" }>,
   ) => {
     const release = await scoring.acquire();
+    let reservedCalls = 0;
+    let reservedUsd = 0;
     try {
       if (state.reason !== null) return;
       const { request } = message;
@@ -293,8 +341,9 @@ export async function runGepaWorker(
         );
         return;
       }
+      const count = request.instance_ids.length;
       if (
-        usage.metric_calls + request.instance_ids.length >
+        usage.metric_calls + reserved.metric_calls + count >
         options.hardMetricCalls
       ) {
         stop(
@@ -302,6 +351,16 @@ export async function runGepaWorker(
           `hard metric-call ceiling ${options.hardMetricCalls} reached`,
         );
         return;
+      }
+      reservedCalls = count;
+      reserved.metric_calls += count;
+      if (maxUsd > 0) {
+        reservedUsd = perCall === null ? 0 : perCall * count;
+        if (usdRemaining() <= 0 || usdRemaining() < reservedUsd) {
+          stop("budget_usd", "max_usd exhausted before scoring");
+          return;
+        }
+        reserved.usd += reservedUsd;
       }
       const id = candidateId(request.candidate.components);
       const meta = options.candidateMeta(id);
@@ -315,49 +374,56 @@ export async function runGepaWorker(
         split: request.split,
         instance_ids: [...request.instance_ids],
         repeats: options.start.repeats,
-        budget: remainingBudget(),
+        budget: {
+          ...remainingBudget(),
+          max_usd:
+            maxUsd > 0 && perCall !== null
+              ? reservedUsd
+              : remainingBudget().max_usd,
+        },
       };
-      if (hostRequest.budget.max_usd <= 0 && options.budget.max_usd > 0) {
-        stop("budget_usd", "max_usd exhausted before scoring");
-        return;
-      }
       let scored: ScoringResult;
       try {
         scored = ScoringResultSchema.parse(
           await options.backend.score(options.context, hostRequest),
         );
       } catch (cause) {
-        stop(
-          "backend_error",
-          `scoring backend failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-        );
+        if (!state.finalized)
+          stop(
+            "backend_error",
+            `scoring backend failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          );
         return;
       }
+      if (state.finalized) return;
       const returned = new Set(scored.scores.map((score) => score.instance_id));
       if (
         scored.split !== request.split ||
-        hostRequest.instance_ids.some((id) => !returned.has(id))
+        hostRequest.instance_ids.some((item) => !returned.has(item))
       ) {
         stop("backend_error", "scoring backend returned an incomplete result");
         return;
       }
-      usage.metric_calls += hostRequest.instance_ids.length;
+      reserved.metric_calls -= reservedCalls;
+      reserved.usd -= reservedUsd;
+      reservedCalls = 0;
+      reservedUsd = 0;
+      usage.metric_calls += count;
       if (scored.cost_usd === null) usage.cost_unmeasured_scores += 1;
       else usage.cost_usd += scored.cost_usd;
       usage.simulated ||= scored.simulated;
       await options.onScore?.(hostRequest, scored);
       if (state.reason !== null) return;
       send({ type: "score_result", id: message.id, result: scored });
-      if (
-        options.budget.max_usd > 0 &&
-        usage.cost_usd >= options.budget.max_usd
-      ) {
+      if (maxUsd > 0 && usage.cost_usd >= maxUsd) {
         stop(
           "budget_usd",
-          `cost ${usage.cost_usd.toFixed(6)} reached max_usd ${options.budget.max_usd}`,
+          `cost ${usage.cost_usd.toFixed(6)} reached max_usd ${maxUsd}`,
         );
       }
     } finally {
+      reserved.metric_calls -= reservedCalls;
+      reserved.usd -= reservedUsd;
       release();
     }
   };
@@ -366,8 +432,10 @@ export async function runGepaWorker(
     message: Extract<WorkerMessage, { type: "reflect" }>,
   ) => {
     if (state.reason !== null) return;
-    const inputTokens = estimateTokens(message.prompt);
-    const remainingTokens = options.budget.max_tokens - usage.tokens;
+    const prompt = scrubSecrets(message.prompt);
+    const inputTokens = options.reflection.estimateInputTokens(prompt);
+    const remainingTokens =
+      options.budget.max_tokens - usage.tokens - reserved.tokens;
     if (remainingTokens <= inputTokens) {
       stop("budget_tokens", "max_tokens exhausted before reflection");
       return;
@@ -380,17 +448,18 @@ export async function runGepaWorker(
       inputTokens,
       maxTokens,
     );
-    if (
-      worstCase !== null &&
-      usage.cost_usd + worstCase > options.budget.max_usd
-    ) {
+    if (worstCase !== null && worstCase > usdRemaining()) {
       stop("budget_usd", "reflection would exceed max_usd");
       return;
     }
+    const reservedTokens = inputTokens + maxTokens;
+    const reservedUsd = worstCase ?? 0;
+    reserved.tokens += reservedTokens;
+    reserved.usd += reservedUsd;
     let reply: Awaited<ReturnType<ReflectionResponder["complete"]>>;
     try {
       reply = await options.reflection.complete({
-        prompt: message.prompt,
+        prompt,
         maxTokens,
         timeoutMs: Math.max(1, deadline - now()),
         signal: inflight.signal,
@@ -402,12 +471,15 @@ export async function runGepaWorker(
           `reflection failed: ${cause instanceof Error ? cause.message : String(cause)}`,
         );
       return;
+    } finally {
+      reserved.tokens -= reservedTokens;
+      reserved.usd -= reservedUsd;
     }
+    if (state.finalized) return;
     usage.reflection_calls += 1;
     usage.tokens += reply.input_tokens + reply.output_tokens;
-    if (reply.cost_usd === null) usage.cost_unmeasured_scores += 0;
-    else usage.cost_usd += reply.cost_usd;
-    if (options.budget.max_usd > 0 && usage.cost_usd > options.budget.max_usd) {
+    if (reply.cost_usd !== null) usage.cost_usd += reply.cost_usd;
+    if (maxUsd > 0 && usage.cost_usd > maxUsd) {
       stop(
         "budget_usd",
         `reflection cost pushed total to ${usage.cost_usd.toFixed(6)}`,
@@ -502,7 +574,16 @@ export async function runGepaWorker(
       cause instanceof Error ? cause.message : String(cause),
     );
   }
-  await Promise.allSettled([...pending]);
+  // Drain in-flight backend calls, but never past the deadline plus a grace
+  // period: the backend contract has no abort signal, so a stalled call is
+  // abandoned and its late result ignored (`finalized`).
+  const drainBudget = Math.max(0, deadline - now()) + DRAIN_GRACE_MS;
+  await Promise.race([
+    Promise.allSettled([...pending]),
+    new Promise<void>((resolve) => setTimeout(resolve, drainBudget)),
+  ]);
+  const abandoned = pending.size;
+  state.finalized = true;
   if (result && state.reason === null) {
     state.reason = "finished";
   } else if (state.reason === null) {
@@ -529,10 +610,16 @@ export async function runGepaWorker(
       ? "completed"
       : finalReason === "cancelled"
         ? "cancelled"
-        : ["deadline", "budget_usd", "budget_tokens", "metric_calls"].includes(
-              finalReason,
-            )
+        : STOPPED_REASONS.includes(finalReason)
           ? "stopped"
           : "failed";
-  return { ...usage, status, stop_reason: finalReason, error, result, worker };
+  return {
+    ...usage,
+    status,
+    stop_reason: finalReason,
+    error,
+    result,
+    abandoned_calls: abandoned,
+    worker,
+  };
 }

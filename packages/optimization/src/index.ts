@@ -48,6 +48,7 @@ export {
   createCommandWorkerLauncher,
   createPythonWorkerLauncher,
   type DoneResult,
+  DRAIN_GRACE_MS,
   type RunWorkerOptions,
   type RunWorkerOutcome,
   runGepaWorker,

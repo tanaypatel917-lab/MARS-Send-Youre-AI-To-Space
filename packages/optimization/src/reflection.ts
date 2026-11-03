@@ -24,6 +24,8 @@ export interface ReflectionResponder {
   readonly simulated: boolean;
   /** Worst-case USD for a call; null when pricing is unknown. */
   estimateCostUsd(inputTokens: number, outputTokens: number): number | null;
+  /** Pre-call input estimate for a prompt, including any fixed system message the responder adds. */
+  estimateInputTokens(prompt: string): number;
   complete(request: ReflectionRequest): Promise<ReflectionReply>;
 }
 
@@ -103,6 +105,8 @@ export function createRegistryReflectionResponder(
     simulated: false,
     estimateCostUsd: (inputTokens, outputTokens) =>
       estimateUsd(pricing, inputTokens, outputTokens),
+    estimateInputTokens: (prompt) =>
+      estimateTokens(SYSTEM_PROMPT) + estimateTokens(prompt),
     async complete(request) {
       const router = new ModelRouter(options.registry, {
         adapterOptions: {
@@ -158,6 +162,7 @@ export function createScriptedReflectionResponder(
     simulated: true,
     prompts,
     estimateCostUsd: () => 0,
+    estimateInputTokens: (prompt) => estimateTokens(prompt),
     async complete(request) {
       prompts.push(request.prompt);
       const text = script(request.prompt, prompts.length - 1);

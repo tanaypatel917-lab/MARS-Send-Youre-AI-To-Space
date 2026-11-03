@@ -22,6 +22,7 @@ import {
   createOptimizationService,
   createPythonWorkerLauncher,
   createScriptedReflectionResponder,
+  DRAIN_GRACE_MS,
   EVALUATE_REQUEST_SCHEMA,
   keywordScore,
   OPTIMIZATION_PINS,
@@ -209,6 +210,9 @@ describe("split", () => {
     const all = [...first.train, ...first.validation, ...first.final_holdout];
     expect(new Set(all).size).toBe(ids.length);
     expect(splitInstances(ids, { ...policy, seed: "b" })).not.toEqual(first);
+    expect(() =>
+      splitInstances(ids, { ...policy, min_final_holdout: 10 }),
+    ).toThrow("minimum final holdout");
   });
 });
 
@@ -235,6 +239,8 @@ describe("targets and holdout", () => {
     ]);
     for (const id of holdout) expect(trainValidation.has(id)).toBe(false);
     expect(JSON.stringify(target)).not.toContain(holdout[0] as string);
+    expect("registration" in target).toBe(false);
+    expect(target.registration_sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(target.instances.some((i) => holdout.includes(i.instance_id))).toBe(
       false,
     );
@@ -374,6 +380,7 @@ describe("propose with the real GEPA worker (gepa 0.1.4 in the pinned venv)", ()
         reflection: createScriptedReflectionResponder(() => REFLECTION_TEXT),
         hardMetricCalls: 100,
         maxReflectionTokens: 512,
+        estimatedUsdPerMetricCall: null,
         candidateMeta: () => ({
           parent_candidate_id: null,
           created_at: "2026-01-01T00:00:00.000Z",
@@ -435,6 +442,7 @@ describe("bounds against a misbehaving worker", () => {
       reflection: createScriptedReflectionResponder(() => REFLECTION_TEXT),
       hardMetricCalls: 100,
       maxReflectionTokens: 512,
+      estimatedUsdPerMetricCall: null,
       candidateMeta: meta,
     });
     expect(outcome.status).toBe("stopped");
@@ -457,6 +465,7 @@ describe("bounds against a misbehaving worker", () => {
       reflection: createScriptedReflectionResponder(() => REFLECTION_TEXT),
       hardMetricCalls: 10_000,
       maxReflectionTokens: 512,
+      estimatedUsdPerMetricCall: null,
       candidateMeta: meta,
     });
     expect(outcome.stop_reason).toBe("budget_usd");
@@ -476,6 +485,7 @@ describe("bounds against a misbehaving worker", () => {
       reflection: createScriptedReflectionResponder(() => REFLECTION_TEXT),
       hardMetricCalls: 5,
       maxReflectionTokens: 512,
+      estimatedUsdPerMetricCall: null,
       candidateMeta: meta,
     });
     expect(outcome.stop_reason).toBe("metric_calls");
@@ -493,6 +503,7 @@ describe("bounds against a misbehaving worker", () => {
       reflection: createScriptedReflectionResponder(() => REFLECTION_TEXT),
       hardMetricCalls: 100,
       maxReflectionTokens: 512,
+      estimatedUsdPerMetricCall: null,
       candidateMeta: meta,
     });
     expect(outcome.stop_reason).toBe("protocol_error");
@@ -510,6 +521,7 @@ describe("bounds against a misbehaving worker", () => {
       reflection: createScriptedReflectionResponder(() => REFLECTION_TEXT),
       hardMetricCalls: 100,
       maxReflectionTokens: 512,
+      estimatedUsdPerMetricCall: null,
       candidateMeta: meta,
     };
     const garbage = await runGepaWorker({
@@ -676,5 +688,272 @@ describe("evaluate, lifecycle and reports without a worker", () => {
         }),
       ),
     ).rejects.toThrow("candidate_id does not match");
+  });
+});
+
+describe("reservations and stalled backends", () => {
+  const meta = () => ({
+    parent_candidate_id: null,
+    created_at: "2026-01-01T00:00:00.000Z",
+  });
+
+  test("overlapping score requests never exceed the hard ceiling or max_usd", async () => {
+    const seen: number[] = [];
+    const backend = createFixtureScoringBackend({
+      score: constantScore(0.5),
+      cost_usd_per_instance: 0.1,
+    });
+    const slow = {
+      ...backend,
+      async score(
+        ctx: RequestContext,
+        request: Parameters<typeof backend.score>[1],
+      ) {
+        seen.push(request.instance_ids.length);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return backend.score(ctx, request);
+      },
+    };
+    const outcome = await runGepaWorker({
+      launcher: fakeLauncher("burst"),
+      context,
+      start: start(),
+      budget: { ...budget, max_usd: 0.5, max_concurrency: 8 },
+      backend: slow,
+      reflection: createScriptedReflectionResponder(() => REFLECTION_TEXT),
+      hardMetricCalls: 100,
+      maxReflectionTokens: 512,
+      estimatedUsdPerMetricCall: 0.1,
+      candidateMeta: meta,
+    });
+    expect(outcome.stop_reason).toBe("budget_usd");
+    // 0.1 USD per instance, 2 instances per request, 0.5 USD: at most 2 requests admitted.
+    expect(seen.length).toBe(2);
+    expect(outcome.cost_usd).toBeLessThanOrEqual(0.5);
+
+    const ceiling = await runGepaWorker({
+      launcher: fakeLauncher("burst"),
+      context,
+      start: start(),
+      budget: { ...budget, max_usd: 0, max_concurrency: 8 },
+      backend: slow,
+      reflection: createScriptedReflectionResponder(() => REFLECTION_TEXT),
+      hardMetricCalls: 5,
+      maxReflectionTokens: 512,
+      estimatedUsdPerMetricCall: null,
+      candidateMeta: meta,
+    });
+    expect(ceiling.stop_reason).toBe("metric_calls");
+    expect(ceiling.metric_calls).toBeLessThanOrEqual(5);
+  }, 20_000);
+
+  test("a stalled scoring backend cannot keep the run alive past the deadline", async () => {
+    const backend = {
+      async score() {
+        return new Promise<never>(() => undefined);
+      },
+    };
+    const began = Date.now();
+    const outcome = await runGepaWorker({
+      launcher: fakeLauncher("loop"),
+      context,
+      start: start(),
+      budget: { ...budget, max_duration_ms: 300 },
+      backend,
+      reflection: createScriptedReflectionResponder(() => REFLECTION_TEXT),
+      hardMetricCalls: 100,
+      maxReflectionTokens: 512,
+      estimatedUsdPerMetricCall: null,
+      candidateMeta: meta,
+    });
+    expect(outcome.stop_reason).toBe("deadline");
+    expect(outcome.abandoned_calls).toBe(1);
+    expect(outcome.metric_calls).toBe(0);
+    expect(Date.now() - began).toBeLessThan(300 + DRAIN_GRACE_MS + 3000);
+  }, 20_000);
+
+  test("reflection prompts are scrubbed before reaching the responder", async () => {
+    const SECRET = "api_key=supersecretvalue99";
+    const root = await newRoot();
+    const artifacts = createMemoryArtifactStore();
+    const backend = createFixtureScoringBackend({
+      score: keywordScore([KEYWORD]),
+    });
+    const reflection = createScriptedReflectionResponder(() => REFLECTION_TEXT);
+    const service = createOptimizationService({
+      rootDir: root,
+      backend,
+      backendId: backend.id,
+      reflection,
+      artifacts,
+      launcher: createPythonWorkerLauncher(),
+    });
+    const put = (value: unknown) =>
+      artifacts.put(
+        context,
+        new TextEncoder().encode(JSON.stringify(value)),
+        "application/json",
+      );
+    const reg = registration();
+    const targetId = await service.registerTarget(
+      context,
+      await put({
+        ...reg,
+        components: { system_prompt: `${SEED} Use ${SECRET}.` },
+      }),
+    );
+    const manifest = await put({
+      schema: PROPOSAL_REQUEST_SCHEMA,
+      max_metric_calls: 12,
+    });
+    const job = await service.propose(context, targetId, manifest, budget);
+    const finished = await service.waitForJob(context, job.job_id);
+    expect(finished.status).toBe("completed");
+    expect(reflection.prompts.length).toBeGreaterThan(0);
+    for (const prompt of reflection.prompts) {
+      expect(prompt).not.toContain("supersecretvalue99");
+      expect(prompt).toContain("[redacted]");
+    }
+  }, 60_000);
+});
+
+describe("evaluate bounds", () => {
+  test("gates the whole validation batch on the remaining budget before calling the backend", async () => {
+    const { service, backend, targetId, put } = await setup({
+      costPerInstance: 1,
+    });
+    const target = await service.target(context, targetId);
+    const components = { system_prompt: `${SEED} v2` };
+    const job = await service.evaluate(
+      context,
+      await put({
+        schema: EVALUATE_REQUEST_SCHEMA,
+        target_id: targetId,
+        candidate: {
+          candidate_id: candidateId(components),
+          components,
+          parent_candidate_id: target.seed_candidate_id,
+          created_at: "2026-01-01T00:00:00.000Z",
+        },
+        budget: { ...budget, max_usd: 1 },
+        estimated_usd_per_metric_call: 1,
+      }),
+    );
+    const finished = await service.waitForJob(context, job.job_id);
+    expect(finished.status).toBe("failed");
+    expect(finished.stop_reason).toBe("budget_usd");
+    expect(backend.requests).toEqual([]);
+  });
+
+  test("cancel during a stalled validation call returns promptly as cancelled", async () => {
+    const root = await newRoot();
+    const artifacts = createMemoryArtifactStore();
+    let calls = 0;
+    const backend = {
+      async score() {
+        calls += 1;
+        return new Promise<never>(() => undefined);
+      },
+    };
+    const service = createOptimizationService({
+      rootDir: root,
+      backend,
+      backendId: "stalled",
+      reflection: createScriptedReflectionResponder(() => REFLECTION_TEXT),
+      artifacts,
+    });
+    const put = (value: unknown) =>
+      artifacts.put(
+        context,
+        new TextEncoder().encode(JSON.stringify(value)),
+        "application/json",
+      );
+    const targetId = await service.registerTarget(
+      context,
+      await put(registration()),
+    );
+    const target = await service.target(context, targetId);
+    const components = { system_prompt: `${SEED} v3` };
+    const job = await service.evaluate(
+      context,
+      await put({
+        schema: EVALUATE_REQUEST_SCHEMA,
+        target_id: targetId,
+        candidate: {
+          candidate_id: candidateId(components),
+          components,
+          parent_candidate_id: target.seed_candidate_id,
+          created_at: "2026-01-01T00:00:00.000Z",
+        },
+        budget,
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const began = Date.now();
+    await service.cancel(context, job.job_id);
+    expect(Date.now() - began).toBeLessThan(2000);
+    const record = await service.job(context, job.job_id);
+    expect(record.status).toBe("cancelled");
+    expect(calls).toBe(1);
+    expect(record.metric_calls).toBe(0);
+
+    const deadlineJob = await service.evaluate(
+      context,
+      await put({
+        schema: EVALUATE_REQUEST_SCHEMA,
+        target_id: targetId,
+        candidate: {
+          candidate_id: candidateId(components),
+          components,
+          parent_candidate_id: target.seed_candidate_id,
+          created_at: "2026-01-01T00:00:00.000Z",
+        },
+        budget: { ...budget, max_duration_ms: 200 },
+      }),
+    );
+    const finished = await service.waitForJob(context, deadlineJob.job_id);
+    expect(finished.status).toBe("failed");
+    expect(finished.stop_reason).toBe("deadline");
+  }, 20_000);
+
+  test("a reused seed baseline still wins over a worse candidate", async () => {
+    const { service, targetId, put, readJson } = await setup({
+      score: (candidate) =>
+        candidate.components.system_prompt === SEED ? 0.8 : 0.3,
+    });
+    const target = await service.target(context, targetId);
+    const evaluate = async (suffix: string) => {
+      const components = { system_prompt: `${SEED} ${suffix}` };
+      const job = await service.evaluate(
+        context,
+        await put({
+          schema: EVALUATE_REQUEST_SCHEMA,
+          target_id: targetId,
+          candidate: {
+            candidate_id: candidateId(components),
+            components,
+            parent_candidate_id: target.seed_candidate_id,
+            created_at: "2026-01-01T00:00:00.000Z",
+          },
+          budget,
+        }),
+      );
+      await service.waitForJob(context, job.job_id);
+      return ProposalReportSchema.parse(
+        await readJson(await service.publish(context, job.job_id)),
+      );
+    };
+    const first = await evaluate("first");
+    expect(first.recommendation).toBe("no_improvement");
+    expect(first.best.candidate.candidate_id).toBe(target.seed_candidate_id);
+    const second = await evaluate("second");
+    expect(second.seed.validation_mean_score).toBeCloseTo(0.8);
+    expect(second.best.candidate.candidate_id).toBe(target.seed_candidate_id);
+    expect(second.best.validation_mean_score).toBeCloseTo(0.8);
+    expect(second.recommendation).toBe("no_improvement");
+    expect(second.per_instance_deltas.every((d) => d.delta === 0)).toBe(true);
+    expect(second.limitations.some((l) => l.includes("earlier job"))).toBe(
+      true,
+    );
   });
 });

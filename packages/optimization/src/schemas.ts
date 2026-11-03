@@ -97,7 +97,7 @@ export const StoredTargetSchema = z
     split: SplitSchema,
     split_sha256: sha,
     seed_candidate_id: z.string().min(1),
-    registration: ArtifactRefSchema,
+    registration_sha256: sha,
     registered_at: timestamp,
   })
   .strict();
@@ -144,6 +144,7 @@ export const EvaluateRequestSchema = z
     candidate: PromptCandidateSchema,
     repeats: z.number().int().min(1).max(16).default(1),
     budget: BudgetSchema,
+    estimated_usd_per_metric_call: z.number().min(0).nullable().default(null),
   })
   .strict();
 export type EvaluateRequest = z.infer<typeof EvaluateRequestSchema>;

@@ -44,13 +44,17 @@ export function splitInstances(
     ids[i] = ids[j] as string;
     ids[j] = left;
   }
-  let holdoutCount = Math.max(
+  const holdoutCount = Math.max(
     policy.min_final_holdout,
     ids.length -
       Math.floor(ids.length * policy.train_fraction) -
       Math.floor(ids.length * policy.validation_fraction),
   );
-  holdoutCount = Math.min(holdoutCount, ids.length - 2);
+  if (holdoutCount > ids.length - 2) {
+    throw new Error(
+      "split requires enough instances for the minimum final holdout plus train and validation",
+    );
+  }
   const remaining = ids.length - holdoutCount;
   const trainCount = Math.min(
     Math.max(

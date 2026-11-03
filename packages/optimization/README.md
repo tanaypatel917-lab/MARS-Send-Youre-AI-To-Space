@@ -105,6 +105,19 @@ draft ──▶ proposed ──▶ accepted ──▶ archived
 | `Budget.max_concurrency` | semaphore on concurrent `backend.score` calls (the adapter batches per GEPA iteration) and copied into every `ScoringRequest.budget` |
 | cancel | `cancel(jobId)` aborts in-flight reflection and kills the worker |
 
+Concurrent calls **reserve** before they start: metric calls are counted
+against the ceiling including in-flight requests; USD is reserved per call
+(`estimated_usd_per_metric_call × instances` for scoring, the responder's
+worst-case estimate for reflection, including its system message); tokens are
+reserved for reflection. When no per-call cost estimate is given and
+`max_usd > 0`, scoring is serialised so each call is admitted against settled
+usage. `PromptScoringBackend.score` has no abort signal, so after the worker is
+stopped the host drains in-flight calls only until the deadline plus
+`DRAIN_GRACE_MS`; a stalled call is abandoned, counted in `abandoned_calls`,
+and its late result is ignored. `evaluate` jobs gate each validation batch the
+same way (estimate × instances must fit the remaining USD), race the backend
+against the job deadline and cancellation, and never record a late result.
+
 Scores whose `cost_usd` is `null` are counted in `cost_unmeasured_scores` and
 listed as a limitation (cost is then a lower bound).
 
@@ -177,11 +190,24 @@ and scores the seed (if not yet scored) and the candidate on `validation`.
 
 - Verified offline: everything above, with gepa 0.1.4 really driving the
   brokered adapter in the venv.
-- Unverified: any live model reflection (the registry responder is exercised
-  only by type-checking and shares its implementation pattern with
-  `@mars/research-worker`), any real scoring backend, and any claim about
-  real prompt quality. All scores in tests are simulated fixtures.
-- CI does not create the venv, so the real-worker tests skip there.
+- Verified once, manually (not in CI, not repeatable without the model): one
+  tiny optimisation with a real reflection model through the providers
+  registry — Ollama `qwen3-coder:30b` (CPU only, 8 vCPU / 31 GB RAM),
+  registered with `bun apps/cli/src/main.ts models add --provider ollama
+  --model qwen3-coder:30b --id ollama/qwen3-coder --tools --context 32768
+  --free`; target with 5 fixture instances split 2 train / 2 validation /
+  1 holdout, `max_metric_calls: 4`, `max_reflection_tokens: 400`. Result:
+  job `completed`/`finished`, 8 metric calls, 1 reflection call, 555 tokens,
+  40.7 s wall clock (18 GB model already loaded), `recommendation:
+  candidate_improved_validation`, seed 0.314 → best 0.814 on the keyword
+  fixture. The scores were still simulated fixtures (`simulated: true` in the
+  report); only the reflection text was real.
+- Unverified: any real scoring backend and any claim about real prompt
+  quality. The registry responder against paid providers is type-checked
+  only.
+- CI (`.github/workflows/checks.yml`) installs uv, creates the pinned venv
+  from `requirements.lock`, runs the worker's pytest suite, then `bun run
+  check`, so the real-worker TS tests run in CI too.
 
 ## Limits
 
