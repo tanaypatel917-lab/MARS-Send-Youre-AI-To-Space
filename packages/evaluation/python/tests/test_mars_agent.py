@@ -325,3 +325,27 @@ def test_stalled_transfer_is_bounded_by_the_trial_timeout(tmp_path, bundle, monk
     with pytest.raises(MarsAgentError, match="instruction upload exceeded trial_timeout_ms"):
         asyncio.run(agent.run("Do the task.", env, AgentContext()))
     assert not any(c["command"].startswith("cd ") for c in env.commands)
+
+
+def test_slow_usage_download_does_not_fail_a_completed_trial(tmp_path, bundle, monkeypatch):
+    monkeypatch.delenv("MARS_EVAL_API_KEY", raising=False)
+    import asyncio
+
+    from mars_harbor_agent import agent as agent_module
+
+    class StallingDownload(FakeEnvironment):
+        async def download_file(self, source_path, target_path):
+            await asyncio.sleep(5)
+            await super().download_file(source_path, target_path)
+
+    monkeypatch.setattr(agent_module, "COLLECTION_GRACE_MS", 100)
+    agent = make_agent(tmp_path, bundle, trial_timeout_ms=1000)
+    # Bundle returns with the trial budget exhausted: collection still runs with the grace window.
+    agent._clock = (lambda it: (lambda: next(it, 1001.0)))(iter([1000.0, 1000.0, 1000.0]))
+    env = StallingDownload(usage={"input_tokens": 1}, return_code=0)
+    asyncio.run(agent.setup(env))
+    context = AgentContext()
+    asyncio.run(agent.run("Do the task.", env, context))
+    assert context.metadata["return_code"] == 0
+    assert context.metadata["usage_available"] is False
+    assert "exceeded 100 ms" in context.metadata["usage_error"]

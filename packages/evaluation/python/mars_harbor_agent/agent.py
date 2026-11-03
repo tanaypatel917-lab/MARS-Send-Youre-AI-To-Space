@@ -53,6 +53,9 @@ SYSTEM_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 SYSTEM_ENV = {"PATH": SYSTEM_PATH}
 # Adapter-side commands (mkdir/chmod/id/chown/test) are short; none may stall a trial.
 SETUP_COMMAND_TIMEOUT_SEC = 60
+# Usage collection after the bundle exits is bookkeeping, not agent work: it gets the larger of
+# the remaining trial budget and this grace window, and a timeout never fails a completed trial.
+COLLECTION_GRACE_MS = 10_000
 USAGE_FILE = "mars-usage.json"
 RESULT_FILE = "mars-result.json"
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
@@ -244,11 +247,12 @@ class MarsAgent(BaseAgent):
     ) -> None:
         if len(instruction.encode("utf-8")) > _MAX_INSTRUCTION_BYTES:
             raise MarsAgentConfigError("instruction exceeds the adapter size limit")
-        # trial_timeout_ms bounds run() end-to-end: instruction upload,
-        # credential handover, the bundle and usage/result collection. Harbor's
-        # upload/download calls take no timeout, so they are wrapped in
-        # asyncio.wait_for on the remaining budget. setup() is bounded by
-        # Harbor's agent setup timeout.
+        # trial_timeout_ms bounds run(): instruction upload, credential
+        # handover and the bundle. Harbor's upload/download calls take no
+        # timeout, so they are wrapped in asyncio.wait_for on the remaining
+        # budget. Usage collection afterwards gets at least COLLECTION_GRACE_MS
+        # and never fails a completed trial. setup() is bounded by Harbor's
+        # agent setup timeout.
         started = self._clock()
 
         def remaining_ms() -> int:
@@ -302,7 +306,8 @@ class MarsAgent(BaseAgent):
             f"2> {shlex.quote(str(self.environment_logs_dir / 'mars-agent.stderr.txt'))}"
         )
         result = await environment.exec(command, env=env, timeout_sec=timeout_sec)
-        await bounded("usage/result collection", self._collect(environment, context, result.return_code))
+        # A bundle that finishes near its deadline must still be recorded as completed.
+        await self._collect(environment, context, result.return_code, max(remaining_ms(), COLLECTION_GRACE_MS))
 
     async def _upload_credential(
         self, environment: BaseEnvironment, key_value: str, credential_path: PurePosixPath
@@ -348,13 +353,23 @@ class MarsAgent(BaseAgent):
         if readable.return_code != 0:
             raise MarsAgentError(f"credential file is not readable by uid {uid}; refusing to start the trial")
 
-    async def _collect(self, environment: BaseEnvironment, context: AgentContext, return_code: int) -> None:
+    async def _collect(
+        self, environment: BaseEnvironment, context: AgentContext, return_code: int, budget_ms: int
+    ) -> None:
         usage_target = self.logs_dir / USAGE_FILE
         usage: dict[str, Any] | None = None
+        usage_error: str | None = None
         try:
-            await environment.download_file(str(CONTAINER_STATE_DIR / USAGE_FILE), usage_target)
+            await asyncio.wait_for(
+                environment.download_file(str(CONTAINER_STATE_DIR / USAGE_FILE), usage_target),
+                timeout=max(1, budget_ms) / 1000,
+            )
             usage = json.loads(usage_target.read_text("utf-8"))
+        except asyncio.TimeoutError:
+            usage_error = f"usage download exceeded {budget_ms} ms"
+            self.logger.warning("MARS usage summary unavailable: %s", usage_error)
         except Exception as error:  # noqa: BLE001 - absence of usage is reported, not fatal
+            usage_error = str(error)
             self.logger.warning("MARS usage summary unavailable: %s", error)
         metadata: dict[str, Any] = {
             "adapter_version": ADAPTER_VERSION,
@@ -363,6 +378,8 @@ class MarsAgent(BaseAgent):
             "component_keys": sorted(self.components),
             "usage_available": usage is not None,
         }
+        if usage_error is not None:
+            metadata["usage_error"] = usage_error[:512]
         if isinstance(usage, dict):
             context.n_input_tokens = _nonneg_int(usage.get("input_tokens"))
             context.n_output_tokens = _nonneg_int(usage.get("output_tokens"))
