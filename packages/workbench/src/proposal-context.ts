@@ -23,7 +23,17 @@ const MAX_CANDIDATES_PER_TARGET = 32;
 const TRUNCATED = "\n[truncated: proposal summary exceeded the output limit]";
 
 function clean(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  let out = "";
+  let lastWasControl = false;
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    const control = code < 0x20 || code === 0x7f;
+    if (control) {
+      if (!lastWasControl) out += " ";
+    } else out += char;
+    lastWasControl = control;
+  }
+  return out.trim();
 }
 
 function score(value: number | null): string {
