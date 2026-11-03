@@ -32,5 +32,5 @@ test("CLI rejects unknown commands with a usage error", async () => {
   ]);
   expect(exit).toBe(2);
   expect(output).toBe("");
-  expect(errors).toContain("<doctor|smoke|models|serve|render>");
+  expect(errors).toContain("<doctor|smoke|models|serve|render|vault>");
 }, 30_000);

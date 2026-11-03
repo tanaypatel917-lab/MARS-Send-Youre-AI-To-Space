@@ -17,9 +17,12 @@
       "dependencies": {
         "@mars/contracts": "workspace:*",
         "@mars/execution": "workspace:*",
+        "@mars/memory": "workspace:*",
+        "@mars/memory-vault": "workspace:*",
         "@mars/output-format": "workspace:*",
         "@mars/providers": "workspace:*",
         "@mars/research-worker": "workspace:*",
+        "@mars/skills": "workspace:*",
         "@mars/workbench": "workspace:*",
       },
     },
@@ -112,6 +115,16 @@
       },
       "devDependencies": {
         "@oh-my-pi/pi-coding-agent": "18.14.0",
+      },
+    },
+    "packages/memory-vault": {
+      "name": "@mars/memory-vault",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "@mars/memory": "workspace:*",
+        "@mars/skills": "workspace:*",
+        "zod": "3.25.76",
       },
     },
     "packages/optimization": {
@@ -346,6 +359,8 @@
     "@mars/knowledge-graph": ["@mars/knowledge-graph@workspace:packages/knowledge-graph"],
 
     "@mars/memory": ["@mars/memory@workspace:packages/memory"],
+
+    "@mars/memory-vault": ["@mars/memory-vault@workspace:packages/memory-vault"],
 
     "@mars/optimization": ["@mars/optimization@workspace:packages/optimization"],
 
