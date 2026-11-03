@@ -6,7 +6,7 @@ const manifest = validateManifest(raw);
 
 describe("source manifest validation", () => {
   test("validates the complete manifest and installed artifact/lock pins", async () => {
-    expect((await checkSources()).components).toHaveLength(27);
+    expect((await checkSources()).components).toHaveLength(28);
   });
   test("accepts the host-bound-tools status and rejects unknown statuses", () => {
     const watch = manifest.components.find((c) => c.id === "watch-skill");
