@@ -76,7 +76,10 @@ export interface PolicyMapping {
   refused?: string;
 }
 
-export type InstructionFileKind = "AGENTS.override.md" | "AGENTS.md" | "CLAUDE.md";
+export type InstructionFileKind =
+  | "AGENTS.override.md"
+  | "AGENTS.md"
+  | "CLAUDE.md";
 
 export interface InstructionFile {
   /** Posix path relative to the discovery root. */
