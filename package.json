@@ -18,6 +18,7 @@
     "test": "bun test apps packages scripts",
     "audit:sources": "bun scripts/check-sources.ts",
     "audit:sources:remote": "bun scripts/check-remote-sources.ts",
+    "omniroute:catalog": "bun packages/providers-omniroute/src/import-cli.ts",
     "doctor": "bun apps/cli/src/main.ts doctor",
     "smoke:execution": "bun apps/cli/src/main.ts smoke",
     "build": "bun build apps/cli/src/main.ts packages/providers/src/index.ts packages/integration-trust/src/index.ts packages/workbench/src/index.ts --target=bun --packages=external --outdir dist",
