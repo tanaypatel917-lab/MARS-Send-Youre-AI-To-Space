@@ -142,8 +142,9 @@ edges as wikilinks to the other file notes.
 - Reconciles with the previous export: notes whose entry disappeared are
   removed **only if the file is byte-identical to what was generated**
   (`file_digest`); a stale note you edited anywhere — body, frontmatter or
-  Related — is kept and reported as `kept_modified`. Untracked files are never
-  touched.
+  Related — is kept and reported as `kept_modified`, as is any stale note from
+  a manifest written before `file_digest` was recorded. Untracked files are
+  never touched.
 - Refuses a `vaultDir` that overlaps a host-private root or the memory/skills
   state directories (`VaultPathError`), refuses note paths that escape the
   vault lexically or through a symlinked directory/file inside the vault

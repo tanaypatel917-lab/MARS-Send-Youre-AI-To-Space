@@ -13,7 +13,7 @@ import type { MemoryEntry, RequestContext } from "@mars/contracts";
 import { canonicalJson, RequestContextSchema } from "@mars/memory";
 import type { Skill } from "@mars/skills";
 import { VaultError } from "./errors";
-import { parseNote, renderNote, sha256, wikilink } from "./notes";
+import { renderNote, sha256, wikilink } from "./notes";
 import {
   assertVaultDirectory,
   contains,
@@ -593,18 +593,12 @@ export async function exportVault(
     }
     // Only a byte-identical generated note is removed; any edit (body,
     // frontmatter or Related section) keeps the file and is reported. Older
-    // manifests without file_digest fall back to the body digest.
-    let unchanged = false;
-    if (stale.file_digest !== undefined)
-      unchanged = sha256(current) === stale.file_digest;
-    else {
-      try {
-        unchanged = sha256(parseNote(current).body) === stale.content_digest;
-      } catch {
-        unchanged = false;
-      }
-    }
-    if (unchanged) {
+    // manifests without file_digest cannot prove the file is untouched, so
+    // their stale notes are always kept.
+    if (
+      stale.file_digest !== undefined &&
+      sha256(current) === stale.file_digest
+    ) {
       await rm(absolute, { force: true });
       removed += 1;
     } else keptModified += 1;

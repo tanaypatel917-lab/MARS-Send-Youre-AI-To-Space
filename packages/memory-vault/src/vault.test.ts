@@ -844,7 +844,7 @@ test("review: encoded graph file names stay within file-name limits", () => {
   );
 });
 
-test("review: manifests written without file_digest still open and clean up by body digest", async () => {
+test("review: manifests written without file_digest still open and keep stale notes", async () => {
   const { common, vaultDir, memory } = await fixture();
   await exportVault(ctx, common);
   const manifestPath = join(vaultDir, ".mars-vault.json");
@@ -855,8 +855,9 @@ test("review: manifests written without file_digest still open and clean up by b
   expect(status.memory.notes.unchanged).toBeGreaterThan(0);
   await memory.batch(ctx, 1, [{ operation: "remove", entry_id: "fact-plain" }]);
   const report = await exportVault(ctx, common);
-  expect(report.removed).toBe(1);
-  expect(existsSync(join(vaultDir, "facts/fact-plain.md"))).toBe(false);
+  expect(report.removed).toBe(0);
+  expect(report.kept_modified).toBe(1);
+  expect(existsSync(join(vaultDir, "facts/fact-plain.md"))).toBe(true);
   expect(
     JSON.parse(readFileSync(manifestPath, "utf8")).notes.every(
       (note: { file_digest?: string }) => typeof note.file_digest === "string",
