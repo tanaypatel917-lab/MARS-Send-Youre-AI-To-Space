@@ -1050,3 +1050,53 @@ test("EvaluationJobStore serializes overlapping writes for one job (regression: 
   expect((await readdir(dir)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   await rm(dir, { recursive: true, force: true });
 });
+
+test("EvaluationJobStore: a failed write rejects only its caller and later writes still succeed", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mars-eval-store-fail-"));
+  const store = new EvaluationJobStore(join(dir, "missing"));
+  const record: JobRecord = {
+    schema: "mars.evaluation-job/v1",
+    job_id: "b".repeat(32),
+    scope: { owner_id: "owner", project_id: "project" },
+    input_manifest: {
+      artifact_id: "manifest",
+      sha256: "0".repeat(64),
+      media_type: "application/json",
+      byte_length: 2,
+    },
+    comparison_id: "cmp",
+    budget: {
+      max_tokens: 1000,
+      max_usd: 1,
+      max_duration_ms: 60_000,
+      max_depth: 0,
+      max_concurrency: 1,
+    },
+    status: "pending",
+    created_at: "2026-11-02T00:00:00.000Z",
+    updated_at: "2026-11-02T00:00:00.000Z",
+    deadline_ms: 1,
+    runs: [],
+    active_pids: [],
+    report: null,
+    trajectories: [],
+    cost_usd: null,
+    error: null,
+  };
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    await expect(store.write(record)).rejects.toThrow();
+    await store.init();
+    await store.write({ ...record, status: "running" });
+    await new Promise((r) => setTimeout(r, 20));
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+  expect(unhandled).toEqual([]);
+  expect((await store.read(record.job_id))?.status).toBe("running");
+  await rm(dir, { recursive: true, force: true });
+});

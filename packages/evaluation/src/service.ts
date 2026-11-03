@@ -120,10 +120,11 @@ export class EvaluationJobStore {
         await rename(tmp, target);
       });
     this.chains.set(record.job_id, next);
-    next.finally(() => {
+    const release = () => {
       if (this.chains.get(record.job_id) === next)
         this.chains.delete(record.job_id);
-    });
+    };
+    next.then(release, release);
     return next;
   }
   async read(jobId: string): Promise<JobRecord | null> {
