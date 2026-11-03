@@ -1115,3 +1115,50 @@ test("refused calls and oversized refusal lists still leave bounded, non-verifie
     await f.cleanup();
   }
 });
+
+test("over-long refusal and contract-error messages are clipped inside the evidence field limits", async () => {
+  const f = await fixture({
+    scenario: { rules: [{ match: ["*"], stdout: "unexpected" }] },
+  });
+  try {
+    const invalid = await f.tools.verify({
+      action: "run",
+      contract: {
+        contract_id: "bad-ids",
+        title: "t",
+        checks: Array.from({ length: 64 }, (_, index) => ({
+          id: `bad id with spaces ${"x".repeat(60)} ${index}`,
+          type: "file_exists",
+          params: { path: "clip.mp4" },
+        })),
+      },
+    });
+    expect(invalid).toContain("not a valid verification contract");
+    const record = f.records.at(-1);
+    expect(record).toMatchObject({
+      kind: "verify",
+      verdict: "error",
+      verified: false,
+    });
+    for (const limitation of record?.limitations ?? [])
+      expect(limitation.length).toBeLessThanOrEqual(1024);
+    expect(
+      record?.limitations.some(
+        (item) => item.length === 1024 && item.endsWith("…"),
+      ),
+    ).toBe(true);
+    const longSource = `${"a".repeat(3000)}.mp4`;
+    expect(await f.tools.watch({ source: longSource })).toContain(
+      "refused by host policy",
+    );
+    const refused = f.records.at(-1);
+    expect(refused?.tool).toBe("mars_watch");
+    expect(refused?.summary.length).toBeLessThanOrEqual(2048);
+    expect(refused?.limitations.every((item) => item.length <= 1024)).toBe(
+      true,
+    );
+    expect(f.records).toHaveLength(2);
+  } finally {
+    await f.cleanup();
+  }
+});

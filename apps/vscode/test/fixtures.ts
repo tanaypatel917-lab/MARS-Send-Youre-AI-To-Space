@@ -13,6 +13,7 @@ import type { ConnectResult, WorkbenchUi } from "../src/controller";
 import type { OpenOutcome } from "../src/diffOpener";
 import type { ViewState } from "../src/messages";
 import type { DescribeResult } from "../src/protocol";
+import type { ReviewTarget } from "../src/reviewOpener";
 import { RpcError, type RpcRequest, type RpcTransport } from "../src/rpc";
 
 export const scope: Scope = {
@@ -205,6 +206,8 @@ export interface Harness {
   confirms: Array<{ message: string; detail: string; action: string }>;
   answer: { value: boolean };
   opened: string[];
+  copied: string[];
+  reviews: ReviewTarget[];
   ui: WorkbenchUi;
   connect: () => Promise<ConnectResult>;
   last(): ViewState;
@@ -215,6 +218,8 @@ export function harness(server = new FakeServer()): Harness {
   const confirms: Harness["confirms"] = [];
   const answer = { value: true };
   const opened: string[] = [];
+  const copied: string[] = [];
+  const reviews: ReviewTarget[] = [];
   let id = 0;
   const ui: WorkbenchUi = {
     confirm: async (message, detail, action) => {
@@ -229,6 +234,13 @@ export function harness(server = new FakeServer()): Harness {
     openArtifact: async (artifact) => {
       opened.push(artifact.ref.artifact_id);
     },
+    copyText: async (text) => {
+      copied.push(text);
+    },
+    openReview: async (_server, target) => {
+      reviews.push(target);
+      return { ok: true };
+    },
   };
   return {
     server,
@@ -236,6 +248,8 @@ export function harness(server = new FakeServer()): Harness {
     confirms,
     answer,
     opened,
+    copied,
+    reviews,
     ui,
     connect: async () => ({
       ok: true,

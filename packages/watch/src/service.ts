@@ -140,8 +140,9 @@ function inside(root: string, candidate: string): boolean {
   );
 }
 
+/** Truncates to at most `max` characters, ellipsis included. */
 function clip(value: string, max = SUMMARY_CHARS): string {
-  return value.length > max ? `${value.slice(0, max)}…` : value;
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
 function parseJson(text: string): unknown {

@@ -7,6 +7,7 @@ import type {
   TaskStatus,
   WorkspaceRef,
 } from "@mars/contracts";
+import { DEFAULT_MAX_REVIEW_LINES } from "@mars/output-format";
 import type { MarsClient, VerifiedArtifact } from "./client";
 import type { OpenOutcome } from "./diffOpener";
 import type {
@@ -30,6 +31,7 @@ import {
   type DiffFile,
   sameScope,
 } from "./protocol";
+import type { ReviewOutcome, ReviewTarget } from "./reviewOpener";
 import { RpcError } from "./rpc";
 import { buildPendingTask } from "./taskFactory";
 
@@ -43,6 +45,11 @@ export interface WorkbenchUi {
   promptToken(): Promise<void>;
   openDiff(server: DescribeResult, file: DiffFile): Promise<OpenOutcome>;
   openArtifact(artifact: VerifiedArtifact, title: string): Promise<void>;
+  copyText(text: string): Promise<void>;
+  openReview(
+    server: DescribeResult,
+    target: ReviewTarget,
+  ): Promise<ReviewOutcome>;
 }
 
 export interface ControllerOptions {
@@ -185,6 +192,12 @@ export class WorkbenchController {
         return this.checkpoint(message.taskId);
       case "restoreCheckpoint":
         return this.restore(message.taskId, message.checkpointId);
+      case "followUp":
+        return this.followUp(message.taskId, message.prompt);
+      case "openReview":
+        return this.openReview(message);
+      case "copyText":
+        return this.copyText(message.text);
     }
   }
 
@@ -746,6 +759,42 @@ export class WorkbenchController {
     }
   }
 
+  /**
+   * A follow-up is a prompt the model proposed inside its own output. It is
+   * shown in full and sent through the normal steer path only after the user
+   * confirms, and only to a task that is still live.
+   */
+  async followUp(taskId: string, prompt: string): Promise<void> {
+    const selected = this.current(taskId);
+    const text = prompt.trim();
+    if (!selected || !text) return;
+    const status = selected.task.status;
+    if (status !== "running" && status !== "paused") {
+      this.setNotice(
+        "info",
+        `A follow-up can only steer a running or paused task (task is ${status}). Create a new task with this prompt instead.`,
+      );
+      this.emit();
+      return;
+    }
+    const detail = [
+      `Task: ${taskId} (revision ${selected.task.revision}, ${status})`,
+      "The model proposed this follow-up in its output. Nothing was sent yet.",
+      "",
+      "Prompt:",
+      text,
+    ].join("\n");
+    if (
+      !(await this.options.ui.confirm(
+        "Send this follow-up as a steering instruction?",
+        detail,
+        "Send follow-up",
+      ))
+    )
+      return;
+    await this.steer(taskId, text);
+  }
+
   async cancel(taskId: string): Promise<void> {
     const selected = this.current(taskId);
     if (!selected) return;
@@ -812,6 +861,59 @@ export class WorkbenchController {
     this.emit();
   }
 
+  // ---------------------------------------------------------- output links
+
+  /** Opens a `mars://review` target locally; the PR URL is displayed, never fetched. */
+  async openReview(
+    message: Extract<WebviewMessage, { type: "openReview" }>,
+  ): Promise<void> {
+    const selected = this.current(message.taskId);
+    const server = this.server;
+    if (!selected || !server) return;
+    const label = `${message.path}:${message.line_start}-${message.line_end}`;
+    const check = checkRelativePath(message.path);
+    if (!check.ok) {
+      this.setNotice("error", `Refused to open ${label}: ${check.reason}`);
+      this.emit();
+      return;
+    }
+    if (message.line_end < message.line_start) {
+      this.setNotice("error", `Refused to open ${label}: empty line range.`);
+      this.emit();
+      return;
+    }
+    const span = message.line_end - message.line_start + 1;
+    if (span > DEFAULT_MAX_REVIEW_LINES) {
+      this.setNotice(
+        "error",
+        `Refused to open ${label}: range spans ${span} lines; the limit is ${DEFAULT_MAX_REVIEW_LINES}.`,
+      );
+      this.emit();
+      return;
+    }
+    const outcome = await this.options.ui.openReview(server, {
+      path: message.path,
+      segments: check.segments,
+      line_start: message.line_start,
+      line_end: message.line_end,
+      side: message.side,
+      pr: message.pr,
+    });
+    if (outcome.ok)
+      this.setNotice(
+        "info",
+        `Opened ${label} (${message.side} side of ${message.pr}; the PR itself was not fetched${outcome.note ? `; ${outcome.note}` : ""}).`,
+      );
+    else this.setNotice("error", `Refused to open ${label}: ${outcome.reason}`);
+    this.emit();
+  }
+
+  async copyText(text: string): Promise<void> {
+    await this.options.ui.copyText(text);
+    this.setNotice("info", "Copied to the clipboard.");
+    this.emit();
+  }
+
   // ---------------------------------------------------------- artifacts
 
   private findArtifact(
@@ -854,7 +956,7 @@ export class WorkbenchController {
       );
       return;
     }
-    selected.artifact = artifactView(artifact);
+    selected.artifact = artifactView(artifact, isFinalText(selected.task, ref));
     this.emit();
   }
 
@@ -953,11 +1055,27 @@ function diffView(file: DiffFile, index: number): DiffFileView {
   };
 }
 
-export function artifactView(artifact: VerifiedArtifact): ArtifactView {
+/**
+ * The host stores the model's final text as a bare `text/plain` artifact on
+ * the task itself; command stdout/stderr are `text/plain; charset=utf-8` and
+ * only ever appear as event payloads, so they stay raw text.
+ */
+export function isFinalText(task: Task, ref: ArtifactRef): boolean {
+  return (
+    ref.media_type === "text/plain" &&
+    task.artifacts.some((item) => item.artifact_id === ref.artifact_id)
+  );
+}
+
+export function artifactView(
+  artifact: VerifiedArtifact,
+  finalText: boolean,
+): ArtifactView {
   const base = {
     artifact_id: artifact.ref.artifact_id,
     media_type: artifact.media_type,
     byte_length: artifact.bytes.byteLength,
+    final_text: finalText,
   };
   if (!TEXT_TYPES.test(artifact.media_type))
     return {
