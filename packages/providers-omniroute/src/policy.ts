@@ -26,11 +26,12 @@ export interface OmniRoutePolicyOptions {
   /** Provider id the guard applies to; other providers pass straight through. */
   providerId?: string;
   /**
-   * Resolves the task's paid-consent state for a model. The default grants
-   * consent only to a model MARS already classified as paid, which the
-   * router only reaches under `allowPaid: true` with an explicit selection.
+   * The MARS task's paid-consent state: a boolean, or a predicate over the
+   * selected model. Default `false`: the router can reach a paid model under
+   * `allowPaid: true` without an explicit selection, so `allowPaid` alone is
+   * never read as task consent and every non-free route is refused.
    */
-  paidConsent?: (model: ModelConfig) => boolean;
+  paidConsent?: boolean | ((model: ModelConfig) => boolean);
   /** Wrapped factory; defaults to the standard provider adapters. */
   inner?: AdapterFactory;
 }
@@ -102,8 +103,9 @@ export function createOmniRouteAdapterFactory(
 ): AdapterFactory {
   const providerId = options.providerId ?? "omniroute";
   const inner = options.inner ?? createProviderAdapter;
-  const paidConsent =
-    options.paidConsent ?? ((model: ModelConfig) => !model.pricing.free);
+  const consentOption = options.paidConsent ?? false;
+  const paidConsent = (model: ModelConfig) =>
+    typeof consentOption === "function" ? consentOption(model) : consentOption;
   return (provider: ProviderConfig, adapterOptions?: AdapterOptions) => {
     if (provider.id !== providerId) return inner(provider, adapterOptions);
     const adapterFor = (model: ModelConfig): ProviderAdapter => {

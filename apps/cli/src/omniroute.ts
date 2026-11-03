@@ -74,16 +74,15 @@ export function omnirouteFromFlags(
     return undefined;
   }
   const url = flags.url ?? OMNIROUTE_DEFAULT_URL;
-  let normalized: string;
   try {
-    normalized = omnirouteBaseUrl(url);
-  } catch {
+    omnirouteBaseUrl(url);
+  } catch (error) {
     throw new ServeUsageError(
-      "--omniroute-url must be http(s)://HOST[:PORT] (optionally ending in /v1).",
+      `--omniroute-url must be http://LOOPBACK[:PORT] or https://HOST[:PORT] (optionally ending in /v1): ${
+        error instanceof Error ? error.message : String(error)
+      }`,
     );
   }
-  if (!/^https?:$/.test(new URL(normalized).protocol))
-    throw new ServeUsageError("--omniroute-url must use http or https.");
   const overrides = omnirouteOverrides(flags.allow ?? []);
   return {
     url,

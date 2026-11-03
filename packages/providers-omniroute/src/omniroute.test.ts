@@ -48,6 +48,7 @@ beforeAll(async () => {
       { id: "goodapi/clean-1", tool_calling: true, context_length: 128_000 },
       { id: "goodapi/clean-2" },
       { id: "chatgpt-web/gpt-x", tool_calling: true },
+      { id: "cautious/c-1" },
       { id: "paid/premium", tool_calling: true },
     ],
   });
@@ -67,6 +68,7 @@ async function registryWithOmniRoute(options: {
   allowPaid?: boolean;
   discovered?: boolean;
   overrides?: ExclusionOverrides;
+  paidConsent?: boolean;
 }) {
   if (options.allowPaid) {
     await Bun.write(
@@ -91,6 +93,9 @@ async function registryWithOmniRoute(options: {
     url: fake.url,
     ...(discovered ? { discovered } : {}),
     ...(options.overrides ? { overrides: options.overrides } : {}),
+    ...(options.paidConsent !== undefined
+      ? { policy: { paidConsent: options.paidConsent } }
+      : {}),
   });
 }
 
@@ -104,6 +109,14 @@ describe("omniroute provider target", () => {
       "http://localhost:20128/v1",
     );
     expect(() => omnirouteBaseUrl("http://user:pw@localhost:20128")).toThrow();
+    // A gateway key must never travel in cleartext off the host.
+    expect(() => omnirouteBaseUrl("http://omniroute.example:20128")).toThrow(
+      /loopback|https/,
+    );
+    expect(omnirouteBaseUrl("https://omniroute.example")).toBe(
+      "https://omniroute.example/v1",
+    );
+    expect(() => omnirouteBaseUrl("ftp://localhost:20128")).toThrow();
     const provider = omnirouteProvider();
     expect(provider).toMatchObject({
       id: "omniroute",
@@ -126,6 +139,46 @@ describe("omniroute provider target", () => {
     }
   });
 
+  test("discovery drops catalog models the gateway does not list so fallback keeps going", () => {
+    const discovered = {
+      listed: new Set(["goodapi/clean-2"]),
+      toolCapable: new Set<string>(),
+      visionCapable: new Set<string>(),
+      contextWindows: new Map<string, number>(),
+    };
+    expect(
+      omnirouteModels(catalog, { discovered }).map((m) => m.model),
+    ).toEqual(["goodapi/clean-2"]);
+    expect(omnirouteModels(catalog).map((m) => m.model)).toEqual([
+      "goodapi/clean-1",
+      "goodapi/clean-2",
+    ]);
+  });
+
+  test("the extension can carry the gateway key environment the probe used", async () => {
+    const bare = await loadModelRegistry({
+      cwd: home,
+      home,
+      env: { MARS_HOME: home },
+    });
+    const withoutEnv = extendRegistryWithOmniRoute(bare, {
+      catalog,
+      url: fake.url,
+    });
+    expect(withoutEnv.unavailableReason("omniroute")).toBeDefined();
+    const withEnv = extendRegistryWithOmniRoute(bare, {
+      catalog,
+      url: fake.url,
+      env: { OMNIROUTE_API_KEY: "fake-gateway-key" },
+    });
+    expect(withEnv.unavailableReason("omniroute")).toBeUndefined();
+    const response = await new ModelRouter(withEnv).complete(
+      { messages: [{ role: "user", content: "hi" }] },
+      { model: "omniroute/goodapi/clean-2" },
+    );
+    expect(response.content).toBe("fake reply from goodapi/clean-2");
+  });
+
   test("probe and discovery use only GET /v1/models and report booleans", async () => {
     fake.requests.length = 0;
     const probe = await probeOmniRoute({ url: fake.url, env: env() });
@@ -134,7 +187,7 @@ describe("omniroute provider target", () => {
       models_endpoint: true,
       authorized: true,
       status: 200,
-      model_count: 4,
+      model_count: 5,
       api_key_env_present: true,
     });
     expect(JSON.stringify(probe)).not.toContain("fake-gateway-key");
@@ -268,10 +321,38 @@ describe("omniroute provider target", () => {
     ).toBe(false);
   });
 
-  test("a paid, explicitly selected model under allowPaid carries consent granted", async () => {
+  test("allowPaid alone is never task consent: a paid OmniRoute model is refused before any request", async () => {
     const registry = await registryWithOmniRoute({
       allowPaid: true,
       discovered: true,
+    });
+    expect(registry.policy.allowPaid).toBe(true);
+    const paid = registry.extend({
+      models: [
+        {
+          id: "omniroute/paid/premium",
+          providerId: "omniroute",
+          model: "paid/premium",
+          capabilities: { tools: true, vision: false, contextWindow: 8192 },
+          pricing: { free: false, inputPerMTokUsd: 1, outputPerMTokUsd: 2 },
+        },
+      ],
+    });
+    fake.requests.length = 0;
+    await expect(
+      new ModelRouter(paid).complete(
+        { messages: [{ role: "user", content: "hi" }] },
+        { model: "omniroute/paid/premium" },
+      ),
+    ).rejects.toThrow(/without paid consent/);
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  test("a paid model under allowPaid with explicit task consent carries consent granted", async () => {
+    const registry = await registryWithOmniRoute({
+      allowPaid: true,
+      discovered: true,
+      paidConsent: true,
     });
     expect(registry.policy.allowPaid).toBe(true);
     const paid = registry.extend({
@@ -294,9 +375,9 @@ describe("omniroute provider target", () => {
     expect(fake.requests[0]?.headers[PAID_CONSENT_HEADER.toLowerCase()]).toBe(
       "granted",
     );
-    // The same paid model is skipped without allowPaid even when requested.
+    // The same paid model is skipped without allowPaid even with task consent.
     const noConsent = (
-      await registryWithOmniRoute({ discovered: true })
+      await registryWithOmniRoute({ discovered: true, paidConsent: true })
     ).extend({
       models: paid.models.filter(
         (model) => model.id === "omniroute/paid/premium",

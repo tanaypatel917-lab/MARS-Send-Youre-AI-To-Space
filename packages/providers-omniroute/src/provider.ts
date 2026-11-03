@@ -36,6 +36,12 @@ export function omnirouteBaseUrl(url: string = OMNIROUTE_DEFAULT_URL): string {
   const parsed = new URL(url);
   if (parsed.search || parsed.hash || parsed.username || parsed.password)
     throw new Error("OmniRoute URL must be a bare origin or /v1 base URL.");
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+    throw new Error("OmniRoute URL must use http (loopback only) or https.");
+  if (parsed.protocol === "http:" && !LOOPBACK_HOSTS.has(parsed.hostname))
+    throw new Error(
+      "Plain http is allowed only for a loopback OmniRoute; the gateway key would otherwise travel in cleartext. Use https for a remote instance.",
+    );
   const path = parsed.pathname.replace(/\/+$/, "");
   parsed.pathname = path.endsWith("/v1") ? path : `${path}/v1`;
   return parsed.toString().replace(/\/+$/, "");
@@ -80,6 +86,8 @@ export interface OmniRouteModelsOptions {
    * Without discovery nothing is known about tools or vision, so every
    * catalog model is registered as text-only and tool-less; the execution
    * runtime then never selects it, while tool-less callers still can.
+   * With discovery, catalog models the gateway does not list are dropped:
+   * a 404 is non-retryable and would otherwise stop route fallback.
    */
   discovered?: DiscoveredCapabilities;
 }
@@ -119,7 +127,10 @@ export function omnirouteModels(
   options: OmniRouteModelsOptions = {},
 ): ModelConfig[] {
   const discovered = options.discovered;
-  return routableEntries(catalog, options.overrides).map((entry) => {
+  const entries = routableEntries(catalog, options.overrides).filter(
+    (entry) => !discovered || discovered.listed.has(catalogModelKey(entry)),
+  );
+  return entries.map((entry) => {
     const key = catalogModelKey(entry);
     const contextWindow = discovered?.contextWindows.get(key);
     const tags = [
@@ -127,7 +138,6 @@ export function omnirouteModels(
       `tos:${entry.terms_risk.verdict}`,
       `free:${entry.free_type}`,
       ...(discovered ? [] : ["capabilities:unknown"]),
-      ...(discovered && !discovered.listed.has(key) ? ["unlisted"] : []),
       ...(contextWindow === undefined ? ["context:assumed"] : []),
     ];
     return {
@@ -156,6 +166,11 @@ export interface OmniRouteRegistryOptions extends OmniRouteModelsOptions {
    */
   extendDefaultRoute?: boolean;
   policy?: Omit<OmniRoutePolicyOptions, "catalog" | "overrides">;
+  /**
+   * Environment the extended registry reads `apiKeyEnv` from, when it is
+   * not the one the base registry was loaded with (merged over it).
+   */
+  env?: Record<string, string | undefined>;
 }
 
 /**
@@ -185,6 +200,7 @@ export function extendRegistryWithOmniRoute(
     providers: [provider],
     models,
     routes,
+    ...(options.env ? { env: options.env } : {}),
     adapterFactory: createOmniRouteAdapterFactory({
       ...options.policy,
       catalog: options.catalog,

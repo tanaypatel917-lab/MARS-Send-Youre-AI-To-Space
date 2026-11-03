@@ -133,6 +133,22 @@ test("mars serve --omniroute-start spawns the pinned gateway on loopback and kil
   expect(kills).toEqual(["SIGTERM"]);
 });
 
+test("a wrong gateway key fails service startup instead of registering dead models", async () => {
+  const fake = await startFakeOmniRoute({ apiKey: "right", models: [] });
+  cleanup.push(() => fake.stop());
+  const f = await fixture();
+  await expect(
+    createWorkbenchService({
+      sourceRoot: f.source,
+      stateRoot: f.state,
+      scope: f.scope,
+      registry: f.registry,
+      port: 0,
+      omniroute: { url: fake.url, env: { OMNIROUTE_API_KEY: "wrong" } },
+    }),
+  ).rejects.toThrow(/rejected the gateway key/);
+});
+
 test("an unreachable OmniRoute in attach mode fails service startup cleanly", async () => {
   const f = await fixture();
   await expect(

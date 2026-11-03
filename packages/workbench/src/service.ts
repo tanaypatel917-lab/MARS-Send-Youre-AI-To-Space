@@ -111,6 +111,11 @@ export interface WorkbenchOmniRouteOptions {
   allowVersionMismatch?: boolean;
   /** Opt-ins over the default exclusions (web-session, browser-session, terms risk). */
   overrides?: ExclusionOverrides;
+  /**
+   * Paid consent carried to OmniRoute for non-free routes. Default false:
+   * the user's `allowPaid` alone never counts as task consent.
+   */
+  paidConsent?: boolean;
   /** Catalog to use instead of the bundled `free-tier-catalog.json`. */
   catalog?: FreeTierCatalog;
   env?: Record<string, string | undefined>;
@@ -182,6 +187,10 @@ async function openOmniRoute(
         url,
         ...(options.overrides ? { overrides: options.overrides } : {}),
         ...(discovered ? { discovered } : {}),
+        // The registry resolves OMNIROUTE_API_KEY from the same environment
+        // the probe used, so a discovered gateway is also routable.
+        ...(options.env ? { env: options.env } : {}),
+        policy: { paidConsent: options.paidConsent === true },
       }),
     };
   } catch (error) {

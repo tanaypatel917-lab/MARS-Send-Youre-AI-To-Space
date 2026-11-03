@@ -38,10 +38,19 @@ describe("mars serve --omniroute flags", () => {
     });
   });
 
-  test("rejects bad URLs and the avoid verdict", () => {
+  test("rejects bad URLs, cleartext remote URLs and the avoid verdict", () => {
     expect(() =>
       omnirouteFromFlags({ enabled: true, url: "localhost:20128" }),
     ).toThrow(ServeUsageError);
+    expect(() =>
+      omnirouteFromFlags({
+        enabled: true,
+        url: "http://gateway.example:20128",
+      }),
+    ).toThrow(/https/);
+    expect(
+      omnirouteFromFlags({ enabled: true, url: "https://gateway.example" }),
+    ).toEqual({ url: "https://gateway.example" });
     expect(() =>
       omnirouteFromFlags({ enabled: true, url: "ftp://localhost:20128" }),
     ).toThrow(ServeUsageError);

@@ -1,7 +1,8 @@
-import { type FetchLike, probeOmniRoute } from "./health";
+import { type FetchLike, type OmniRouteProbe, probeOmniRoute } from "./health";
 import { OMNIROUTE_PIN } from "./pin";
 import {
   isLoopbackUrl,
+  OMNIROUTE_API_KEY_ENV,
   OMNIROUTE_DEFAULT_URL,
   omnirouteBaseUrl,
 } from "./provider";
@@ -163,6 +164,7 @@ export function createOmniRouteProcess(
     if (running) return status();
     const existing = await probeOmniRoute(probeOptions);
     if (existing.reachable) {
+      assertUsable(existing);
       attached = true;
       running = true;
       log({ type: "attached", url });
@@ -203,7 +205,14 @@ export function createOmniRouteProcess(
           `OmniRoute exited during startup with code ${exitCode}.`,
         );
       const probe = await probeOmniRoute(probeOptions);
-      if (probe.reachable) {
+      if (probe.reachable && probe.authorized === false) {
+        await stop();
+        await exited.catch(() => undefined);
+        assertUsable(probe);
+      }
+      // Ready means an authorized, well-formed /v1/models answer, not any
+      // HTTP response: a booting gateway may answer 404/503 first.
+      if (probe.models_endpoint) {
         log({ type: "ready", url });
         return status();
       }
@@ -214,6 +223,18 @@ export function createOmniRouteProcess(
     throw new OmniRouteProcessError(
       `OmniRoute did not answer at ${url} within the startup timeout.`,
     );
+  }
+
+  /** A reachable gateway is usable only when /v1/models answers with authorization. */
+  function assertUsable(probe: OmniRouteProbe): void {
+    if (probe.authorized === false)
+      throw new OmniRouteProcessError(
+        `OmniRoute at ${url} rejected the gateway key (HTTP ${probe.status}); set ${options.apiKeyEnv ?? OMNIROUTE_API_KEY_ENV} to a key issued by that OmniRoute.`,
+      );
+    if (!probe.models_endpoint)
+      throw new OmniRouteProcessError(
+        `OmniRoute at ${url} answered HTTP ${probe.status} on /v1/models; it is not usable as a provider target.`,
+      );
   }
 
   async function stop(): Promise<void> {

@@ -39,6 +39,8 @@ export interface RegistryExtension {
   routes?: Record<string, string[]>;
   /** Adapter factory every `ModelRouter` over the extended registry uses by default. */
   adapterFactory?: AdapterFactory;
+  /** Credential environment merged over the loaded one (variable names resolve here first). */
+  env?: Record<string, string | undefined>;
   notice?: string;
 }
 
@@ -267,7 +269,7 @@ export class ModelProviderRegistry {
           : [...this.notices],
         ignoredProjectConfig: this.ignoredProjectConfig,
       },
-      this.env,
+      extension.env ? { ...this.env, ...extension.env } : this.env,
       this.trustProjectConfig,
       extension.adapterFactory ?? this.adapterFactory,
     );
