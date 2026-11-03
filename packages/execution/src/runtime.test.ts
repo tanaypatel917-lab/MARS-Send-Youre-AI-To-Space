@@ -214,6 +214,74 @@ test("bridge preserves tool call identities and tool results without inventing a
   ).toThrow("only supports text");
 });
 
+test("mars_proposals is a read-only host-bound tool rendering untrusted proposal text", async () => {
+  const f = await fixture();
+  const requests: Record<string, unknown>[] = [];
+  let summaries = 0;
+  try {
+    const session = await f.open({
+      proposals: {
+        async summary() {
+          summaries += 1;
+          return "[untrusted optimization candidate c1 · proposed · promotion none_automatic]";
+        },
+      },
+      fetch: async (_url, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return requests.length === 1
+          ? sse(
+              {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_proposals",
+                    type: "function",
+                    function: { name: "mars_proposals", arguments: "{}" },
+                  },
+                ],
+              },
+              "tool_calls",
+            )
+          : sse({ content: "One proposed candidate; nothing promoted." });
+      },
+    });
+    const outcome = await session.run(f.task.request);
+    expect(outcome.status).toBe("completed");
+    expect(summaries).toBe(1);
+    expect(requests).toHaveLength(2);
+    expect(JSON.stringify(requests[0])).toContain("mars_proposals");
+    expect(JSON.stringify(requests[1])).toContain(
+      "untrusted optimization candidate c1",
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("mars_proposals is absent without read approval or a proposals source", async () => {
+  const f = await fixture();
+  const requests: Record<string, unknown>[] = [];
+  try {
+    const reply = async (_url: string, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return sse({ content: "Done." });
+    };
+    const plain = await f.open({ fetch: reply });
+    await plain.run(f.task.request);
+    const noRead = await f.open({
+      approvals: { read: false, write: true, execute: false },
+      proposals: { summary: async () => "unused" },
+      fetch: reply,
+    });
+    await noRead.run(f.task.request);
+    expect(requests).toHaveLength(2);
+    for (const request of requests)
+      expect(JSON.stringify(request)).not.toContain("mars_proposals");
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("actual Oh My Pi owns a two-turn write-tool session through the existing provider adapter", async () => {
   const f = await fixture();
   const requests: Record<string, unknown>[] = [];

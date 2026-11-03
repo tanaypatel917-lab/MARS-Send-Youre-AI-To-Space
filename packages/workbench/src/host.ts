@@ -63,6 +63,7 @@ import {
   type WorkbenchMemory,
   withFrozenMemory,
 } from "./memory-context";
+import { proposalTools, type WorkbenchOptimization } from "./proposal-context";
 import {
   type Approvals,
   ApprovalsSchema,
@@ -134,6 +135,8 @@ export interface WorkbenchHostOptions {
   specialists?: WorkbenchSpecialists;
   collaboration?: WorkbenchCollaboration;
   research?: WorkbenchResearch;
+  /** Read-only prompt-optimisation proposals exposed to sessions as untrusted text. */
+  optimization?: WorkbenchOptimization;
   hostPrivateRoots?: string[];
   runtimeFactory?: (options: RuntimeSessionOptions) => Promise<RuntimeSession>;
 }
@@ -266,6 +269,14 @@ export async function createWorkbenchHost(
       ),
     };
   };
+  const proposalsFor = () =>
+    options.optimization
+      ? {
+          proposals: proposalTools(options.optimization, () =>
+            internalContext(options.scope),
+          ),
+        }
+      : {};
   const staleResearch = async (taskId: string) => {
     if (!options.research) return;
     await staleTaskResearch(
@@ -1342,6 +1353,7 @@ export async function createWorkbenchHost(
               collaboration: Boolean(options.collaboration),
               delegation: Boolean(delegation),
               research: Boolean(options.research),
+              proposals: Boolean(options.optimization),
               instruction: baseInstruction,
             }) + MIN_INITIAL_OUTPUT_RESERVE,
           );
@@ -1361,6 +1373,7 @@ export async function createWorkbenchHost(
         collaboration: Boolean(options.collaboration),
         delegation: Boolean(delegation),
         research: Boolean(options.research),
+        proposals: Boolean(options.optimization),
         instruction: baseInstruction,
       });
       let memory: z.infer<typeof FrozenMemorySchema> | undefined;
@@ -1512,6 +1525,7 @@ export async function createWorkbenchHost(
             : {}),
           ...(params.approvals.read ? historyFor(context) : {}),
           ...researchFor(task.task_id, () => launchDeadline),
+          ...proposalsFor(),
           onEvent: async (event) => {
             if (!bound) {
               if (initialObservations.length >= 1000)
@@ -1642,6 +1656,7 @@ export async function createWorkbenchHost(
             task.task_id,
             () => launch.deadline ?? Date.now() + task.budget.max_duration_ms,
           ),
+          ...proposalsFor(),
           onEvent: observe(taskId),
         });
         if (closing) throw new WorkbenchError("unavailable");
