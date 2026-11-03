@@ -36,6 +36,12 @@ evidence.
   worker, train/validation/final-holdout splits, candidate lifecycle and
   proposal reports.
 
+Workbench wiring is read-only: `WorkbenchHostOptions.optimization` (a
+`candidates`/`report` view of `@mars/optimization` plus the target ids a
+workbench may read) adds the host-bound `mars_proposals` tool, which renders
+candidates and proposal reports as bounded, labelled untrusted text. Sessions
+cannot propose, decide, publish, or see the final holdout through it.
+
 The package READMEs carry the detailed architecture, setup commands, test
 inventory and their own verified/unverified sections. This document records
 the cross-cutting rules and the evidence produced in this increment.

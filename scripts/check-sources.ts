@@ -72,6 +72,7 @@ export const ManifestSchema = z
               "initialization-only",
               "journal-probe-only",
               "workbench-context-only",
+              "python-worker",
               "not-integrated",
             ]),
           })

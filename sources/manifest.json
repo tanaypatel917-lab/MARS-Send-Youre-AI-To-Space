@@ -978,7 +978,7 @@
       "group": "evaluation",
       "repository_url": "https://github.com/harbor-framework/harbor",
       "revision": "c23909f47508af47a70321eb22c2b40aa190ca5d",
-      "version_note": "pyproject version 0.25.0; audited HEAD is NOT the v0.25.0 tag commit (tag v0.25.0 -> fb8162a2209bb2af33f9377ac9f131561ceb51fa)",
+      "version_note": "pyproject version 0.25.0; audited HEAD is NOT the v0.25.0 tag commit (tag v0.25.0 -> fb8162a2209bb2af33f9377ac9f131561ceb51fa) Milestone 4: `@mars/evaluation` launches `harbor run` from a pinned Python 3.12 venv (harbor==0.25.0) with Bun-side deadline/cancel enforcement and parses job/trial result.json records; `packages/evaluation/python/mars_harbor_agent` is the custom BaseAgent for the MARS Oh My Pi runtime.",
       "license": {
         "spdx": "Apache-2.0",
         "path": "LICENSE",
@@ -1122,7 +1122,7 @@
         "MIT/Apache third-party evaluator subtrees need NOTICE retention if vendored",
         "base images pulled from Docker Hub are rate-limited"
       ],
-      "integration_status": "not-integrated",
+      "integration_status": "python-worker",
       "background_references": []
     },
     {
@@ -1130,7 +1130,7 @@
       "group": "evaluation",
       "repository_url": "https://github.com/SWE-agent/mini-swe-agent",
       "revision": "04d809ceab9df28f9adaed044884180159172930",
-      "version_note": "v2.4.6 (HEAD == tag; __version__ 2.4.6)",
+      "version_note": "v2.4.6 (HEAD == tag; __version__ 2.4.6) Milestone 4: baseline arm via Harbor installed adapter (`-a mini-swe-agent --ak version=2.4.6`) in `@mars/evaluation` comparison manifests; a live attempt on this VM failed to import litellm (`No module named mcp`) so no real-model baseline trial exists yet.",
       "license": {
         "spdx": "MIT",
         "path": "LICENSE.md",
@@ -1201,7 +1201,7 @@
         "cost_limit semantics depend on LiteLLM pricing tables",
         "baseline/candidate env drift if standalone CLI used instead of Harbor adapter"
       ],
-      "integration_status": "not-integrated",
+      "integration_status": "python-worker",
       "background_references": []
     },
     {
@@ -1209,7 +1209,7 @@
       "group": "evaluation",
       "repository_url": "https://github.com/laude-institute/terminal-bench-2",
       "revision": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
-      "version_note": "Terminal-Bench 2.0 task set as pinned by the Harbor registry (laude-institute/harbor main @ a81b92d5f3cd06afaa1d3ad7bcaa926c6100fb5a, dataset `terminal-bench@2.0`, 89 tasks, every task entry points at this commit). The 10-task `terminal-bench-sample@2.0` dataset comes from laude-institute/terminal-bench-2-0-sample @ 7e917f35c281188532772312d4ad91ca9274febc.",
+      "version_note": "Terminal-Bench 2.0 task set as pinned by the Harbor registry (laude-institute/harbor main @ a81b92d5f3cd06afaa1d3ad7bcaa926c6100fb5a, dataset `terminal-bench@2.0`, 89 tasks, every task entry points at this commit). The 10-task `terminal-bench-sample@2.0` dataset comes from laude-institute/terminal-bench-2-0-sample @ 7e917f35c281188532772312d4ad91ca9274febc. Milestone 4: consumed through Harbor datasets by `@mars/evaluation`; task commits pinned in comparison manifests.",
       "license": {
         "spdx": "NOASSERTION",
         "path": "README.md",
@@ -1284,7 +1284,7 @@
         "Registry on the Harbor `main` branch can move; the registry commit must be recorded with every comparison",
         "Some tasks require network access or large images; CPU-only VMs may time out"
       ],
-      "integration_status": "not-integrated"
+      "integration_status": "python-worker"
     },
     {
       "id": "dspy",
@@ -1359,7 +1359,7 @@
       "group": "evaluation",
       "repository_url": "https://github.com/gepa-ai/gepa",
       "revision": "02ea4152ff6e512484cb5298046bfe967aea4735",
-      "version_note": "latest tag v0.1.4 -> 8b0ce6cd99a234f6b74daf37558a2ac0ce18f975; audited HEAD is NOT the tag commit. DSPy 3.4.1 pins 0.1.4, so the runtime-relevant pin is the tag commit (source audited at HEAD; diff vs tag not reviewed).",
+      "version_note": "latest tag v0.1.4 -> 8b0ce6cd99a234f6b74daf37558a2ac0ce18f975; audited HEAD is NOT the tag commit. DSPy 3.4.1 pins 0.1.4, so the runtime-relevant pin is the tag commit (source audited at HEAD; diff vs tag not reviewed). Milestone 4: `@mars/optimization` runs gepa==0.1.4 (tag commit 8b0ce6cd99a234f6b74daf37558a2ac0ce18f975, MIT) in `packages/optimization/python/mars_gepa_worker`, an isolated Python 3.12 venv whose scoring and reflection are brokered over NDJSON to the Bun side; no extras and no DSPy installed.",
       "license": {
         "spdx": "MIT",
         "path": "LICENSE",
@@ -1449,7 +1449,7 @@
         "Harbor-backed evaluate is slow/expensive; per-example container failures must map to fallback 0.0 not exceptions",
         "reward scale must be higher-is-better and consistent"
       ],
-      "integration_status": "not-integrated",
+      "integration_status": "python-worker",
       "background_references": []
     },
     {
