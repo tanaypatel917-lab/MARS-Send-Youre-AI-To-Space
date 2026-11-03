@@ -53,6 +53,10 @@ _WORKDIR = re.compile(r"^/[A-Za-z0-9._/-]*$")
 _MAX_INSTRUCTION_BYTES = 256 * 1024
 
 
+class MarsAgentError(RuntimeError):
+    """A trial could not be started or collected safely."""
+
+
 class MarsAgentConfigError(ValueError):
     """Raised when kwargs are missing or unsafe; Harbor records it as an agent error."""
 
@@ -260,6 +264,13 @@ class MarsAgent(BaseAgent):
     async def _upload_credential(
         self, environment: BaseEnvironment, key_value: str, credential_path: PurePosixPath
     ) -> None:
+        """Upload the key as a file only the trial's exec user can read.
+
+        `docker cp` creates root-owned files, so for non-root task images the
+        file is chowned to the exec user from a root exec. Every step checks
+        its return code; an unreadable credential fails the trial up front
+        instead of surfacing as an authentication failure inside the bundle.
+        """
         fd, host_path = tempfile.mkstemp(prefix="mars-credential-", dir=self.logs_dir)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -268,7 +279,22 @@ class MarsAgent(BaseAgent):
             await environment.upload_file(host_path, str(credential_path))
         finally:
             os.unlink(host_path)
-        await environment.exec(f"chmod 0600 {shlex.quote(str(credential_path))}")
+        quoted = shlex.quote(str(credential_path))
+        ident = await environment.exec("id -u && id -g")
+        if ident.return_code != 0 or len(ident.stdout.split()) != 2:
+            raise MarsAgentError(f"could not determine the trial exec user: {ident.stderr.strip()}")
+        uid, gid = ident.stdout.split()
+        if not (uid.isdigit() and gid.isdigit()):
+            raise MarsAgentError(f"unexpected id output: {ident.stdout!r}")
+        secured = await environment.exec(f"chown {uid}:{gid} {quoted} && chmod 0600 {quoted}", user="root")
+        if secured.return_code != 0:
+            # No root exec available: fall back to the exec user's own chmod.
+            secured = await environment.exec(f"chmod 0600 {quoted}")
+        if secured.return_code != 0:
+            raise MarsAgentError(f"could not secure the credential file: {secured.stderr.strip()}")
+        readable = await environment.exec(f"test -r {quoted}")
+        if readable.return_code != 0:
+            raise MarsAgentError(f"credential file is not readable by uid {uid}; refusing to start the trial")
 
     async def _collect(self, environment: BaseEnvironment, context: AgentContext, return_code: int) -> None:
         usage_target = self.logs_dir / USAGE_FILE

@@ -15,6 +15,7 @@ from mars_harbor_agent.agent import (
     USAGE_FILE,
     MarsAgent,
     MarsAgentConfigError,
+    MarsAgentError,
 )
 
 
@@ -26,17 +27,35 @@ class FakeEnvironment:
         self.usage = usage
         self.return_code = return_code
 
+    uid = 1000
+    gid = 1000
+    root_exec_ok = True
+    credential_readable = True
+
     async def exec(self, command, cwd=None, env=None, timeout_sec=None, user=None):
-        self.commands.append({"command": command, "env": dict(env or {}), "timeout_sec": timeout_sec})
+        self.commands.append(
+            {"command": command, "env": dict(env or {}), "timeout_sec": timeout_sec, "user": user}
+        )
         if self.usage is not None and command.startswith("cd "):
             self.files[str(CONTAINER_STATE_DIR / USAGE_FILE)] = json.dumps(self.usage).encode()
+        stdout, return_code = "", self.return_code
+        if command == "id -u && id -g":
+            stdout, return_code = f"{self.uid}\n{self.gid}\n", 0
+        elif command.startswith("chown ") and user == "root":
+            return_code = 0 if self.root_exec_ok else 126
+        elif command.startswith("chmod "):
+            return_code = 0
+        elif command.startswith("test -r "):
+            return_code = 0 if self.credential_readable else 1
 
         class Result:
-            stdout = ""
-            stderr = ""
-            return_code = self.return_code
+            pass
 
-        return Result()
+        result = Result()
+        result.stdout = stdout
+        result.stderr = "" if return_code == 0 else "denied"
+        result.return_code = return_code
+        return result
 
     async def upload_file(self, source_path, target_path):
         self.uploads.append((Path(source_path).name, str(target_path)))
@@ -137,7 +156,13 @@ def test_run_passes_instruction_only_and_reports_usage(tmp_path, bundle, monkeyp
     assert env.files[str(CONTAINER_STATE_DIR / "credential")] == b"sk-not-real-secret"
     assert "sk-not-real-secret" not in run_cmd["command"]
     assert run_cmd["command"].startswith("cd /app && exec /opt/mars-agent/mars-agent ")
-    assert any(c["command"] == f"chmod 0600 {CONTAINER_STATE_DIR / 'credential'}" for c in env.commands)
+    cred = str(CONTAINER_STATE_DIR / "credential")
+    secure = [c for c in env.commands if c["command"].startswith("chown ")]
+    assert secure == [
+        {"command": f"chown 1000:1000 {cred} && chmod 0600 {cred}", "env": {}, "timeout_sec": None, "user": "root"}
+    ]
+    assert [c["command"] for c in env.commands if c["command"].startswith("test -r ")] == [f"test -r {cred}"]
+    assert env.commands.index(secure[0]) < env.commands.index(run_cmd)
     assert not list(tmp_path.rglob("mars-credential-*"))
     assert "tests" not in run_cmd["command"]
     assert env.files[str(CONTAINER_STATE_DIR / "instruction.txt")] == b"Fix the regex in /app/filter.py so the tests pass."
@@ -210,3 +235,30 @@ def test_run_without_key_skips_credential_handover(tmp_path, bundle, monkeypatch
     assert "MARS_AGENT_CREDENTIAL" not in run_cmd["env"]
     assert str(CONTAINER_STATE_DIR / "credential") not in env.files
     assert run_cmd["command"].startswith("cd /app && exec /opt/mars-agent/mars-agent ")
+
+
+def test_run_without_root_exec_falls_back_to_own_chmod(tmp_path, bundle, monkeypatch):
+    monkeypatch.setenv("MARS_EVAL_API_KEY", "sk-not-real-secret")
+    agent = make_agent(tmp_path, bundle)
+    env = FakeEnvironment(usage=None, return_code=0)
+    env.root_exec_ok = False
+    import asyncio
+
+    asyncio.run(agent.setup(env))
+    asyncio.run(agent.run("Do the task.", env, AgentContext()))
+    cred = str(CONTAINER_STATE_DIR / "credential")
+    assert [c["command"] for c in env.commands if c["command"].startswith("chmod 0600")] == [f"chmod 0600 {cred}"]
+    assert any(c["command"].startswith("cd ") for c in env.commands)
+
+
+def test_run_refuses_unreadable_credential(tmp_path, bundle, monkeypatch):
+    monkeypatch.setenv("MARS_EVAL_API_KEY", "sk-not-real-secret")
+    agent = make_agent(tmp_path, bundle)
+    env = FakeEnvironment(usage=None, return_code=0)
+    env.credential_readable = False
+    import asyncio
+
+    asyncio.run(agent.setup(env))
+    with pytest.raises(MarsAgentError, match="not readable by uid 1000"):
+        asyncio.run(agent.run("Do the task.", env, AgentContext()))
+    assert not any(c["command"].startswith("cd ") for c in env.commands)
