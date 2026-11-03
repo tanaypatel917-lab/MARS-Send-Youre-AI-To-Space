@@ -483,13 +483,18 @@ export function boundPatchSummary(
   if (bytes.byteLength <= limit) return text;
   const marker = (omitted: number) =>
     `\n[summary truncated: ${omitted} more bytes omitted]`;
+  const boundary = (end: number) => {
+    let cut = Math.max(0, Math.min(end, bytes.byteLength));
+    while (cut > 0 && ((bytes[cut] ?? 0) & 0xc0) === 0x80) cut--;
+    return cut;
+  };
   // The omitted count never exceeds the total, so reserving the marker for
-  // the total's digit count keeps the final text within the limit.
-  let keep = Math.max(
-    0,
-    limit - encoder.encode(marker(bytes.byteLength)).byteLength,
-  );
-  while (keep > 0 && ((bytes[keep] ?? 0) & 0xc0) === 0x80) keep--;
+  // the total's digit count keeps the final text within the limit. A limit
+  // too small for the marker yields a bare, boundary-aligned prefix.
+  const reserved = encoder.encode(marker(bytes.byteLength)).byteLength;
+  if (limit <= reserved)
+    return new TextDecoder().decode(bytes.subarray(0, boundary(limit)));
+  const keep = boundary(limit - reserved);
   const prefix = new TextDecoder().decode(bytes.subarray(0, keep));
   return `${prefix}${marker(bytes.byteLength - keep)}`;
 }

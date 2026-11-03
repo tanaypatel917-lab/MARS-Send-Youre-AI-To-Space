@@ -816,6 +816,12 @@ test("boundPatchSummary keeps the whole result within the byte limit at a charac
     ).toBe(true);
   }
   expect(bytesOf(boundPatchSummary(multibyte))).toBeLessThanOrEqual(128 * 1024);
+  for (const limit of [0, 1, 2, 3, 4, 10, 40]) {
+    const bounded = boundPatchSummary(multibyte, limit);
+    expect(bytesOf(bounded)).toBeLessThanOrEqual(limit);
+    expect(bounded).not.toContain("\uFFFD");
+    expect(multibyte.startsWith(bounded)).toBe(true);
+  }
 });
 
 test("mars_apply_patch keeps a persisted patch successful when its summary exceeds the output limit", async () => {
