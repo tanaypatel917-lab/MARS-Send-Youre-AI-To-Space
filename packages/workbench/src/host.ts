@@ -48,6 +48,7 @@ import {
 } from "@mars/execution";
 import type { ModelProviderRegistry } from "@mars/providers";
 import type { Turn } from "@mars/review";
+import { CommandError } from "@mars/skills";
 import type { DurableTaskStore } from "@mars/tasks";
 import { z } from "zod";
 import { chooseChildModel, isReviewerRole } from "./child-model";
@@ -1686,7 +1687,15 @@ export async function createWorkbenchHost(
         throw new WorkbenchError("forbidden");
       // A request that names a repository slash command (`/name args`) is
       // expanded from the command file; the durable task keeps the original.
-      const expanded = options.conventions?.commands?.expand(task.request);
+      const expanded = (() => {
+        try {
+          return options.conventions?.commands?.expand(task.request) ?? null;
+        } catch (error) {
+          if (error instanceof CommandError && error.code === "too-large")
+            throw new WorkbenchError("too_large");
+          throw error;
+        }
+      })();
       const request = expanded ? expanded.prompt : task.request;
       const baseInstruction = `${request}\n\nAcceptance criteria:\n${task.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`;
       if (baseInstruction.length > MAX_RUNTIME_INSTRUCTION_LENGTH)
