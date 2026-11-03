@@ -66,7 +66,7 @@ Dispatched 2026-11-02 as parallel child sessions, each opening its own PR agains
 4. `MARS` site: rebase and land the `/how` landscape branches.
 
 5. Output format follow-ups: a host connector registry so `app://` triggers resolve to real tools (today both clients list them as unresolved); host-side `processOutput` on the final `text/plain` artifact plus an explicit final-response role in task metadata (the VS Code client infers it from a bare `text/plain` artifact on the task); live-model and real-window verification.
-6. Wire `@mars/watch` into `mars serve`: a `--watch-command`/venv option, a `WATCH_DATA_DIR` under the state root, policy flags (`allow_screen_capture`, `allow_network_sources`, `allow_cloud_models`), then run the real CLI once end to end (`watch` on a local file, `loop start` on a loopback URL with Playwright, `verify run`) and record the commands and results in `documentation/WATCH.md`.
+6. Wire `@mars/watch` into `mars serve`: a `--watch-command`/venv option, a `WATCH_DATA_DIR` under the state root, policy flags (`allow_screen_capture`, `allow_network_sources`, `allow_cloud_models`), then run the real CLI end to end (`watch` on a local file, `loop start` on a loopback URL with Playwright) and record the commands and results in `documentation/WATCH.md`. Done so far through the wrapper against the real 1.4.3 CLI: doctor gate, `verify checks/run/show`, `loop status` (`packages/watch/src/real-cli.test.ts`, opt-in via `MARS_WATCH_REAL_CLI`).
 7. Make the skill service load `skills/vendor/watch-skill` and let the reviewer require a `verify` record for visual work (reviewer policy, not yet enforced anywhere).
 
 Milestone 3 follow-ups:

@@ -97,11 +97,20 @@ and must lie outside the workspace), so one task's video index, loops, captures 
 verification bundles are not searchable or readable from another task's session.
 Delegated children share their parent task's directory on purpose.
 
-Known limits of the host-side guards: they check the hostname the model supplied,
-so a loopback server that redirects to an external host is followed by the CLI
-itself; and upstream has a single offline switch, so `allow_cloud_models` lifts
-`WATCHSKILL_OFFLINE` only when `allow_network_sources` is also on (with network
-off the CLI always runs offline). Keep both off unless the user opts in.
+Redirects: with network sources off, every loopback URL handed to the CLI
+(`mars_watch` source, `mars_watch_capture`/`mars_loop` target, script `goto`,
+`browser_dom` check URL) is pre-flighted by the host with manual redirects
+(`HEAD`, `GET` on 405, 3 s timeout, at most 5 hops); the first hop that leaves
+loopback, uses a non-http(s) scheme, or exceeds the hop limit refuses the call
+before the CLI runs. An unreachable server is left to the CLI, which fails
+locally. Upstream's `http_request` check already runs with
+`follow_redirects=False`. Remaining limit: the probe is a point-in-time check,
+so a page that later navigates away (JavaScript, meta refresh) inside the
+loop's browser is not caught; keep `allow_network_sources` off and treat
+captured content as untrusted. Upstream has a single offline switch, so
+`allow_cloud_models` lifts `WATCHSKILL_OFFLINE` only when
+`allow_network_sources` is also on (with network off the CLI always runs
+offline). Keep both off unless the user opts in.
 
 ```ts
 WatchPolicy = {
@@ -303,6 +312,14 @@ group `perception-verification`, integration status `host-bound-tools`) and
 
 ## 9. Offline testing
 
+`packages/watch/src/real-cli.test.ts` adds a compatibility layer: it parses
+artifacts the real 1.4.3 package produced (`test/fixtures/real-loop-state.json`
+from upstream's `LoopState.save()`, `real-loop-status.stdout` from a real
+`watch-skill loop status`) and, only when `MARS_WATCH_REAL_CLI` names an
+installed binary, drives the wrapper against the real CLI (doctor gate,
+`verify checks`, a `verify run`, `verify show`, `loop status`). CI has no
+Python and skips the live half.
+
 Tests run with no network and no Python: `packages/watch/test/fake-watch-skill.ts`
 is a fixture CLI invoked through `command: ["bun", path]` with a scenario file
 that scripts the CLI's responses. The execution probe
@@ -340,8 +357,33 @@ wrapper.
 6. `watch-skill loop status nope` → exit 1,
    `{"error":"loop.not_found","message":"unknown loop_id: nope","fix":"start one with loop_start; state lives under ~/.watch-skill/loops","details":{}}`.
 
+7. Through the wrapper (`packages/watch/src/real-cli.test.ts`, live half), after
+   `~/ws-venv/bin/pip install yt-dlp` made `doctor --no-fix --json` report
+   `ok: true` (remaining warnings: features not installed, ffmpeg 4.4, no deno,
+   memory probe, tesseract):
+   `MARS_WATCH_REAL_CLI=$HOME/ws-venv/bin/watch-skill PATH=$HOME/ws-venv/bin:$PATH bun test packages/watch/src/real-cli.test.ts`
+   → 3 pass, 0 fail (3.4 s). The real CLI passed the doctor gate (`version`
+   `1.4.3`, `available: true`), `mars_verify checks` listed `file_exists`,
+   `mars_verify run` on a two-check `file_exists` contract returned
+   `verdict pass · assurance isolated_local`, recorded `verified: true` with
+   `required_checks {1,0,0}` and a `vr_…` run id, `mars_verify show` of that run
+   rendered `verified`, `mars_loop status` on the real `state.json` fixture
+   rendered `verdict pass · visual_advisory · advisory, not verified · loop
+   status passed` (iteration 1), and `loop status lp_nope` rendered `error` with
+   `loop.not_found`. This run found and fixed one incompatibility: `verify show`
+   prints the stored bundle (`check_results[]`, `attestation.signature_status`),
+   not the `verify run` summary shape; both are now normalised
+   (`VerifyRunResultSchema`) and kept as fixtures
+   (`test/fixtures/real-verify-*.stdout`).
+8. `WATCHSKILL_OFFLINE=1 WATCHSKILL_DATA_DIR=/tmp/wsreal watch-skill loop status lp_real_fixture`
+   → exit 0 against a `state.json` written by upstream's `LoopState.save()`
+   (two iterations, critique `fail` 40 then `pass` 90, constructed in Python
+   without a browser or model); stdout kept as
+   `test/fixtures/real-loop-status.stdout`.
+
 Not run against the real CLI: `watch`, `ask`, `search`, `capture`,
-`loop start` / `loop iterate`, `extract`, any vision provider, any URL source.
+`loop start` / `loop iterate` (a real capture → critique iteration), `extract`,
+any vision provider, any URL source.
 
 ### Unverified
 
@@ -351,8 +393,10 @@ covered by fixtures only or not at all.
 - Browser (`http://…`) and screen (`screen:` / `window:`) capture through the
   wrapper, including the `allow_screen_capture` refusal path against a real
   display.
-- THE LOOP (`loop start` / `iterate` / `status` on a real loop) and the
-  `state.json` reading.
+- THE LOOP's capture → critique iteration (`loop start` / `iterate` with a real
+  browser and vision model). Reading upstream's real `state.json` and
+  `loop status` output is covered by fixtures the real package produced; the
+  loop itself never ran.
 - Any model-backed critique or perception (`watch`, `ask`, vision providers).
 - URL sources (yt-dlp) and non-loopback network targets.
 - Installation of the `perceive` / `index` / `ocr` / `loop` / `attest` extras

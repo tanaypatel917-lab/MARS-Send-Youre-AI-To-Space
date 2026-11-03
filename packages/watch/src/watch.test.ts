@@ -31,6 +31,7 @@ async function fixture(input: {
   execute?: boolean;
   read?: boolean;
   taskId?: string;
+  fetch?: (input: string, init?: RequestInit) => Promise<Response>;
 }) {
   const root = await mkdtemp(join(tmpdir(), "mars-watch-"));
   const cwd = join(root, "workspace");
@@ -50,6 +51,7 @@ async function fixture(input: {
     ...(input.policy ? { policy: input.policy } : {}),
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
     env: { FAKE_WATCH_SKILL_SCENARIO: scenarioPath, FAKE_WATCH_SKILL_LOG: log },
+    fetch: input.fetch ?? (async () => new Response(null, { status: 200 })),
   });
   const tools = service.toolsFor({
     task_id: input.taskId ?? "task",
@@ -1160,5 +1162,114 @@ test("over-long refusal and contract-error messages are clipped inside the evide
     expect(f.records).toHaveLength(2);
   } finally {
     await f.cleanup();
+  }
+});
+
+test("loopback URLs are pre-flighted for redirects that leave loopback", async () => {
+  const seen: string[] = [];
+  const responses: Record<string, Response> = {
+    "http://localhost:3000/evil": new Response(null, {
+      status: 302,
+      headers: { location: "https://attacker.example/collect" },
+    }),
+    "http://localhost:3000/hop": new Response(null, {
+      status: 307,
+      headers: { location: "/final" },
+    }),
+    "http://localhost:3000/final": new Response(null, { status: 200 }),
+    "http://localhost:3000/head-not-allowed": new Response(null, {
+      status: 405,
+    }),
+    "http://localhost:3000/loop": new Response(null, {
+      status: 302,
+      headers: { location: "/loop" },
+    }),
+    "http://localhost:3000/ftp": new Response(null, {
+      status: 302,
+      headers: { location: "ftp://127.0.0.1/x" },
+    }),
+  };
+  const f = await fixture({
+    scenario: { rules: [{ match: ["*"], stdout: "ok" }] },
+    fetch: async (input, init) => {
+      const url = String(input);
+      seen.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === "http://localhost:3000/down")
+        throw new TypeError("connect ECONNREFUSED");
+      return responses[url]?.clone() ?? new Response(null, { status: 404 });
+    },
+  });
+  try {
+    expect(
+      await f.tools.capture({ target: "http://localhost:3000/evil" }),
+    ).toContain("redirects to https://attacker.example");
+    expect(
+      await f.tools.watch({ source: "http://localhost:3000/ftp" }),
+    ).toContain("redirects to ftp://127.0.0.1");
+    expect(
+      await f.tools.capture({ target: "http://localhost:3000/loop" }),
+    ).toContain("redirects more than 5 times");
+    expect(
+      await f.tools.loop({
+        action: "start",
+        target: "http://localhost:3000/final",
+        pass_criteria: "x",
+        script: JSON.stringify([
+          { action: "goto", url: "http://localhost:3000/evil" },
+        ]),
+      }),
+    ).toContain("script goto url redirects to https://attacker.example");
+    expect(
+      await f.tools.verify({
+        action: "run",
+        contract: {
+          contract_id: "c",
+          title: "t",
+          checks: [
+            {
+              id: "dom",
+              type: "browser_dom",
+              params: { url: "http://localhost:3000/evil", selector: "h1" },
+            },
+          ],
+        },
+      }),
+    ).toContain("check dom url redirects to https://attacker.example");
+    expect(
+      (await f.calls()).filter(
+        (call) => !["version", "doctor"].includes(call.args[0] ?? ""),
+      ),
+    ).toHaveLength(0);
+    expect(
+      await f.tools.capture({ target: "http://localhost:3000/hop" }),
+    ).toContain("· mars_watch_capture · advisory]");
+    expect(
+      await f.tools.capture({
+        target: "http://localhost:3000/head-not-allowed",
+      }),
+    ).toContain("· mars_watch_capture · advisory]");
+    expect(
+      await f.tools.capture({ target: "http://localhost:3000/down" }),
+    ).toContain("· mars_watch_capture · advisory]");
+    expect(seen).toContain("HEAD http://localhost:3000/hop");
+    expect(seen).toContain("HEAD http://localhost:3000/final");
+    expect(seen).toContain("GET http://localhost:3000/head-not-allowed");
+    expect(seen.filter((entry) => entry.endsWith("/loop"))).toHaveLength(5);
+  } finally {
+    await f.cleanup();
+  }
+  const open = await fixture({
+    policy: { allow_network_sources: true },
+    scenario: { rules: [{ match: ["*"], stdout: "ok" }] },
+    fetch: async () => {
+      throw new Error("no preflight when network sources are allowed");
+    },
+  });
+  try {
+    expect(
+      await open.tools.capture({ target: "https://example.com/" }),
+    ).toContain("· mars_watch_capture · advisory]");
+  } finally {
+    await open.cleanup();
   }
 });

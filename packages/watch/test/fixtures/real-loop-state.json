@@ -1,0 +1,73 @@
+{
+  "loop_id": "lp_real_fixture",
+  "target": "http://127.0.0.1:5173/",
+  "pass_criteria": "no overlapping controls",
+  "script": null,
+  "max_iterations": 3,
+  "duration_seconds": 4.0,
+  "status": "passed",
+  "iterations": [
+    {
+      "n": 0,
+      "video": "/tmp/wsreal/loops/lp_real_fixture/iter_0/capture.mp4",
+      "capture_kind": "browser",
+      "critique": {
+        "verdict": "fail",
+        "score": 40,
+        "summary": "Submit button overlaps the header",
+        "issues": [
+          {
+            "timestamp": 1.5,
+            "severity": "major",
+            "description": "Submit button overlaps the header",
+            "suggested_fix": "add top margin"
+          }
+        ],
+        "assurance": "visual_advisory",
+        "limitations": []
+      },
+      "perception": {
+        "frames": [],
+        "ocr": [],
+        "transcript": ""
+      },
+      "diff": null,
+      "artifacts": null
+    },
+    {
+      "n": 1,
+      "video": "/tmp/wsreal/loops/lp_real_fixture/iter_1/capture.mp4",
+      "capture_kind": "browser",
+      "critique": {
+        "verdict": "pass",
+        "score": 90,
+        "summary": "Layout matches the pass criteria",
+        "issues": [],
+        "assurance": "visual_advisory",
+        "limitations": []
+      },
+      "perception": {
+        "frames": [],
+        "ocr": [],
+        "transcript": ""
+      },
+      "diff": {
+        "fixed": [
+          {
+            "timestamp": 1.5,
+            "severity": "major",
+            "description": "Submit button overlaps the header",
+            "suggested_fix": "add top margin"
+          }
+        ],
+        "unchanged": [],
+        "new": [],
+        "changed_pair_count": 3,
+        "aligned_pair_count": 4
+      },
+      "artifacts": null
+    }
+  ],
+  "loop_type": "ui",
+  "extra": {}
+}

@@ -48,6 +48,8 @@ export interface WatchServiceOptions {
   /** Extra `MARS_WATCH_` or `FAKE_WATCH_SKILL_` prefixed variables (fixtures only). */
   env?: Record<string, string>;
   runner?: CliRunner;
+  /** Used only to pre-flight loopback URLs for redirects; defaults to global fetch. */
+  fetch?: (input: string, init?: RequestInit) => Promise<Response>;
   now?: () => number;
 }
 
@@ -168,6 +170,8 @@ function relativePathParam(value: unknown, what: string): string | null {
 type Label = "verified" | "advisory" | "inconclusive" | "error" | "unavailable";
 
 const MAX_LIMITATIONS = 32;
+const MAX_REDIRECT_HOPS = 5;
+const PROBE_TIMEOUT_MS = 3000;
 
 /** Keeps a limitation list inside the evidence schema; omitted entries stay counted. */
 function boundLimitations(items: string[]): string[] {
@@ -305,6 +309,58 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
   };
 
   const isLoopback = (url: URL) => LOOPBACK_HOSTS.has(url.hostname);
+  const fetchImpl: (input: string, init?: RequestInit) => Promise<Response> =
+    options.fetch ?? ((input, init) => globalThis.fetch(input, init));
+
+  /**
+   * A loopback URL may answer with a redirect to an external host, and the CLI
+   * (browser, downloader) would follow it. Before handing such a URL to the
+   * CLI the host walks the redirect chain itself with manual redirects and
+   * refuses the first hop that leaves loopback. An unreachable server is left
+   * to the CLI, which then fails locally without fetching anything off-host.
+   */
+  const probeRedirects = async (url: string, what: string): Promise<void> => {
+    if (policy.allow_network_sources) return;
+    let current = url;
+    for (let hop = 0; hop < MAX_REDIRECT_HOPS; hop++) {
+      let response: Response;
+      try {
+        response = await fetchImpl(current, {
+          method: "HEAD",
+          redirect: "manual",
+          signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        });
+        if (response.status === 405)
+          response = await fetchImpl(current, {
+            method: "GET",
+            redirect: "manual",
+            signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+          });
+      } catch {
+        return;
+      }
+      if (response.status < 300 || response.status >= 400) return;
+      const location = response.headers.get("location");
+      if (!location) return;
+      let next: URL;
+      try {
+        next = new URL(location, current);
+      } catch {
+        throw new WatchPolicyError(`${what} redirects to an invalid location.`);
+      }
+      if (
+        (next.protocol !== "http:" && next.protocol !== "https:") ||
+        !isLoopback(next)
+      )
+        throw new WatchPolicyError(
+          `${what} redirects to ${next.protocol}//${next.host}; network sources are disabled for this host, so a loopback URL that leaves loopback is refused.`,
+        );
+      current = next.toString();
+    }
+    throw new WatchPolicyError(
+      `${what} redirects more than ${MAX_REDIRECT_HOPS} times; refused.`,
+    );
+  };
 
   const guardUrl = (raw: string, what: string): string => {
     let url: URL;
@@ -469,8 +525,11 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
             );
           return value;
         }
-        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value))
-          return guardUrl(value, what);
+        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+          const url = guardUrl(value, what);
+          await probeRedirects(url, what);
+          return url;
+        }
         return guardPath(value, what);
       };
 
@@ -649,10 +708,10 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
         });
 
       /** Host policy on a contract: anything listed here stops the run as inconclusive. */
-      const contractRefusals = (
+      const contractRefusals = async (
         contract: z.infer<typeof VerificationContractInputSchema>,
         required: string,
-      ): string[] => {
+      ): Promise<string[]> => {
         const refusals: string[] = [];
         if (required === "remote_attested")
           refusals.push(
@@ -723,7 +782,11 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
               refusals.push(`check ${check.id} url must be a string`);
             else
               try {
-                guardUrl(url, `check ${check.id} url`);
+                const guarded = guardUrl(url, `check ${check.id} url`);
+                // http_request runs upstream with follow_redirects=False; a
+                // browser_dom check drives a browser, which does follow.
+                if (check.type === "browser_dom")
+                  await probeRedirects(guarded, `check ${check.id} url`);
               } catch (error) {
                 refusals.push(
                   error instanceof Error ? error.message : String(error),
@@ -853,8 +916,10 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
                     "script must be a JSON array of steps with action goto|click|fill|press|scroll|wait and only the fields watch-skill 1.4.3 understands.",
                   );
                 for (const step of script.data)
-                  if (step.action === "goto")
+                  if (step.action === "goto") {
                     step.url = guardUrl(step.url, "script goto url");
+                    await probeRedirects(step.url, "script goto url");
+                  }
                 args.push("--script", JSON.stringify(script.data));
               }
               args.push("--max-iterations", String(input.max_iterations ?? 5));
@@ -1026,7 +1091,7 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
           const requiredCount = contract.data.checks.filter(
             (check) => check.required !== false,
           ).length;
-          const refusals = contractRefusals(contract.data, required);
+          const refusals = await contractRefusals(contract.data, required);
           if (refusals.length) {
             await record({
               kind: "verify",

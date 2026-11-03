@@ -112,28 +112,62 @@ export const WatchDoctorSchema = z
   .strict();
 export type WatchDoctor = z.infer<typeof WatchDoctorSchema>;
 
-/** The upstream `watch-skill verify run` JSON result. */
-export const VerifyRunResultSchema = z
+const checkResultSchema = z
   .object({
-    run_id: z.string().min(1),
-    verdict: WatchVerdictSchema,
-    assurance: WatchAssuranceSchema,
-    limitations: z.array(z.string()).default([]),
-    signature_status: z.string().optional(),
-    checks: z
-      .array(
-        z
-          .object({
-            id: z.string(),
-            status: z.string(),
-            required: z.boolean(),
-            summary: z.string().optional(),
-          })
-          .passthrough(),
-      )
-      .default([]),
+    id: z.string(),
+    status: z.string(),
+    required: z.boolean(),
+    summary: z.string().optional(),
   })
   .passthrough();
+
+/**
+ * `verify run` prints a summary (`checks[]`, top-level `signature_status`);
+ * `verify show` prints the stored bundle (`check_results[]` keyed by
+ * `check_id`, `attestation.signature_status`). Both normalise to one shape.
+ */
+function normaliseVerifyResult(value: unknown): unknown {
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  const checks = Array.isArray(record.checks)
+    ? record.checks
+    : Array.isArray(record.check_results)
+      ? record.check_results.map((item) =>
+          item && typeof item === "object" && !("id" in item)
+            ? {
+                ...(item as Record<string, unknown>),
+                id: (item as Record<string, unknown>).check_id,
+              }
+            : item,
+        )
+      : undefined;
+  const attestation = record.attestation;
+  const signature =
+    record.signature_status ??
+    (attestation && typeof attestation === "object"
+      ? (attestation as Record<string, unknown>).signature_status
+      : undefined);
+  return {
+    ...record,
+    ...(checks ? { checks } : {}),
+    ...(typeof signature === "string" ? { signature_status: signature } : {}),
+  };
+}
+
+/** The upstream `watch-skill verify run` / `verify show` JSON, normalised. */
+export const VerifyRunResultSchema = z.preprocess(
+  normaliseVerifyResult,
+  z
+    .object({
+      run_id: z.string().min(1),
+      verdict: WatchVerdictSchema,
+      assurance: WatchAssuranceSchema,
+      limitations: z.array(z.string()).default([]),
+      signature_status: z.string().optional(),
+      checks: z.array(checkResultSchema).default([]),
+    })
+    .passthrough(),
+);
 export type VerifyRunResult = z.infer<typeof VerifyRunResultSchema>;
 
 /** The upstream `{error, message, fix, details}` failure envelope. */
