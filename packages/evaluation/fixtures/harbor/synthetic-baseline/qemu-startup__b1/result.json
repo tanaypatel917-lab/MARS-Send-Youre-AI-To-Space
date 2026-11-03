@@ -1,0 +1,125 @@
+{
+  "id": "747d64b0-6903-4de4-bdc3-5c5432e4cffc",
+  "task_name": "qemu-startup",
+  "trial_name": "qemu-startup__b1",
+  "trial_uri": "file://jobs/synthetic/qemu-startup__b1",
+  "task_id": {
+    "git_url": "https://github.com/laude-institute/terminal-bench-2-0-sample.git",
+    "git_commit_id": "7e917f35c281188532772312d4ad91ca9274febc",
+    "path": "sample/qemu-startup"
+  },
+  "source": "terminal-bench-sample",
+  "task_checksum": "4dd947b5c60d968ca75cf67985e95c338d36f2fc5648b21c918a13d8816e148d",
+  "config": {
+    "task": {
+      "path": "sample/qemu-startup",
+      "git_url": "https://github.com/laude-institute/terminal-bench-2-0-sample.git",
+      "git_commit_id": "7e917f35c281188532772312d4ad91ca9274febc",
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "terminal-bench-sample"
+    },
+    "trial_name": "qemu-startup__b1",
+    "trials_dir": "jobs/oracle-regex-log",
+    "install_only": false,
+    "timeout_multiplier": 1.0,
+    "agent_timeout_multiplier": null,
+    "verifier_timeout_multiplier": null,
+    "agent_setup_timeout_multiplier": null,
+    "environment_build_timeout_multiplier": null,
+    "agent": {
+      "name": "mini-swe-agent",
+      "import_path": null,
+      "model_name": null,
+      "base_url": null,
+      "model_api_key_name": null,
+      "model_api_format": null,
+      "skip_model_parsing": false,
+      "n_concurrent": null,
+      "concurrency_group": null,
+      "skills": [],
+      "override_timeout_sec": null,
+      "override_setup_timeout_sec": null,
+      "max_timeout_sec": null,
+      "resume_trajectory": false,
+      "load_trajectory": null,
+      "extra_allowed_hosts": [],
+      "kwargs": {},
+      "mcp_servers": []
+    },
+    "user_agent": null,
+    "environment": {
+      "type": "docker",
+      "import_path": null,
+      "force_build": false,
+      "delete": true,
+      "stream": false,
+      "cpu_enforcement_policy": "auto",
+      "memory_enforcement_policy": "auto",
+      "override_cpus": null,
+      "override_memory_mb": null,
+      "override_storage_mb": null,
+      "override_gpus": null,
+      "override_tpu": null,
+      "mounts": null,
+      "extra_docker_compose": [],
+      "kwargs": {},
+      "extra_allowed_hosts": []
+    },
+    "verifier": {
+      "override_timeout_sec": null,
+      "max_timeout_sec": null,
+      "disable": false
+    },
+    "artifacts": [],
+    "extra_instruction_paths": [],
+    "extra_instructions": [],
+    "job_id": "99bc9d30-4a20-457f-8073-2d30d4b6870f",
+    "source_trial": null
+  },
+  "agent_info": {
+    "name": "mini-swe-agent",
+    "version": "2.4.6",
+    "model_info": {
+      "name": "qwen3-coder:30b",
+      "provider": "openai"
+    }
+  },
+  "agent_result": {
+    "n_input_tokens": 1200,
+    "n_cache_tokens": 0,
+    "n_output_tokens": 340,
+    "cost_usd": 0.0,
+    "model_usage": null,
+    "rollout_details": null,
+    "metadata": null
+  },
+  "verifier_result": {
+    "rewards": {
+      "reward": 1.0
+    }
+  },
+  "verifier_environment_mode": "shared",
+  "exception_info": null,
+  "started_at": "2026-11-02T23:47:14.341531Z",
+  "finished_at": "2026-11-02T23:47:37.304326Z",
+  "environment_setup": {
+    "started_at": "2026-11-02T23:47:14.366869Z",
+    "finished_at": "2026-11-02T23:47:15.264977Z"
+  },
+  "agent_setup": {
+    "started_at": "2026-11-02T23:47:15.265031Z",
+    "finished_at": "2026-11-02T23:47:15.265092Z"
+  },
+  "agent_execution": {
+    "started_at": "2026-11-02T23:40:00+00:00",
+    "finished_at": "2026-11-02T23:41:30+00:00"
+  },
+  "verifier": {
+    "started_at": "2026-11-02T23:47:15.701924Z",
+    "finished_at": "2026-11-02T23:47:26.845381Z"
+  },
+  "step_results": null
+}

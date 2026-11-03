@@ -1,0 +1,351 @@
+"""Offline tests for MarsAgent: a fake environment, no containers, no model calls."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import pytest
+from harbor.models.agent.context import AgentContext
+
+from mars_harbor_agent.agent import (
+    ADAPTER_VERSION,
+    CONTAINER_STATE_DIR,
+    USAGE_FILE,
+    MarsAgent,
+    MarsAgentConfigError,
+    MarsAgentError,
+    SETUP_COMMAND_TIMEOUT_SEC,
+    SYSTEM_PATH,
+)
+
+
+class FakeEnvironment:
+    def __init__(self, usage: dict | None = None, return_code: int = 0):
+        self.uploads: list[tuple[str, str]] = []
+        self.commands: list[dict] = []
+        self.files: dict[str, bytes] = {}
+        self.usage = usage
+        self.return_code = return_code
+
+    uid = 1000
+    gid = 1000
+    root_exec_ok = True
+    credential_readable = True
+
+    async def exec(self, command, cwd=None, env=None, timeout_sec=None, user=None):
+        self.commands.append(
+            {"command": command, "env": dict(env or {}), "timeout_sec": timeout_sec, "user": user}
+        )
+        if self.usage is not None and command.startswith("cd "):
+            self.files[str(CONTAINER_STATE_DIR / USAGE_FILE)] = json.dumps(self.usage).encode()
+        stdout, return_code = "", self.return_code
+        if command == "id -u && id -g":
+            stdout, return_code = f"{self.uid}\n{self.gid}\n", 0
+        elif command.startswith("chown ") and user == "root":
+            return_code = 0 if self.root_exec_ok else 126
+        elif command.startswith("chmod "):
+            return_code = 0
+        elif command.startswith("test -r "):
+            return_code = 0 if self.credential_readable else 1
+
+        class Result:
+            pass
+
+        result = Result()
+        result.stdout = stdout
+        result.stderr = "" if return_code == 0 else "denied"
+        result.return_code = return_code
+        return result
+
+    async def upload_file(self, source_path, target_path):
+        self.uploads.append((Path(source_path).name, str(target_path)))
+        self.files[str(target_path)] = Path(source_path).read_bytes()
+
+    async def download_file(self, source_path, target_path):
+        if source_path not in self.files:
+            raise FileNotFoundError(source_path)
+        Path(target_path).write_bytes(self.files[source_path])
+
+
+@pytest.fixture
+def bundle(tmp_path: Path):
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    binary = bundle_dir / "mars-agent"
+    binary.write_bytes(b"#!/bin/sh\necho fake bundle\n")
+    (bundle_dir / "pi_natives.linux-x64-modern.node").write_bytes(b"\x7fELF fake")
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text(json.dumps({"components": {"system_prompt": "You are candidate 3."}}))
+    return {
+        "bundle_dir": str(bundle_dir),
+        "bundle_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+        "candidate_path": str(candidate),
+    }
+
+
+def make_agent(tmp_path: Path, bundle: dict, **overrides) -> MarsAgent:
+    kwargs = dict(
+        logs_dir=tmp_path / "logs",
+        model_name="qwen3-coder:30b",
+        base_url="http://host.docker.internal:11434/v1",
+        model_api_key_name="MARS_EVAL_API_KEY",
+        model_api_format="openai_chat_completions",
+        trial_timeout_ms=120_000,
+        **bundle,
+    )
+    kwargs.update(overrides)
+    return MarsAgent(**kwargs)
+
+
+def test_identity():
+    assert MarsAgent.name() == "mars-oh-my-pi"
+
+
+def test_setup_uploads_pinned_bundle_and_config_without_secrets(tmp_path, bundle, monkeypatch):
+    monkeypatch.setenv("MARS_EVAL_API_KEY", "sk-not-real-secret")
+    agent = make_agent(tmp_path, bundle)
+    assert agent.version() == ADAPTER_VERSION
+    env = FakeEnvironment()
+    import asyncio
+
+    asyncio.run(agent.setup(env))
+    names = [name for name, _ in env.uploads]
+    assert "mars-agent" in names and "pi_natives.linux-x64-modern.node" in names
+    config = json.loads(env.files[str(CONTAINER_STATE_DIR / "config.json")])
+    assert config["model_id"] == "qwen3-coder:30b"
+    assert config["api_key_env"] == "MARS_EVAL_API_KEY"
+    assert config["components"] == {"system_prompt": "You are candidate 3."}
+    assert "sk-not-real-secret" not in json.dumps(config)
+    assert "sk-not-real-secret" not in (tmp_path / "logs" / "mars-agent-config.json").read_text()
+
+
+def test_setup_refuses_sha_mismatch(tmp_path, bundle):
+    agent = make_agent(tmp_path, bundle, bundle_sha256="0" * 64)
+    import asyncio
+
+    with pytest.raises(MarsAgentConfigError, match="sha256 mismatch"):
+        asyncio.run(agent.setup(FakeEnvironment()))
+
+
+def test_run_passes_instruction_only_and_reports_usage(tmp_path, bundle, monkeypatch):
+    monkeypatch.setenv("MARS_EVAL_API_KEY", "sk-not-real-secret")
+    agent = make_agent(tmp_path, bundle)
+    env = FakeEnvironment(
+        usage={
+            "input_tokens": 1200,
+            "output_tokens": 340,
+            "cache_tokens": 0,
+            "cost_usd": 0.0,
+            "status": "completed",
+            "model_requests": 3,
+            "elapsed_ms": 4500,
+        }
+    )
+    context = AgentContext()
+    import asyncio
+
+    asyncio.run(agent.setup(env))
+    asyncio.run(agent.run("Fix the regex in /app/filter.py so the tests pass.", env, context))
+    run_cmd = [c for c in env.commands if c["command"].startswith("cd ")][0]
+    assert run_cmd["timeout_sec"] == 120
+    assert run_cmd["command"].startswith("cd /app && ")
+    # Credential handover: uploaded as a 0600 file, never placed in any
+    # container process environment or argv.
+    assert "MARS_EVAL_API_KEY" not in run_cmd["env"]
+    assert run_cmd["env"]["MARS_AGENT_CREDENTIAL"] == str(CONTAINER_STATE_DIR / "credential")
+    assert env.files[str(CONTAINER_STATE_DIR / "credential")] == b"sk-not-real-secret"
+    assert "sk-not-real-secret" not in run_cmd["command"]
+    assert run_cmd["command"].startswith("cd /app && exec /opt/mars-agent/mars-agent ")
+    cred = str(CONTAINER_STATE_DIR / "credential")
+    secure = [c for c in env.commands if c["command"].startswith("chown ")]
+    assert secure == [
+        {
+            "command": f"chown 1000:1000 {cred} && chmod 0600 {cred}",
+            "env": {"PATH": SYSTEM_PATH},
+            "timeout_sec": SETUP_COMMAND_TIMEOUT_SEC,
+            "user": "root",
+        }
+    ]
+    # Every adapter-side command resolves binaries through the fixed system PATH
+    # only and is individually bounded; the bundle gets the trial budget.
+    for c in env.commands:
+        if c is not run_cmd:
+            assert c["env"] == {"PATH": SYSTEM_PATH}, c
+            assert c["timeout_sec"] == SETUP_COMMAND_TIMEOUT_SEC, c
+    assert run_cmd["timeout_sec"] == 120
+    assert "PATH" not in run_cmd["env"]
+    assert [c["command"] for c in env.commands if c["command"].startswith("test -r ")] == [f"test -r {cred}"]
+    assert env.commands.index(secure[0]) < env.commands.index(run_cmd)
+    assert not list(tmp_path.rglob("mars-credential-*"))
+    assert "tests" not in run_cmd["command"]
+    assert env.files[str(CONTAINER_STATE_DIR / "instruction.txt")] == b"Fix the regex in /app/filter.py so the tests pass."
+    assert context.n_input_tokens == 1200
+    assert context.n_output_tokens == 340
+    assert context.n_cache_tokens == 0
+    assert context.cost_usd == 0.0
+    assert context.metadata["status"] == "completed"
+    assert context.metadata["model_requests"] == 3
+    assert context.metadata["usage_available"] is True
+    assert context.metadata["adapter_version"] == ADAPTER_VERSION
+
+
+def test_run_without_usage_summary_records_absence(tmp_path, bundle):
+    agent = make_agent(tmp_path, bundle, candidate_path=None)
+    env = FakeEnvironment(usage=None, return_code=137)
+    context = AgentContext()
+    import asyncio
+
+    asyncio.run(agent.run("Do the task.", env, context))
+    assert context.n_input_tokens is None
+    assert context.cost_usd is None
+    assert context.metadata["usage_available"] is False
+    assert context.metadata["return_code"] == 137
+    assert context.metadata["component_keys"] == []
+
+
+def test_config_validation(tmp_path, bundle):
+    with pytest.raises(MarsAgentConfigError, match="MARS_AGENT_"):
+        make_agent(tmp_path, bundle, model_api_key_name="MARS_AGENT_CREDENTIAL").provider_config()
+    with pytest.raises(MarsAgentConfigError, match="bundle_dir"):
+        make_agent(tmp_path, {**bundle, "bundle_dir": None})
+    with pytest.raises(MarsAgentConfigError, match="workdir"):
+        make_agent(tmp_path, bundle, workdir="relative/path")
+    with pytest.raises(MarsAgentConfigError, match="trial_timeout_ms"):
+        make_agent(tmp_path, bundle, trial_timeout_ms="soon")
+    with pytest.raises(MarsAgentConfigError, match="model name"):
+        make_agent(tmp_path, bundle, model_name=None)
+
+
+def test_pricing_passes_through_only_when_both_rates_are_given(tmp_path, bundle):
+    agent = make_agent(tmp_path, bundle)
+    assert agent.provider_config()["pricing"] is None
+    paid = make_agent(
+        tmp_path,
+        bundle,
+        pricing_input_per_mtok_usd="1.5",
+        pricing_output_per_mtok_usd=2,
+    )
+    assert paid.provider_config()["pricing"] == {
+        "input_per_mtok_usd": 1.5,
+        "output_per_mtok_usd": 2.0,
+    }
+    with pytest.raises(MarsAgentConfigError, match="pricing_input_per_mtok_usd"):
+        make_agent(tmp_path, bundle, pricing_input_per_mtok_usd=1.0)
+    with pytest.raises(MarsAgentConfigError, match="pricing_output_per_mtok_usd"):
+        make_agent(tmp_path, bundle, pricing_input_per_mtok_usd=1.0, pricing_output_per_mtok_usd="free")
+
+
+def test_run_without_key_skips_credential_handover(tmp_path, bundle, monkeypatch):
+    monkeypatch.delenv("MARS_EVAL_API_KEY", raising=False)
+    agent = make_agent(tmp_path, bundle)
+    env = FakeEnvironment(usage=None, return_code=0)
+    import asyncio
+
+    asyncio.run(agent.setup(env))
+    asyncio.run(agent.run("Do the task.", env, AgentContext()))
+    run_cmd = [c for c in env.commands if c["command"].startswith("cd ")][0]
+    assert "MARS_EVAL_API_KEY" not in run_cmd["env"]
+    assert "MARS_AGENT_CREDENTIAL" not in run_cmd["env"]
+    assert str(CONTAINER_STATE_DIR / "credential") not in env.files
+    assert run_cmd["command"].startswith("cd /app && exec /opt/mars-agent/mars-agent ")
+
+
+def test_run_without_root_exec_falls_back_to_own_chmod(tmp_path, bundle, monkeypatch):
+    monkeypatch.setenv("MARS_EVAL_API_KEY", "sk-not-real-secret")
+    agent = make_agent(tmp_path, bundle)
+    env = FakeEnvironment(usage=None, return_code=0)
+    env.root_exec_ok = False
+    import asyncio
+
+    asyncio.run(agent.setup(env))
+    asyncio.run(agent.run("Do the task.", env, AgentContext()))
+    cred = str(CONTAINER_STATE_DIR / "credential")
+    assert [c["command"] for c in env.commands if c["command"].startswith("chmod 0600")] == [f"chmod 0600 {cred}"]
+    assert any(c["command"].startswith("cd ") for c in env.commands)
+
+
+def test_run_refuses_unreadable_credential(tmp_path, bundle, monkeypatch):
+    monkeypatch.setenv("MARS_EVAL_API_KEY", "sk-not-real-secret")
+    agent = make_agent(tmp_path, bundle)
+    env = FakeEnvironment(usage=None, return_code=0)
+    env.credential_readable = False
+    import asyncio
+
+    asyncio.run(agent.setup(env))
+    with pytest.raises(MarsAgentError, match="not readable by uid 1000"):
+        asyncio.run(agent.run("Do the task.", env, AgentContext()))
+    assert not any(c["command"].startswith("cd ") for c in env.commands)
+
+
+def test_credential_handover_is_charged_to_the_trial_timeout(tmp_path, bundle, monkeypatch):
+    monkeypatch.setenv("MARS_EVAL_API_KEY", "sk-not-real-secret")
+    import asyncio
+
+    def fake_clock(*samples: float):
+        # run() reads the clock at entry, before each bounded transfer, before
+        # the bundle exec and before collection; keep returning the last sample.
+        it = iter(samples)
+        return lambda: next(it, samples[-1])
+
+    # handover took 45 s of a 120 s trial budget
+    agent = make_agent(tmp_path, bundle)
+    agent._clock = fake_clock(1000.0, 1000.0, 1000.0, 1045.0)
+    env = FakeEnvironment(usage=None, return_code=0)
+    asyncio.run(agent.setup(env))
+    asyncio.run(agent.run("Do the task.", env, AgentContext()))
+    run_cmd = [c for c in env.commands if c["command"].startswith("cd ")][0]
+    assert run_cmd["timeout_sec"] == 75
+
+    # handover left under one second (500 ms): a 1 s floor would exceed the budget
+    for stalled_until in (1119.5, 1120.0, 1130.0):
+        agent = make_agent(tmp_path, bundle)
+        agent._clock = fake_clock(1000.0, 1000.0, 1000.0, stalled_until)
+        env = FakeEnvironment(usage=None, return_code=0)
+        asyncio.run(agent.setup(env))
+        with pytest.raises(MarsAgentError, match="less than one second of trial_timeout_ms"):
+            asyncio.run(agent.run("Do the task.", env, AgentContext()))
+        assert not any(c["command"].startswith("cd ") for c in env.commands)
+
+
+def test_stalled_transfer_is_bounded_by_the_trial_timeout(tmp_path, bundle, monkeypatch):
+    monkeypatch.delenv("MARS_EVAL_API_KEY", raising=False)
+    import asyncio
+
+    class StallingEnvironment(FakeEnvironment):
+        async def upload_file(self, source_path, target_path):
+            if str(target_path).endswith("instruction.txt"):
+                await asyncio.sleep(30)
+            await super().upload_file(source_path, target_path)
+
+    agent = make_agent(tmp_path, bundle, trial_timeout_ms=1000)
+    env = StallingEnvironment(usage=None, return_code=0)
+    asyncio.run(agent.setup(env))
+    with pytest.raises(MarsAgentError, match="instruction upload exceeded trial_timeout_ms"):
+        asyncio.run(agent.run("Do the task.", env, AgentContext()))
+    assert not any(c["command"].startswith("cd ") for c in env.commands)
+
+
+def test_slow_usage_download_does_not_fail_a_completed_trial(tmp_path, bundle, monkeypatch):
+    monkeypatch.delenv("MARS_EVAL_API_KEY", raising=False)
+    import asyncio
+
+    from mars_harbor_agent import agent as agent_module
+
+    class StallingDownload(FakeEnvironment):
+        async def download_file(self, source_path, target_path):
+            await asyncio.sleep(5)
+            await super().download_file(source_path, target_path)
+
+    monkeypatch.setattr(agent_module, "COLLECTION_GRACE_MS", 100)
+    agent = make_agent(tmp_path, bundle, trial_timeout_ms=1000)
+    # Bundle returns with the trial budget exhausted: collection still runs with the grace window.
+    agent._clock = (lambda it: (lambda: next(it, 1001.0)))(iter([1000.0, 1000.0, 1000.0]))
+    env = StallingDownload(usage={"input_tokens": 1}, return_code=0)
+    asyncio.run(agent.setup(env))
+    context = AgentContext()
+    asyncio.run(agent.run("Do the task.", env, context))
+    assert context.metadata["return_code"] == 0
+    assert context.metadata["usage_available"] is False
+    assert "exceeded 100 ms" in context.metadata["usage_error"]
