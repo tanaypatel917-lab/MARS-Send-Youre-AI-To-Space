@@ -216,7 +216,9 @@ Rules:
 ## 6. Evidence records
 
 Every `mars_watch`, `mars_watch_capture`, `mars_loop` and `mars_verify run` call,
-including one that fails, times out or is refused by policy,
+including one that fails, times out, is refused by host policy (unreadable or
+out-of-workspace source, screen capture without opt-in, non-loopback URL, bad
+loop script, denied contract checks) or submits an invalid contract,
 produces a `WatchEvidenceRecord` (zod `WatchEvidenceRecordSchema`) that the
 host appends as a `tool.completed` task event with `producer: "@mars/watch"`
 and `versions: [{component:"@mars/watch",revision:"0.0.1"},{component:"watch-skill",revision:"1.4.3"}]`:
@@ -238,7 +240,7 @@ and `versions: [{component:"@mars/watch",revision:"0.0.1"},{component:"watch-ski
   "contract_digest"?: string,
   "signature_status"?: string, // e.g. unsigned_hash_bound — a hash binding, not a signature
   "required_checks": { "passed": number, "failed": number, "inconclusive": number },
-  "limitations": string[],
+  "limitations": string[],    // at most 32; a longer list keeps 31 and a "… N more omitted" entry
   "summary": string,          // untrusted, clipped to 2048 characters
   "cli_version": string | null,
   "recorded_at": "ISO 8601"

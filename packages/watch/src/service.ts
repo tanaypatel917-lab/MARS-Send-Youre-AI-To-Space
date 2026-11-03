@@ -166,6 +166,18 @@ function relativePathParam(value: unknown, what: string): string | null {
 
 type Label = "verified" | "advisory" | "inconclusive" | "error" | "unavailable";
 
+const MAX_LIMITATIONS = 32;
+
+/** Keeps a limitation list inside the evidence schema; omitted entries stay counted. */
+function boundLimitations(items: string[]): string[] {
+  if (items.length <= MAX_LIMITATIONS) return items;
+  const kept = items.slice(0, MAX_LIMITATIONS - 1);
+  return [
+    ...kept,
+    `… ${items.length - kept.length} more limitation(s) omitted`,
+  ];
+}
+
 export function createWatchService(options: WatchServiceOptions): WatchService {
   const policy = WatchPolicySchema.parse({
     ...DEFAULT_WATCH_POLICY,
@@ -474,8 +486,8 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
           cli_version: version(),
           ...input,
           summary: clip(redact(input.summary)),
-          limitations: input.limitations.map((item) =>
-            clip(redact(item), 1024),
+          limitations: boundLimitations(
+            input.limitations.map((item) => clip(redact(item), 1024)),
           ),
         } satisfies WatchEvidenceRecord);
         await binding.evidence.append(parsed);
@@ -529,13 +541,32 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
         });
       };
 
-      const policyRefusal = (tool: string, error: unknown) => {
-        if (error instanceof WatchPolicyError)
-          return render(tool, "unavailable", [
-            `refused by host policy: ${error.message}`,
-          ]);
-        throw error;
+      /**
+       * A refusal is still an attempt the reviewer should see: tools that
+       * produce evidence record an inconclusive, non-verified entry for it.
+       */
+      const policyRefusal = async (
+        tool: string,
+        error: unknown,
+        evidence?: (message: string) => Promise<unknown>,
+      ) => {
+        if (!(error instanceof WatchPolicyError)) throw error;
+        const message = `refused by host policy: ${error.message}`;
+        await evidence?.(message);
+        return render(tool, "unavailable", [message]);
       };
+      const refusedPerception = (tool: string) => (message: string) =>
+        record({
+          kind: "perception",
+          tool,
+          verdict: "inconclusive",
+          assurance: "none",
+          verified: false,
+          advisory: true,
+          required_checks: { passed: 0, failed: 0, inconclusive: 0 },
+          limitations: [message],
+          summary: `${tool} did not run: ${message}`,
+        });
 
       const perception = async (
         tool: string,
@@ -708,7 +739,11 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
           try {
             source = await guardTarget(input.source, "source", false);
           } catch (error) {
-            return policyRefusal("mars_watch", error);
+            return policyRefusal(
+              "mars_watch",
+              error,
+              refusedPerception("mars_watch"),
+            );
           }
           const args = ["watch", source];
           if (input.start) args.push("--start", input.start);
@@ -750,7 +785,11 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
           try {
             target = await guardTarget(input.target, "target", true);
           } catch (error) {
-            return policyRefusal("mars_watch_capture", error);
+            return policyRefusal(
+              "mars_watch_capture",
+              error,
+              refusedPerception("mars_watch_capture"),
+            );
           }
           const captureDir = join(taskRoot, "captures", randomUUID());
           await ensureDir(captureDir);
@@ -828,7 +867,15 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
               args = ["loop", input.action, loopId];
             }
           } catch (error) {
-            return policyRefusal(tool, error);
+            return policyRefusal(tool, error, (message) =>
+              loopEvidence(
+                "inconclusive",
+                loopId,
+                undefined,
+                [message],
+                `loop did not run: ${message}`,
+              ).then(() => undefined),
+            );
           }
           const result = await runTask(args);
           if (incomplete(result)) {
@@ -951,16 +998,29 @@ export function createWatchService(options: WatchServiceOptions): WatchService {
           const contract = VerificationContractInputSchema.safeParse(
             input.contract,
           );
-          if (!contract.success)
+          if (!contract.success) {
+            const issues = clip(
+              contract.error.issues
+                .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+                .join("; "),
+              1024,
+            );
+            await record({
+              kind: "verify",
+              tool,
+              verdict: "error",
+              assurance: "none",
+              verified: false,
+              advisory: false,
+              required_checks: { passed: 0, failed: 0, inconclusive: 0 },
+              limitations: ["contract rejected before running", issues],
+              summary: "verification did not run: the contract is invalid",
+            });
             return render(tool, "error", [
               "contract is not a valid verification contract: it needs contract_id, title and a non-empty checks list (each with id, type and params).",
-              clip(
-                contract.error.issues
-                  .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
-                  .join("; "),
-                1024,
-              ),
+              issues,
             ]);
+          }
           const required = contract.data.required_assurance ?? "isolated_local";
           const requiredCount = contract.data.checks.filter(
             (check) => check.required !== false,

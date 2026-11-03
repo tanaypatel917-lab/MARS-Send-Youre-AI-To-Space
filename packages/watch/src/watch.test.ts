@@ -1045,3 +1045,73 @@ test("cloud models never lift the CLI's offline mode unless network sources are 
     await both.cleanup();
   }
 });
+
+test("refused calls and oversized refusal lists still leave bounded, non-verified evidence", async () => {
+  const f = await fixture({
+    read: false,
+    scenario: { rules: [{ match: ["*"], stdout: "unexpected" }] },
+  });
+  try {
+    const denied = await f.tools.verify({
+      action: "run",
+      contract: {
+        contract_id: "big",
+        title: "t",
+        checks: Array.from({ length: 64 }, (_, index) => ({
+          id: `c${index}`,
+          type: "file_exists",
+          params: { path: `/abs/${index}` },
+        })),
+      },
+    });
+    expect(denied).toContain("· mars_verify · inconclusive]");
+    const record = f.records.at(-1);
+    expect(record).toMatchObject({
+      kind: "verify",
+      verdict: "inconclusive",
+      verified: false,
+      contract_id: "big",
+    });
+    expect(record?.limitations.length).toBeLessThanOrEqual(32);
+    expect(record?.limitations.at(-1)).toMatch(/more limitation\(s\) omitted/);
+    expect(record?.required_checks.inconclusive).toBe(64);
+    expect(
+      await f.tools.verify({ action: "run", contract: { title: "no id" } }),
+    ).toContain("not a valid verification contract");
+    expect(f.records.at(-1)).toMatchObject({
+      kind: "verify",
+      verdict: "error",
+      verified: false,
+    });
+    expect(await f.tools.watch({ source: "screen:" })).toContain(
+      "refused by host policy",
+    );
+    expect(await f.tools.capture({ target: "window:Editor" })).toContain(
+      "refused by host policy",
+    );
+    expect(
+      await f.tools.loop({
+        action: "start",
+        target: "https://example.com/",
+        pass_criteria: "x",
+      }),
+    ).toContain("refused by host policy");
+    expect(
+      f.records
+        .slice(-3)
+        .map((item) => [item.kind, item.tool, item.verdict, item.verified]),
+    ).toEqual([
+      ["perception", "mars_watch", "inconclusive", false],
+      ["perception", "mars_watch_capture", "inconclusive", false],
+      ["loop", "mars_loop", "inconclusive", false],
+    ]);
+    expect(
+      (await f.calls()).filter(
+        (call) => !["version", "doctor"].includes(call.args[0] ?? ""),
+      ),
+    ).toHaveLength(0);
+    expect(await f.tools.evidence()).toContain("5 record(s), 0 verified");
+  } finally {
+    await f.cleanup();
+  }
+});
