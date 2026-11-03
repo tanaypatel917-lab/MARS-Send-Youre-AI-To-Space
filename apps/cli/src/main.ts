@@ -7,6 +7,7 @@ import {
   ModelRouter,
 } from "@mars/providers";
 import { runCommands } from "./commands";
+import { omnirouteDoctorReport } from "./omniroute";
 import { runRender } from "./render";
 import { RESEARCH_SEARCH_PROVIDERS, runServer, ServeUsageError } from "./serve";
 
@@ -249,10 +250,12 @@ try {
         verified: "offline only (fixtures and injected model responses)",
         live_verified: false,
       },
+      omniroute: await omnirouteDoctorReport(),
       limitations: [
         "Initialization probe only; no agent task or model request was run.",
         "Live-provider and real IDE workbench acceptance remain unverified; memory and learning (skills plus proposal-only background review) are implemented with offline evidence only; training is not implemented.",
         "Background research runs only when mars serve is started with --research-search; no live search provider or model run has been verified.",
+        "OmniRoute is an optional provider target enabled by mars serve --omniroute; the doctor probe is one GET /v1/models and no model request. No live OmniRoute or upstream provider call has been verified; catalog quotas are upstream approximations.",
         "Python services must use separate versioned environments.",
       ],
     };

@@ -9,6 +9,7 @@
     "@mars/execution": "workspace:*",
     "@mars/output-format": "workspace:*",
     "@mars/providers": "workspace:*",
+    "@mars/providers-omniroute": "workspace:*",
     "@mars/research-worker": "workspace:*",
     "@mars/skills": "workspace:*",
     "@mars/workbench": "workspace:*"

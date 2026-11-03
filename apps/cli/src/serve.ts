@@ -18,7 +18,10 @@ import {
 } from "@mars/workbench";
 
 /** A configuration mistake whose message is safe to print: it names flags and environment variable names only. */
-export class ServeUsageError extends Error {}
+import { omnirouteFromFlags } from "./omniroute";
+import { ServeUsageError } from "./serve-errors";
+
+export { ServeUsageError };
 
 /** Search providers `mars serve` can drive; credentials are read from the named environment variable at startup only. */
 export const RESEARCH_SEARCH_PROVIDERS = {
@@ -154,6 +157,10 @@ export async function runServer(args: string[]): Promise<void> {
       "research-searxng-url": { type: "string" },
       "research-model": { type: "string" },
       "research-deny-host": { type: "string", multiple: true },
+      omniroute: { type: "boolean" },
+      "omniroute-url": { type: "string" },
+      "omniroute-start": { type: "boolean" },
+      "omniroute-allow": { type: "string", multiple: true },
       help: { type: "boolean" },
     },
   });
@@ -162,9 +169,11 @@ export async function runServer(args: string[]): Promise<void> {
       [
         "Usage: mars serve [--source DIR] [--state PRIVATE_DIR] [--port 7331] [--owner ID] [--project ID] [--image REPO@sha256:DIGEST] [--trust-project] [--no-conventions]",
         "                  [--research-search brave|searxng|tavily] [--research-api-key-env NAME] [--research-searxng-url URL] [--research-model ID] [--research-deny-host PATTERN]...",
+        "                  [--omniroute] [--omniroute-url http://localhost:20128] [--omniroute-start] [--omniroute-allow web-session|browser-session|caution|ambiguous|unknown]...",
         "Without a pre-pulled digest-pinned image, command execution is disabled. No model request is made at startup. Connection credentials are written only to the private connection file.",
         "Repository conventions are read once from --source at startup: skill folders (skills/, .claude/skills, .codex/skills, .agents/skills) and slash commands (.mars/commands, .claude/commands) always; AGENTS.md/AGENTS.override.md/CLAUDE.md instruction files and .mars/hooks.json only with --trust-project. Hook commands run only through the sandboxed execute path with execute approval. --no-conventions disables all of it, including mars_apply_patch.",
         "Background research runs only with --research-search. The search credential is read from BRAVE_SEARCH_API_KEY / TAVILY_API_KEY (or --research-api-key-env NAME) at startup and never stored; the worker uses the free default model unless --research-model names another free model. Live research is unverified.",
+        "--omniroute adds a self-hosted OmniRoute gateway as the `omniroute` provider target (attach to a running instance; --omniroute-start spawns the pinned omniroute CLI on 127.0.0.1). Only free, non-excluded catalog models route; MARS keeps policy and sends its paid-consent state. OMNIROUTE_API_KEY (OmniRoute's own key) is read by name; upstream credentials stay in OmniRoute. Live OmniRoute use is unverified.",
       ].join("\n"),
     );
     return;
@@ -189,6 +198,18 @@ export async function runServer(args: string[]): Promise<void> {
     },
     process.env,
   );
+  const omniroute = omnirouteFromFlags({
+    ...(values.omniroute !== undefined ? { enabled: values.omniroute } : {}),
+    ...(values["omniroute-url"] !== undefined
+      ? { url: values["omniroute-url"] }
+      : {}),
+    ...(values["omniroute-start"] !== undefined
+      ? { start: values["omniroute-start"] }
+      : {}),
+    ...(values["omniroute-allow"] !== undefined
+      ? { allow: values["omniroute-allow"] }
+      : {}),
+  });
   const source = await realpath(resolve(values.source ?? process.cwd()));
   const project =
     values.project ??
@@ -215,6 +236,7 @@ export async function runServer(args: string[]): Promise<void> {
     ...(values.image ? { image: values.image } : {}),
     ...(research ? { research } : {}),
     ...(conventions ? { conventions: conventions.conventions } : {}),
+    ...(omniroute ? { omniroute } : {}),
     trustProjectConfig: trustProject,
   });
   await new Promise<void>((resolve, reject) => {
@@ -234,6 +256,7 @@ export async function runServer(args: string[]): Promise<void> {
         execute_enabled: Boolean(values.image),
         research: research ? { search: research.search.id, live: true } : null,
         conventions: conventions ? conventions.summary : null,
+        omniroute: service.omniroute,
       }),
     );
   });
