@@ -3,6 +3,7 @@ import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { applyPatch, discoverInstructions } from "@mars/codex-tools";
 import { registerRuntimeCleanup } from "@mars/execution";
 import {
   createBraveSearch,
@@ -129,7 +130,10 @@ export function conventionsAdapters(): Pick<
   Parameters<typeof loadWorkbenchConventions>[0],
   "applyPatch" | "discoverInstructions"
 > {
-  return {};
+  return {
+    applyPatch: (patch, files) => applyPatch(patch, files),
+    discoverInstructions: (root) => discoverInstructions({ root }),
+  };
 }
 
 export async function runServer(args: string[]): Promise<void> {
