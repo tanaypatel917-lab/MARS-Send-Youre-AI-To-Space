@@ -204,6 +204,7 @@ describe("knowledge graph service", () => {
     expect(stored?.revision).toBe("rev-1");
     expect(stored?.value.content_digest).toBe(first.artifact.content_digest);
     expect(f.records.map((r) => r.status)).toEqual(["built", "built"]);
+    expect(f.records[0]?.isolation).toBe("process_env");
     expect(f.records[0]?.content_digest).toBe(first.artifact.content_digest);
 
     const calls = await f.calls();
@@ -246,7 +247,7 @@ describe("knowledge graph service", () => {
     expect(wrong.reason).toContain("not the pinned 0.9.101");
     const text = await f.service.toolsFor(f.binding).build();
     expect(text).toContain("· mars_graph_build · unavailable ·");
-    expect(text).toContain("No graph was stored");
+    expect(text).toContain("Nothing was built or changed");
     expect(await f.service.lookup(f.binding)).toEqual({ status: "not_built" });
   });
 
@@ -309,6 +310,107 @@ describe("knowledge graph service", () => {
     expect(stale).toContain("· stale ·");
     expect(stale).toContain("built for revision rev-1, not the current rev-2");
     expect(stale).not.toContain("c0");
+  });
+
+  test("a failed rebuild discards the earlier graph instead of leaving it queryable", async () => {
+    await writeFile(
+      join(f.root, "scenario.json"),
+      JSON.stringify({ graph: rawGraph(f.workspace), analysis }),
+    );
+    expect((await f.service.build(f.binding)).status).toBe("built");
+    expect((await f.service.lookup(f.binding)).status).toBe("ready");
+    await writeFile(
+      join(f.root, "scenario.json"),
+      JSON.stringify({
+        extract_exit: 3,
+        extract_stderr: `Traceback: ${f.workspace}/src/a.ts failed; see ${f.dataRoot}/tasks/x/out and /etc/hosts`,
+      }),
+    );
+    const outcome = await f.service.build(f.binding);
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "built") throw new Error("unreachable");
+    expect(outcome.reason).not.toContain(f.workspace);
+    expect(outcome.reason).not.toContain(f.dataRoot);
+    expect(outcome.reason).not.toContain("/etc/hosts");
+    expect(outcome.reason).toContain("<private>/src/a.ts");
+    expect(outcome.record.summary).not.toContain(f.root);
+    expect(outcome.record.limitations).toContain(
+      "previous graph for this workspace discarded",
+    );
+    expect(await f.service.lookup(f.binding)).toEqual({ status: "not_built" });
+    const text = await f.service
+      .toolsFor(f.binding)
+      .query({ kind: "communities" });
+    expect(text).toContain("· not_built ·");
+
+    // unavailable (wrong version) leaves an existing graph alone and says so
+    await writeFile(
+      join(f.root, "scenario.json"),
+      JSON.stringify({ graph: rawGraph(f.workspace), analysis }),
+    );
+    expect((await f.service.build(f.binding)).status).toBe("built");
+    await writeFile(
+      join(f.root, "scenario.json"),
+      JSON.stringify({ version: "0.9.0" }),
+    );
+    const unavailable = await f.service.toolsFor(f.binding).build();
+    expect(unavailable).toContain("· unavailable ·");
+    expect(unavailable).toContain("stays as it was");
+    expect((await f.service.lookup(f.binding)).status).toBe("ready");
+  });
+
+  test("builds and queries follow the workspace's current revision, not the binding-time one", async () => {
+    await writeFile(
+      join(f.root, "scenario.json"),
+      JSON.stringify({ graph: rawGraph(f.workspace), analysis }),
+    );
+    let revision = "rev-5";
+    const binding: GraphBinding = {
+      ...f.binding,
+      revision: "rev-1",
+      currentRevision: async () => revision,
+    };
+    const built = await f.service.build(binding);
+    if (built.status !== "built") throw new Error(built.reason);
+    expect(built.artifact.workspace.revision).toBe("rev-5");
+    expect(built.record.revision).toBe("rev-5");
+    const tools = f.service.toolsFor(binding);
+    expect(await tools.query({ kind: "communities" })).toContain(
+      "· communities · workspace revision rev-5]",
+    );
+    revision = "rev-6";
+    const stale = await tools.query({ kind: "communities" });
+    expect(stale).toContain("· stale · workspace revision rev-6]");
+    expect(stale).toContain("built for revision rev-5, not the current rev-6");
+
+    // a write that lands during extraction fences the build
+    let calls = 0;
+    const racing: GraphBinding = {
+      ...binding,
+      currentRevision: async () => `rev-${7 + calls++}`,
+    };
+    const raced = await f.service.build(racing);
+    expect(raced.status).toBe("failed");
+    if (raced.status === "built") throw new Error("unreachable");
+    expect(raced.reason).toContain("workspace changed during extraction");
+    expect(await f.service.lookup(binding)).toEqual({ status: "not_built" });
+  });
+
+  test("queries are refused without read approval", async () => {
+    await writeFile(
+      join(f.root, "scenario.json"),
+      JSON.stringify({ graph: rawGraph(f.workspace), analysis }),
+    );
+    expect((await f.service.build(f.binding)).status).toBe("built");
+    const denied = f.service.toolsFor({
+      ...f.binding,
+      approvals: { read: false },
+    });
+    const text = await denied.query({ kind: "communities" });
+    expect(text).toContain("· refused ·");
+    expect(text).toContain("read approval is required");
+    expect(text).not.toContain("c0");
+    expect(await denied.build()).toContain("· refused ·");
   });
 
   test("refuses to build without read approval", async () => {

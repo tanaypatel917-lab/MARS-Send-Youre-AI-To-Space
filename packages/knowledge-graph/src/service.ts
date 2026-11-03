@@ -41,8 +41,13 @@ export interface GraphBinding {
   workspace_id: string;
   /** Absolute, host-resolved workspace root; the only tree graphify may read. */
   cwd: string;
-  /** Current workspace revision; artifacts built for another revision are stale. */
+  /** Workspace revision at binding time; artifacts built for another revision are stale. */
   revision: string;
+  /**
+   * Resolves the workspace's current revision (it advances on every write);
+   * builds and queries use it instead of the binding-time value when present.
+   */
+  currentRevision?(): Promise<string>;
   approvals?: { read: boolean };
   evidence?: GraphEvidenceSink;
 }
@@ -50,6 +55,11 @@ export interface GraphBinding {
 export interface KnowledgeGraphServiceOptions {
   /** argv prefix of the CLI; defaults to `["graphify"]` on PATH. */
   command?: string[];
+  /**
+   * Set when `command` wraps the CLI in an OS sandbox (bwrap, firejail, …);
+   * recorded on every build so reviewers know which isolation produced it.
+   */
+  osWrapper?: boolean;
   expectedVersion?: string;
   /** Host-private directory for graphify's HOME, cache and raw output. */
   dataRoot: string;
@@ -78,7 +88,7 @@ export type GraphBuildOutcome =
 export type GraphLookup =
   | { status: "ready"; artifact: KnowledgeGraphArtifact }
   | { status: "not_built" }
-  | { status: "stale"; built_for: string };
+  | { status: "stale"; built_for: string; current: string };
 
 export interface KnowledgeGraphService {
   doctor(): Promise<GraphDoctor>;
@@ -320,6 +330,22 @@ export function normalizeGraph(input: {
   });
 }
 
+/** Strip host paths from subprocess diagnostics before they reach task events. */
+export function redactDiagnostics(
+  text: string,
+  roots: string[],
+  max = 240,
+): string {
+  let out = text;
+  for (const root of roots.filter(Boolean).sort((a, b) => b.length - a.length))
+    out = out.split(root).join("<private>");
+  out = out.replace(
+    /(?:^|(?<=[\s"'(=:]))(?:\/|[A-Za-z]:\\)[^\s"')]+/g,
+    "<path>",
+  );
+  return out.replace(/\s+/g, " ").trim().slice(0, max);
+}
+
 function parseExtractSummary(stdout: string): { files: number } | null {
   const match = /found (\d+) code/.exec(stdout);
   return match ? { files: Number(match[1]) } : null;
@@ -406,6 +432,7 @@ export function createKnowledgeGraphService(
     revision: binding.revision,
     content_digest: null,
     graphify_version: null,
+    isolation: options.osWrapper ? "os_wrapper" : "process_env",
     stats: null,
     limitations: [],
     summary: summary.slice(0, 2048),
@@ -417,6 +444,10 @@ export function createKnowledgeGraphService(
     await binding.evidence?.append(record);
     return record;
   };
+  const currentRevision = async (binding: GraphBinding) =>
+    binding.currentRevision
+      ? await binding.currentRevision()
+      : binding.revision;
 
   const build = async (binding: GraphBinding): Promise<GraphBuildOutcome> => {
     if (binding.approvals && !binding.approvals.read) {
@@ -452,6 +483,8 @@ export function createKnowledgeGraphService(
         ),
       };
     }
+    const revision = await currentRevision(binding);
+    const fenced = { ...binding, revision };
     const taskRoot = join(options.dataRoot, "tasks", taskKey(binding.task_id));
     await rm(taskRoot, { recursive: true, force: true });
     await mkdir(taskRoot, { recursive: true, mode: 0o700 });
@@ -462,27 +495,39 @@ export function createKnowledgeGraphService(
       timeoutMs,
       dataRoot: taskRoot,
     });
-    const fail = async (reason: string): Promise<GraphBuildOutcome> => {
+    const redact = (text: string) =>
+      redactDiagnostics(text, [binding.cwd, options.dataRoot]);
+    const fail = async (
+      reason: string,
+      extra: Partial<GraphBuildRecord> = {},
+    ): Promise<GraphBuildOutcome> => {
       await rm(taskRoot, { recursive: true, force: true });
+      /* A failed rebuild must not leave an older graph answering as current. */
+      await options.artifacts.remove(key(binding)).catch(() => undefined);
       return {
         status: "failed",
         reason,
         record: await emit(
-          binding,
+          fenced,
           recordFor(
-            binding,
+            fenced,
             "failed",
-            { graphify_version: report.version },
+            {
+              graphify_version: report.version,
+              limitations: ["previous graph for this workspace discarded"],
+              ...extra,
+            },
             `graphify build failed: ${reason}`,
           ),
         ),
       };
     };
-    if (result.spawn_error) return fail(`spawn error: ${result.spawn_error}`);
+    if (result.spawn_error)
+      return fail(`spawn error: ${redact(result.spawn_error)}`);
     if (result.timed_out) return fail(`timed out after ${timeoutMs} ms`);
     if (result.exit_code !== 0)
       return fail(
-        `exit ${result.exit_code}: ${(result.stderr || result.stdout).trim().slice(0, 240)}`,
+        `exit ${result.exit_code}: ${redact(result.stderr || result.stdout) || "no output"}`,
       );
     const graphPath = join(outRoot, "graphify-out", "graph.json");
     const analysisPath = join(
@@ -504,7 +549,7 @@ export function createKnowledgeGraphService(
       }
     } catch (error) {
       return fail(
-        `graphify produced no graph.json (${error instanceof Error ? error.message : String(error)})`,
+        `graphify produced no graph.json (${redact(error instanceof Error ? error.message : String(error))})`,
       );
     }
     const summary = parseExtractSummary(result.stdout);
@@ -517,7 +562,7 @@ export function createKnowledgeGraphService(
         dataRoot: options.dataRoot,
         workspace: {
           workspace_id: binding.workspace_id,
-          revision: binding.revision,
+          revision,
         },
         graphifyVersion: report.version ?? expectedVersion,
         builtAt: now().toISOString(),
@@ -526,34 +571,31 @@ export function createKnowledgeGraphService(
       });
     } catch (error) {
       return fail(
-        `graph.json did not match the expected shape (${error instanceof Error ? error.message : String(error)})`,
+        `graph.json did not match the expected shape (${redact(error instanceof Error ? error.message : String(error))})`,
       );
     }
-    await rm(taskRoot, { recursive: true, force: true });
     if (artifact.stats.nodes === 0)
-      return {
-        status: "failed",
-        reason: "graphify extracted no nodes; an empty graph is not a result",
-        record: await emit(
-          binding,
-          recordFor(
-            binding,
-            "failed",
-            { graphify_version: report.version, stats: artifact.stats },
-            "graphify build produced an empty graph; nothing was stored",
-          ),
-        ),
-      };
+      return fail(
+        "graphify extracted no nodes; an empty graph is not a result",
+        {
+          stats: artifact.stats,
+        },
+      );
+    if ((await currentRevision(binding)) !== revision)
+      return fail(
+        `workspace changed during extraction (revision ${revision} is no longer current)`,
+      );
+    await rm(taskRoot, { recursive: true, force: true });
     await options.artifacts.write(
       key(binding),
-      binding.revision,
+      revision,
       artifact,
       KnowledgeGraphArtifactSchema,
     );
     const record = await emit(
-      binding,
+      fenced,
       recordFor(
-        binding,
+        fenced,
         "built",
         {
           content_digest: artifact.content_digest,
@@ -573,11 +615,16 @@ export function createKnowledgeGraphService(
       KnowledgeGraphArtifactSchema,
     );
     if (!entry) return { status: "not_built" };
+    const revision = await currentRevision(binding);
     if (
-      entry.value.workspace.revision !== binding.revision ||
+      entry.value.workspace.revision !== revision ||
       entry.value.workspace.workspace_id !== binding.workspace_id
     )
-      return { status: "stale", built_for: entry.value.workspace.revision };
+      return {
+        status: "stale",
+        built_for: entry.value.workspace.revision,
+        current: revision,
+      };
     return { status: "ready", artifact: entry.value };
   };
 
@@ -586,36 +633,54 @@ export function createKnowledgeGraphService(
     build,
     lookup,
     toolsFor(binding) {
-      const header = (tool: string, status: string) =>
-        `[derived evidence · code knowledge graph · ${tool} · ${status} · workspace revision ${binding.revision}]`;
-      const render = (tool: string, status: string, lines: string[]) =>
+      const header = (tool: string, status: string, revision: string) =>
+        `[derived evidence · code knowledge graph · ${tool} · ${status} · workspace revision ${revision}]`;
+      const render = (
+        tool: string,
+        status: string,
+        revision: string,
+        lines: string[],
+      ) =>
         truncate(
-          [header(tool, status), ...lines].join("\n"),
+          [header(tool, status, revision), ...lines].join("\n"),
           QUERY_LIMITS.max_render_chars,
         );
       return {
         async build() {
           const outcome = await build(binding);
+          const revision = outcome.record.revision;
           if (outcome.status === "built")
-            return render("mars_graph_build", "built", [
+            return render("mars_graph_build", "built", revision, [
               outcome.record.summary,
               `graphify ${outcome.artifact.producer.version}, digest ${outcome.artifact.content_digest.slice(0, 16)}; use mars_graph_query to explore.`,
             ]);
-          return render("mars_graph_build", outcome.status, [
+          return render("mars_graph_build", outcome.status, revision, [
             outcome.reason,
-            "No graph was stored; nothing here counts as a built graph.",
+            outcome.status === "failed"
+              ? "No graph is stored for this workspace now; nothing here counts as a built graph."
+              : "Nothing was built or changed; an earlier graph for the current revision, if any, stays as it was.",
           ]);
         },
         async query(input) {
+          if (binding.approvals && !binding.approvals.read)
+            return render("mars_graph_query", "refused", binding.revision, [
+              "read approval is required to query the code graph (it is derived from workspace files).",
+            ]);
           const found = await lookup(binding);
           if (found.status === "not_built")
-            return render("mars_graph_query", "not_built", [
-              "No code knowledge graph exists for this workspace revision; run mars_graph_build first.",
-            ]);
+            return render(
+              "mars_graph_query",
+              "not_built",
+              await currentRevision(binding),
+              [
+                "No code knowledge graph exists for this workspace; run mars_graph_build first.",
+              ],
+            );
           if (found.status === "stale")
-            return render("mars_graph_query", "stale", [
-              `The stored graph was built for revision ${found.built_for}, not the current ${binding.revision}; run mars_graph_build to rebuild. No stale answer is given.`,
+            return render("mars_graph_query", "stale", found.current, [
+              `The stored graph was built for revision ${found.built_for}, not the current ${found.current}; run mars_graph_build to rebuild. No stale answer is given.`,
             ]);
+          const revision = found.artifact.workspace.revision;
           const index = indexGraph(found.artifact);
           const pick = (name: string | undefined, role: string) => {
             if (!name) throw new Error(`${role} is required`);
@@ -632,7 +697,7 @@ export function createKnowledgeGraphService(
                 ...(input.depth !== undefined ? { depth: input.depth } : {}),
                 ...(input.limit !== undefined ? { limit: input.limit } : {}),
               });
-              return render("mars_graph_query", "neighbours", [
+              return render("mars_graph_query", "neighbours", revision, [
                 `${describeNode(node)}${alternatives.length ? ` (other matches: ${alternatives.map((item) => item.label).join(", ")})` : ""}`,
                 ...(hits.length
                   ? hits.map(
@@ -651,7 +716,7 @@ export function createKnowledgeGraphService(
                   : {}),
                 ...(input.limit !== undefined ? { limit: input.limit } : {}),
               });
-              return render("mars_graph_query", "paths", [
+              return render("mars_graph_query", "paths", revision, [
                 `${describeNode(from.node)} → ${describeNode(to.node)}`,
                 ...(found.length
                   ? found.map(
@@ -667,7 +732,7 @@ export function createKnowledgeGraphService(
                 : {}),
               ...(input.limit !== undefined ? { limit: input.limit } : {}),
             });
-            return render("mars_graph_query", "communities", [
+            return render("mars_graph_query", "communities", revision, [
               ...(groups.length
                 ? groups.map(
                     (group) =>
@@ -676,7 +741,7 @@ export function createKnowledgeGraphService(
                 : ["(no matching community)"]),
             ]);
           } catch (error) {
-            return render("mars_graph_query", "error", [
+            return render("mars_graph_query", "error", revision, [
               error instanceof Error ? error.message : String(error),
             ]);
           }

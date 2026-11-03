@@ -136,6 +136,8 @@ export const GraphBuildRecordSchema = z
       .regex(/^[a-f0-9]{64}$/)
       .nullable(),
     graphify_version: z.string().nullable(),
+    /** process_env: argv/env/cwd confinement only (no kernel sandbox); os_wrapper: operator-supplied wrapper prefix. */
+    isolation: z.enum(["process_env", "os_wrapper"]),
     stats: KnowledgeGraphArtifactSchema.shape.stats.nullable(),
     limitations: z.array(z.string().max(512)).max(32),
     summary: z.string().max(2048),

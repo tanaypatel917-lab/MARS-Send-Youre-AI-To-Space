@@ -100,7 +100,12 @@ export interface WorkbenchServiceOptions {
   /** Background research worker and control plane; sessions get no research tools without it. */
   research?: WorkbenchResearchOptions;
   /** Pinned graphify CLI (argv prefix); sessions get no graph tools without it. */
-  knowledgeGraph?: { command: string[]; timeoutMs?: number };
+  knowledgeGraph?: {
+    command: string[];
+    timeoutMs?: number;
+    /** `command` wraps graphify in an OS sandbox (bwrap, firejail, …). */
+    osWrapper?: boolean;
+  };
   runtimeFactory?: WorkbenchHostOptions["runtimeFactory"];
 }
 
@@ -277,6 +282,9 @@ export async function createWorkbenchService(
             command: options.knowledgeGraph.command,
             ...(options.knowledgeGraph.timeoutMs !== undefined
               ? { timeoutMs: options.knowledgeGraph.timeoutMs }
+              : {}),
+            ...(options.knowledgeGraph.osWrapper !== undefined
+              ? { osWrapper: options.knowledgeGraph.osWrapper }
               : {}),
             dataRoot: graphRoot,
             artifacts: createDerivedArtifactStore({

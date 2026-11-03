@@ -329,6 +329,7 @@ export async function createWorkbenchHost(
   // rebuildable cache next to the repository map, never a memory owner, and
   // build attempts land in the task's events.
   const graphBinding = (
+    context: RequestContext,
     taskId: string,
     cwd: string,
     workspace: WorkspaceRef,
@@ -340,6 +341,14 @@ export async function createWorkbenchHost(
     workspace_id: workspace.workspace_id,
     cwd,
     revision: workspace.revision,
+    // The workspace revision advances on every write; builds and queries
+    // re-resolve it so an edited tree never answers from the launch graph.
+    async currentRevision() {
+      const current = await options.workspace.reopen(context, taskId);
+      if (current.workspace_id !== workspace.workspace_id)
+        throw new WorkbenchError("conflict");
+      return current.revision;
+    },
     approvals: { read: approvals.read },
     evidence: graphEvidence(
       options.store,
@@ -348,6 +357,7 @@ export async function createWorkbenchHost(
     ),
   });
   const graphOption = (
+    context: RequestContext,
     taskId: string,
     cwd: string,
     workspace: WorkspaceRef,
@@ -357,7 +367,7 @@ export async function createWorkbenchHost(
     if (!graph) return {};
     return {
       knowledgeGraph: graph.toolsFor(
-        graphBinding(taskId, cwd, workspace, approvals),
+        graphBinding(context, taskId, cwd, workspace, approvals),
       ),
     };
   };
@@ -1731,7 +1741,13 @@ export async function createWorkbenchHost(
         if (options.knowledgeGraph && params.approvals.read) {
           try {
             const found = await options.knowledgeGraph.lookup(
-              graphBinding(task.task_id, cwd, workspace, params.approvals),
+              graphBinding(
+                context,
+                task.task_id,
+                cwd,
+                workspace,
+                params.approvals,
+              ),
             );
             if (found.status === "ready") {
               graphSummary = freezeGraphSummary(
@@ -1780,7 +1796,13 @@ export async function createWorkbenchHost(
           ...researchFor(task.task_id, () => launchDeadline),
           ...proposalsFor(),
           ...watchOption(task.task_id, cwd, params.approvals),
-          ...graphOption(task.task_id, cwd, workspace, params.approvals),
+          ...graphOption(
+            context,
+            task.task_id,
+            cwd,
+            workspace,
+            params.approvals,
+          ),
           onEvent: async (event) => {
             if (!bound) {
               if (initialObservations.length >= 1000)
@@ -1924,7 +1946,13 @@ export async function createWorkbenchHost(
           ),
           ...proposalsFor(),
           ...watchOption(task.task_id, cwd, launch.approvals),
-          ...graphOption(task.task_id, cwd, workspace, launch.approvals),
+          ...graphOption(
+            context,
+            task.task_id,
+            cwd,
+            workspace,
+            launch.approvals,
+          ),
           onEvent: observe(taskId),
         });
         if (closing) throw new WorkbenchError("unavailable");

@@ -3160,7 +3160,7 @@ test.skipIf(process.platform !== "linux")(
             artifact: artifact(binding.workspace_id, binding.revision),
           };
         if (lookupStatus === "stale")
-          return { status: "stale", built_for: "r0" };
+          return { status: "stale", built_for: "r0", current: "r1" };
         return { status: "not_built" };
       },
       toolsFor(binding) {
@@ -3175,6 +3175,7 @@ test.skipIf(process.platform !== "linux")(
               revision: binding.revision,
               content_digest: "b".repeat(64),
               graphify_version: "0.9.101",
+              isolation: "process_env",
               stats: artifact(binding.workspace_id, binding.revision).stats,
               limitations: [],
               summary: "code graph built",
@@ -3183,7 +3184,7 @@ test.skipIf(process.platform !== "linux")(
             return "[derived evidence · code knowledge graph · mars_graph_build · built]";
           },
           async query(input) {
-            return `query:${input.kind}:${binding.revision}`;
+            return `query:${input.kind}:${await binding.currentRevision?.()}`;
           },
         };
       },
@@ -3234,6 +3235,16 @@ test.skipIf(process.platform !== "linux")(
     expect(await tools.query({ kind: "communities" })).toBe(
       "query:communities:r1",
     );
+    const reopen = f.workspace.reopen;
+    f.workspace.reopen = async () => ({
+      provider: "local",
+      workspace_id: "workspace",
+      revision: "r2",
+    });
+    expect(await tools.query({ kind: "communities" })).toBe(
+      "query:communities:r2",
+    );
+    f.workspace.reopen = reopen;
     expect(await tools.build()).toContain("mars_graph_build · built");
     const events: Array<{ event_type: string; producer: string }> = [];
     for await (const event of f.store.events(context(), "task"))

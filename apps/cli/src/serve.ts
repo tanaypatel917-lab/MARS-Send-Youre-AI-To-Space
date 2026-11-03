@@ -136,7 +136,8 @@ export async function runServer(args: string[]): Promise<void> {
       "research-searxng-url": { type: "string" },
       "research-model": { type: "string" },
       "research-deny-host": { type: "string", multiple: true },
-      graphify: { type: "string" },
+      graphify: { type: "string", multiple: true },
+      "graphify-os-wrapper": { type: "boolean" },
       help: { type: "boolean" },
     },
   });
@@ -144,9 +145,9 @@ export async function runServer(args: string[]): Promise<void> {
     console.log(
       [
         "Usage: mars serve [--source DIR] [--state PRIVATE_DIR] [--port 7331] [--owner ID] [--project ID] [--image REPO@sha256:DIGEST] [--trust-project]",
-        "                  [--research-search brave|searxng|tavily] [--research-api-key-env NAME] [--research-searxng-url URL] [--research-model ID] [--research-deny-host PATTERN]... [--graphify PATH]",
+        "                  [--research-search brave|searxng|tavily] [--research-api-key-env NAME] [--research-searxng-url URL] [--research-model ID] [--research-deny-host PATTERN]... [--graphify ARG]... [--graphify-os-wrapper]",
         "Without a pre-pulled digest-pinned image, command execution is disabled. No model request is made at startup. Connection credentials are written only to the private connection file.",
-        "Code knowledge graph tools (mars_graph_build, mars_graph_query) are offered only with --graphify PATH naming the pinned graphify 0.9.101 executable (a uv/venv install); it runs sandboxed and offline, and the graph is a derived, rebuildable artifact.",
+        "Code knowledge graph tools (mars_graph_build, mars_graph_query) are offered only with --graphify ARG (repeatable; the argv prefix of the pinned graphify 0.9.101 executable from a uv/venv install, optionally behind an OS sandbox such as bwrap, then pass --graphify-os-wrapper). Confinement without a wrapper is process-level only (argv, env allowlist, offline flags); the graph is a derived, rebuildable artifact.",
         "Background research runs only with --research-search. The search credential is read from BRAVE_SEARCH_API_KEY / TAVILY_API_KEY (or --research-api-key-env NAME) at startup and never stored; the worker uses the free default model unless --research-model names another free model. Live research is unverified.",
       ].join("\n"),
     );
@@ -186,8 +187,13 @@ export async function runServer(args: string[]): Promise<void> {
     port: values.port === undefined ? 7331 : Number(values.port),
     ...(values.image ? { image: values.image } : {}),
     ...(research ? { research } : {}),
-    ...(values.graphify
-      ? { knowledgeGraph: { command: [values.graphify] } }
+    ...(values.graphify?.length
+      ? {
+          knowledgeGraph: {
+            command: values.graphify,
+            osWrapper: values["graphify-os-wrapper"] === true,
+          },
+        }
       : {}),
     trustProjectConfig:
       values["trust-project"] === true ||
@@ -209,7 +215,14 @@ export async function runServer(args: string[]): Promise<void> {
         connection_file: service.connectionFile,
         execute_enabled: Boolean(values.image),
         research: research ? { search: research.search.id, live: true } : null,
-        knowledge_graph: values.graphify ? { command: values.graphify } : null,
+        knowledge_graph: values.graphify?.length
+          ? {
+              command: values.graphify,
+              isolation: values["graphify-os-wrapper"]
+                ? "os_wrapper"
+                : "process_env",
+            }
+          : null,
       }),
     );
   });
