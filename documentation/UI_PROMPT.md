@@ -57,7 +57,7 @@ Each principle names the usability rule it enforces and where it was observed. T
 
 ## 2. Terminal client information architecture
 
-`mars` with no subcommand (or `mars session`) opens the interactive client. It is a `@oh-my-pi/pi-tui` program (`TUI` root, component tree, differential renderer) that speaks the workbench RPC; it does not import `createAgentSession`, `AgentSession` or any Oh My Pi mode. Layout, top to bottom, one column:
+`mars` with no subcommand (or `mars session`) opens the interactive client. It is a `@oh-my-pi/pi-tui` program (`TUI` root, component tree, differential renderer) that speaks the workbench RPC; it does not import `createAgentSession`, `AgentSession` or any Oh My Pi mode. `pi-tui` itself depends on `@oh-my-pi/pi-agent-core`, `pi-ai` and `pi-wire` `[source: pi-tui/package.json]`, so a lint rule (biome `noRestrictedImports`) must forbid `@oh-my-pi/pi-coding-agent`, `pi-agent-core` and `pi-ai` in `apps/cli/src/session/**` and `packages/ui-core/**`. Connection: the `mars serve` connection file at `~/.mars/workbench/<project>/connection.json` (`--state` override), parsed with the same strict reader as `apps/vscode/src/connectionFile.ts`. Layout, top to bottom, one column:
 
 ```
 ┌ header (1 line, optional, hidden < 30 rows) ─ project · branch · task title · task status
@@ -169,7 +169,7 @@ One main window per workbench connection; additional windows are plain duplicate
 
 ### 3.2 Session switcher
 
-Sidebar list of tasks (`tasks.list`), grouped by status, with the same columns as `/tasks`; a workbench selector when more than one connection file exists (`~/.mars/workbench/*.json`). Switching never restarts anything.
+Sidebar list of tasks (`tasks.list`), grouped by status, with the same columns as `/tasks`; a workbench selector when more than one connection file exists (`~/.mars/workbench/*/connection.json`). Switching never restarts anything.
 
 ### 3.3 Workspace and task views
 
