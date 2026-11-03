@@ -15,11 +15,13 @@
       "name": "@mars/cli",
       "version": "0.0.1",
       "dependencies": {
+        "@mars/codex-tools": "workspace:*",
         "@mars/contracts": "workspace:*",
         "@mars/execution": "workspace:*",
         "@mars/output-format": "workspace:*",
         "@mars/providers": "workspace:*",
         "@mars/research-worker": "workspace:*",
+        "@mars/skills": "workspace:*",
         "@mars/workbench": "workspace:*",
       },
     },

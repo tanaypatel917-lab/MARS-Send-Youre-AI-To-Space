@@ -12,6 +12,7 @@ import {
 } from "@mars/research-worker";
 import {
   createWorkbenchService,
+  loadWorkbenchConventions,
   type WorkbenchResearchOptions,
 } from "@mars/workbench";
 
@@ -119,6 +120,18 @@ export function researchFromFlags(
   };
 }
 
+/**
+ * The @mars/codex-tools pieces the loader is given: the apply_patch applier
+ * and the instruction-file discovery. Kept in one place so the CLI is the only
+ * composition point.
+ */
+export function conventionsAdapters(): Pick<
+  Parameters<typeof loadWorkbenchConventions>[0],
+  "applyPatch" | "discoverInstructions"
+> {
+  return {};
+}
+
 export async function runServer(args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
@@ -131,6 +144,7 @@ export async function runServer(args: string[]): Promise<void> {
       project: { type: "string" },
       image: { type: "string" },
       "trust-project": { type: "boolean" },
+      "no-conventions": { type: "boolean" },
       "research-search": { type: "string" },
       "research-api-key-env": { type: "string" },
       "research-searxng-url": { type: "string" },
@@ -142,9 +156,10 @@ export async function runServer(args: string[]): Promise<void> {
   if (values.help) {
     console.log(
       [
-        "Usage: mars serve [--source DIR] [--state PRIVATE_DIR] [--port 7331] [--owner ID] [--project ID] [--image REPO@sha256:DIGEST] [--trust-project]",
+        "Usage: mars serve [--source DIR] [--state PRIVATE_DIR] [--port 7331] [--owner ID] [--project ID] [--image REPO@sha256:DIGEST] [--trust-project] [--no-conventions]",
         "                  [--research-search brave|searxng|tavily] [--research-api-key-env NAME] [--research-searxng-url URL] [--research-model ID] [--research-deny-host PATTERN]...",
         "Without a pre-pulled digest-pinned image, command execution is disabled. No model request is made at startup. Connection credentials are written only to the private connection file.",
+        "Repository conventions are read once from --source at startup: skill folders (skills/, .claude/skills, .codex/skills, .agents/skills) and slash commands (.mars/commands, .claude/commands) always; AGENTS.md/AGENTS.override.md/CLAUDE.md instruction files and .mars/hooks.json only with --trust-project. Hook commands run only through the sandboxed execute path with execute approval. --no-conventions disables all of it, including mars_apply_patch.",
         "Background research runs only with --research-search. The search credential is read from BRAVE_SEARCH_API_KEY / TAVILY_API_KEY (or --research-api-key-env NAME) at startup and never stored; the worker uses the free default model unless --research-model names another free model. Live research is unverified.",
       ].join("\n"),
     );
@@ -177,6 +192,17 @@ export async function runServer(args: string[]): Promise<void> {
   const state = resolve(
     values.state ?? join(homedir(), ".mars", "workbench", project),
   );
+  const trustProject =
+    values["trust-project"] === true ||
+    process.env.MARS_TRUST_PROJECT_CONFIG === "1";
+  const conventions =
+    values["no-conventions"] === true
+      ? null
+      : await loadWorkbenchConventions({
+          sourceRoot: source,
+          trustProject,
+          ...conventionsAdapters(),
+        });
   const service = await createWorkbenchService({
     sourceRoot: source,
     stateRoot: state,
@@ -184,9 +210,8 @@ export async function runServer(args: string[]): Promise<void> {
     port: values.port === undefined ? 7331 : Number(values.port),
     ...(values.image ? { image: values.image } : {}),
     ...(research ? { research } : {}),
-    trustProjectConfig:
-      values["trust-project"] === true ||
-      process.env.MARS_TRUST_PROJECT_CONFIG === "1",
+    ...(conventions ? { conventions: conventions.conventions } : {}),
+    trustProjectConfig: trustProject,
   });
   await new Promise<void>((resolve, reject) => {
     registerRuntimeCleanup("mars-workbench", async () => {
@@ -204,6 +229,7 @@ export async function runServer(args: string[]): Promise<void> {
         connection_file: service.connectionFile,
         execute_enabled: Boolean(values.image),
         research: research ? { search: research.search.id, live: true } : null,
+        conventions: conventions ? conventions.summary : null,
       }),
     );
   });

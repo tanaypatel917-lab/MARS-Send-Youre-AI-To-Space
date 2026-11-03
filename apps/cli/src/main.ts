@@ -6,6 +6,7 @@ import {
   loadModelRegistry,
   ModelRouter,
 } from "@mars/providers";
+import { runCommands } from "./commands";
 import { runRender } from "./render";
 import { RESEARCH_SEARCH_PROVIDERS, runServer, ServeUsageError } from "./serve";
 
@@ -262,6 +263,8 @@ try {
     await runModels(process.argv.slice(3));
   } else if (command === "render") {
     await runRender(process.argv.slice(3));
+  } else if (command === "commands") {
+    await runCommands(process.argv.slice(3));
   } else if (command === "serve") {
     try {
       await runServer(process.argv.slice(3));
@@ -275,7 +278,7 @@ try {
     }
   } else {
     console.error(
-      "Usage: bun apps/cli/src/main.ts <doctor|smoke|models|serve|render>",
+      "Usage: bun apps/cli/src/main.ts <doctor|smoke|models|serve|render|commands>",
     );
     process.exitCode = 2;
   }
