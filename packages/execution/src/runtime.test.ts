@@ -14,6 +14,7 @@ import {
   toChatRequest,
 } from "./model-bridge";
 import {
+  boundPatchSummary,
   MAX_SYSTEM_PROMPT_CHARS,
   openRuntimeSession,
   type RuntimeSession,
@@ -793,6 +794,30 @@ test("mars_apply_patch is a host-bound tool: Oh My Pi passes the patch text to t
   }
 }, 30000);
 
+test("boundPatchSummary keeps the whole result within the byte limit at a character boundary", () => {
+  const bytesOf = (text: string) => new TextEncoder().encode(text).byteLength;
+  expect(boundPatchSummary("short", 64)).toBe("short");
+  const ascii = "A path/to/file.txt\n".repeat(10_000);
+  const boundedAscii = boundPatchSummary(ascii, 1_000);
+  expect(bytesOf(boundedAscii)).toBeLessThanOrEqual(1_000);
+  expect(boundedAscii).toMatch(
+    /\n\[summary truncated: \d+ more bytes omitted\]$/,
+  );
+  expect(
+    ascii.startsWith(boundedAscii.split("\n[summary truncated")[0] ?? ""),
+  ).toBe(true);
+  const multibyte = "A ééé/日本語/🙂.txt\n".repeat(2_000);
+  for (const limit of [1_000, 1_001, 1_002, 1_003, 4_096]) {
+    const bounded = boundPatchSummary(multibyte, limit);
+    expect(bytesOf(bounded)).toBeLessThanOrEqual(limit);
+    expect(bounded).not.toContain("\uFFFD");
+    expect(
+      multibyte.startsWith(bounded.split("\n[summary truncated")[0] ?? ""),
+    ).toBe(true);
+  }
+  expect(bytesOf(boundPatchSummary(multibyte))).toBeLessThanOrEqual(128 * 1024);
+});
+
 test("mars_apply_patch keeps a persisted patch successful when its summary exceeds the output limit", async () => {
   const f = await fixture(1_000_000);
   const requests: Record<string, unknown>[] = [];
@@ -833,7 +858,12 @@ test("mars_apply_patch keeps a persisted patch successful when its summary excee
     expect(relayed).toContain("Success. Updated the following files:");
     expect(relayed).toContain("[summary truncated:");
     expect(relayed).not.toContain("exceeds tool output limit");
-    expect(relayed.length).toBeLessThan(summary.length);
+    const relayedTool = (
+      requests[1]?.messages as Array<{ role: string; content: string }>
+    ).find((m) => m.role === "tool");
+    expect(
+      new TextEncoder().encode(relayedTool?.content ?? "").byteLength,
+    ).toBeLessThanOrEqual(128 * 1024);
   } finally {
     await f.cleanup();
   }

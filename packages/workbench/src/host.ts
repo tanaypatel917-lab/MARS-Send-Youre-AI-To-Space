@@ -1458,7 +1458,9 @@ export async function createWorkbenchHost(
         await options.workspace.remove(context, workspace, path);
       },
       // Existence never decodes content, so binary files can be deleted or
-      // moved; only Update hunks require UTF-8 text.
+      // moved; only Update hunks require UTF-8 text. A provider policy refusal
+      // (ignored or private path, directory) propagates as the hunk's failure
+      // instead of being reported as a directory.
       async exists(path: string) {
         try {
           const context = await authorize();
@@ -1472,7 +1474,6 @@ export async function createWorkbenchHost(
               : undefined;
           // A file too large to read still exists and can be deleted or moved.
           if (code === "limit_exceeded") return "file" as const;
-          if (code === "policy") return "directory" as const;
           throw error;
         }
       },

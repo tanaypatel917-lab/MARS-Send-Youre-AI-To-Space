@@ -469,6 +469,31 @@ export interface RuntimeWatch {
  */
 const PATCH_OUTPUT_LIMIT = 128 * 1024;
 
+/**
+ * Bounds a patch summary to PATCH_OUTPUT_LIMIT UTF-8 bytes including the
+ * truncation marker, cutting only at a character boundary. The patch is
+ * already persisted when the summary comes back, so the call stays successful.
+ */
+export function boundPatchSummary(
+  text: string,
+  limit = PATCH_OUTPUT_LIMIT,
+): string {
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(text);
+  if (bytes.byteLength <= limit) return text;
+  const marker = (omitted: number) =>
+    `\n[summary truncated: ${omitted} more bytes omitted]`;
+  // The omitted count never exceeds the total, so reserving the marker for
+  // the total's digit count keeps the final text within the limit.
+  let keep = Math.max(
+    0,
+    limit - encoder.encode(marker(bytes.byteLength)).byteLength,
+  );
+  while (keep > 0 && ((bytes[keep] ?? 0) & 0xc0) === 0x80) keep--;
+  const prefix = new TextDecoder().decode(bytes.subarray(0, keep));
+  return `${prefix}${marker(bytes.byteLength - keep)}`;
+}
+
 export interface RuntimePatch {
   apply(patch: string): Promise<string>;
 }
@@ -1168,12 +1193,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
           .parse(params);
         // The patch is already persisted when the summary comes back, so an
         // oversized summary is truncated instead of failing the call.
-        const text = await patch.apply(input.patch);
-        return toolResult(
-          text.length > PATCH_OUTPUT_LIMIT
-            ? `${text.slice(0, PATCH_OUTPUT_LIMIT)}\n[summary truncated: ${text.length - PATCH_OUTPUT_LIMIT} more characters omitted]`
-            : text,
-        );
+        return toolResult(boundPatchSummary(await patch.apply(input.patch)));
       },
     });
   if (approvals.execute)

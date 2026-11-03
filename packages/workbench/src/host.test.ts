@@ -3575,11 +3575,17 @@ test("mars_apply_patch can delete or move a binary file: existence never decodes
   f.readArtifacts.set("missing.txt", null);
   f.readArtifacts.set("assets/huge.bin", "limit_exceeded");
   f.readArtifacts.set("assets", "policy");
+  f.readArtifacts.set(".mars/secret.json", "policy");
   const api = await conventionsHost(f, {
     async applyPatch(_patch, files) {
       expect(await files.exists("assets/logo.png")).toBe("file");
       expect(await files.exists("assets/huge.bin")).toBe("file");
-      expect(await files.exists("assets")).toBe("directory");
+      await expect(files.exists("assets")).rejects.toMatchObject({
+        code: "policy",
+      });
+      await expect(files.exists(".mars/secret.json")).rejects.toMatchObject({
+        code: "policy",
+      });
       expect(await files.exists("missing.txt")).toBeNull();
       await expect(files.read("assets/logo.png")).rejects.toThrow();
       await files.remove("assets/logo.png");
