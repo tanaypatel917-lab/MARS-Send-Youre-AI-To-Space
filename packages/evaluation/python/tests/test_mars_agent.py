@@ -16,6 +16,7 @@ from mars_harbor_agent.agent import (
     MarsAgent,
     MarsAgentConfigError,
     MarsAgentError,
+    SYSTEM_PATH,
 )
 
 
@@ -159,8 +160,18 @@ def test_run_passes_instruction_only_and_reports_usage(tmp_path, bundle, monkeyp
     cred = str(CONTAINER_STATE_DIR / "credential")
     secure = [c for c in env.commands if c["command"].startswith("chown ")]
     assert secure == [
-        {"command": f"chown 1000:1000 {cred} && chmod 0600 {cred}", "env": {}, "timeout_sec": None, "user": "root"}
+        {
+            "command": f"chown 1000:1000 {cred} && chmod 0600 {cred}",
+            "env": {"PATH": SYSTEM_PATH},
+            "timeout_sec": None,
+            "user": "root",
+        }
     ]
+    # Every adapter-side command resolves binaries through the fixed system PATH only.
+    for c in env.commands:
+        if c is not run_cmd:
+            assert c["env"] == {"PATH": SYSTEM_PATH}, c
+    assert "PATH" not in run_cmd["env"]
     assert [c["command"] for c in env.commands if c["command"].startswith("test -r ")] == [f"test -r {cred}"]
     assert env.commands.index(secure[0]) < env.commands.index(run_cmd)
     assert not list(tmp_path.rglob("mars-credential-*"))

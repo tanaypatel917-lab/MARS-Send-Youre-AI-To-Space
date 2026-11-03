@@ -46,6 +46,9 @@ CONTAINER_AGENT_DIR = PurePosixPath("/opt/mars-agent")
 CONTAINER_STATE_DIR = PurePosixPath("/tmp/mars-state")
 CREDENTIAL_FILE = "credential"
 RESERVED_ENV_PREFIX = "MARS_AGENT_"
+# Adapter commands resolve binaries only here, never through a PATH the task image controls.
+SYSTEM_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+SYSTEM_ENV = {"PATH": SYSTEM_PATH}
 USAGE_FILE = "mars-usage.json"
 RESULT_FILE = "mars-result.json"
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
@@ -210,11 +213,13 @@ class MarsAgent(BaseAgent):
         natives = sorted(self.bundle_dir.glob(NATIVE_ADDON_GLOB))
         if not natives:
             raise MarsAgentConfigError("bundle is missing the pi_natives addon")
-        await environment.exec(f"mkdir -p {shlex.quote(str(CONTAINER_AGENT_DIR))} {shlex.quote(str(CONTAINER_STATE_DIR))}")
+        await environment.exec(
+            f"mkdir -p {shlex.quote(str(CONTAINER_AGENT_DIR))} {shlex.quote(str(CONTAINER_STATE_DIR))}", env=SYSTEM_ENV
+        )
         await environment.upload_file(binary, str(CONTAINER_AGENT_DIR / BUNDLE_BINARY))
         for native in natives:
             await environment.upload_file(native, str(CONTAINER_AGENT_DIR / native.name))
-        await environment.exec(f"chmod 0755 {shlex.quote(str(CONTAINER_AGENT_DIR / BUNDLE_BINARY))}")
+        await environment.exec(f"chmod 0755 {shlex.quote(str(CONTAINER_AGENT_DIR / BUNDLE_BINARY))}", env=SYSTEM_ENV)
         config_path = self.logs_dir / "mars-agent-config.json"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(self.provider_config(), indent=2, sort_keys=True), "utf-8")
@@ -267,8 +272,10 @@ class MarsAgent(BaseAgent):
         """Upload the key as a file only the trial's exec user can read.
 
         `docker cp` creates root-owned files, so for non-root task images the
-        file is chowned to the exec user from a root exec. Every step checks
-        its return code; an unreadable credential fails the trial up front
+        file is chowned to the exec user from a root exec. These commands run
+        with a fixed system PATH so a task-controlled PATH entry cannot shadow
+        chown/chmod/id/test (a hostile task *image* that replaces /bin itself
+        is outside this boundary). Every step checks its return code; an unreadable credential fails the trial up front
         instead of surfacing as an authentication failure inside the bundle.
         """
         fd, host_path = tempfile.mkstemp(prefix="mars-credential-", dir=self.logs_dir)
@@ -280,19 +287,21 @@ class MarsAgent(BaseAgent):
         finally:
             os.unlink(host_path)
         quoted = shlex.quote(str(credential_path))
-        ident = await environment.exec("id -u && id -g")
+        ident = await environment.exec("id -u && id -g", env=SYSTEM_ENV)
         if ident.return_code != 0 or len(ident.stdout.split()) != 2:
             raise MarsAgentError(f"could not determine the trial exec user: {ident.stderr.strip()}")
         uid, gid = ident.stdout.split()
         if not (uid.isdigit() and gid.isdigit()):
             raise MarsAgentError(f"unexpected id output: {ident.stdout!r}")
-        secured = await environment.exec(f"chown {uid}:{gid} {quoted} && chmod 0600 {quoted}", user="root")
+        secured = await environment.exec(
+            f"chown {uid}:{gid} {quoted} && chmod 0600 {quoted}", env=SYSTEM_ENV, user="root"
+        )
         if secured.return_code != 0:
             # No root exec available: fall back to the exec user's own chmod.
-            secured = await environment.exec(f"chmod 0600 {quoted}")
+            secured = await environment.exec(f"chmod 0600 {quoted}", env=SYSTEM_ENV)
         if secured.return_code != 0:
             raise MarsAgentError(f"could not secure the credential file: {secured.stderr.strip()}")
-        readable = await environment.exec(f"test -r {quoted}")
+        readable = await environment.exec(f"test -r {quoted}", env=SYSTEM_ENV)
         if readable.return_code != 0:
             raise MarsAgentError(f"credential file is not readable by uid {uid}; refusing to start the trial")
 
