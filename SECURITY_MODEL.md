@@ -1,6 +1,6 @@
 # MARS threat model
 
-Covers three repositories scanned together: `tanaypatel917-lab/MARS-Send-Youre-AI-To-Space` (the agent platform), `tanaypatel917-lab/mars-platform` (memory, skills, review runner, gateway probe) and `tanaypatel917-lab/MARS` (the public intro website). No infrastructure repository exists yet; the only deployment artifact is `MARS/vercel.json` (static hosting). Drafted from the code and the repositories' own docs (`documentation/LOCAL_WORKBENCH.md`, `documentation/WORKBENCH_RPC.md`, `documentation/INTEGRATION_TRUST.md`, `packages/workspaces/README.md`, `mars-platform/README.md`, `tools/gateway-probe.md`), then corrected by the owner's answers (2026-11-01).
+Covers three repositories scanned together: `tanaypatel917-lab/MARS-Send-Youre-AI-To-Space` (the agent platform, now including the memory store, skill store and proposal-only review runner), `tanaypatel917-lab/mars-platform` (reference-only since Milestone 3: earlier memory/skills/review ports and the gateway probe) and `tanaypatel917-lab/MARS` (the public intro website). No infrastructure repository exists yet; the only deployment artifact is `MARS/vercel.json` (static hosting). Drafted from the code and the repositories' own docs (`documentation/LOCAL_WORKBENCH.md`, `documentation/WORKBENCH_RPC.md`, `documentation/INTEGRATION_TRUST.md`, `packages/workspaces/README.md`, `mars-platform/README.md`, `tools/gateway-probe.md`), then corrected by the owner's answers (2026-11-01).
 
 ## Owner decisions (from the user)
 
@@ -24,8 +24,10 @@ Covers three repositories scanned together: `tanaypatel917-lab/MARS-Send-Youre-A
                                    Providers (packages/providers): OpenRouter/Gemini/Groq/GitHub/NVIDIA/Cerebras/Ollama, keys from env
                                    Integration trust (packages/integration-trust): default-deny gate for MCP/plugins/skills (library only)
 
- mars-platform: Memory store (services/memory) + Skills (packages/skills) on local files, Review runner (services/review)
-                calling an OpenAI-compatible model endpoint, Gateway probe (tools/gateway-probe) to a local OpenClaw gateway.
+                                   Memory (packages/memory, SQLite) + Skills (packages/skills, SKILL.md files) under the private state dir
+                                   Review runner (packages/review): proposal-only, calls a free model via Providers, logs hashes to review.jsonl
+
+ mars-platform (reference only): earlier memory/skills/review ports; Gateway probe (tools/gateway-probe) to a local OpenClaw gateway.
 
  MARS website: static Vite/Three.js site on Vercel; `src/how/scorer.ts` has a placeholder RemoteScorer POSTing traces to a future API.
 ```
@@ -37,7 +39,7 @@ Trust boundaries:
 3. **Sandbox vs. host.** `createDockerSandbox` runs commands with `--network none`, `--read-only`, non-root `--user`, `--cap-drop`, memory limits, digest-pinned image only; execution is disabled without `--image` (`packages/workspaces/src/sandbox.ts`). No host-shell fallback.
 4. **Untrusted project config vs. user config.** `.mars/models.json` in a project is ignored unless `--trust-project`/`MARS_TRUST_PROJECT_CONFIG=1`; only env-var *names* are stored, never key values (`packages/providers/src/models/registry.ts`).
 5. **Integrations vs. platform.** `@mars/integration-trust` is a default-deny gate with HMAC-signed approvals and binding-digest drift detection; it is not yet wired into any loader.
-6. **Model/review output vs. authoritative memory.** `services/review` can only `submitProposal`; `MemoryStore` is the single writer and runs the threat scanner in `services/memory/src/threats.ts` (injection, exfiltration, hardcoded secrets, invisible Unicode) on new content.
+6. **Model/review output vs. authoritative memory and skills.** `packages/review` holds only `MemoryProposalService.submitProposal` and `SkillProposalService` (`list`, `getRevision`, `submitProposal`); `DurableMemoryStore` and `SkillStore` are the single writers and run `scanThreat` from `packages/memory/src/threats.ts` (injection, exfiltration, C2, credential reads, hardcoded secrets, agent/MARS config modification, invisible Unicode) on every fact, skill body, draft, proposal and review rationale. Review output is a strict JSON whitelist (add-only memory, create/update-only skills, ≤8×8, threat-scanned), proposals are revision-fenced at submission and again at acceptance, and only a human/host may accept. The invisible-Unicode denylist is now complete (`INVISIBLE_CODE_POINT_RANGES`, checked before and after NFKC): C0 controls except tab/LF/CR, DEL and C1 (U+007F–U+009F), U+00AD, U+034F, U+061C, U+115F–U+1160, U+17B4–U+17B5, U+180B–U+180F, U+200B–U+200F, U+2028–U+2029, U+202A–U+202E, U+2060–U+2064, U+2066–U+206F, U+3164, U+FE00–U+FE0F, U+FEFF, U+FFA0, U+FFF9–U+FFFB, U+1BCA0–U+1BCA3, U+1D173–U+1D17A, U+E0000–U+E007F, U+E0100–U+E01EF.
 7. **Browser vs. static site.** The website runs entirely client-side; the only outbound call is the unused `RemoteScorer`.
 
 ## Components
@@ -50,8 +52,8 @@ Trust boundaries:
 | `Execution & Tasks` | `MARS-Send-Youre-AI-To-Space/packages/execution`, `packages/tasks`, `packages/contracts` | Host; agent loop owner, durable state |
 | `Providers` | `MARS-Send-Youre-AI-To-Space/packages/providers` | Host; credentials, outbound model HTTPS |
 | `Integration Trust` | `MARS-Send-Youre-AI-To-Space/packages/integration-trust` | Host gate for third-party code |
-| `Memory & Skills` | `mars-platform/services/memory`, `packages/skills` | Authoritative local stores of personal data |
-| `Review Runner` | `mars-platform/services/review` | Background model caller, proposal-only |
+| `Memory & Skills` | `MARS-Send-Youre-AI-To-Space/packages/memory`, `packages/skills` (reference: `mars-platform/services/memory`, `packages/skills`) | Authoritative local stores of personal data; single writers with threat scanning |
+| `Review Runner` | `MARS-Send-Youre-AI-To-Space/packages/review` (reference: `mars-platform/services/review`) | Background model caller, proposal-only, free-model routing via Providers |
 | `Gateway Probe` | `mars-platform/tools/gateway-probe*` | Local OpenClaw client, handles a gateway token |
 | `Website` | `MARS/src`, `MARS/index.html`, `MARS/how.html`, `MARS/scripts`, `MARS/vercel.json` | Public static site |
 | `Build & CI` | `.github/workflows/*`, `scripts/`, lockfiles, `sources/` in all repos | Supply chain |
@@ -63,7 +65,7 @@ Trust boundaries:
 - Files in the task workspace, task prompts, model and tool output (reach Execution, Workspaces, Tasks; indirectly the IDE via diffs/artifacts — `apps/vscode/src/pathSafety.ts`, `patch.ts`).
 - Project `.mars/models.json` and `~/.mars/models.json` (Providers).
 - Integration manifests, evidence and approval proofs (Integration Trust).
-- Memory/skill content from users, curators and the review model; `MARS_REVIEW_BASE_URL` responses (Memory & Skills, Review Runner).
+- Memory/skill content from users, the curator and the review model; review-model responses arriving through the provider registry (Memory & Skills, Review Runner). No `MARS_REVIEW_*` endpoint variables exist in this repository.
 - OpenClaw gateway WebSocket frames and `OPENCLAW_GATEWAY_TOKEN` / dev config (Gateway Probe).
 - Website: user-uploaded trace JSON (`tracesFromJson`), query-string `?frame=` review states, `innerHTML` templating in `src/main.ts`; future `RemoteScorer` endpoint.
 - CI: `push`/`pull_request` workflows with `contents: read`; `bun install --frozen-lockfile --ignore-scripts`, `pnpm install --frozen-lockfile`, pinned source digests in `sources/`.
@@ -96,16 +98,16 @@ Trust boundaries:
 - Digest-pinned, network-less, read-only, non-root Docker sandbox; execution disabled without it (`sandbox.ts`).
 - Untrusted project config by default; env-var names only; no paid fallback (`packages/providers`).
 - Default-deny integration gate with HMAC approvals, nonce single use, binding digest drift → superseded (`packages/integration-trust`).
-- Memory single writer with cross-process lock, atomic transactions, threat scanner with NFKC normalization, 0600 files; review runner is proposal-only, HTTPS required off-loopback, redirects rejected, bounded tokens/bytes (`mars-platform`).
+- Memory single writer (SQLite WAL, scoped, revision-fenced proposals) and skill single writer (`.writer.lock` directory lock, transactional `.skills-transaction.json` recovery, symlink/traversal rejection, 0600 files); threat scanner with NFKC normalization and complete invisible-Unicode denylist (`packages/memory/src/threats.ts`); review runner is proposal-only, recursion-guarded, bounded context/output/tokens, free-model-only via the provider registry, hash-only audit log (`packages/review`).
 - Gateway probe: loopback-only `ws://127.0.0.1`, token from env, redaction of credential fields.
 - CI with `contents: read`, pinned action SHAs (platform repo), frozen lockfiles, `--ignore-scripts`, source digest audit (`scripts/check-sources.ts`).
 
 ## Out of scope / accepted risk
 
-None declared by the owner. The unimplemented features named in the README (memory service wiring, research, evaluation, training, specialist serving) are not reachable yet but are not excluded from reporting.
+None declared by the owner. The unimplemented features named in the README (live research, evaluation, training, specialist serving) are not reachable yet but are not excluded from reporting. Skills and background review are implemented with offline evidence only and have no operator UI yet.
 
 ## Open questions
 
 - When the platform goes remote, what authentication replaces the single bearer token (per-user identity, TLS termination, reverse proxy)? Findings about multi-tenant scope enforcement will be judged assuming untrusted remote callers.
 - Will the website's `RemoteScorer` endpoint ever ship, and if so, where will it be hosted?
-- Which host will run `mars-platform` memory/review services once shared across users?
+- Which host will run the memory/skills/review stores once shared across users, and how will the per-state-directory (unscoped) skill store be partitioned?
