@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createController } from "../src/renderer/controller";
-import { READ_METHODS } from "../src/shared/methods";
+import { READ_METHODS, type ShellBridge } from "../src/shared/methods";
 import { findAll, MiniDocument, serialize } from "./mini-dom";
 import { fakeBridge, loadFixtureData, type RecordedCall } from "./test-utils";
 
@@ -22,7 +22,7 @@ test("fixture task views match deterministic snapshots and keep untrusted text i
       (element) => element.getAttribute("data-task-id") === task.task_id,
     ).find((element) => element.tagName === "BUTTON");
     session?.click();
-    await Bun.sleep(25);
+    await controller.settled();
     const snapshot = serialize(document.root);
     const snapshotPath = fileURLToPath(
       new URL(`../fixtures/snapshots/${task.task_id}.html`, import.meta.url),
@@ -72,7 +72,7 @@ test("completed and unverified remain separate and the reserved control is disab
       element.getAttribute("data-task-id") === "fixture-completed-unverified",
   ).find((element) => element.tagName === "BUTTON");
   completed?.click();
-  await Bun.sleep(25);
+  await controller.settled();
   const serialized = serialize(document.root);
   expect(serialized).toContain("Unverified");
   expect(serialized).toContain("✔ completed");
@@ -100,7 +100,7 @@ test("session switching reloads the selected task and tampered artifact text is 
       element.getAttribute("data-task-id") === "fixture-completed-verified",
   ).find((element) => element.tagName === "BUTTON");
   selected?.click();
-  await Bun.sleep(25);
+  await controller.settled();
   expect(
     calls.some(
       (call) =>
@@ -117,6 +117,14 @@ test("session switching reloads the selected task and tampered artifact text is 
   )[0];
   expect(tampered?.textContent).toContain("rejected: sha256 mismatch");
   expect(tampered?.textContent).not.toContain("<script>");
+  const invalidUtf8 = findAll(
+    document.root,
+    (element) =>
+      element.getAttribute("class") === "artifact" &&
+      element.textContent.includes("artifact-invalid-utf8"),
+  )[0];
+  expect(invalidUtf8?.textContent).toContain("not valid UTF-8 · not rendered");
+  expect(invalidUtf8?.textContent).not.toContain("�");
   expect(
     calls.every((call) => READ_METHODS.includes(call.method as never)),
   ).toBe(true);
@@ -137,9 +145,58 @@ test("refresh repeats the read-only description and list requests", async () => 
     document.root,
     (element) => element.textContent === "Refresh",
   )[0]?.click();
-  await Bun.sleep(25);
+  await controller.settled();
   expect(calls.slice(before, before + 2).map((call) => call.method)).toEqual([
     "workbench.describe",
     "tasks.list",
   ]);
+});
+
+test("a session click during an in-flight load queues the selected task", async () => {
+  const data = await loadFixtureData();
+  const delegate = fakeBridge(data);
+  let shouldDefer = false;
+  let resolveDeferred!: (
+    result: Awaited<ReturnType<(typeof delegate)["tasks.inspect"]>>,
+  ) => void;
+  let notifyStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    notifyStarted = resolve;
+  });
+  const bridge: ShellBridge = {
+    ...delegate,
+    "tasks.inspect": (params) => {
+      if (shouldDefer && params.task_id === "fixture-running") {
+        notifyStarted();
+        return new Promise((resolve) => {
+          resolveDeferred = resolve;
+        });
+      }
+      return delegate["tasks.inspect"](params);
+    },
+  };
+  const document = new MiniDocument();
+  const controller = createController(bridge, document, document.root);
+  await controller.load();
+  shouldDefer = true;
+  findAll(
+    document.root,
+    (element) => element.textContent === "Refresh",
+  )[0]?.click();
+  await started;
+  findAll(
+    document.root,
+    (element) =>
+      element.getAttribute("data-task-id") === "fixture-completed-verified",
+  )
+    .find((element) => element.tagName === "BUTTON")
+    ?.click();
+  resolveDeferred(
+    await delegate["tasks.inspect"]({ task_id: "fixture-running" }),
+  );
+  await controller.settled();
+  expect(
+    findAll(document.root, (element) => element.tagName === "H1")[1]
+      ?.textContent,
+  ).toContain("fixture-completed-verified");
 });

@@ -17,6 +17,7 @@ export type ArtifactView = {
   ref: ArtifactRef;
   content?: string;
   status: "verified" | "rejected" | "not rendered";
+  message?: string;
 };
 
 export type ShellState = {
@@ -79,21 +80,28 @@ function taskList(
           class: `session${task.task_id === selectedId ? " selected" : ""}`,
           "data-task-id": task.task_id,
           "aria-pressed": task.task_id === selectedId ? "true" : "false",
+          title: task.task_id,
           type: "button",
         },
         status(doc, task),
         h(
           doc,
           "span",
-          { class: "session-request", "data-provenance": "task request" },
-          `untrusted · task request · ${firstLine(task.request)}`,
+          { class: "provenance", "data-provenance": "task request" },
+          "untrusted · task request",
         ),
+        h(doc, "span", { class: "session-request" }, firstLine(task.request)),
         h(
           doc,
           "span",
           { class: "session-runtime" },
           h(doc, "span", { class: "runtime-label" }, "oh-my-pi"),
-          h(doc, "span", { class: "session-id" }, task.task_id.slice(0, 8)),
+          h(
+            doc,
+            "span",
+            { class: "session-id", title: task.task_id },
+            task.task_id,
+          ),
         ),
       );
       button.addEventListener("click", () => onSelect?.(task.task_id));
@@ -132,7 +140,7 @@ function taskHeader(
     doc,
     "header",
     { class: "task-header" },
-    h(doc, "h1", {}, `Task ${task.task_id.slice(0, 8)}`),
+    h(doc, "h1", {}, `Task ${task.task_id}`),
     h(
       doc,
       "div",
@@ -337,7 +345,7 @@ function artifactsSection(
             { class: artifact.status === "rejected" ? "error" : "muted" },
             artifact.status === "rejected"
               ? "rejected: sha256 mismatch"
-              : "not rendered",
+              : (artifact.message ?? "not rendered"),
           );
     return h(
       doc,
@@ -427,7 +435,7 @@ export function renderShell(
         doc,
         "p",
         {},
-        `Transcript projection arrives with @mars/ui-core. ${state.events.length >= 1000 ? "1000+" : state.events.length} journal events available via tasks.events (content not rendered in this build).`,
+        `Transcript projection arrives with @mars/ui-core. ${state.events.length >= 1000 ? "1000+" : state.events.length} task events available via tasks.events (content not rendered in this build).`,
       ),
     ),
   );

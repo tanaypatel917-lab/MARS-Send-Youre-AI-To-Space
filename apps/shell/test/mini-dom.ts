@@ -130,14 +130,21 @@ function escapeAttribute(value: string): string {
   return escapeText(value).replaceAll('"', "&quot;");
 }
 
-export function serialize(node: MiniElement | MiniText): string {
-  if (node instanceof MiniText) return escapeText(node.textContent);
+export function serialize(node: MiniElement | MiniText, depth = 0): string {
+  const indentation = " ".repeat(depth);
+  if (node instanceof MiniText)
+    return `${indentation}${escapeText(node.textContent)}`;
   const attributes = [...node.attributes.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, value]) => ` ${name}="${escapeAttribute(value)}"`)
     .join("");
   const tag = node.tagName.toLowerCase();
-  return `<${tag}${attributes}>${node.children.map(serialize).join("")}</${tag}>`;
+  const open = `${indentation}<${tag}${attributes}>`;
+  if (!node.children.some((child) => child instanceof MiniElement))
+    return `${open}${node.children.map(serialize).join("")}</${tag}>`;
+  return `${open}\n${node.children
+    .map((child) => serialize(child, depth + 2))
+    .join("\n")}\n${indentation}</${tag}>`;
 }
 
 export function findAll(

@@ -16,7 +16,8 @@ export function createController(
   root: ShellElement,
 ) {
   let selectedId: string | undefined;
-  let loading = false;
+  let loadRequested = false;
+  let loadPromise: Promise<void> | undefined;
   let state: ShellState = { tasks: [], events: [], artifacts: [] };
 
   const render = () => root.replaceChildren(renderShell(doc, state));
@@ -30,9 +31,7 @@ export function createController(
     return result.result;
   };
 
-  const load = async () => {
-    if (loading) return;
-    loading = true;
+  const loadOnce = async () => {
     try {
       const described = await value(bridge["workbench.describe"]({}));
       const tasks = await value(bridge["tasks.list"]({}));
@@ -86,11 +85,19 @@ export function createController(
           atob(fetched.result.data_base64),
           (character) => character.charCodeAt(0),
         );
-        artifacts.push({
-          ref,
-          status: "verified",
-          content: new TextDecoder("utf-8", { fatal: false }).decode(bytes),
-        });
+        try {
+          artifacts.push({
+            ref,
+            status: "verified",
+            content: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+          });
+        } catch {
+          artifacts.push({
+            ref,
+            status: "not rendered",
+            message: "not valid UTF-8 · not rendered",
+          });
+        }
       }
       state = {
         describe: described,
@@ -112,10 +119,28 @@ export function createController(
       displayError(
         error instanceof Error ? error.message : "Workbench is unavailable.",
       );
-    } finally {
-      loading = false;
     }
   };
 
-  return { load };
+  const load = () => {
+    loadRequested = true;
+    if (!loadPromise) {
+      loadPromise = (async () => {
+        while (loadRequested) {
+          loadRequested = false;
+          await loadOnce();
+        }
+      })().finally(() => {
+        loadPromise = undefined;
+        if (loadRequested) void load();
+      });
+    }
+    return loadPromise;
+  };
+
+  const settled = async () => {
+    while (loadPromise) await loadPromise;
+  };
+
+  return { load, settled };
 }

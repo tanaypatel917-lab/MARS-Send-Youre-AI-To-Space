@@ -6,7 +6,7 @@
   "main": "dist/main.cjs",
   "scripts": {
     "build": "bun scripts/build.ts",
-    "native:install": "node node_modules/electron/install.js",
+    "native:install": "bun node_modules/electron/install.js",
     "start": "bun run build && electron dist/main.cjs",
     "fixture-workbench": "bun scripts/fixture-workbench.ts"
   },

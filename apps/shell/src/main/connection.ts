@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { open, readdir } from "node:fs/promises";
+import { lstat, open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ScopeSchema } from "@mars/contracts";
 import { z } from "zod";
@@ -170,11 +170,22 @@ export async function resolveConnection(
       const entries = await readdir(join(home, ".mars", "workbench"), {
         withFileTypes: true,
       });
-      paths = entries
+      const candidates = entries
         .filter((entry) => entry.isDirectory())
         .map((entry) =>
           join(home, ".mars", "workbench", entry.name, "connection.json"),
         );
+      paths = (
+        await Promise.all(
+          candidates.map(async (path) => {
+            try {
+              return (await lstat(path)).isFile() ? path : undefined;
+            } catch {
+              return undefined;
+            }
+          }),
+        )
+      ).filter((path): path is string => path !== undefined);
     } catch {
       paths = [];
     }

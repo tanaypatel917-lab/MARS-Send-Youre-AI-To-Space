@@ -79,6 +79,7 @@ test("file reads reject broad permissions and symlinks; discovery handles none, 
     ok: false,
     reason: expect.stringContaining("No workbench"),
   });
+  await mkdir(join(base, "without-connection"), { recursive: true });
   const one = await resolveConnection({ argv: [], env: {}, homeDir: home });
   expect(one.ok).toBe(true);
   if (one.ok) {

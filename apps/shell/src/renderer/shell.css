@@ -80,7 +80,7 @@ button:disabled {
 
 .app-shell {
   display: grid;
-  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr) minmax(
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(
       280px,
       340px
     );
@@ -150,16 +150,25 @@ button:disabled {
 }
 
 .session-request {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .session-runtime {
   display: flex;
+  min-width: 0;
   justify-content: space-between;
   color: var(--muted);
   font-size: 11px;
+}
+
+.session-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status {
@@ -291,6 +300,11 @@ button:disabled {
   margin-bottom: 4px;
   color: var(--untrustedLabel);
   font-size: 11px;
+}
+
+.session .provenance {
+  margin: 0;
+  font-size: 10px;
 }
 
 .untrusted-text {

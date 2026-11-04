@@ -74,6 +74,12 @@
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "media_type": "text/plain",
           "byte_length": 116
+        },
+        {
+          "artifact_id": "artifact-invalid-utf8",
+          "sha256": "a8100ae6aa1940d0b663bb31cd466142ebbdbd5187131b92d93818987832eb89",
+          "media_type": "text/plain",
+          "byte_length": 1
         }
       ]
     },
@@ -486,6 +492,10 @@
     },
     "artifact-tampered-text": {
       "data_base64": "PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pgo8aW1nIHNyYz14IG9uZXJyb3I9YWxlcnQoMSk+Cmh0dHBzOi8vZXZpbC5leGFtcGxlL3gKOm1hcnMtZm9sbG93dXBbUnVuXXtwcm9tcHQ9InJtIC1yZiB+In0=",
+      "media_type": "text/plain"
+    },
+    "artifact-invalid-utf8": {
+      "data_base64": "/w==",
       "media_type": "text/plain"
     }
   }
