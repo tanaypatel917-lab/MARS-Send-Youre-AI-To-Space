@@ -1,7 +1,7 @@
 # Team Chat
 
-Human-to-human messaging for a MARS team, with @MARS answers, task links and
-result shares arriving in later PRs. This document records the architecture
+Human-to-human messaging for a MARS team, with task links and result shares
+(PR 6, chat half) and @MARS answers arriving in a later PR. This document records the architecture
 split, who owns what, and what exists today. Contract discovery that led here:
 the Team Chat discovery report (sections 4–6); where the owner's implementation
 plan and the report disagreed, the report's repo-specific adaptation was
@@ -54,9 +54,92 @@ Envelope, limits, auth handling and error vocabulary are the workbench's
 | `reactions.set` | `{message_id, emoji ≤ 32, on}` | Idempotent set/remove of the caller's reaction on a message they may see (`seq > joined_seq`; otherwise `not_found`). The key is validated with the invisible-code-point denylist from `packages/memory/src/threats.ts` (so no zero-width or variation-selector smuggling; `❤` is valid, `❤\ufe0f` is not) and must contain no whitespace. A change emits one outbox row `kind: "reaction"` with the message's `seq`/`message_id`; a no-op emits nothing. Returns `{message_id, emoji, count, reacted}`. Distinct keys per message are bounded (`max_reactions_per_message` → `too_large`). |
 | `messages.search` | `{query 2..200, conversation_id?, limit ≤ 50, cursor?}` | Membership is applied in SQL before any body is read: `JOIN participants … state='active' AND m.seq > p.joined_seq` on the caller's team, optional conversation filter (a conversation the caller is not in → `not_found`). Case-insensitive (ASCII, SQLite `LIKE` semantics; `%`, `_`, `\` are literal) substring match, newest first (`created_at DESC, message_id DESC`), ≤ 200-UTF-16-unit excerpt around the first hit (whole code points only) with `cut_before`/`cut_after`, opaque `next_cursor` bound to (caller, query, filter) — a reused or altered cursor is `invalid_request`. Rate-limited per (team, user) in a sliding minute (`max_search_per_minute` → `unavailable`). |
 
-Not implemented: references, @MARS requests, task links and result shares
-(PR 4–6; their schemas are reserved in `packages/contracts/src/team.ts`); any
-VS Code wiring (the inbox client of the stream lives in the extension host and
+| `tasks.link_draft` | `{conversation_id, message_ids 1–50, reference_ids ≤ 16}` | Requester must be a participant and every message visible to them (`seq > joined_seq`). Creates a `TaskLink` (`status: draft`, server-generated `launch_key`, provenance `{message_id, seq, body_sha256}` frozen now) and returns bounded excerpts (≤ 280 chars each) for the confirmation step. Idempotent on `request_id`. |
+| `tasks.link_confirm` | `{link_id, workbench: {scope, task_id, request_id}, target: {repo_id?, base_revision?}}` | Requester only (`forbidden` for other members, `not_found` for non-participants). `draft → confirmed`. A retry with the same binding returns the same link (same `launch_key`); a different binding → `conflict`. |
+| `tasks.link_created` | `{link_id, task_revision}` | Requester only. `confirmed → created`; a `shared` link keeps `shared` while recording a newer revision; the revision may only move forward (`conflict` otherwise). |
+| `tasks.link_inspect` | `{link_id}` | Participants who can read every quoted message (`provenance[*].seq > joined_seq`); a member who joined or rejoined later gets `not_found`, like history. The requester gets `{view: "requester", link}`; everyone else `{view: "member", link}` with `launch_key`, `target` and `workbench` **omitted** (never another user's scope ids). |
+| `shares.preview` | `{link_id, evidence: <caller's tasks.evidence result>, run_status, selection: {summary ≤ 2000, include_diff_digest, verify_event_ids ≤ 8, artifacts?}}` | Requester only; link must be `created`/`shared`. Returns `{preview_sha256, card}` — exactly what `shares.create` would post. `artifacts` non-empty → `unavailable` (artifact access gate is a later PR). |
+| `shares.create` | `{link_id, preview_sha256, ...same}` | Recomputes the card; `preview_sha256` must match byte-for-byte (`conflict` otherwise). Posts a message `kind: "result_card"` whose `body` is the summary and whose `payload` is the `ResultShare`; link becomes `shared`. A card that would not fit one `messages.history` page (with its stale overlay) is refused with `too_large`. Idempotent on `request_id`; the replay re-reads the stale overlay so it agrees with history. |
+
+Not implemented (TODO markers in `packages/team/src/protocol.ts`): `events.stream`
+(SSE), `reactions.set`, `messages.search` (PR 3); references and @MARS
+requests (PR 4–5; their schemas are reserved in
+`packages/contracts/src/team.ts`); artifact shares (artifact access gate);
+any VS Code wiring.
+
+## Task handoff (PR 6, chat half)
+
+The team service never opens a workbench connection. The desktop client (today
+the VS Code extension host) talks to both with the user's own credentials and
+carries only ids between them:
+
+```
+   client (user's desktop)                 team service (@mars/team)          workbench (user's own)
+   ───────────────────────                 ─────────────────────────          ──────────────────────
+1. select messages ─────── tasks.link_draft ─────────────▶ TaskLink{draft, launch_key,
+                                                             provenance frozen} + excerpts
+2. user confirms ───────── tasks.link_confirm ───────────▶ TaskLink{confirmed, workbench ids,
+      {scope, task_id, request_id, target}                   target}
+3. ─────────────────────────────────────────────────────────────── tasks.create ────────────▶ task
+      {launch_key, provenance:{source:"team_chat", ...}}     (same key + same task → replay)
+4. ─────────────────────── tasks.link_created ───────────▶ TaskLink{created, task_revision}
+   ... the task runs in the workbench; chat sees nothing until the user shares ...
+5. ──────────────────────────────────────────────────────────────── tasks.evidence ─────────▶ {task_revision,
+                                                                                               workspace, diff_sha256,
+                                                                                               verify_records}
+6. ─────────────────────── shares.preview {evidence, run_status, selection} ─▶ {preview_sha256, card}
+7. user reviews card ───── shares.create {preview_sha256, ...} ──────────────▶ message kind:"result_card"
+```
+
+| Owns | Team service | Workbench |
+| --- | --- | --- |
+| Conversation provenance (`message_id`, `seq`, `body_sha256`), `launch_key`, link status, who requested | ✔ | reads `provenance` as opaque input |
+| Task state, workspace, diff, verification evidence | stores the ids/digests the requester submitted | ✔ |
+| Result card content and its `preview_sha256`, `attested_by`, stale overlay | ✔ | — |
+
+Rules the implementation keeps:
+
+- **Frozen provenance.** `provenance` is written once at draft time from the
+  stored `seq` and `body_sha256`; a later edit or deletion (no RPC exists yet;
+  the test mutates the row directly) never changes it. A new draft after an
+  edit gets a new link and the new hash.
+- **One launch per link.** The `launch_key` is minted by the service
+  (`tc-<sha256(team_id, link_id)[0:48]>`, unique per team) and returned on
+  every replay, so an interrupted confirm — same `request_id` or a fresh one
+  with the same workbench binding — never creates a second link, and the
+  workbench's launch-key rule makes `tasks.create` retries land on one task.
+- **Verification is copied, never judged.** `verified: true` only when a
+  selected `verify_records` entry has `verified: true`, `stale: false`, and
+  the same `diff_sha256`/`workspace_revision` as the evidence head; anything
+  else yields `verified: false` with `verified_reason` ∈ `missing | stale |
+  failed | inconclusive | skipped` (first match in that order across the
+  selected records). The contract refuses `verified: true` on a non-`pass`
+  record. `run_status`, `verified`, `export_status` (`not_exported` until the
+  artifact gate) and `git_status` (`unknown`: the service cannot observe git)
+  are four separate fields and are never merged into one badge.
+- **Attested, not verified by the service.** The card records
+  `attested_by: requester_id` and `evidence_sha256` (canonical digest of the
+  submitted `tasks.evidence` result). `SharedEvidenceSchema` in
+  `packages/contracts/src/team.ts` mirrors the workbench's
+  `EvidenceResultSchema` (parity test in `packages/team/src/handoff.test.ts`).
+- **Stale on re-share.** Every share binds the candidate `diff_sha256` (even
+  when `include_diff_digest: false` hides it from the card). A later share of
+  the same link with a different digest makes earlier cards read back from
+  `messages.history` with `stale: true` and `superseded_by: <message_id>`;
+  the posted content is immutable (`card_json` + `record_sha256`).
+- **Nothing leaks across members.** Result cards carry no workbench `scope`,
+  `task_id` or `launch_key`; other members' `tasks.link_inspect` view omits
+  those keys; non-participants get `not_found` for links and cards alike;
+  outbox rows stay metadata-only.
+
+Follow-ups the workbench contract needs (not edited here): `tasks.evidence`
+does not return the task's execution status, so the client passes
+`run_status` from `tasks.inspect` alongside the evidence (the card therefore
+attests two reads, not one); an artifact access gate before `ArtifactRef`
+shares; the client wiring in `apps/vscode` (PR 1's webview is fixture-only).
+
+Not implemented: references and @MARS requests (PR 4–5; their schemas are
+reserved in `packages/contracts/src/team.ts`); any VS Code wiring (the inbox client of the stream lives in the extension host and
 is a separate task after the PR 1 prototype).
 
 ## Streaming (`POST /v1/stream`, Server-Sent Events)
@@ -191,8 +274,11 @@ with the dev authenticator and a second Bun process for the DM race;
 `packages/team/src/features.test.ts` opens real SSE connections (interrupted
 acknowledgement + reconnect, backfill/live race with 4-row pages, nonmember
 denial, same-call revocation, idempotent reactions, join-window search
-filtering, stream/search limits). No live identity provider, no remote host, no
-VS Code window.
+filtering, stream/search limits); `handoff.test.ts` covers link
+draft/confirm/created with interrupted confirms, frozen provenance, every
+unverified reason, stale-on-re-share, member/non-member visibility and
+`preview_sha256` mismatch with fixture evidence only. No live identity
+provider, no remote host, no workbench process, no VS Code window.
 
 
 ---

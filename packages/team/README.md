@@ -49,3 +49,14 @@ const server = serveTeam({
 Tests: `bun test packages/team` (offline; loopback server + dev authenticator;
 a spawned Bun process races DM creation; real SSE connections for reconnect,
 backfill/live and revocation).
+
+## Task links and result shares (PR 6, chat half)
+
+`tasks.link_draft` → `tasks.link_confirm` → `tasks.link_created` record a
+"Start task" handoff; `shares.preview` / `shares.create` post a
+`kind: "result_card"` message from the requester's own `tasks.evidence`
+result. The service never contacts a workbench: it stores opaque workbench ids,
+the frozen conversation provenance and the attested card. See
+`documentation/TEAM_CHAT.md` → "Task handoff" for the flow and the rules
+(frozen provenance, one launch key per link, verification copied not judged,
+stale on re-share, no scope ids to other members).
