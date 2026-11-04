@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit -p ../../tsconfig.json"
   },
   "dependencies": {
+    "@mars/code-refs": "workspace:*",
     "@mars/contracts": "workspace:*",
     "zod": "3.25.76"
   }

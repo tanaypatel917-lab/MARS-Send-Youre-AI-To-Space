@@ -170,9 +170,10 @@ never silently passed.
 
 ## Follow-ups
 
-- TODO: replace the local `GitRangeReferenceSchema` with the `git_range`
-  member of `ReferenceSchema` from `packages/contracts/src/team.ts` once Team
-  Chat PR 2 lands; then delete the local copy.
-- The chat service (PR 2/3) owns the `reference_id → locator` store and the
-  viewer authorization; the VS Code preview panel renders `ResolvedReference`
-  through the extension host.
+- `GitRangeReferenceSchema` is the `git_range` member of `ReferenceSchema`
+  in `packages/contracts/src/team.ts`, re-exported here (no local copy).
+- `@mars/team` owns the `reference_id → locator` store, the repo-access
+  tables and the viewer authorization (`references.create|resolve|search_paths`,
+  see `documentation/TEAM_CHAT.md`); the VS Code preview panel is a later UI
+  task and renders the team service's `ReferencePreview` through the
+  extension host.

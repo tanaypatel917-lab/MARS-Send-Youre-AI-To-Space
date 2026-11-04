@@ -1,16 +1,24 @@
 import {
   ConversationSchema,
-  MessageSchema,
+  GitRangeReferenceSchema,
+  MessageViewSchema,
   ParticipantSchema,
+  ReferencePreviewSchema,
+  RepoSchema,
   TEAM_MAX_BODY_CHARS,
   TEAM_MAX_CLIENT_MESSAGE_ID_CHARS,
+  TEAM_MAX_REFERENCES,
   TEAM_MAX_TITLE_CHARS,
   TeamContextSchema,
   TeamDeliveryEventSchema,
   TeamRoleSchema,
 } from "@mars/contracts";
 import { z } from "zod";
-import { TEAM_MAX_GROUP_SIZE, TeamLimitsSchema } from "./schemas";
+import {
+  TEAM_MAX_GROUP_SIZE,
+  TEAM_MAX_SEARCH_HITS,
+  TeamLimitsSchema,
+} from "./schemas";
 
 /**
  * Team service RPC: the exact envelope of the workbench RPC
@@ -19,16 +27,23 @@ import { TEAM_MAX_GROUP_SIZE, TeamLimitsSchema } from "./schemas";
  * appears in a request; the server derives it from the bearer token.
  *
  * TODO(PR 3): `events.stream` (SSE), `reactions.set`, `messages.search`.
+ * Search must render references through the same per-viewer gate as
+ * `messages.history` (`TeamStore.history` chips): a restricted reference's
+ * path, label or SHA is never indexed or matched for that viewer.
  */
 const id = z.string().min(1).max(256);
 const seq = z.number().int().nonnegative();
 const empty = z.object({}).strict();
 const conversationId = z.object({ conversation_id: id }).strict();
+const commitSha = z.string().regex(/^[a-f0-9]{40}$/);
+const lineNumber = z.number().int().positive();
 
 export const MAX_GROUP_MEMBER_IDS = TEAM_MAX_GROUP_SIZE;
 export const MAX_POLL_CURSORS = 50;
 export const MAX_HISTORY_LIMIT = 200;
 export const MAX_POLL_LIMIT = 1000;
+export const MAX_REFERENCE_PATH_CHARS = 1024;
+export const MAX_SEARCH_QUERY_CHARS = 256;
 
 function method<M extends string, P extends z.AnyZodObject>(
   name: M,
@@ -53,6 +68,8 @@ export const SendParamsSchema = z
     client_message_id: z.string().min(1).max(TEAM_MAX_CLIENT_MESSAGE_ID_CHARS),
     body: z.string().min(1).max(TEAM_MAX_BODY_CHARS),
     reply_to: id.optional(),
+    /** Ids returned by `references.create`; each must be in the team and accessible to the sender. */
+    reference_ids: z.array(id).max(TEAM_MAX_REFERENCES).optional(),
   })
   .strict();
 
@@ -75,6 +92,32 @@ export const PollParamsSchema = z
     limit: z.number().int().positive().max(MAX_POLL_LIMIT).optional(),
   })
   .strict();
+
+/** Locator of a committed object; `validateLocator` applies the full path and range rules. */
+export const CreateReferenceParamsSchema = z
+  .object({
+    repo_id: id,
+    commit_sha: commitSha,
+    path: z.string().min(1).max(MAX_REFERENCE_PATH_CHARS),
+    line_start: lineNumber.optional(),
+    line_end: lineNumber.optional(),
+  })
+  .strict();
+export type CreateReferenceParams = z.infer<typeof CreateReferenceParamsSchema>;
+
+export const ResolveReferenceParamsSchema = z
+  .object({ reference_id: id })
+  .strict();
+
+export const SearchPathsParamsSchema = z
+  .object({
+    repo_id: id,
+    commit_sha: commitSha,
+    query: z.string().max(MAX_SEARCH_QUERY_CHARS),
+    limit: z.number().int().positive().max(TEAM_MAX_SEARCH_HITS).optional(),
+  })
+  .strict();
+export type SearchPathsParams = z.infer<typeof SearchPathsParamsSchema>;
 
 export const TeamRpcRequestSchema = z.discriminatedUnion("method", [
   method("team.describe", empty),
@@ -103,6 +146,10 @@ export const TeamRpcRequestSchema = z.discriminatedUnion("method", [
   method("messages.send", SendParamsSchema),
   method("messages.history", HistoryParamsSchema),
   method("events.poll", PollParamsSchema),
+  method("repos.list", empty),
+  method("references.create", CreateReferenceParamsSchema),
+  method("references.resolve", ResolveReferenceParamsSchema),
+  method("references.search_paths", SearchPathsParamsSchema),
 ]);
 export type TeamRpcRequest = z.infer<typeof TeamRpcRequestSchema>;
 export type TeamRpcMethod = TeamRpcRequest["method"];
@@ -135,6 +182,8 @@ export const TeamDescribeResultSchema = z
         stream: z.boolean(),
         reactions: z.boolean(),
         search: z.boolean(),
+        /** True when the host wired a `@mars/code-refs` registry into the server. */
+        references: z.boolean(),
       })
       .strict(),
   })
@@ -143,7 +192,37 @@ export const TeamDescribeResultSchema = z
 export const ConversationListSchema = z
   .array(ConversationViewSchema)
   .max(10_000);
-export const MessageListSchema = z.array(MessageSchema).max(MAX_HISTORY_LIMIT);
+export const MessageListSchema = z
+  .array(MessageViewSchema)
+  .max(MAX_HISTORY_LIMIT);
 export const EventListSchema = z
   .array(TeamDeliveryEventSchema)
   .max(MAX_POLL_LIMIT);
+export const RepoListSchema = z.array(RepoSchema).max(10_000);
+export const ReferenceResultSchema = GitRangeReferenceSchema;
+export const ReferencePreviewResultSchema = ReferencePreviewSchema;
+
+/** `references.search_paths` result: repo-relative paths only, never a label or absolute path. */
+export const PathSearchResultSchema = z.discriminatedUnion("state", [
+  z
+    .object({
+      state: z.literal("ok"),
+      matches: z
+        .array(
+          z
+            .object({
+              path: z.string().min(1).max(MAX_REFERENCE_PATH_CHARS),
+              rank: z.number().int().min(0).max(4),
+            })
+            .strict(),
+        )
+        .max(TEAM_MAX_SEARCH_HITS),
+      truncated: z.boolean(),
+    })
+    .strict(),
+  /** The commit is not in the repo (or not yet fetched); nothing else is said. */
+  z
+    .object({ state: z.literal("unavailable") })
+    .strict(),
+]);
+export type PathSearchResult = z.infer<typeof PathSearchResultSchema>;

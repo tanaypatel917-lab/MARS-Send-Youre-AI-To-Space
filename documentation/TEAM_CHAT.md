@@ -29,6 +29,9 @@ VS Code extension host (apps/vscode)      ──HTTP loopback, team bearer token
 | Model execution | Oh My Pi via `@mars/execution` | The team service never calls a model. |
 | Agent-to-agent rooms | `@mars/collaboration` | Different thing; its idempotency / seq / delivery patterns were copied, not extended. |
 | Team token on the client | VS Code `SecretStorage` (own key, PR 3) | Never the workbench token, never in `ViewState`. |
+| Repo registration (`repo_id` → directory) and repo access (`repos`, `repo_access` tables) | Host administers both: `createRepoRegistry().register` (`@mars/code-refs`) and `store.setRepo` / `setRepoAccess` / `revokeRepoAccess` (`@mars/team`) | No RPC grants access in the pilot. The team store never holds a path; `repo_id` is opaque. |
+| Reading committed Git objects | `@mars/code-refs` | Argv-only `git`, pinned commit, bounded output; **no authorization in the package**. |
+| Who may see a reference | `@mars/team` (`references.*`, message chips) | Re-checks team membership, conversation visibility and `repo_access` inside each call; renders `restricted` otherwise. |
 
 ## RPC (`POST /v1/rpc`, loopback only)
 
@@ -47,9 +50,94 @@ Envelope, limits, auth handling and error vocabulary are the workbench's
 | `conversations.add_member` / `remove_member` | `{conversation_id, user_id, expected_revision}` | Groups only; `conflict` on revision mismatch; removal is effective in the same transaction. A re-added member gets a new `joined_seq`. |
 | `conversations.mark_read` | `{conversation_id, read_seq}` | Monotonic; `read_seq` ≤ the conversation's `last_seq`. |
 | `conversations.pin` | `{conversation_id, pinned}` | Per participant. |
-| `messages.send` | `{conversation_id, client_message_id ≤ 128, body ≤ 16 KiB, reply_to?}` | `UNIQUE(conversation_id, author_id, client_message_id)`; same key + same `body_sha256` → the original `{message_id, seq}`; different body → `conflict`. Message and outbox row commit together. `reply_to` must be a message the author may see in the same conversation. |
-| `messages.history` | `{conversation_id, after_seq? \| before_seq?, limit ≤ 200}` | Membership re-checked inside the read transaction; page cut by count and serialized bytes, never skipping (a single oversized message → `too_large`); a participant sees only `seq > joined_seq`. |
-| `events.poll` | `{cursors: [{conversation_id, after_event_seq}] ≤ 50, limit ≤ 1000}` | Membership-filtered outbox; events carry `{conversation_id, event_seq, kind, message_seq, message_id, revision}` only — never a body. Cursors are per conversation. |
+| `messages.send` | `{conversation_id, client_message_id ≤ 128, body ≤ 16 KiB, reply_to?, reference_ids? ≤ 16}` | `UNIQUE(conversation_id, author_id, client_message_id)`; same key + same `body_sha256` + same `reference_ids` → the original message; different body or references → `conflict`. Message, `message_references` rows and outbox row commit together. `reply_to` must be a message the author may see in the same conversation. Every `reference_id` must exist in the team and the sender must have `active` access to its repo at send time, else `not_found`. Returns a `MessageView` (the message plus per-viewer `references` chips). |
+| `messages.history` | `{conversation_id, after_seq? \| before_seq?, limit ≤ 200}` | Membership re-checked inside the read transaction; page cut by count and serialized bytes, never skipping (a single oversized message → `too_large`); a participant sees only `seq > joined_seq`. Each message carries `references` chips rendered for the caller (see "Code references"). |
+| `events.poll` | `{cursors: [{conversation_id, after_event_seq}] ≤ 50, limit ≤ 1000}` | Membership-filtered outbox; events carry `{conversation_id, event_seq, kind, message_seq, message_id, revision}` only — never a body, never a reference field. Cursors are per conversation. |
+| `repos.list` | `{}` | Repos of the caller's team the caller has `active` access to: `{team_id, repo_id, label, revision}`. Never a path. |
+| `references.create` | `{repo_id, commit_sha (40 hex), path, line_start?, line_end?}` | Sender must be an active team member with access to `repo_id` (else `not_found`); locator validated with `validateLocator`; the object is resolved once through the host registry. `ok` (stores `blob_sha256` = SHA-256 of the excerpt), `binary` and `oversized` objects are stored; `unavailable` → `not_found`; directory / symlink / submodule / out-of-range → `invalid_request`; registry or git failure → `unavailable`. `reference_id = referenceDigest(locator)` so an identical reference dedupes per team. |
+| `references.resolve` | `{reference_id}` | The reference must be attached to a message the caller can see (active participant, `seq > joined_seq`), else `not_found`. With repo access: `{state: ok, reference_id, repo_id, commit_sha, path, line_start, line_end, text, total_lines, truncated}` re-read from the pinned commit/blob (branch moves and renames do not change it), or the same locator fields with a non-`ok` state. Without repo access: exactly `{state: "restricted"}`. Rate limited per user (`max_resolves_per_minute`, excess → `unavailable`). |
+| `references.search_paths` | `{repo_id, commit_sha, query ≤ 256, limit ≤ 50}` | Repo access required (else `not_found`); delegates to `searchPaths`; returns `{state: ok, matches: [{path, rank}], truncated}` or `{state: unavailable}`. Repo-relative paths only. |
+
+Not implemented (TODO markers in `packages/team/src/protocol.ts`): `events.stream`
+(SSE), `reactions.set`, `messages.search` (PR 3); @MARS requests, task links
+and result shares (PR 5–6; their schemas are reserved in
+`packages/contracts/src/team.ts`); any VS Code wiring (the reference picker and
+preview panel are a later UI task).
+
+## Code references (PR 4, service half)
+
+**Reference model.** A reference is an immutable committed Git locator,
+`GitRangeReferenceSchema` in `packages/contracts/src/team.ts` (the single
+schema; `@mars/code-refs` re-exports it): `{kind: "git_range", reference_id,
+team_id, repo_id, commit_sha, path, line_start | null, line_end | null,
+blob_sha256 | null}`. `reference_id` is `referenceDigest` over the locator, so
+the same locator is one row per team (`code_references`, keyed
+`(team_id, reference_id)`, canonical JSON + `record_sha256` like messages).
+`blob_sha256` is the SHA-256 of the excerpt resolved at creation (`text_sha256`
+of the `ok` resolution) and null for `binary`/`oversized`; `resolved_state` and
+`created_by` are stored beside the record. A message lists its references in
+`reference_ids` (author order, part of the hashed record) and in
+`message_references` rows. Branch movement, force pushes and renames never
+alter a reference: everything is re-read at the pinned commit by blob id.
+
+**Repo access model.** `repos (team_id, repo_id, label, revision)` and
+`repo_access (team_id, repo_id, user_id, state active|removed, revision)`,
+host-administered through `store.setRepo`, `store.setRepoAccess` and
+`store.revokeRepoAccess`. `repo_id` is the opaque id the host also registered
+in the `@mars/code-refs` registry (`createRepoRegistry().register({repo_id,
+dir, label})`); the directory lives only in the registry, never in the team
+store or in any response. Access means: active team member AND the repo is
+registered for the team AND the `repo_access` row is `active`. It is re-read
+on every call (`store.hasRepoAccess`); nothing is cached, so revoking access
+restricts the very next read, including the revoking user's own earlier
+messages and idempotent replays of their earlier sends.
+
+**Access matrix** (`u1`: access to A and B; `u2`: A only; `u3`: team member
+outside the conversation; stranger: valid token, not a team member):
+
+| Surface | u1 | u2 | u3 | stranger |
+| --- | --- | --- | --- | --- |
+| `repos.list` | A, B | A | `[]` | `forbidden` |
+| `references.create` on B | reference | `not_found` | `not_found` | `forbidden` |
+| `messages.send` with a B reference | message | `not_found` (no row written) | `not_found` | `forbidden` |
+| `messages.history` chip for A | `{reference_id, restricted: false, repo_id, commit_sha, path, line_start, line_end}` | same | `not_found` | `forbidden` |
+| `messages.history` chip for B | resolved chip | `{reference_id, restricted: true}` — nothing else | `not_found` | `forbidden` |
+| `references.resolve` on B | preview from the pinned commit | `{state: "restricted"}` — nothing else | `not_found` | `forbidden` |
+| `references.search_paths` on B | matches | `not_found` | `not_found` | `forbidden` |
+| `events.poll` | metadata only | metadata only | `not_found` | `forbidden` |
+
+**Restricted representation.** A conversation member without repo access gets
+exactly `{reference_id, restricted: true}` in a chip and exactly
+`{state: "restricted"}` from `references.resolve`: no path, repo label, SHA,
+range, size, excerpt or resolver state. Absent and inaccessible repos and
+references share `not_found`, the same choice as conversations. The server's
+`validateResult` re-checks every chip, preview, repo row and search hit against
+the store after the handler ran (restricted shapes have no extra keys, every
+exposed `repo_id` is one the caller has access to, every path is
+repo-relative), so a handler bug still fails closed. Fixed error strings only;
+no response or error ever carries a directory, a repo label of a restricted
+repo, or a message body.
+
+**Same gate everywhere.** `messages.send` and `messages.history` chips,
+`references.resolve` and `references.search_paths` all go through
+`store.hasRepoAccess` / `store.viewReference`. `events.*` carry no reference
+fields at all. Not on `main` yet, but bound to the same gate when they land:
+`messages.search` (PR 3) must render hits through the chip projection and must
+never index or match the path/SHA of a reference the searcher cannot see;
+reply excerpts and @MARS/result-card payloads (PR 5–6) render references the
+same way. The VS Code picker and preview panel call `references.search_paths`
+and `references.resolve`; no client ever calls `git`.
+
+**Limits** (`TeamLimitsSchema`): `max_references_per_message` (≤ 16),
+`max_resolves_per_minute` (default 120, per user, in-memory sliding window),
+`max_preview_lines` and `max_preview_blob_bytes` (the `@mars/code-refs`
+defaults, 400 lines / 1 MiB, passed to the resolver as `max_range_lines` /
+`max_blob_bytes`), `max_search_hits` (≤ 50).
+
+**Host wiring.** `serveTeam({store, authenticator, repos})` takes the
+registry; without it `references.*` answer `unavailable` and
+`team.describe.capabilities.references` is `false`. A `mars serve`
+`--team-repo <repo_id>=<dir>` option and a doctor row are not written yet.
 
 Not implemented (TODO markers in `packages/team/src/protocol.ts`): `events.stream`
 (SSE), `reactions.set`, `messages.search` (PR 3); references, @MARS requests,
@@ -82,20 +170,34 @@ task links and result shares (PR 4–6; their schemas are reserved in
 - **Team administration is host-side** (`store.setTeamMember` /
   `removeTeamMember`); no RPC can change team membership in PR 2. Removing a
   team member removes them from every conversation of that team.
+- **Repo administration is host-side too** (`store.setRepo` / `setRepoAccess`
+  / `revokeRepoAccess`, plus the `@mars/code-refs` registry); no RPC grants
+  repo access in the pilot. Repo and reference reads answer `not_found` for
+  "absent" and "no access" alike; a member of the conversation who lacks repo
+  access gets the `restricted` shape instead, because the message itself is
+  theirs to see.
+- **Rate-limit code.** The RPC vocabulary is frozen to the workbench's eight
+  codes, so an exceeded `references.resolve` budget answers `unavailable`
+  (503), the same code a failing host registry answers.
 
 ## Assumptions (owner defaults)
 
 Pilot deployment is a loopback Bun process with a SQLite store whose schema is
 Postgres-portable; identity is the pluggable `Authenticator` with a local dev
-provider only; the Git provider (PR 4) reads committed objects through a
-host-trusted repo mapping with argv-only `git`; @MARS models are free-first
-only, no paid.
+provider only; the Git provider reads committed objects through a host-trusted
+repo mapping with argv-only `git` (`@mars/code-refs`, wired in PR 4); @MARS
+models are free-first only, no paid.
 
 ## Verification
 
 Offline only: `bun test packages/team` runs through the real loopback server
-with the dev authenticator and a second Bun process for the DM race. No live
-identity provider, no remote host, no VS Code window.
+with the dev authenticator and a second Bun process for the DM race; the
+reference tests (`packages/team/src/references.test.ts`) build two temporary
+`git init` repositories and prove the access matrix above, pinning across a
+branch move and rename, immediate revocation, the rate limit and that no
+response to a restricted viewer contains a directory, the restricted repo's
+label, path or SHA (skipped with a warning when `git` is absent). No live
+identity provider, no remote host, no VS Code window, no real multi-GiB repo.
 
 
 ---
