@@ -24,6 +24,8 @@ export interface TeamChatControllerOptions {
   pageSize?: number;
   /** Simulated acknowledgement delay so pending state is observable. */
   sendDelayMs?: number;
+  /** Upper bound on messages kept in memory for the selected conversation. */
+  maxLoaded?: number;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -53,6 +55,7 @@ const SEND_FAILURE_TEXT: Record<TeamErrorCode, string> = {
 export class TeamChatController {
   private readonly service: TeamService;
   private readonly pageSize: number;
+  private readonly maxLoaded: number;
   private viewer: string;
   private conversations: ConversationSummary[] = [];
   private selected: SelectedConversation | null = null;
@@ -65,6 +68,7 @@ export class TeamChatController {
   constructor(private readonly options: TeamChatControllerOptions) {
     this.service = options.service ?? new FixtureTeamService();
     this.pageSize = Math.max(1, options.pageSize ?? DEFAULT_PAGE_SIZE);
+    this.maxLoaded = Math.max(this.pageSize, options.maxLoaded ?? MAX_LOADED);
     this.viewer = options.viewer ?? FIXTURE_USERS.ada;
   }
 
@@ -164,18 +168,33 @@ export class TeamChatController {
       return;
     }
     const cursor = page.value.conversation.read_cursor;
-    const firstUnread = page.value.messages.find((m) => m.sequence > cursor);
     this.selected = {
       conversation: page.value.conversation,
       messages: page.value.messages,
       older_cursor: page.value.older_cursor,
+      // The first unread sequence, whether or not that page is loaded yet.
       divider_sequence:
-        page.value.conversation.unread_count > 0
-          ? (firstUnread?.sequence ?? null)
-          : null,
+        page.value.conversation.unread_count > 0 ? cursor + 1 : null,
     };
-    const last = page.value.conversation.last_sequence;
-    if (last > cursor) this.markRead(conversationId, last);
+    this.markReadIfBoundaryLoaded();
+  }
+
+  /**
+   * Advances the read cursor to the latest message only once the first unread
+   * message is actually loaded; unread history on older pages stays unread.
+   */
+  private markReadIfBoundaryLoaded(): void {
+    const selected = this.selected;
+    if (!selected) return;
+    const cursor = selected.conversation.read_cursor;
+    const last = selected.conversation.last_sequence;
+    if (last <= cursor) return;
+    const earliest = selected.messages[0]?.sequence;
+    const boundaryLoaded =
+      selected.older_cursor === null ||
+      (earliest !== undefined && earliest <= cursor + 1);
+    if (boundaryLoaded)
+      this.markRead(selected.conversation.conversation_id, last);
   }
 
   private loadOlder(conversationId: string, cursor: string): void {
@@ -191,11 +210,16 @@ export class TeamChatController {
     }
     const known = new Set(this.selected.messages.map((m) => m.message_id));
     const older = page.value.messages.filter((m) => !known.has(m.message_id));
+    const messages = [...older, ...this.selected.messages];
+    // Never drop a fetched page: once the in-memory cap is reached the older
+    // cursor is withheld instead of silently skipping history.
     this.selected = {
       ...this.selected,
-      messages: [...older, ...this.selected.messages].slice(-MAX_LOADED),
-      older_cursor: page.value.older_cursor,
+      messages,
+      older_cursor:
+        messages.length >= this.maxLoaded ? null : page.value.older_cursor,
     };
+    this.markReadIfBoundaryLoaded();
   }
 
   /** Re-reads the selected conversation keeping everything already loaded plus `grow` new messages. */
@@ -203,7 +227,7 @@ export class TeamChatController {
     if (!this.selected) return;
     const id = this.selected.conversation.conversation_id;
     const limit = Math.min(
-      MAX_LOADED,
+      this.maxLoaded,
       Math.max(this.pageSize, this.selected.messages.length + grow),
     );
     const page = this.service.openConversation(this.viewer, id, { limit });

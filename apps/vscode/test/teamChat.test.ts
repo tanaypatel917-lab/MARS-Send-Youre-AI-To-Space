@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   FIXTURE_CONVERSATIONS as C,
+  FixtureTeamService,
   SITE_SHA,
   FIXTURE_USERS as U,
 } from "@mars/team-chat";
@@ -368,5 +369,75 @@ describe("TeamChatController", () => {
     const n = states.length;
     expect(await controller.handleMessage({ type: "ready" })).toBe(false);
     expect(states.length).toBe(n);
+  });
+});
+
+describe("review fixes", () => {
+  test("unread history on unloaded pages is not marked read until it is loaded", async () => {
+    const service = new FixtureTeamService();
+    for (let i = 0; i < 5; i++)
+      service.sendMessage(U.ada, {
+        conversation_id: C.groupRelease,
+        client_message_id: `cm_burst_${i}`,
+        body: `update ${i}`,
+        reply_to: null,
+        references: [],
+      });
+    const states: TeamChatViewState[] = [];
+    const controller = new TeamChatController({
+      post: (state) => states.push(state),
+      service,
+      viewer: U.linus,
+      pageSize: 3,
+    });
+    const last = () => states[states.length - 1] as TeamChatViewState;
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: C.groupRelease,
+    });
+    // Linus had read #2; #3-#8 are unread but only #6-#8 are loaded.
+    expect(last().selected?.messages.map((m) => m.sequence)).toEqual([6, 7, 8]);
+    expect(last().selected?.conversation.read_cursor).toBe(2);
+    expect(last().selected?.conversation.unread_count).toBe(6);
+    expect(last().selected?.divider_sequence).toBe(3);
+    let cursor = last().selected?.older_cursor ?? "";
+    await controller.handleMessage({
+      type: "loadOlder",
+      conversationId: C.groupRelease,
+      cursor,
+    });
+    expect(last().selected?.messages[0]?.sequence).toBe(3);
+    expect(last().selected?.conversation.read_cursor).toBe(8);
+    expect(last().selected?.divider_sequence).toBe(3);
+    cursor = last().selected?.older_cursor ?? "";
+    await controller.handleMessage({
+      type: "loadOlder",
+      conversationId: C.groupRelease,
+      cursor,
+    });
+    expect(last().selected?.messages.map((m) => m.sequence)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8,
+    ]);
+  });
+
+  test("reaching the in-memory cap withholds the older cursor instead of dropping a page", async () => {
+    const states: TeamChatViewState[] = [];
+    const controller = new TeamChatController({
+      post: (state) => states.push(state),
+      pageSize: 1,
+      maxLoaded: 2,
+    });
+    const last = () => states[states.length - 1] as TeamChatViewState;
+    await controller.handleMessage({ type: "ready" });
+    expect(last().selected?.messages.map((m) => m.sequence)).toEqual([4]);
+    const cursor = last().selected?.older_cursor ?? "";
+    await controller.handleMessage({
+      type: "loadOlder",
+      conversationId: C.dmAdaGrace,
+      cursor,
+    });
+    expect(last().selected?.messages.map((m) => m.sequence)).toEqual([3, 4]);
+    expect(last().selected?.older_cursor).toBeNull();
   });
 });
