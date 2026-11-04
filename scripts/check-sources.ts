@@ -74,6 +74,7 @@ export const ManifestSchema = z
               "workbench-context-only",
               "python-worker",
               "host-bound-tools",
+              "provider-gateway",
               "not-integrated",
             ]),
           })
@@ -122,6 +123,7 @@ export const REQUIRED_COMPONENTS = [
   "agent-lightning",
   "vllm",
   "watch-skill",
+  "omniroute",
 ] as const;
 
 export function validateManifest(input: unknown): SourceManifest {

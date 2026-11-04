@@ -50,7 +50,10 @@ export class ModelRouter {
     private readonly registry: ModelProviderRegistry,
     options: ModelRouterOptions = {},
   ) {
-    this.adapterFactory = options.adapterFactory ?? createProviderAdapter;
+    this.adapterFactory =
+      options.adapterFactory ??
+      registry.adapterFactory ??
+      createProviderAdapter;
     this.adapterOptions = options.adapterOptions ?? {};
     this.now = options.now ?? Date.now;
   }

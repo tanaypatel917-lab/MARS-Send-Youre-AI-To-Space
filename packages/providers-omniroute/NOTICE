@@ -1,0 +1,12 @@
+@mars/providers-omniroute
+
+This package contains no code copied from OmniRoute. The file
+catalog/free-tier-catalog.json is derived data: it is rebuilt by
+src/import-cli.ts from the hand-curated free-tier catalog of OmniRoute
+(https://github.com/cheaper-inference/OmniRoute, MIT, revision
+ad6f33f66bda34eba98645d3bfdabbde294bc843, tag v3.8.52), namely
+open-sse/config/freeModelCatalog.data.ts, open-sse/config/freeTierCatalog.ts,
+src/shared/constants/providers/web-cookie.ts and
+src/shared/constants/providers/noauth.ts. The upstream license is kept at
+third_party/omniroute/LICENSE.txt. Quota figures are upstream approximations
+curated on 2026-10-19 and are not verified by MARS.
