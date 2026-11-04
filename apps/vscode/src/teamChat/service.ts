@@ -377,7 +377,21 @@ export class RpcTeamService implements TeamService {
           view.conversation.last_seq > view.participant.joined_seq &&
           latest < view.conversation.last_seq
         ) {
-          const page = await this.client.history(id, { limit: 1 });
+          // The excerpt needs the latest message; a server without
+          // `unread_count` (pre-#64) also needs the unread span cached so the
+          // count can skip the viewer's own posts (exact up to one page).
+          const floor = Math.max(
+            view.participant.read_seq,
+            view.participant.joined_seq,
+          );
+          const page =
+            view.unread_count === undefined &&
+            view.conversation.last_seq > floor
+              ? await this.client.history(id, {
+                  after_seq: floor,
+                  limit: MAX_PAGE,
+                })
+              : await this.client.history(id, { limit: 1 });
           for (const m of page) this.remember(m);
         }
       }

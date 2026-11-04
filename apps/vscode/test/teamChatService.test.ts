@@ -998,3 +998,39 @@ describe("older servers", () => {
     });
   });
 });
+
+describe("older servers: unread counts", () => {
+  test("without a server counter the inbox fetches the unread span so own posts are not counted", async () => {
+    const server = new FakeTeamServer();
+    const dm = server.seedDm(ADA, GRACE, ["a", "b", "c", "d", "e", "f"]);
+    // Seeded authors alternate grace/ada: 3 of 6 are the viewer's own.
+    const inner = server.transport(ADA);
+    const client = new TeamClient({
+      send: async (request, signal) => {
+        const result = (await inner.send(request, signal)) as unknown;
+        if (request.method !== "conversations.list") return result;
+        return (result as Record<string, unknown>[]).map(
+          ({ unread_count: _u, last_message_at: _l, ...rest }) => rest,
+        );
+      },
+    });
+    const service = new RpcTeamService(client);
+    const states: TeamChatViewState[] = [];
+    const controller = new TeamChatController({
+      post: (state) => states.push(state),
+      service,
+      viewer: "service",
+      pageSize: 2,
+    });
+    await controller.handleMessage({ type: "ready" });
+    const summary = states[states.length - 1]?.conversations.find(
+      (c) => c.conversation_id === dm,
+    );
+    expect(summary?.unread_count).toBe(3);
+    expect(summary?.first_unread_sequence).toBe(1);
+    const spans = server.calls.filter(
+      (c) => c.method === "messages.history" && c.params.after_seq === 0,
+    );
+    expect(spans).toHaveLength(1);
+  });
+});
