@@ -29,6 +29,9 @@ export const TEAM_MAX_TITLE_CHARS = 200;
 export const TEAM_MAX_CLIENT_MESSAGE_ID_CHARS = 128;
 export const TEAM_MAX_BODY_CHARS = 16_384;
 export const TEAM_MAX_REFERENCES = 16;
+export const TEAM_MAX_EMOJI_CHARS = 32;
+export const TEAM_MAX_SEARCH_QUERY_CHARS = 200;
+export const TEAM_MAX_EXCERPT_CHARS = 200;
 /** Reserved author id of @MARS answers; never a team member, never authenticable. */
 export const MARS_AGENT_USER_ID = "mars";
 export const AGENT_MAX_MESSAGES = 50;
@@ -140,19 +143,44 @@ export const ReferenceChipSchema = z.discriminatedUnion("restricted", [
 export type ReferenceChip = z.infer<typeof ReferenceChipSchema>;
 
 /** A stored message as returned to one authenticated viewer. */
+/** Per-message reaction aggregate; counts only, never who reacted. */
+export const ReactionSummarySchema = z
+  .object({
+    emoji: z.string().min(1).max(TEAM_MAX_EMOJI_CHARS),
+    count: z.number().int().positive(),
+    reacted: z.boolean(),
+  })
+  .strict();
+export type ReactionSummary = z.infer<typeof ReactionSummarySchema>;
+export const TEAM_MAX_REACTION_SUMMARIES = 256;
+
+/**
+ * `messages.history` / `messages.send` item: the stored record plus per-viewer
+ * reference chips, reaction summaries and a bounded excerpt of the reply
+ * target (`null` with `reply_restricted: true` when the target is before the
+ * viewer's `joined_seq`).
+ */
 export const MessageViewSchema = MessageSchema.extend({
   references: z.array(ReferenceChipSchema).max(TEAM_MAX_REFERENCES),
+  reactions: z.array(ReactionSummarySchema).max(TEAM_MAX_REACTION_SUMMARIES),
+  reply_excerpt: z.string().max(TEAM_MAX_EXCERPT_CHARS).nullable(),
+  reply_restricted: z.boolean(),
 }).strict();
 export type MessageView = z.infer<typeof MessageViewSchema>;
 
 export const ReactionSchema = z
-  .object({ message_id: id, user_id: id, emoji: z.string().min(1).max(32) })
+  .object({
+    message_id: id,
+    user_id: id,
+    emoji: z.string().min(1).max(TEAM_MAX_EMOJI_CHARS),
+  })
   .strict();
 export type Reaction = z.infer<typeof ReactionSchema>;
 
 export const TeamDeliveryEventKindSchema = z.enum([
   "message",
   "membership",
+  "reaction",
   /** An existing message was edited or deleted; `message_seq`/`message_id` name it. */
   "edit",
 ]);

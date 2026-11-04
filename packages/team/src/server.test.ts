@@ -580,7 +580,7 @@ test("(h) authentication, origin, route, size and shape checks match the workben
       team_id: TEAM,
       user_id: "alice",
       role: "member",
-      capabilities: { stream: false, reactions: false, search: false },
+      capabilities: { stream: true, reactions: true, search: true },
     },
   });
   expect(ok.headers.get("cache-control")).toBe("no-store");

@@ -42,6 +42,7 @@ export {
 export {
   type AgentRequestInput,
   type AgentSelection,
+  type ConversationListItem,
   type ConversationMember,
   type ConversationView,
   canonicalJson,
@@ -50,8 +51,14 @@ export {
   type HistoryQuery,
   type PollCursor,
   type PutReferenceInput,
+  type ReactionState,
+  type ReactionSummary,
   type ReferenceVisibility,
+  type SearchHit,
+  type SearchPage,
+  type SearchQuery,
   type SendInput,
+  type StoreNotice,
   sha256,
   TEAM_MIGRATIONS,
   TEAM_STORE_FORMAT_VERSION,
@@ -60,3 +67,11 @@ export {
   type TeamStore,
   type TeamStoreOptions,
 } from "./store";
+export {
+  excerptAround,
+  hasInvisibleCodePoint,
+  headExcerpt,
+  INVISIBLE_CODE_POINT_RANGES,
+  isInvisibleCodePoint,
+  isValidEmoji,
+} from "./text";
