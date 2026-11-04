@@ -1,9 +1,10 @@
 # `@mars/team`
 
-Team Chat service foundation: an authenticated, loopback-bound RPC server over a
-SQLite store for team membership, DM/group conversations, messages, read
-cursors, pins and a committed delivery outbox. It owns identity resolution and
-conversations only — no model calls, no Git, no tools, no task state.
+Team Chat service: an authenticated, loopback-bound RPC + SSE server over a
+SQLite store for team membership, DM/group conversations, messages, replies,
+reactions, search, read cursors, pins and a committed delivery outbox. It owns
+identity resolution and conversations only — no model calls, no Git, no tools,
+no task state.
 Architecture and decisions: `documentation/TEAM_CHAT.md`.
 
 ```ts
@@ -18,7 +19,8 @@ const server = serveTeam({
   ]),
   port: 0,
 });
-// POST http://127.0.0.1:<port>/v1/rpc with Authorization: Bearer <token>
+// POST http://127.0.0.1:<port>/v1/rpc    with Authorization: Bearer <token>
+// POST http://127.0.0.1:<port>/v1/stream same envelope, method "events.stream" → text/event-stream
 ```
 
 - `createTeamStore({ rootDir, limits?, now?, randomId? })` — `team.sqlite`
@@ -29,14 +31,24 @@ const server = serveTeam({
 - `Authenticator` — `authenticate(bearerToken) → {user_id, team_ids} | null`.
   `createDevAuthenticator(users)` is for tests and the pilot only.
 - `serveTeam({ store, authenticator, port? })` — same checks, caps, envelope
-  and error codes as `packages/workbench/src/server.ts`.
+  and error codes as `packages/workbench/src/server.ts`; `/v1/stream` serves
+  membership-filtered outbox metadata as SSE (`id:` = `event_seq`, heartbeat
+  comments, `event: close` on revocation) by re-polling the store from the
+  connection's cursors whenever a commit wakes it.
+- `store.subscribe(listener)` — post-commit notices (`event` /
+  `removed`) for the in-process server; nothing in a notice but ids.
 - `TeamLimitsSchema` / `DEFAULT_TEAM_LIMITS` — body bytes, group size, page
-  size and bytes, cursors per poll, poll events, idempotency rows.
-- `TeamRpcRequestSchema` — strict request union (see the method table in the
-  documentation).
+  size and bytes, cursors per poll, poll events, idempotency rows, open streams
+  per user, heartbeat period, stream batch and buffer bytes, searches per
+  minute, reaction keys per message.
+- `TeamRpcRequestSchema` / `TeamStreamRequestSchema` — strict request shapes
+  (see the method table in the documentation); `MessageViewSchema`,
+  `ConversationListItemSchema`, `ReactionStateSchema`, `SearchResultSchema`
+  describe the PR 3 results.
 
 Tests: `bun test packages/team` (offline; loopback server + dev authenticator;
-a spawned Bun process races DM creation).
+a spawned Bun process races DM creation; real SSE connections for reconnect,
+backfill/live and revocation).
 
 ## Task links and result shares (PR 6, chat half)
 
