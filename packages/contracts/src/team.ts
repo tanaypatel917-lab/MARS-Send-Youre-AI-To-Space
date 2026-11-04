@@ -29,6 +29,9 @@ export const TEAM_MAX_TITLE_CHARS = 200;
 export const TEAM_MAX_CLIENT_MESSAGE_ID_CHARS = 128;
 export const TEAM_MAX_BODY_CHARS = 16_384;
 export const TEAM_MAX_REFERENCES = 16;
+export const TEAM_MAX_EMOJI_CHARS = 32;
+export const TEAM_MAX_SEARCH_QUERY_CHARS = 200;
+export const TEAM_MAX_EXCERPT_CHARS = 200;
 
 export const TeamContextSchema = z
   .object({
@@ -104,11 +107,19 @@ export const MessageSchema = z
 export type Message = z.infer<typeof MessageSchema>;
 
 export const ReactionSchema = z
-  .object({ message_id: id, user_id: id, emoji: z.string().min(1).max(32) })
+  .object({
+    message_id: id,
+    user_id: id,
+    emoji: z.string().min(1).max(TEAM_MAX_EMOJI_CHARS),
+  })
   .strict();
 export type Reaction = z.infer<typeof ReactionSchema>;
 
-export const TeamDeliveryEventKindSchema = z.enum(["message", "membership"]);
+export const TeamDeliveryEventKindSchema = z.enum([
+  "message",
+  "membership",
+  "reaction",
+]);
 /** Outbox row: generic metadata only, never a body. */
 export const TeamDeliveryEventSchema = z
   .object({

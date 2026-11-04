@@ -5,6 +5,7 @@ export const TEAM_ERROR_CODES = [
   "not_found",
   "conflict",
   "too_large",
+  "rate_limited",
   "unknown_cursor",
   "unsafe_path",
   "corrupt_record",

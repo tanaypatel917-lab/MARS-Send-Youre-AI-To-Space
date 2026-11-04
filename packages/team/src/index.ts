@@ -18,13 +18,21 @@ export {
   type TeamServerOptions,
 } from "./server";
 export {
+  type ConversationListItem,
   type ConversationMember,
   type ConversationView,
   canonicalJson,
   createTeamStore,
   dmKey,
   type HistoryQuery,
+  type MessageView,
   type PollCursor,
+  type ReactionState,
+  type ReactionSummary,
+  type SearchHit,
+  type SearchPage,
+  type SearchQuery,
+  type StoreNotice,
   sha256,
   TEAM_MIGRATIONS,
   TEAM_STORE_FORMAT_VERSION,
@@ -33,3 +41,11 @@ export {
   type TeamStore,
   type TeamStoreOptions,
 } from "./store";
+export {
+  excerptAround,
+  hasInvisibleCodePoint,
+  headExcerpt,
+  INVISIBLE_CODE_POINT_RANGES,
+  isInvisibleCodePoint,
+  isValidEmoji,
+} from "./text";

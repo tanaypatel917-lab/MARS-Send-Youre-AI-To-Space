@@ -32,6 +32,16 @@ export const TeamLimitsSchema = z
     max_cursors_per_poll: z.number().int().positive().max(50),
     max_poll_events: z.number().int().positive().max(1000),
     max_pending_idempotency_rows: z.number().int().positive().max(100_000),
+    /** Concurrent `events.stream` connections per (team, user). */
+    max_open_streams_per_user: z.number().int().positive().max(64),
+    /** SSE heartbeat comment period; each heartbeat also re-polls the cursors. */
+    stream_heartbeat_ms: z.number().int().min(50).max(120_000),
+    /** Outbox rows pushed per stream pump; a longer backlog takes more pumps. */
+    max_stream_batch_events: z.number().int().positive().max(1000),
+    /** `messages.search` calls per (team, user) in a sliding minute. */
+    max_search_per_minute: z.number().int().positive().max(10_000),
+    /** Distinct reaction keys per message. */
+    max_reactions_per_message: z.number().int().positive().max(256),
   })
   .strict();
 export type TeamLimits = z.infer<typeof TeamLimitsSchema>;
@@ -46,4 +56,9 @@ export const DEFAULT_TEAM_LIMITS: TeamLimits = {
   max_cursors_per_poll: 50,
   max_poll_events: 1000,
   max_pending_idempotency_rows: 10_000,
+  max_open_streams_per_user: 4,
+  stream_heartbeat_ms: 15_000,
+  max_stream_batch_events: 200,
+  max_search_per_minute: 60,
+  max_reactions_per_message: 64,
 };

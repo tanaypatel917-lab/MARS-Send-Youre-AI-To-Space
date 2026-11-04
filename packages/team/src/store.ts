@@ -15,6 +15,9 @@ import {
   MessageSchema,
   type Participant,
   ParticipantSchema,
+  TEAM_MAX_EMOJI_CHARS,
+  TEAM_MAX_EXCERPT_CHARS,
+  TEAM_MAX_SEARCH_QUERY_CHARS,
   type TeamDeliveryEvent,
   TeamDeliveryEventSchema,
   type TeamMembership,
@@ -28,6 +31,13 @@ import {
   type TeamLimits,
   TeamLimitsSchema,
 } from "./schemas";
+import {
+  excerptAround,
+  hasInvisibleCodePoint,
+  headExcerpt,
+  isValidEmoji,
+  likePattern,
+} from "./text";
 
 export const TEAM_STORE_FORMAT_VERSION = 1;
 
@@ -134,6 +144,64 @@ export interface PollCursor {
   after_event_seq: number;
 }
 
+export interface ConversationListItem extends ConversationView {
+  unread_count: number;
+  last_message_at: string | null;
+}
+
+export interface ReactionSummary {
+  emoji: string;
+  count: number;
+  reacted: boolean;
+}
+
+/** History item: the record plus aggregates the caller may see. */
+export interface MessageView extends Message {
+  reactions: ReactionSummary[];
+  reply_excerpt: string | null;
+  reply_restricted: boolean;
+}
+
+export interface ReactionState {
+  message_id: string;
+  emoji: string;
+  count: number;
+  reacted: boolean;
+}
+
+export interface SearchQuery {
+  query: string;
+  conversation_id?: string | undefined;
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export interface SearchHit {
+  conversation_id: string;
+  message_id: string;
+  seq: number;
+  author_id: string;
+  created_at: string;
+  excerpt: string;
+  cut_before: boolean;
+  cut_after: boolean;
+}
+
+export interface SearchPage {
+  hits: SearchHit[];
+  next_cursor: string | null;
+}
+
+/**
+ * Delivered synchronously after a write transaction commits, in commit order.
+ * `event`: new outbox rows exist for the conversation (the listener re-polls
+ * through the membership-filtered query; nothing else is carried).
+ * `removed`: the user's participation in the conversation ended.
+ */
+export type StoreNotice =
+  | { type: "event"; conversation_id: string }
+  | { type: "removed"; conversation_id: string; user_id: string };
+
 export interface TeamDescription {
   team_id: string;
   user_id: string;
@@ -163,7 +231,7 @@ export interface TeamStore {
     requestId: string,
     input: { member_ids: string[]; title: string },
   ): ConversationView;
-  list(actor: TeamActor): ConversationView[];
+  list(actor: TeamActor): ConversationListItem[];
   open(actor: TeamActor, conversationId: string): ConversationView;
   addMember(
     actor: TeamActor,
@@ -182,6 +250,12 @@ export interface TeamStore {
       user_id: string;
       expected_revision: number;
     },
+  ): ConversationView;
+  /** Self-removal from a DM or group; the returned participant is `removed`. */
+  leave(
+    actor: TeamActor,
+    requestId: string,
+    input: { conversation_id: string },
   ): ConversationView;
   markRead(
     actor: TeamActor,
@@ -202,11 +276,20 @@ export interface TeamStore {
     },
   ): Message;
   /** Page cut by count and serialized bytes; never skips a message. */
-  history(actor: TeamActor, query: HistoryQuery): Message[];
+  history(actor: TeamActor, query: HistoryQuery): MessageView[];
   poll(
     actor: TeamActor,
     input: { cursors: PollCursor[]; limit?: number | undefined },
   ): TeamDeliveryEvent[];
+  /** Idempotent set/remove; emits a `reaction` outbox row only on change. */
+  setReaction(
+    actor: TeamActor,
+    input: { message_id: string; emoji: string; on: boolean },
+  ): ReactionState;
+  /** Membership-filtered before excerpting; newest first; opaque cursor. */
+  search(actor: TeamActor, query: SearchQuery): SearchPage;
+  /** Post-commit notices for the in-process server (streams). */
+  subscribe(listener: (notice: StoreNotice) => void): () => void;
   close(): void;
 }
 
@@ -517,7 +600,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
 
   const emitEvent = (
     conversation: ConversationRow,
-    kind: "message" | "membership",
+    kind: "message" | "membership" | "reaction",
     messageSeq: number,
     messageId: string | null,
     revision: number,
@@ -535,7 +618,18 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
       timestamp(),
     );
     conversation.last_event_seq = eventSeq;
+    notify({ type: "event", conversation_id: conversation.conversation_id });
     return eventSeq;
+  };
+  const removeParticipant = (conversationId: string, userId: string) => {
+    db.query(
+      "UPDATE participants SET state = 'removed' WHERE conversation_id = ? AND user_id = ?",
+    ).run(conversationId, userId);
+    notify({
+      type: "removed",
+      conversation_id: conversationId,
+      user_id: userId,
+    });
   };
   const saveConversation = (conversation: ConversationRow) => {
     db.query(
@@ -659,8 +753,48 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     })
     .strict();
 
-  const write = <T>(fn: () => T): T => db.transaction(fn).immediate();
+  const listeners = new Set<(notice: StoreNotice) => void>();
+  let pending: StoreNotice[] | null = null;
+  const notify = (notice: StoreNotice) => {
+    if (pending) pending.push(notice);
+  };
+  const write = <T>(fn: () => T): T => {
+    if (pending) return fn();
+    pending = [];
+    let notices: StoreNotice[];
+    try {
+      const result = db.transaction(fn).immediate();
+      notices = pending;
+      pending = null;
+      for (const notice of notices)
+        for (const listener of listeners) {
+          try {
+            listener(notice);
+          } catch {
+            // A failing subscriber never undoes a committed write.
+          }
+        }
+      return result;
+    } finally {
+      pending = null;
+    }
+  };
   const read = <T>(fn: () => T): T => db.transaction(fn)();
+
+  const searchWindow = new Map<string, number[]>();
+  const takeSearchSlot = (actor: TeamActor) => {
+    const key = `${actor.team_id}\u0000${actor.user_id}`;
+    const at = now().getTime();
+    const recent = (searchWindow.get(key) ?? []).filter(
+      (stamp) => at - stamp < 60_000,
+    );
+    if (recent.length >= limits.max_search_per_minute) {
+      searchWindow.set(key, recent);
+      throw new TeamError("rate_limited", "Search rate limit reached");
+    }
+    recent.push(at);
+    searchWindow.set(key, recent);
+  };
 
   const changeMembership = (
     actor: TeamActor,
@@ -711,9 +845,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
             else insertParticipant(conversation, input.user_id);
           } else {
             if (!target || target.state !== "active") throw notFound();
-            db.query(
-              "UPDATE participants SET state = 'removed' WHERE conversation_id = ? AND user_id = ?",
-            ).run(conversation.conversation_id, input.user_id);
+            removeParticipant(conversation.conversation_id, input.user_id);
           }
           conversation.revision += 1;
           emitEvent(
@@ -736,14 +868,56 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
       );
     });
 
+  const reactionSummaries = (
+    messageId: string,
+    userId: string,
+  ): ReactionSummary[] =>
+    db
+      .query<{ emoji: string; count: number; mine: number }, [string, string]>(
+        "SELECT emoji, COUNT(*) AS count, SUM(CASE WHEN user_id = ? THEN 1 ELSE 0 END) AS mine FROM reactions WHERE message_id = ? GROUP BY emoji ORDER BY emoji",
+      )
+      .all(userId, messageId)
+      .map((row) => ({
+        emoji: row.emoji,
+        count: row.count,
+        reacted: row.mine > 0,
+      }));
+
+  const messageView = (
+    row: MessageRow,
+    participant: ParticipantRow,
+  ): MessageView => {
+    const message = messageRecord(row);
+    let reply_excerpt: string | null = null;
+    let reply_restricted = false;
+    if (message.reply_to !== null) {
+      const target = db
+        .query<Pick<MessageRow, "seq" | "body" | "deleted">, [string, string]>(
+          "SELECT seq, body, deleted FROM messages WHERE message_id = ? AND conversation_id = ?",
+        )
+        .get(message.reply_to, row.conversation_id);
+      if (!target || target.seq <= participant.joined_seq)
+        reply_restricted = true;
+      else if (target.deleted !== 1)
+        reply_excerpt = headExcerpt(target.body, TEAM_MAX_EXCERPT_CHARS).text;
+    }
+    return {
+      ...message,
+      reactions: reactionSummaries(row.message_id, participant.user_id),
+      reply_excerpt,
+      reply_restricted,
+    };
+  };
+
   const messagePage = (
     rows: MessageRow[],
+    participant: ParticipantRow,
     fromCursorSide: boolean,
-  ): Message[] => {
-    const page: Message[] = [];
+  ): MessageView[] => {
+    const page: MessageView[] = [];
     let bytes = ENVELOPE_BYTES;
     for (const row of rows) {
-      const message = messageRecord(row);
+      const message = messageView(row, participant);
       const size =
         Buffer.byteLength(JSON.stringify(message)) + (page.length ? 1 : 0);
       if (bytes + size > limits.max_page_bytes) {
@@ -806,9 +980,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
           )
           .all(parsed.team_id, parsed.user_id);
         for (const conversation of rows) {
-          db.query(
-            "UPDATE participants SET state = 'removed' WHERE conversation_id = ? AND user_id = ?",
-          ).run(conversation.conversation_id, parsed.user_id);
+          removeParticipant(conversation.conversation_id, parsed.user_id);
           conversation.revision += 1;
           emitEvent(
             conversation,
@@ -832,7 +1004,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
           user_id: member.user_id,
           role: member.role === "admin" ? "admin" : "member",
           limits,
-          capabilities: { stream: false, reactions: false, search: false },
+          capabilities: { stream: true, reactions: true, search: true },
         };
       });
     },
@@ -1012,7 +1184,24 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
           );
           if (!participant)
             throw new TeamError("corrupt_record", "Participant missing");
-          return view(row, participant);
+          // read_seq never drops below joined_seq, so it is the unread floor.
+          const unread =
+            db
+              .query<{ count: number }, [string, number, string]>(
+                "SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ? AND seq > ? AND author_id != ?",
+              )
+              .get(row.conversation_id, participant.read_seq, actor.user_id)
+              ?.count ?? 0;
+          const last = db
+            .query<{ created_at: string }, [string, number]>(
+              "SELECT created_at FROM messages WHERE conversation_id = ? AND seq > ? ORDER BY seq DESC LIMIT 1",
+            )
+            .get(row.conversation_id, participant.joined_seq);
+          return {
+            ...view(row, participant),
+            unread_count: unread,
+            last_message_at: last?.created_at ?? null,
+          };
         });
       });
     },
@@ -1031,6 +1220,40 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     },
     removeMember(actor, requestId, input) {
       return changeMembership(actor, requestId, input, "remove");
+    },
+    leave(actor, requestId, input) {
+      return write(() => {
+        requireTeamMember(actor);
+        return idempotent(
+          actor,
+          requestId,
+          "conversations.leave",
+          input,
+          viewSchema,
+          () => {
+            const { conversation } = requireParticipant(
+              actor,
+              input.conversation_id,
+            );
+            removeParticipant(conversation.conversation_id, actor.user_id);
+            conversation.revision += 1;
+            emitEvent(
+              conversation,
+              "membership",
+              conversation.last_seq,
+              null,
+              conversation.revision,
+            );
+            saveConversation(conversation);
+            const self = participantRow(
+              conversation.conversation_id,
+              actor.user_id,
+            );
+            if (!self) throw notFound();
+            return view(conversation, self);
+          },
+        );
+      });
     },
     markRead(actor, input) {
       return write(() => {
@@ -1199,7 +1422,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
               "SELECT * FROM messages WHERE conversation_id = ? AND seq > ? AND seq > ? ORDER BY seq ASC LIMIT ?",
             )
             .all(conversation.conversation_id, query.after_seq, floor, limit);
-          return messagePage(rows, false);
+          return messagePage(rows, participant, false);
         }
         const before = query.before_seq ?? conversation.last_seq + 1;
         if (
@@ -1213,7 +1436,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
             "SELECT * FROM messages WHERE conversation_id = ? AND seq < ? AND seq > ? ORDER BY seq DESC LIMIT ?",
           )
           .all(conversation.conversation_id, before, floor, limit);
-        return messagePage(rows, true);
+        return messagePage(rows, participant, true);
       });
     },
     poll(actor, input) {
@@ -1274,7 +1497,208 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
         return events;
       });
     },
+    setReaction(actor, input) {
+      return write(() => {
+        requireTeamMember(actor);
+        if (typeof input.on !== "boolean")
+          throw invalidInput("on must be boolean");
+        if (!isValidEmoji(input.emoji, TEAM_MAX_EMOJI_CHARS))
+          throw invalidInput("Invalid reaction key");
+        if (!idSchema.safeParse(input.message_id).success) throw notFound();
+        const message = db
+          .query<
+            Pick<MessageRow, "message_id" | "conversation_id" | "seq">,
+            [string]
+          >(
+            "SELECT message_id, conversation_id, seq FROM messages WHERE message_id = ?",
+          )
+          .get(input.message_id);
+        if (!message) throw notFound();
+        const { conversation, participant } = requireParticipant(
+          actor,
+          message.conversation_id,
+        );
+        if (message.seq <= participant.joined_seq) throw notFound();
+        const existing = db
+          .query<{ user_id: string }, [string, string, string]>(
+            "SELECT user_id FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?",
+          )
+          .get(message.message_id, actor.user_id, input.emoji);
+        let changed = false;
+        if (input.on && !existing) {
+          const distinct =
+            db
+              .query<{ count: number }, [string, string]>(
+                "SELECT COUNT(*) AS count FROM (SELECT DISTINCT emoji FROM reactions WHERE message_id = ? AND emoji != ?)",
+              )
+              .get(message.message_id, input.emoji)?.count ?? 0;
+          if (distinct + 1 > limits.max_reactions_per_message)
+            throw new TeamError(
+              "too_large",
+              "Reaction key limit reached for this message",
+            );
+          db.query(
+            "INSERT INTO reactions (message_id, user_id, emoji, created_at) VALUES (?, ?, ?, ?)",
+          ).run(message.message_id, actor.user_id, input.emoji, timestamp());
+          changed = true;
+        } else if (!input.on && existing) {
+          db.query(
+            "DELETE FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?",
+          ).run(message.message_id, actor.user_id, input.emoji);
+          changed = true;
+        }
+        if (changed) {
+          emitEvent(
+            conversation,
+            "reaction",
+            message.seq,
+            message.message_id,
+            conversation.revision,
+          );
+          saveConversation(conversation);
+        }
+        const count =
+          db
+            .query<{ count: number }, [string, string]>(
+              "SELECT COUNT(*) AS count FROM reactions WHERE message_id = ? AND emoji = ?",
+            )
+            .get(message.message_id, input.emoji)?.count ?? 0;
+        return {
+          message_id: message.message_id,
+          emoji: input.emoji,
+          count,
+          reacted: input.on,
+        };
+      });
+    },
+    search(actor, query) {
+      return read(() => {
+        requireTeamMember(actor);
+        const parsed = z
+          .object({
+            query: z.string().min(2).max(TEAM_MAX_SEARCH_QUERY_CHARS),
+            conversation_id: idSchema.optional(),
+            limit: z.number().int().positive().max(50).optional(),
+            cursor: z.string().min(1).max(512).optional(),
+          })
+          .strict()
+          .safeParse(query);
+        if (!parsed.success || parsed.data.query.trim().length < 2)
+          throw invalidInput("Invalid search input");
+        if (hasInvisibleCodePoint(parsed.data.query))
+          throw invalidInput("Invalid search input");
+        takeSearchSlot(actor);
+        const limit = parsed.data.limit ?? 20;
+        const conversationId = parsed.data.conversation_id ?? null;
+        if (conversationId !== null) requireParticipant(actor, conversationId);
+        const cursorKey = sha256(
+          canonicalJson([
+            actor.team_id,
+            actor.user_id,
+            parsed.data.query,
+            conversationId,
+          ]),
+        ).slice(0, 32);
+        let after: { created_at: string; message_id: string } | null = null;
+        if (parsed.data.cursor !== undefined) {
+          try {
+            const raw = Buffer.from(parsed.data.cursor, "base64url").toString(
+              "utf8",
+            );
+            if (Buffer.from(raw).toString("base64url") !== parsed.data.cursor)
+              throw new Error("cursor does not round-trip");
+            const decoded = z
+              .object({
+                k: z.literal(cursorKey),
+                t: z.string().datetime({ offset: true }),
+                m: idSchema,
+              })
+              .strict()
+              .parse(JSON.parse(raw));
+            after = { created_at: decoded.t, message_id: decoded.m };
+          } catch {
+            throw new TeamError("unknown_cursor", "Unknown search cursor");
+          }
+        }
+        // Membership is applied in SQL before any body is read: active
+        // participation in the caller's team and seq inside the joined window.
+        const rows = db
+          .query<
+            MessageRow,
+            [
+              string,
+              string,
+              string,
+              string | null,
+              string | null,
+              string | null,
+              string | null,
+              string | null,
+              string | null,
+              number,
+            ]
+          >(
+            `SELECT m.* FROM messages m
+               JOIN participants p ON p.conversation_id = m.conversation_id AND p.user_id = ? AND p.state = 'active'
+               JOIN conversations c ON c.conversation_id = m.conversation_id AND c.team_id = ?
+             WHERE m.seq > p.joined_seq AND m.deleted = 0 AND m.body LIKE ? ESCAPE '\\'
+               AND (? IS NULL OR m.conversation_id = ?)
+               AND (? IS NULL OR m.created_at < ? OR (m.created_at = ? AND m.message_id < ?))
+             ORDER BY m.created_at DESC, m.message_id DESC LIMIT ?`,
+          )
+          .all(
+            actor.user_id,
+            actor.team_id,
+            likePattern(parsed.data.query),
+            conversationId,
+            conversationId,
+            after?.created_at ?? null,
+            after?.created_at ?? null,
+            after?.created_at ?? null,
+            after?.message_id ?? null,
+            limit + 1,
+          );
+        const page = rows.slice(0, limit);
+        const hits = page.map((row) => {
+          const message = messageRecord(row);
+          const excerpt = excerptAround(
+            message.body,
+            parsed.data.query,
+            TEAM_MAX_EXCERPT_CHARS,
+          );
+          return {
+            conversation_id: message.conversation_id,
+            message_id: message.message_id,
+            seq: message.seq,
+            author_id: message.author_id,
+            created_at: message.created_at,
+            excerpt: excerpt.text,
+            cut_before: excerpt.cut_before,
+            cut_after: excerpt.cut_after,
+          };
+        });
+        const tail = page[page.length - 1];
+        const next_cursor =
+          rows.length > limit && tail
+            ? Buffer.from(
+                JSON.stringify({
+                  k: cursorKey,
+                  t: tail.created_at,
+                  m: tail.message_id,
+                }),
+              ).toString("base64url")
+            : null;
+        return { hits, next_cursor };
+      });
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     close() {
+      listeners.clear();
       db.close();
     },
   };
