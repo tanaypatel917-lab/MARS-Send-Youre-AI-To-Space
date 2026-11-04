@@ -113,6 +113,15 @@ describe("mars session is read-only", () => {
     expect(state.notice).toContain("nothing was executed");
   });
 
+  test("one refresh reads every page at the host's 100-event page size", async () => {
+    const { state, workbench } = await session({ large: true });
+    const pages = workbench.sent.filter(
+      (body) => body.method === "tasks.events",
+    ).length;
+    expect(pages).toBe(Math.ceil(workbench.events.length / 100) + 1);
+    expect(state.projection?.trimmed).toBeGreaterThan(0);
+  });
+
   test("journal text renders when the host supports tasks.journal", async () => {
     const { state } = await session();
     expect(state.projection?.journal).toBe("available");
