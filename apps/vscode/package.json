@@ -42,7 +42,7 @@
         {
           "type": "webview",
           "id": "mars.teamChat",
-          "name": "Team Chat (fixture)",
+          "name": "Team Chat",
           "when": "config.mars.teamChat.enabled"
         }
       ]
@@ -85,7 +85,17 @@
       },
       {
         "command": "mars.teamChat.open",
-        "title": "Open Team Chat (fixture prototype)",
+        "title": "Open Team Chat",
+        "category": "MARS"
+      },
+      {
+        "command": "mars.teamChat.setToken",
+        "title": "Set team token",
+        "category": "MARS"
+      },
+      {
+        "command": "mars.teamChat.clearToken",
+        "title": "Clear team token",
         "category": "MARS"
       }
     ],
@@ -136,7 +146,29 @@
           "type": "boolean",
           "default": false,
           "scope": "application",
-          "markdownDescription": "Show the Team Chat prototype view. Off by default. The view is fed by a deterministic local fixture (`FIXTURE` label); it never contacts a network service."
+          "markdownDescription": "Show the Team Chat view. Off by default. With `#mars.teamChat.source#` = `fixture` the view is fed by a deterministic local fixture (`FIXTURE` label) and never contacts a network service."
+        },
+        "mars.teamChat.source": {
+          "type": "string",
+          "enum": [
+            "fixture",
+            "service"
+          ],
+          "default": "fixture",
+          "scope": "application",
+          "markdownDescription": "Where Team Chat reads from: the offline `fixture`, or the `@mars/team` `service` at `#mars.teamServerUrl#` using the token set with `MARS: Set team token`. Requests leave only from the extension host; the webview never has network access."
+        },
+        "mars.teamServerUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:7332",
+          "scope": "application",
+          "markdownDescription": "Base URL of the MARS team service. Loopback only unless `#mars.teamChat.allowNonLoopbackServer#` is enabled (HTTPS required then). Separate from `#mars.serverUrl#`; user settings only."
+        },
+        "mars.teamChat.allowNonLoopbackServer": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "Allow an HTTPS non-loopback team service. Independent of `#mars.allowNonLoopbackServer#`, which covers the task server only."
         }
       }
     }

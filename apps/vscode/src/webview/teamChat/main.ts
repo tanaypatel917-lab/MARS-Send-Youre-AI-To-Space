@@ -54,14 +54,38 @@ scroller.addEventListener("scroll", () => {
   stickToBottom =
     scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 24;
   jumpButton.hidden = stickToBottom;
+  reportViewport();
 });
 const jumpButton = button("Jump to latest", "jump-latest", () => {
   scroller.scrollTop = scroller.scrollHeight;
   stickToBottom = true;
   jumpButton.hidden = true;
+  reportViewport();
 });
 jumpButton.className = "jump";
 jumpButton.hidden = true;
+
+/** `aria-live` region used only for new-message announcements. */
+const announcer = h("div", { class: "announcer", role: "status" });
+announcer.setAttribute("aria-live", "polite");
+announcer.setAttribute("aria-atomic", "true");
+let announcedSeq = 0;
+
+let lastViewport: { focused: boolean; atBottom: boolean } | null = null;
+/** Tells the host where the viewport is; it advances the read cursor only when focused and at the bottom. */
+function reportViewport(): void {
+  const next = { focused: document.hasFocus(), atBottom: stickToBottom };
+  if (
+    lastViewport &&
+    lastViewport.focused === next.focused &&
+    lastViewport.atBottom === next.atBottom
+  )
+    return;
+  lastViewport = next;
+  post({ type: "viewport", ...next });
+}
+window.addEventListener("focus", reportViewport);
+window.addEventListener("blur", reportViewport);
 
 const textarea = h("textarea", { label: "Message" });
 textarea.rows = 3;
@@ -198,6 +222,93 @@ function post(message: TeamChatWebviewMessage): void {
 
 // ---------------------------------------------------------------- inbox pane
 
+const CONNECTION_TEXT: Record<TeamChatViewState["connection"], string> = {
+  offline: "Offline",
+  connecting: "Connecting…",
+  live: "Live",
+  polling: "Polling",
+  retrying: "Reconnecting…",
+  unauthenticated: "No token",
+};
+
+let searchDraft = "";
+
+function renderSearch(s: TeamChatViewState): HTMLElement {
+  const input = h("input", { label: "Search messages" });
+  input.type = "search";
+  input.placeholder = "Search messages…";
+  input.value = searchDraft;
+  input.dataset.focusKey = "search";
+  input.addEventListener("input", () => {
+    searchDraft = input.value;
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const query = input.value.trim();
+      if (query) post({ type: "search", query });
+      else post({ type: "clearSearch" });
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      searchDraft = "";
+      input.value = "";
+      post({ type: "clearSearch" });
+    }
+  });
+  const results = h("ul", { class: "search-results", label: "Search results" });
+  if (s.search) {
+    const title = h(
+      "li",
+      { class: "muted small row" },
+      h(
+        "span",
+        { class: "grow" },
+        s.search.hits.length === 0
+          ? "No matches."
+          : `${s.search.hits.length} match(es)`,
+      ),
+      button(
+        "Clear",
+        "clear-search",
+        () => {
+          searchDraft = "";
+          post({ type: "clearSearch" });
+        },
+        { secondary: true },
+      ),
+    );
+    results.append(title);
+    for (const hit of s.search.hits) {
+      const where = s.conversations.find(
+        (c) => c.conversation_id === hit.conversation_id,
+      );
+      const open = button(
+        "",
+        `hit-${hit.message_id}`,
+        () => {
+          stickToBottom = true;
+          post({
+            type: "selectConversation",
+            conversationId: hit.conversation_id,
+          });
+        },
+        { secondary: true },
+      );
+      open.className = "search-hit";
+      open.append(
+        h(
+          "span",
+          { class: "small muted" },
+          `${hit.author_name} · ${where?.title ?? "Conversation"} · #${hit.sequence}`,
+        ),
+        h("span", { class: "body" }, hit.body),
+      );
+      results.append(h("li", {}, open));
+    }
+  }
+  return h("div", { class: "search-row" }, input, results);
+}
+
 function renderInbox(s: TeamChatViewState): HTMLElement {
   const viewerSelect = h("select", { label: "Fixture viewer" });
   viewerSelect.dataset.focusKey = "viewer";
@@ -284,23 +395,47 @@ function renderInbox(s: TeamChatViewState): HTMLElement {
       h("h2", {}, "Team Chat"),
       h(
         "span",
-        { class: "fixture-badge", title: "Deterministic local fixture data" },
+        {
+          class: "fixture-badge",
+          title:
+            s.label === "FIXTURE"
+              ? "Deterministic local fixture data"
+              : "Connected to the team service",
+        },
         s.label,
       ),
+      s.label === "SERVICE"
+        ? h(
+            "span",
+            { class: `connection ${s.connection}`, role: "status" },
+            CONNECTION_TEXT[s.connection],
+          )
+        : null,
     ),
-    h(
-      "div",
-      { class: "viewer-row" },
-      h("label", { class: "small muted" }, "Viewing as"),
-      viewerSelect,
-    ),
+    s.viewers.length > 0
+      ? h(
+          "div",
+          { class: "viewer-row" },
+          h("label", { class: "small muted" }, "Viewing as"),
+          viewerSelect,
+        )
+      : h(
+          "div",
+          { class: "viewer-row small muted" },
+          `Signed in as ${s.viewer.display_name}`,
+        ),
+    renderSearch(s),
     list,
   );
 }
 
 // ---------------------------------------------------------------- thread pane
 
-function renderReactions(message: MessageView): HTMLElement {
+function renderReactions(
+  s: TeamChatViewState,
+  message: MessageView,
+): HTMLElement | null {
+  if (!s.capabilities.reactions) return null;
   const row = h("div", { class: "reactions", label: "Reactions" });
   for (const emoji of REACTIONS) {
     const existing = message.reactions.find((r) => r.emoji === emoji);
@@ -413,7 +548,7 @@ function renderMessage(
     reply,
     h("p", { class: "body" }, message.body),
     message.references.length > 0 ? renderChips(message, panelRef) : null,
-    renderReactions(message),
+    renderReactions(s, message),
   );
   item.dataset.messageId = message.message_id;
   return item;
@@ -425,10 +560,35 @@ function renderPending(item: PendingSend): HTMLElement {
       ? h("span", { class: "status pending", role: "status" }, "Sending…")
       : h(
           "span",
-          { class: "status failed", role: "alert" },
-          `Failed: ${item.reason ?? "unknown"}`,
+          { class: `status ${item.status}`, role: "alert" },
+          `${item.status === "conflict" ? "Not sent" : "Failed"}: ${item.reason ?? "unknown"}`,
         );
   const actions = h("div", { class: "row" });
+  if (item.status === "conflict")
+    actions.append(
+      button("Edit and resend", `edit-${item.client_message_id}`, () => {
+        // The old id is burnt on the server; the draft comes back to the
+        // composer and the next send gets a fresh client message id.
+        textarea.value = item.body;
+        updateComposer({
+          type: "input",
+          text: item.body,
+          caret: item.body.length,
+        });
+        post({ type: "discardSend", clientMessageId: item.client_message_id });
+        returnFocusTo = "composer";
+      }),
+      button(
+        "Discard",
+        `discard-${item.client_message_id}`,
+        () =>
+          post({
+            type: "discardSend",
+            clientMessageId: item.client_message_id,
+          }),
+        { secondary: true },
+      ),
+    );
   if (item.status === "failed")
     actions.append(
       button("Retry", `retry-${item.client_message_id}`, () =>
@@ -789,7 +949,11 @@ function render(): void {
         ),
     code,
   );
-  app.replaceChildren(layout);
+  app.replaceChildren(layout, announcer);
+  if (s.announcement && s.announcement.seq !== announcedSeq) {
+    announcedSeq = s.announcement.seq;
+    announcer.textContent = s.announcement.text;
+  }
   renderComposerParts();
   if (anchorOlder) {
     scroller.scrollTop =
@@ -799,6 +963,7 @@ function render(): void {
     scroller.scrollTop = scroller.scrollHeight;
   }
   jumpButton.hidden = stickToBottom;
+  reportViewport();
   const first = code?.querySelector<HTMLElement>("[data-first-highlight]");
   first?.scrollIntoView({ block: "center" });
   const wanted = returnFocusTo ?? focusKey;

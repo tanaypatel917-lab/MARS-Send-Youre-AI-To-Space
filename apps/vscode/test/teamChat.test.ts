@@ -92,6 +92,11 @@ describe("TeamChatController", () => {
   test("ready opens the inbox for the fixture viewer and selects the pinned conversation", async () => {
     const { controller, last } = setup();
     expect(await controller.handleMessage({ type: "nonsense" })).toBe(false);
+    await controller.handleMessage({
+      type: "viewport",
+      focused: true,
+      atBottom: true,
+    });
     expect(await controller.handleMessage({ type: "ready" })).toBe(true);
     const state = last();
     expect(state.label).toBe("FIXTURE");
@@ -137,6 +142,11 @@ describe("TeamChatController", () => {
 
   test("send shows pending, then commits with a sequence and references; retry is idempotent", async () => {
     const { controller, last, release, states } = setup({ sendDelayMs: 10 });
+    await controller.handleMessage({
+      type: "viewport",
+      focused: true,
+      atBottom: true,
+    });
     await controller.handleMessage({ type: "ready" });
     const sending = controller.handleMessage({
       type: "send",
@@ -221,13 +231,15 @@ describe("TeamChatController", () => {
       references: [],
     });
     const failed = last().pending[0];
-    expect(failed?.status).toBe("failed");
+    expect(failed?.status).toBe("conflict");
     expect(failed?.reason).toContain("already committed");
+    // A conflict is final for that id: retry is refused, the draft must be
+    // edited and resent under a new id.
     await controller.handleMessage({
       type: "retrySend",
       clientMessageId: "cm_ada_0001",
     });
-    expect(last().pending[0]?.status).toBe("failed");
+    expect(last().pending[0]?.status).toBe("conflict");
     await controller.handleMessage({
       type: "discardSend",
       clientMessageId: "cm_ada_0001",
@@ -392,6 +404,11 @@ describe("review fixes", () => {
       pageSize: 3,
     });
     const last = () => states[states.length - 1] as TeamChatViewState;
+    await controller.handleMessage({
+      type: "viewport",
+      focused: true,
+      atBottom: true,
+    });
     await controller.handleMessage({ type: "ready" });
     await controller.handleMessage({
       type: "selectConversation",
@@ -441,6 +458,11 @@ describe("review fixes", () => {
       maxLoaded: 2,
     });
     const last = () => states[states.length - 1] as TeamChatViewState;
+    await controller.handleMessage({
+      type: "viewport",
+      focused: true,
+      atBottom: true,
+    });
     await controller.handleMessage({ type: "ready" });
     await controller.handleMessage({
       type: "selectConversation",
@@ -474,6 +496,11 @@ describe("review fixes", () => {
       pageSize: 1,
     });
     const last = () => states[states.length - 1] as TeamChatViewState;
+    await controller.handleMessage({
+      type: "viewport",
+      focused: true,
+      atBottom: true,
+    });
     await controller.handleMessage({ type: "ready" });
     await controller.handleMessage({
       type: "selectConversation",
@@ -502,6 +529,11 @@ describe("review fixes", () => {
       maxLoaded: 2,
     });
     const last = () => states[states.length - 1] as TeamChatViewState;
+    await controller.handleMessage({
+      type: "viewport",
+      focused: true,
+      atBottom: true,
+    });
     await controller.handleMessage({ type: "ready" });
     const cursor = last().selected?.older_cursor ?? "";
     await controller.handleMessage({
@@ -549,6 +581,11 @@ describe("review fixes", () => {
       maxLoaded: 2,
     });
     const last = () => states[states.length - 1] as TeamChatViewState;
+    await controller.handleMessage({
+      type: "viewport",
+      focused: true,
+      atBottom: true,
+    });
     await controller.handleMessage({ type: "ready" });
     expect(last().selected?.messages.map((m) => m.sequence)).toEqual([4]);
     const cursor = last().selected?.older_cursor ?? "";
@@ -559,5 +596,56 @@ describe("review fixes", () => {
     });
     expect(last().selected?.messages.map((m) => m.sequence)).toEqual([3, 4]);
     expect(last().selected?.older_cursor).toBeNull();
+  });
+});
+
+describe("viewport-gated read cursor", () => {
+  test("nothing is marked read until the view is focused and scrolled to the bottom", async () => {
+    const { controller, last } = setup();
+    await controller.handleMessage({ type: "ready" });
+    expect(last().selected?.conversation.read_cursor).toBe(2);
+    expect(last().selected?.conversation.unread_count).toBe(2);
+    await controller.handleMessage({
+      type: "viewport",
+      focused: true,
+      atBottom: false,
+    });
+    expect(last().selected?.conversation.read_cursor).toBe(2);
+    await controller.handleMessage({
+      type: "markRead",
+      conversationId: C.dmAdaGrace,
+      sequence: 4,
+    });
+    expect(last().selected?.conversation.read_cursor).toBe(2);
+    await controller.handleMessage({
+      type: "viewport",
+      focused: true,
+      atBottom: true,
+    });
+    expect(last().selected?.conversation.read_cursor).toBe(4);
+    expect(last().selected?.divider_sequence).toBe(3);
+  });
+
+  test("search is membership-filtered and clears", async () => {
+    const { controller, last } = setup();
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({ type: "search", query: "release" });
+    const hits = last().search?.hits ?? [];
+    expect(hits.length).toBeGreaterThan(0);
+    for (const hit of hits)
+      expect(
+        last().conversations.some(
+          (c) => c.conversation_id === hit.conversation_id,
+        ),
+      ).toBe(true);
+    await controller.handleMessage({
+      type: "fixtureSwitchViewer",
+      userId: U.linus,
+    });
+    await controller.handleMessage({ type: "search", query: "release" });
+    for (const hit of last().search?.hits ?? [])
+      expect(hit.conversation_id).not.toBe(C.dmAdaGrace);
+    await controller.handleMessage({ type: "clearSearch" });
+    expect(last().search).toBeNull();
   });
 });
