@@ -32,8 +32,8 @@ async function spawnServe(
   const reader = child.stdout.getReader();
   let output = "";
   let errorOutput = "";
-  let ready: (() => void) | null = null;
-  let failed: ((error: Error) => void) | null = null;
+  let ready: () => void = () => {};
+  let failed: (error: Error) => void = () => {};
   const firstLine = new Promise<void>((resolve, reject) => {
     ready = resolve;
     failed = reject;
@@ -43,10 +43,10 @@ async function spawnServe(
       const part = await reader.read();
       if (part.done) break;
       output += new TextDecoder().decode(part.value);
-      if (output.includes("\n")) ready?.();
+      if (output.includes("\n")) ready();
     }
     errorOutput = await new Response(child.stderr).text();
-    failed?.(new Error(`CLI exited before ready: ${errorOutput}`));
+    failed(new Error(`CLI exited before ready: ${errorOutput}`));
   })();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {

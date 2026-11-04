@@ -80,9 +80,10 @@ async function cli(args: string[], env: Record<string, string>) {
 interface Rpc {
   status: number;
   result?: unknown;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string } | undefined;
   headers: Headers;
 }
+type Served = Bun.Subprocess<"ignore", "pipe", "pipe">;
 
 async function run() {
   const root = mkdtempSync(join(tmpdir(), "mars-team-staging-"));
@@ -90,7 +91,7 @@ async function run() {
   const state = join(root, "state");
   mkdirSync(home);
   const env = { PATH: process.env.PATH ?? "", HOME: home };
-  let child: ReturnType<typeof Bun.spawn> | null = null;
+  let child: Served | null = null;
   try {
     // Two repositories: repo-a (everyone) and repo-b (ada and grace only).
     const repoA = join(root, "repo-a");
@@ -824,7 +825,7 @@ async function run() {
           `unexpected counters ${JSON.stringify(parsed.metrics)}`,
         );
         assert(
-          parsed.metrics.denied_reads.not_found >= 3 &&
+          (parsed.metrics.denied_reads.not_found ?? 0) >= 3 &&
             parsed.metrics.disabled_refusals >= 2,
           "denials/refusals not counted",
         );
