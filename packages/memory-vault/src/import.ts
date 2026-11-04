@@ -270,6 +270,24 @@ export async function importVault(
       );
       continue;
     }
+    if (!note.derived && note.tracked && note.state !== "deleted") {
+      // The entry behind a tracked note may have left the store (export keeps
+      // an edited note as `retained`); whatever the edit, it cannot land.
+      const noteStore: Store = note.kind === "skill" ? "skills" : "memory";
+      const exists =
+        noteStore === "memory"
+          ? current.has(note.id ?? "")
+          : currentSkills.has(note.id ?? "");
+      if (!exists) {
+        items.push(
+          item(note.path, note.kind, note.id, "stale_export", {
+            store: noteStore,
+            reason: `${noteStore} entry ${note.id ?? note.path} was removed after the export; copy the body into a new untracked note to propose it again`,
+          }),
+        );
+        continue;
+      }
+    }
     if (note.state === "unchanged") {
       items.push(item(note.path, note.kind, note.id, "unchanged"));
       continue;
@@ -337,19 +355,6 @@ export async function importVault(
     const body = note.note?.body ?? "";
     if (note.state === "modified") {
       const digest = note.tracked?.content_digest ?? "";
-      const exists =
-        store === "memory"
-          ? current.has(note.id ?? "")
-          : currentSkills.has(note.id ?? "");
-      if (!exists) {
-        items.push(
-          item(note.path, note.kind, note.id, "stale_export", {
-            store,
-            reason: `${store} entry ${note.id ?? note.path} was removed after the export; copy the body into a new untracked note to propose it again`,
-          }),
-        );
-        continue;
-      }
       if (store === "memory") {
         const entryId = note.id ?? "";
         const rationale = `vault edit of ${note.path} (exported revision ${exportedRevision}, digest ${shortDigest(digest)})`;

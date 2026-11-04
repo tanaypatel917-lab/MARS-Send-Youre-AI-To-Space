@@ -148,9 +148,11 @@ edges as wikilinks to the other file notes.
   (`file_digest`); a stale note you edited anywhere — body, frontmatter or
   Related — is kept and reported as `kept_modified`, as is any stale note from
   a manifest written before `file_digest` was recorded. Kept notes stay in the
-  manifest so the next import still reads them and reports `stale_export`
-  (`entry … was removed after the export`) instead of treating them as
-  untracked. Untracked files are never touched.
+  manifest as `retained`, so the next import still reads them and reports
+  `stale_export` (`entry … was removed after the export`) instead of treating
+  them as untracked, and a later export of the same path refuses to overwrite
+  them (`path_collision`). Cleanup never reads or removes through a symlink.
+  Untracked files are never touched.
 - Refuses a `vaultDir` that overlaps a host-private root or the memory/skills
   state directories (`VaultPathError`; both sides are compared after symlink
   resolution, so a vault that is a link into the state directory is refused
@@ -162,7 +164,9 @@ edges as wikilinks to the other file notes.
 
 The manifest `.mars-vault.json` records `schema_version: 1`, `exported_at`,
 `scope`, `memory_revision`, `skills_revision`, `graph` digests and one
-`{path, kind, id, revision, content_digest}` per tracked note.
+`{path, kind, id, revision, content_digest, file_digest}` per tracked note;
+a kept stale note additionally carries `retained: true`, which excludes its
+path from the files export may regenerate.
 
 ## Import
 

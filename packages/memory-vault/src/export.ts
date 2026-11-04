@@ -18,6 +18,7 @@ import {
   contains,
   encodeSegment,
   encodeSourcePath,
+  readFileNoFollow,
   realpathExisting,
   resolveInside,
   VaultPathError,
@@ -558,9 +559,14 @@ export async function exportVault(
     paths.set(note.path, note);
   }
 
-  // A file at a generated path that the previous manifest does not own is the
-  // user's; refuse before touching anything rather than overwrite it.
-  const owned = new Set((previous?.notes ?? []).map((note) => note.path));
+  // A file at a generated path that the previous manifest does not own — or
+  // that it only retained after the user edited it — is the user's; refuse
+  // before touching anything rather than overwrite it.
+  const owned = new Set(
+    (previous?.notes ?? [])
+      .filter((note) => note.retained !== true)
+      .map((note) => note.path),
+  );
   const planned = [...notes].sort((a, b) => byString(a.path, b.path));
   const rendered = new Map<string, string>();
   for (const note of planned) {
@@ -570,7 +576,7 @@ export async function exportVault(
     const absolute = resolveInside(vaultDir, note.path);
     let current: string | null = null;
     try {
-      current = await readFile(absolute, "utf8");
+      current = await readFileNoFollow(absolute, note.path);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -610,27 +616,33 @@ export async function exportVault(
     } catch {
       continue;
     }
-    let current: string;
+    let current: string | null;
     try {
-      current = await readFile(absolute, "utf8");
-    } catch {
-      continue;
+      // Never read through a link: a stale path swapped for a symlink is
+      // left alone (and stays retained so the scan reports it).
+      current = await readFileNoFollow(absolute, stale.path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      if (error instanceof VaultPathError) current = null;
+      else throw error;
     }
     // Only a byte-identical generated note is removed; any edit (body,
     // frontmatter or Related section) keeps the file and is reported. Older
     // manifests without file_digest cannot prove the file is untouched, so
     // their stale notes are always kept.
     if (
+      current !== null &&
       stale.file_digest !== undefined &&
       sha256(current) === stale.file_digest
     ) {
       await rm(absolute, { force: true });
       removed += 1;
     } else {
-      // The edited note stays tracked so the next import can still read it
-      // (and report that its entry is gone) instead of calling it untracked.
+      // The edited note stays tracked (as retained) so the next import can
+      // still read it and report that its entry is gone, and a later export
+      // of the same path refuses to overwrite it.
       keptModified += 1;
-      manifestNotes.push(stale);
+      manifestNotes.push({ ...stale, retained: true });
     }
   }
   manifestNotes.sort((a, b) => byString(a.path, b.path));

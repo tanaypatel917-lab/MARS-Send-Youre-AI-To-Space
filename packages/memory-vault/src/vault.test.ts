@@ -26,6 +26,7 @@ import {
   VaultManifestSchema,
   vaultStatus,
 } from "./index";
+import { readFileNoFollow } from "./paths";
 import { ImportReportSchema, StatusReportSchema } from "./schema";
 import { emitYaml, parseYaml } from "./yaml";
 
@@ -945,6 +946,87 @@ test("review: a new skill note must be named after its file", async () => {
   const pending = await skills.listProposals();
   expect(pending).toHaveLength(1);
   expect(pending[0]?.ops[0]).toMatchObject({ op: "create", name: "triage" });
+});
+
+test("review: a retained note whose entry is gone is stale_export whatever was edited", async () => {
+  const { common, vaultDir, memory } = await fixture();
+  await exportVault(ctx, common);
+  await memory.batch(ctx, 1, [{ operation: "remove", entry_id: "fact-plain" }]);
+  // frontmatter-only edit: the body digest still matches the manifest
+  writeFileSync(
+    join(vaultDir, "facts/fact-plain.md"),
+    read(vaultDir, "facts/fact-plain.md").replace(
+      "mars_kind: memory_fact\n",
+      "mars_kind: memory_fact\nreviewed: true\n",
+    ),
+  );
+  const report = await exportVault(ctx, common);
+  expect(report).toMatchObject({ removed: 0, kept_modified: 1 });
+  const manifest = VaultManifestSchema.parse(
+    JSON.parse(read(vaultDir, VAULT_MANIFEST_FILE)),
+  );
+  expect(
+    manifest.notes.find((note) => note.path === "facts/fact-plain.md"),
+  ).toMatchObject({ retained: true });
+  const imported = await importVault(ctx, { ...common, actor: "tester" });
+  const item = imported.items.find((i) => i.path === "facts/fact-plain.md");
+  expect(item?.action).toBe("stale_export");
+  expect(item?.reason).toContain("removed after the export");
+  expect(imported.proposals.memory).toEqual([]);
+});
+
+test("review: a returning graph never overwrites a retained edited graph note", async () => {
+  const { common, vaultDir } = await fixture();
+  await exportVault(ctx, { ...common, graph: graphFixture() });
+  const path = join(vaultDir, "graph/ws1/index.md");
+  const edited = `${read(vaultDir, "graph/ws1/index.md")}\nMy annotation.\n`;
+  writeFileSync(path, edited);
+  const without = await exportVault(ctx, common);
+  expect(without.kept_modified).toBeGreaterThan(0);
+  expect(read(vaultDir, "graph/ws1/index.md")).toBe(edited);
+  await expect(
+    exportVault(ctx, { ...common, graph: graphFixture() }),
+  ).rejects.toMatchObject({ code: "path_collision" });
+  expect(read(vaultDir, "graph/ws1/index.md")).toBe(edited);
+});
+
+test("review: stale-note cleanup never reads or removes through a symlink", async () => {
+  if (process.platform === "win32") return;
+  const { common, vaultDir, state, memory } = await fixture();
+  await exportVault(ctx, common);
+  const generated = read(vaultDir, "facts/fact-plain.md");
+  const outside = join(state, "outside-note.md");
+  writeFileSync(outside, generated);
+  await memory.batch(ctx, 1, [{ operation: "remove", entry_id: "fact-plain" }]);
+  rmSync(join(vaultDir, "facts/fact-plain.md"));
+  symlinkSync(outside, join(vaultDir, "facts/fact-plain.md"));
+  const report = await exportVault(ctx, common);
+  expect(report).toMatchObject({ removed: 0, kept_modified: 1 });
+  expect(existsSync(outside)).toBe(true);
+  expect(readFileSync(outside, "utf8")).toBe(generated);
+  const status = await vaultStatus(ctx, common);
+  expect(status.memory.notes.invalid).toBe(1);
+});
+
+test("review: readFileNoFollow refuses links and non-files even at open time", async () => {
+  if (process.platform === "win32") return;
+  const root = mkdtempSync(join(tmpdir(), "mars-vault-nofollow-"));
+  roots.push(root);
+  writeFileSync(join(root, "target.md"), "secret\n");
+  symlinkSync(join(root, "target.md"), join(root, "link.md"));
+  mkdirSync(join(root, "dir.md"));
+  await expect(
+    readFileNoFollow(join(root, "link.md"), "link.md"),
+  ).rejects.toMatchObject({ code: "path_escape" });
+  await expect(
+    readFileNoFollow(join(root, "dir.md"), "dir.md"),
+  ).rejects.toMatchObject({ code: "path_escape" });
+  expect(await readFileNoFollow(join(root, "target.md"), "target.md")).toBe(
+    "secret\n",
+  );
+  await expect(
+    readFileNoFollow(join(root, "missing.md"), "missing.md"),
+  ).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 test("review: encoded graph file names stay within file-name limits", () => {

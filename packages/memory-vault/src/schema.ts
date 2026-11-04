@@ -33,6 +33,11 @@ export const ManifestNoteSchema = z
     content_digest: digest,
     /** Whole-file digest; absent in manifests written before it was recorded. */
     file_digest: digest.optional(),
+    /**
+     * The entry left the store but the edited note was kept; export never
+     * regenerates over a retained note, and import explains why it is stale.
+     */
+    retained: z.literal(true).optional(),
   })
   .strict();
 export type ManifestNote = z.infer<typeof ManifestNoteSchema>;
