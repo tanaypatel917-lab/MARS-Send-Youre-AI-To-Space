@@ -435,7 +435,6 @@ export function projectTranscript(
             const entry = journal.entries.get(entryId);
             if (
               entry &&
-              !seenEntries.has(entry.entry_id) &&
               (THINKING_KINDS.has(entry.kind) ||
                 (TEXT_KINDS.has(entry.kind) && entry.text.trim()))
             )
@@ -454,6 +453,7 @@ export function projectTranscript(
           break;
         }
         for (const entry of resolved) {
+          if (seenEntries.has(entry.entry_id)) continue;
           seenEntries.add(entry.entry_id);
           const entryProvenance = {
             source: `tasks.journal ${entry.entry_id}`,

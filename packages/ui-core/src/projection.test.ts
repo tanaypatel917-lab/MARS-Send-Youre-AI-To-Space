@@ -77,6 +77,35 @@ describe("projectTranscript (criterion 1)", () => {
     }
   });
 
+  test("a repeated journal id renders its text once and adds no turn marker", () => {
+    const [first] = loadEventFixture("execution.observed").filter(
+      (row) => pendingJournalIds([row], new Set()).length > 0,
+    );
+    if (!first) throw new Error("fixture has no observed entry ids");
+    const [entry_id = ""] = pendingJournalIds([first], new Set());
+    const repeat = {
+      ...first,
+      event: {
+        ...first.event,
+        event_id: `${first.event.event_id}-repeat`,
+      },
+    };
+    const projection = projectTranscript({
+      task: fixtureTask(),
+      events: [first, repeat],
+      journal: {
+        status: "available",
+        entries: new Map([
+          [entry_id, { entry_id, kind: "assistant", text: "once" }],
+        ]),
+      },
+    });
+    expect(
+      projection.entries.filter((e) => e.kind === "assistant"),
+    ).toHaveLength(1);
+    expect(projection.entries.filter((e) => e.kind === "turn")).toHaveLength(0);
+  });
+
   test("journal reply resolves thinking and assistant text; unmatched ids stay turns", () => {
     const projection = projectTranscript({
       task: fixtureTask(),
