@@ -6,6 +6,9 @@ import {
 } from "../scripts/fixture-workbench";
 import { createBridge } from "../src/main/bridge";
 import { createLoopbackTransport } from "../src/main/transport";
+import { createController } from "../src/renderer/controller";
+import { READ_METHODS, type ShellBridge } from "../src/shared/methods";
+import { findAll, MiniDocument } from "./mini-dom";
 import { loadFixtureData } from "./test-utils";
 
 const TOKEN = "fixture-token-0123456789abcdefghijklmnopqrstuvwxyz";
@@ -63,6 +66,59 @@ test("real loopback workbench serves all nine read methods through the bridge", 
       ok: false,
       error: { kind: "hash_mismatch" },
     });
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("fixture event cursors page generated events through the real controller transport", async () => {
+  const data = await loadFixtureData();
+  const taskId = "fixture-running";
+  const detail = data.details[taskId];
+  const baseEvent = detail?.events[0];
+  if (!detail || !baseEvent) throw new Error("Fixture task event missing.");
+  detail.events = Array.from({ length: 150 }, (_, index) => ({
+    ...baseEvent,
+    event_id: `fixture-page-event-${index + 1}`,
+    parent_event_id: index === 0 ? null : `fixture-page-event-${index}`,
+  }));
+  await expect(
+    createFixtureOperations(data).events(
+      {
+        schema_version: 1,
+        scope: data.describe.scope,
+        request_id: "fixture-pagination-test",
+      },
+      taskId,
+      "unknown-event-cursor",
+    ),
+  ).rejects.toMatchObject({ code: "invalid_request" });
+
+  const { server, url } = await runningServer(data);
+  try {
+    const rpcBridge = createBridge({
+      transport: createLoopbackTransport({ url, token: TOKEN }),
+      connectionScope: {
+        owner_id: data.describe.scope.owner_id,
+        project_id: data.describe.scope.project_id,
+      },
+      requestId: () => "fixture-pagination-test",
+    });
+    const bridge = Object.fromEntries(
+      READ_METHODS.map((method) => [
+        method,
+        (params: unknown) => rpcBridge.call(method, params),
+      ]),
+    ) as ShellBridge;
+    const document = new MiniDocument();
+    const controller = createController(bridge, document, document.root);
+    await controller.load();
+
+    expect(
+      findAll(document.root, (element) => element.tagName === "P")
+        .map((element) => element.textContent)
+        .join(" "),
+    ).toContain("150 task events");
   } finally {
     await server.stop(true);
   }

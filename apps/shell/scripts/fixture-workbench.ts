@@ -74,8 +74,19 @@ export function createFixtureOperations(
         text: "Fixture journal entry.",
       }));
     },
-    async events(_context: RequestContext, taskId: string) {
-      return operation(taskId).events;
+    async events(
+      _context: RequestContext,
+      taskId: string,
+      afterEventId?: string,
+    ) {
+      const events = operation(taskId).events;
+      const cursorIndex =
+        afterEventId === undefined
+          ? -1
+          : events.findIndex((event) => event.event_id === afterEventId);
+      if (afterEventId !== undefined && cursorIndex < 0)
+        throw new WorkbenchError("invalid_request");
+      return events.slice(cursorIndex + 1, cursorIndex + 101);
     },
     async artifact(_context: RequestContext, taskId: string, ref: ArtifactRef) {
       const task = data.tasks.find((candidate) => candidate.task_id === taskId);
