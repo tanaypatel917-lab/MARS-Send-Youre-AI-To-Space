@@ -123,6 +123,7 @@ export const REQUIRED_COMPONENTS = [
   "agent-lightning",
   "vllm",
   "watch-skill",
+  "graphify",
   "codex-tooling",
   "omniroute",
 ] as const;

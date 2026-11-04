@@ -69,6 +69,14 @@ import {
   withFrozenInstructions,
 } from "./conventions-context";
 import {
+  FrozenGraphSummarySchema,
+  freezeGraphSummary,
+  graphEvidence,
+  validateFrozenGraphSummary,
+  type WorkbenchKnowledgeGraph,
+  withFrozenGraphSummary,
+} from "./graph-context";
+import {
   FrozenMemorySchema,
   freezeMemory,
   recallHistory,
@@ -127,6 +135,7 @@ const launchSchema = z
     memory: FrozenMemorySchema.optional(),
     skills: FrozenSkillsSchema.optional(),
     repository_map: FrozenRepositoryMapSchema.optional(),
+    knowledge_graph: FrozenGraphSummarySchema.optional(),
     instructions: FrozenInstructionsSchema.optional(),
     routing: FrozenRoutingSchema.optional(),
     collaboration: FrozenCollaborationSchema.optional(),
@@ -185,6 +194,8 @@ export interface WorkbenchHostOptions {
   optimization?: WorkbenchOptimization;
   /** Host-owned watch-skill perception and verification; absent means no watch tools. */
   watch?: WorkbenchWatch;
+  /** Host-owned derived code knowledge graph; tools and launch summaries are bound per task. */
+  knowledgeGraph?: WorkbenchKnowledgeGraph;
   /** Repository conventions (instruction files, skill folders, hooks, slash commands, apply_patch). */
   conventions?: WorkbenchConventions;
   hostPrivateRoots?: string[];
@@ -304,6 +315,7 @@ export async function createWorkbenchHost(
     collaboration ||
     Boolean(options.research) ||
     Boolean(options.watch) ||
+    Boolean(options.knowledgeGraph) ||
     Object.values(approvals).some(Boolean);
   // Watch tools are host-bound too: the subprocess, policy and evidence
   // records belong to the host, and loop/verify verdicts land in the task's
@@ -333,6 +345,52 @@ export async function createWorkbenchHost(
   ) => {
     const watch = watchFor(taskId, cwd, approvals);
     return watch ? { watch } : {};
+  };
+  // Graph tools are host-bound and revision-fenced: the artifact is a derived,
+  // rebuildable cache next to the repository map, never a memory owner, and
+  // build attempts land in the task's events.
+  const graphBinding = (
+    context: RequestContext,
+    taskId: string,
+    cwd: string,
+    workspace: WorkspaceRef,
+    approvals: Pick<Approvals, "read">,
+  ) => ({
+    task_id: taskId,
+    owner_id: options.scope.owner_id,
+    project_id: options.scope.project_id,
+    workspace_id: workspace.workspace_id,
+    cwd,
+    revision: workspace.revision,
+    // The workspace revision advances on every write; builds and queries
+    // re-resolve it so an edited tree never answers from the launch graph.
+    async currentRevision() {
+      const current = await options.workspace.reopen(context, taskId);
+      if (current.workspace_id !== workspace.workspace_id)
+        throw new WorkbenchError("conflict");
+      return current.revision;
+    },
+    approvals: { read: approvals.read },
+    evidence: graphEvidence(
+      options.store,
+      () => internalContext(options.scope),
+      taskId,
+    ),
+  });
+  const graphOption = (
+    context: RequestContext,
+    taskId: string,
+    cwd: string,
+    workspace: WorkspaceRef,
+    approvals: Pick<Approvals, "read">,
+  ) => {
+    const graph = options.knowledgeGraph;
+    if (!graph) return {};
+    return {
+      knowledgeGraph: graph.toolsFor(
+        graphBinding(context, taskId, cwd, workspace, approvals),
+      ),
+    };
   };
   // Research tools are host-bound: requests carry the task's current durable
   // revision and budget, and findings return as rendered untrusted text.
@@ -404,6 +462,20 @@ export async function createWorkbenchHost(
           map.workspace.workspace_id !== value.workspace.workspace_id ||
           map.workspace.provider !== value.workspace.provider ||
           map.workspace.revision !== value.workspace.revision
+        )
+          throw new WorkbenchError("internal_error");
+      }
+      if (value.knowledge_graph) {
+        const graph = value.knowledge_graph;
+        validateFrozenGraphSummary(graph);
+        if (
+          !value.approvals.read ||
+          graph.scope.owner_id !== task.scope.owner_id ||
+          graph.scope.project_id !== task.scope.project_id ||
+          graph.scope.workspace_id !== task.scope.workspace_id ||
+          graph.workspace.workspace_id !== value.workspace.workspace_id ||
+          graph.workspace.provider !== value.workspace.provider ||
+          graph.workspace.revision !== value.workspace.revision
         )
           throw new WorkbenchError("internal_error");
       }
@@ -1765,6 +1837,7 @@ export async function createWorkbenchHost(
               research: Boolean(options.research),
               proposals: Boolean(options.optimization),
               watch: Boolean(options.watch),
+              knowledgeGraph: Boolean(options.knowledgeGraph),
               patch: Boolean(options.conventions?.applyPatch),
               instruction: baseInstruction,
             }) + MIN_INITIAL_OUTPUT_RESERVE,
@@ -1787,6 +1860,7 @@ export async function createWorkbenchHost(
         research: Boolean(options.research),
         proposals: Boolean(options.optimization),
         watch: Boolean(options.watch),
+        knowledgeGraph: Boolean(options.knowledgeGraph),
         patch: Boolean(options.conventions?.applyPatch),
         instruction: baseInstruction,
       });
@@ -1948,6 +2022,40 @@ export async function createWorkbenchHost(
         const stateDir = taskState(task);
         await mkdir(stateDir, { mode: 0o700 });
         const cwd = await options.workspace.cwd(context, workspace);
+        let graphSummary: z.infer<typeof FrozenGraphSummarySchema> | undefined;
+        if (options.knowledgeGraph && params.approvals.read) {
+          try {
+            const found = await options.knowledgeGraph.lookup(
+              graphBinding(
+                context,
+                task.task_id,
+                cwd,
+                workspace,
+                params.approvals,
+              ),
+            );
+            if (found.status === "ready") {
+              graphSummary = freezeGraphSummary(
+                context,
+                WorkspaceRefSchema.parse(workspace),
+                found.artifact,
+                instruction,
+                capacity -
+                  (serializedBytes(instruction) -
+                    serializedBytes(baseInstruction)),
+              );
+              if (graphSummary) {
+                assertPublicBytes(
+                  new TextEncoder().encode(graphSummary.text),
+                  await privatePatterns(context, task.task_id),
+                );
+                instruction = withFrozenGraphSummary(instruction, graphSummary);
+              }
+            }
+          } catch {
+            graphSummary = undefined;
+          }
+        }
         runtime = await runtimeFactory({
           task: runtimeTask(running, collaboration),
           cwd,
@@ -1982,6 +2090,13 @@ export async function createWorkbenchHost(
           ...researchFor(task.task_id, () => launchDeadline),
           ...proposalsFor(),
           ...watchOption(task.task_id, cwd, params.approvals),
+          ...graphOption(
+            context,
+            task.task_id,
+            cwd,
+            workspace,
+            params.approvals,
+          ),
           onEvent: async (event) => {
             if (!bound) {
               if (initialObservations.length >= 1000)
@@ -2006,6 +2121,7 @@ export async function createWorkbenchHost(
           ...(memory ? { memory } : {}),
           ...(skills ? { skills } : {}),
           ...(repositoryMap ? { repository_map: repositoryMap } : {}),
+          ...(graphSummary ? { knowledge_graph: graphSummary } : {}),
           ...(instructions ? { instructions } : {}),
           ...(routing ? { routing } : {}),
           ...(collaboration ? { collaboration } : {}),
@@ -2164,6 +2280,13 @@ export async function createWorkbenchHost(
           ),
           ...proposalsFor(),
           ...watchOption(task.task_id, cwd, launch.approvals),
+          ...graphOption(
+            context,
+            task.task_id,
+            cwd,
+            workspace,
+            launch.approvals,
+          ),
           onEvent: observe(taskId),
         });
         if (closing) throw new WorkbenchError("unavailable");

@@ -10,10 +10,12 @@ import {
   sep,
 } from "node:path";
 import {
+  createDerivedArtifactStore,
   createRepositoryMapProvider,
   type RepositoryMapProvider,
 } from "@mars/context";
 import { type Scope, ScopeSchema } from "@mars/contracts";
+import { createKnowledgeGraphService } from "@mars/knowledge-graph";
 import { createMemoryStore, type DurableMemoryStore } from "@mars/memory";
 import { loadModelRegistry, type ModelProviderRegistry } from "@mars/providers";
 import {
@@ -140,6 +142,13 @@ export interface WorkbenchServiceOptions {
   collaboration?: WorkbenchCollaboration;
   /** Background research worker and control plane; sessions get no research tools without it. */
   research?: WorkbenchResearchOptions;
+  /** Pinned graphify CLI (argv prefix); sessions get no graph tools without it. */
+  knowledgeGraph?: {
+    command: string[];
+    timeoutMs?: number;
+    /** `command` wraps graphify in an OS sandbox (bwrap, firejail, …). */
+    osWrapper?: boolean;
+  };
   /** Repository conventions (instruction files, skill folders, hooks, slash commands, apply_patch) loaded by the caller from the trusted checkout. */
   conventions?: WorkbenchConventions;
   /** OmniRoute provider target; absent means no OmniRoute models exist. */
@@ -249,6 +258,9 @@ export async function createWorkbenchService(
   const memoryRoot = await privateSubdirectory(root, "memory");
   const researchRoot = options.research
     ? await privateSubdirectory(root, "research")
+    : undefined;
+  const graphRoot = options.knowledgeGraph
+    ? await privateSubdirectory(root, "knowledge-graph")
     : undefined;
   const skillsRoot = await privateSubdirectory(root, "skills");
   const reviewRoot = await privateSubdirectory(root, "review");
@@ -373,6 +385,22 @@ export async function createWorkbenchService(
         };
       },
     });
+    const knowledgeGraph =
+      options.knowledgeGraph && graphRoot
+        ? createKnowledgeGraphService({
+            command: options.knowledgeGraph.command,
+            ...(options.knowledgeGraph.timeoutMs !== undefined
+              ? { timeoutMs: options.knowledgeGraph.timeoutMs }
+              : {}),
+            ...(options.knowledgeGraph.osWrapper !== undefined
+              ? { osWrapper: options.knowledgeGraph.osWrapper }
+              : {}),
+            dataRoot: graphRoot,
+            artifacts: createDerivedArtifactStore({
+              rootDir: join(graphRoot, "artifacts"),
+            }),
+          })
+        : undefined;
     host = await createWorkbenchHost({
       scope,
       workspaceLabel: basename(source),
@@ -389,6 +417,7 @@ export async function createWorkbenchService(
         ? { collaboration: options.collaboration }
         : {}),
       ...(research ? { research } : {}),
+      ...(knowledgeGraph ? { knowledgeGraph } : {}),
       ...(options.conventions ? { conventions: options.conventions } : {}),
       hostPrivateRoots: [
         memoryRoot,
@@ -396,6 +425,7 @@ export async function createWorkbenchService(
         reviewRoot,
         source,
         ...(researchRoot ? [researchRoot] : []),
+        ...(graphRoot ? [graphRoot] : []),
       ],
       workspace: {
         prepare: provider.prepare.bind(provider),
