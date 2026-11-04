@@ -43,6 +43,10 @@ const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const LOG_TAIL = 200;
 /** How long to wait for in-flight backend calls after the worker was stopped. */
 export const DRAIN_GRACE_MS = 2000;
+/** How long to wait for the killed worker process to exit. */
+export const EXIT_WAIT_MS = 5000;
+/** How long to wait for the worker's stderr to finish draining. */
+export const STDERR_DRAIN_MS = 1000;
 
 /** Worker environment is minimal: it never sees host secrets. */
 function workerEnvironment(): Record<string, string> {
@@ -598,12 +602,12 @@ export async function runGepaWorker(
   worker.exit_code = await Promise.race([
     process.exited,
     new Promise<number | null>((resolve) =>
-      setTimeout(() => resolve(null), 5000),
+      setTimeout(() => resolve(null), EXIT_WAIT_MS),
     ),
   ]);
   await Promise.race([
     stderrDrain,
-    new Promise((resolve) => setTimeout(resolve, 1000)),
+    new Promise((resolve) => setTimeout(resolve, STDERR_DRAIN_MS)),
   ]);
 
   const finalReason: StopReason = state.reason ?? "protocol_error";
