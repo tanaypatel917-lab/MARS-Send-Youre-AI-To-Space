@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { RepoRegistry } from "@mars/code-refs";
 import {
   AgentPreviewSchema,
@@ -190,7 +191,7 @@ async function dispatch(
   actor: TeamActor,
   request: TeamRpcRequest,
 ): Promise<unknown> {
-  const requestId = request.context.request_id;
+  const requestId = request.context?.request_id ?? randomUUID();
   const refs = () => {
     if (!references) throw unavailable("Repository is unavailable");
     return references;
@@ -1081,7 +1082,12 @@ export function serveTeam(options: TeamServerOptions) {
         const parsed = TeamRpcRequestSchema.safeParse(raw);
         if (!parsed.success) return done(responseError("invalid_request"));
         method = parsed.data.method;
-        const teamId = parsed.data.context.team_id;
+        const teamId =
+          parsed.data.context?.team_id ??
+          (parsed.data.method === "team.describe" && user.team_ids.length === 1
+            ? user.team_ids[0]
+            : undefined);
+        if (teamId === undefined) return done(responseError("invalid_request"));
         if (!user.team_ids.includes(teamId))
           return done(responseError("forbidden"));
         // Kill switch: only `team.describe` (which reports `enabled: false`)

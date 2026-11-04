@@ -226,7 +226,13 @@ export const AgentRequestParamsSchema = AgentSelectionParamsSchema.extend({
 const requestId = z.object({ request_id: id }).strict();
 
 export const TeamRpcRequestSchema = z.discriminatedUnion("method", [
-  method("team.describe", empty),
+  z
+    .object({
+      method: z.literal("team.describe"),
+      params: empty,
+      context: TeamContextSchema.optional(),
+    })
+    .strict(),
   /** Redacted counters; team admins only. */
   method("team.metrics", empty),
   method("conversations.create_dm", z.object({ peer_user_id: id }).strict()),
