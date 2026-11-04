@@ -183,6 +183,16 @@ function fixture(overrides: Partial<WorkbenchOperations> = {}) {
       calls.push("checkpoint");
       return checkpoint;
     },
+    async verification() {
+      calls.push("verification");
+      return {
+        candidate: null,
+        state: "unverified" as const,
+        record: null,
+        reasons: [],
+        records: [],
+      };
+    },
     async restore() {
       calls.push("restore");
       return workspace;

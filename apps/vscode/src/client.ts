@@ -3,9 +3,13 @@ import {
   type ArtifactRef,
   type CheckpointRef,
   type EventEnvelope,
+  type RequiredCheck,
+  RequiredCheckSchema,
   type Scope,
   type Task,
   TaskSchema,
+  type VerificationView,
+  VerificationViewSchema,
   type WorkspaceRef,
 } from "@mars/contracts";
 import type { z } from "zod";
@@ -33,6 +37,8 @@ export interface StartOptions {
   expectedRevision: number;
   approvals: Approvals;
   modelId?: string;
+  /** Host-run checks fixed at launch; the server verifies the finished candidate against them. */
+  requiredChecks?: readonly RequiredCheck[];
 }
 
 export interface VerifiedArtifact {
@@ -157,10 +163,39 @@ export class MarsClient {
       approvals: ApprovalsSchema.parse(options.approvals),
     };
     if (options.modelId) params.model_id = options.modelId;
+    if (options.requiredChecks?.length)
+      params.required_checks = options.requiredChecks.map((check) =>
+        RequiredCheckSchema.parse(check),
+      );
     return this.checkTask(
       await this.call(RPC_METHODS.start, params, signal),
       taskId,
     );
+  }
+
+  /** The host-owned verification verdict for the task's current candidate revision. */
+  async verification(
+    taskId: string,
+    signal?: AbortSignal,
+  ): Promise<VerificationView> {
+    const view = validate(
+      VerificationViewSchema,
+      await this.call(RPC_METHODS.verification, { task_id: taskId }, signal),
+      "verification",
+    );
+    if (view.candidate) this.checkWorkspace(view.candidate);
+    for (const record of view.records)
+      if (record.task_id !== taskId) throw invalid("verification identity");
+    if (view.record && !view.records.includes(view.record)) {
+      const known = view.records.some(
+        (record) =>
+          record.run_id === view.record?.run_id &&
+          record.recorded_at === view.record?.recorded_at &&
+          record.candidate.revision === view.record?.candidate.revision,
+      );
+      if (!known) throw invalid("verification record");
+    }
+    return view;
   }
 
   async resume(
