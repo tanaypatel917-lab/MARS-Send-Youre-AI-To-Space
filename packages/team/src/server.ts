@@ -1,5 +1,11 @@
 import type { RepoRegistry } from "@mars/code-refs";
-import { MessageViewSchema, ParticipantSchema } from "@mars/contracts";
+import {
+  MessageViewSchema,
+  ParticipantSchema,
+  SharePreviewSchema,
+  TaskLinkSchema,
+  TaskLinkViewSchema,
+} from "@mars/contracts";
 import type { Authenticator } from "./auth";
 import { TeamError, unavailable } from "./errors";
 import {
@@ -11,6 +17,7 @@ import {
   ReferencePreviewResultSchema,
   ReferenceResultSchema,
   RepoListSchema,
+  TaskLinkDraftResultSchema,
   TeamDescribeResultSchema,
   type TeamRpcRequest,
   TeamRpcRequestSchema,
@@ -110,7 +117,7 @@ async function dispatch(
 ): Promise<unknown> {
   const requestId = request.context.request_id;
   const refs = () => {
-    if (!references) throw unavailable();
+    if (!references) throw unavailable("Repository is unavailable");
     return references;
   };
   switch (request.method) {
@@ -171,6 +178,30 @@ async function dispatch(
     case "references.search_paths":
       return PathSearchResultSchema.parse(
         await refs().searchPaths(actor, request.params),
+      );
+    case "tasks.link_draft":
+      return TaskLinkDraftResultSchema.parse(
+        store.linkDraft(actor, requestId, request.params),
+      );
+    case "tasks.link_confirm":
+      return TaskLinkSchema.parse(
+        store.linkConfirm(actor, requestId, request.params),
+      );
+    case "tasks.link_created":
+      return TaskLinkSchema.parse(
+        store.linkCreated(actor, requestId, request.params),
+      );
+    case "tasks.link_inspect":
+      return TaskLinkViewSchema.parse(
+        store.linkInspect(actor, request.params.link_id),
+      );
+    case "shares.preview":
+      return SharePreviewSchema.parse(
+        store.sharePreview(actor, request.params),
+      );
+    case "shares.create":
+      return MessageViewSchema.parse(
+        store.shareCreate(actor, requestId, request.params),
       );
   }
 }
@@ -372,6 +403,73 @@ function validateResult(
         for (const match of search.matches)
           if (!isRelativePath(match.path)) invalid();
       }
+      break;
+    }
+    case "tasks.link_draft": {
+      const draft = TaskLinkDraftResultSchema.parse(result);
+      if (
+        draft.link.team_id !== actor.team_id ||
+        draft.link.requester_id !== actor.user_id ||
+        draft.link.conversation_id !== request.params.conversation_id ||
+        draft.link.status !== "draft"
+      )
+        invalid();
+      break;
+    }
+    case "tasks.link_confirm":
+    case "tasks.link_created": {
+      const link = TaskLinkSchema.parse(result);
+      if (
+        link.team_id !== actor.team_id ||
+        link.requester_id !== actor.user_id ||
+        link.link_id !== request.params.link_id
+      )
+        invalid();
+      break;
+    }
+    case "tasks.link_inspect": {
+      const view = TaskLinkViewSchema.parse(result);
+      if (
+        view.link.team_id !== actor.team_id ||
+        view.link.link_id !== request.params.link_id ||
+        (view.view === "requester") !==
+          (view.link.requester_id === actor.user_id)
+      )
+        invalid();
+      // Another member's view must omit the requester's workbench binding, not blank it.
+      if (
+        view.view === "member" &&
+        ("launch_key" in view.link ||
+          "workbench" in view.link ||
+          "target" in view.link)
+      )
+        invalid();
+      break;
+    }
+    case "shares.preview": {
+      const preview = SharePreviewSchema.parse(result);
+      if (
+        preview.card.link_id !== request.params.link_id ||
+        preview.card.requester_id !== actor.user_id ||
+        preview.card.attested_by !== actor.user_id ||
+        (preview.card.verified && preview.card.verified_reason !== null) ||
+        (!preview.card.verified && preview.card.verified_reason === null)
+      )
+        invalid();
+      break;
+    }
+    case "shares.create": {
+      const message = checkMessage(result);
+      if (
+        message.author_id !== actor.user_id ||
+        message.kind !== "result_card" ||
+        message.payload === undefined ||
+        message.payload.link_id !== request.params.link_id ||
+        message.payload.message_id !== message.message_id ||
+        message.payload.preview_sha256 !== request.params.preview_sha256 ||
+        message.payload.requester_id !== actor.user_id
+      )
+        invalid();
       break;
     }
   }

@@ -35,6 +35,5 @@ export const notFound = () =>
 export const referenceNotFound = () =>
   new TeamError("not_found", "Repository or reference not found");
 export const conflict = (message: string) => new TeamError("conflict", message);
-/** The host registry cannot serve the repo right now; nothing about it leaks. */
-export const unavailable = () =>
-  new TeamError("unavailable", "Repository is unavailable");
+export const unavailable = (message: string) =>
+  new TeamError("unavailable", message);

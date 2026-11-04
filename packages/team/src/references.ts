@@ -124,7 +124,7 @@ export function createReferenceService(
           throw invalidInput("Reference target is not a shareable file range");
         case "unknown_repo":
         case "error":
-          throw unavailable();
+          throw unavailable("Repository is unavailable");
       }
     },
     async resolve(actor, referenceId) {
@@ -200,7 +200,7 @@ export function createReferenceService(
           throw invalidInput("Invalid search input");
         case "unknown_repo":
         case "error":
-          throw unavailable();
+          throw unavailable("Repository is unavailable");
       }
     },
   };

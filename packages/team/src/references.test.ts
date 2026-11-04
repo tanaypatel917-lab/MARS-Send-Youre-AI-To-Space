@@ -166,7 +166,8 @@ describe.skipIf(!GIT)("@mars/team committed code references", () => {
   test("the migration ledger gained the references migration", () => {
     expect(TEAM_MIGRATIONS.map((m) => m.id)).toEqual([
       "0001_initial",
-      "0002_references",
+      "0002_task_links",
+      "0003_references",
     ]);
   });
 

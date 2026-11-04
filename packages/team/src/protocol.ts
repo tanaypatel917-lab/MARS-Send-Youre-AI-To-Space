@@ -5,6 +5,12 @@ import {
   ParticipantSchema,
   ReferencePreviewSchema,
   RepoSchema,
+  ScopeSchema,
+  SharedEvidenceSchema,
+  ShareSelectionSchema,
+  TASK_LINK_MAX_MESSAGES,
+  TaskLinkSchema,
+  TaskStatusSchema,
   TEAM_MAX_BODY_CHARS,
   TEAM_MAX_CLIENT_MESSAGE_ID_CHARS,
   TEAM_MAX_REFERENCES,
@@ -30,6 +36,9 @@ import {
  * Search must render references through the same per-viewer gate as
  * `messages.history` (`TeamStore.history` chips): a restricted reference's
  * path, label or SHA is never indexed or matched for that viewer.
+ * Task links (`tasks.link_*`) and result shares (`shares.*`) are the Team Chat
+ * PR 6 chat half; the service stores workbench ids and cards only and never
+ * calls a workbench itself.
  */
 const id = z.string().min(1).max(256);
 const seq = z.number().int().nonnegative();
@@ -119,6 +128,46 @@ export const SearchPathsParamsSchema = z
   .strict();
 export type SearchPathsParams = z.infer<typeof SearchPathsParamsSchema>;
 
+export const LinkDraftParamsSchema = z
+  .object({
+    conversation_id: id,
+    message_ids: z.array(id).min(1).max(TASK_LINK_MAX_MESSAGES),
+    reference_ids: z.array(id).max(TEAM_MAX_REFERENCES),
+  })
+  .strict();
+
+export const LinkConfirmParamsSchema = z
+  .object({
+    link_id: id,
+    workbench: z
+      .object({ scope: ScopeSchema, task_id: id, request_id: id })
+      .strict(),
+    target: z
+      .object({
+        repo_id: id.optional(),
+        base_revision: z.string().min(1).max(256).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+/**
+ * `evidence` is the caller's own workbench `tasks.evidence` result and
+ * `run_status` the caller's `tasks.inspect` status (the evidence result does
+ * not carry it; see the follow-up in `documentation/TEAM_CHAT.md`).
+ */
+export const SharePreviewParamsSchema = z
+  .object({
+    link_id: id,
+    evidence: SharedEvidenceSchema,
+    run_status: TaskStatusSchema,
+    selection: ShareSelectionSchema,
+  })
+  .strict();
+export const ShareCreateParamsSchema = SharePreviewParamsSchema.extend({
+  preview_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+
 export const TeamRpcRequestSchema = z.discriminatedUnion("method", [
   method("team.describe", empty),
   method("conversations.create_dm", z.object({ peer_user_id: id }).strict()),
@@ -150,6 +199,17 @@ export const TeamRpcRequestSchema = z.discriminatedUnion("method", [
   method("references.create", CreateReferenceParamsSchema),
   method("references.resolve", ResolveReferenceParamsSchema),
   method("references.search_paths", SearchPathsParamsSchema),
+  method("tasks.link_draft", LinkDraftParamsSchema),
+  method("tasks.link_confirm", LinkConfirmParamsSchema),
+  method(
+    "tasks.link_created",
+    z
+      .object({ link_id: id, task_revision: z.number().int().nonnegative() })
+      .strict(),
+  ),
+  method("tasks.link_inspect", z.object({ link_id: id }).strict()),
+  method("shares.preview", SharePreviewParamsSchema),
+  method("shares.create", ShareCreateParamsSchema),
 ]);
 export type TeamRpcRequest = z.infer<typeof TeamRpcRequestSchema>;
 export type TeamRpcMethod = TeamRpcRequest["method"];
@@ -226,3 +286,22 @@ export const PathSearchResultSchema = z.discriminatedUnion("state", [
     .strict(),
 ]);
 export type PathSearchResult = z.infer<typeof PathSearchResultSchema>;
+
+export const TASK_LINK_EXCERPT_CHARS = 280;
+/** Shown to the requester in the confirmation step only; never stored. */
+export const TaskLinkExcerptSchema = z
+  .object({
+    message_id: id,
+    seq: z.number().int().positive(),
+    author_id: id,
+    excerpt: z.string().max(TASK_LINK_EXCERPT_CHARS),
+    truncated: z.boolean(),
+  })
+  .strict();
+export const TaskLinkDraftResultSchema = z
+  .object({
+    link: TaskLinkSchema,
+    excerpts: z.array(TaskLinkExcerptSchema).max(TASK_LINK_MAX_MESSAGES),
+  })
+  .strict();
+export type TaskLinkDraftResult = z.infer<typeof TaskLinkDraftResultSchema>;

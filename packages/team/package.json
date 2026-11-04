@@ -12,5 +12,8 @@
     "@mars/code-refs": "workspace:*",
     "@mars/contracts": "workspace:*",
     "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@mars/workbench": "workspace:*"
   }
 }
