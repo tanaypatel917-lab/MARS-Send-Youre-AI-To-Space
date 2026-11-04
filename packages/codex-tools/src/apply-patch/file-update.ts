@@ -25,8 +25,10 @@ export class ReplacementError extends Error {
  * position, then `old_lines` (retrying without a trailing empty line that
  * stands for the final newline). Parsed context lines are kept in place so
  * their exact text and terminators survive. A chunk without old lines is
- * appended at end of file (upstream behaviour, even after a `@@` anchor).
- * MARS bounds the whole search at `MAX_SEEK_LINE_COMPARISONS` per hunk.
+ * inserted right after its `@@` anchor when it has one (MARS deviation:
+ * upstream appends at end of file even after an anchor) and appended at end
+ * of file otherwise. MARS bounds the whole search at
+ * `MAX_SEEK_LINE_COMPARISONS` per hunk.
  */
 export function computeReplacements(
   originalLines: readonly string[],
@@ -71,7 +73,9 @@ function locateReplacements(
       lineIndex = idx + 1;
     }
     if (chunk.old_lines.length === 0) {
-      replacements.push([originalLines.length, 0, [...chunk.new_lines]]);
+      const insertAt =
+        chunk.change_context !== null ? lineIndex : originalLines.length;
+      replacements.push([insertAt, 0, [...chunk.new_lines]]);
       continue;
     }
     let pattern: readonly string[] = chunk.old_lines;

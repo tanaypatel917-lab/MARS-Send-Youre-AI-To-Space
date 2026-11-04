@@ -42,6 +42,9 @@ frozen AGENTS.md through this code.
   sizes, exit code and outcome — like `mars_execute`, command output is never
   published through the events API), patch text 1 MiB, apply_patch context
   search 20M line comparisons per hunk, tool output 128 KiB.
+- apply_patch deviation: an Update chunk with only `+` lines after a `@@`
+  anchor is inserted right after that anchor; upstream appends it at end of
+  file. Addition-only chunks without an anchor still append at end of file.
 - Not implemented: Claude Code stdin JSON for hooks and its other hook events,
   `allowed-tools` enforcement for commands, shell inclusion in commands,
   `CLAUDE.local.md`/home-directory instruction files, Codex `granular`

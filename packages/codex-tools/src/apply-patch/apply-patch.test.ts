@@ -366,6 +366,48 @@ describe("MARS bounds", () => {
   });
 });
 
+describe("MARS deviations", () => {
+  test("an addition-only chunk after a @@ anchor is inserted after the anchor", async () => {
+    const fs = new MemoryFs({ "a.txt": "start\nanchor\ntail\n" });
+    const result = await applyPatch(
+      "*** Begin Patch\n*** Update File: a.txt\n@@ anchor\n+inserted\n*** End Patch",
+      fs,
+    );
+    expect(result.ok).toBe(true);
+    expect(fs.files.get("a.txt")).toBe("start\nanchor\ninserted\ntail\n");
+  });
+
+  test("anchored addition-only chunks are placed in order and a missing anchor fails", async () => {
+    const fs = new MemoryFs({ "a.txt": "one\ntwo\nthree\n" });
+    const result = await applyPatch(
+      "*** Begin Patch\n*** Update File: a.txt\n@@ one\n+after one\n@@ three\n+after three\n*** End Patch",
+      fs,
+    );
+    expect(result.ok).toBe(true);
+    expect(fs.files.get("a.txt")).toBe(
+      "one\nafter one\ntwo\nthree\nafter three\n",
+    );
+    const missing = await applyPatch(
+      "*** Begin Patch\n*** Update File: a.txt\n@@ nowhere\n+x\n*** End Patch",
+      fs,
+    );
+    expect(missing).toMatchObject({ ok: false, failed_hunk: 0 });
+    expect(fs.files.get("a.txt")).toBe(
+      "one\nafter one\ntwo\nthree\nafter three\n",
+    );
+  });
+
+  test("an addition-only chunk without an anchor still appends at end of file", async () => {
+    const fs = new MemoryFs({ "a.txt": "start\nanchor\ntail\n" });
+    const result = await applyPatch(
+      "*** Begin Patch\n*** Update File: a.txt\n+appended\n*** End Patch",
+      fs,
+    );
+    expect(result.ok).toBe(true);
+    expect(fs.files.get("a.txt")).toBe("start\nanchor\ntail\nappended\n");
+  });
+});
+
 describe("parser leniency", () => {
   const inner = "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch";
 
