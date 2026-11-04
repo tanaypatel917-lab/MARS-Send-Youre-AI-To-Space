@@ -43,7 +43,7 @@ Envelope, limits, auth handling and error vocabulary are the workbench's
 
 | Method | Params | Guarantees |
 | --- | --- | --- |
-| `team.describe` | `{}` | Caller's `team_id`, `user_id`, role, limits, capabilities (`stream`/`reactions`/`search` are `true` since PR 3). |
+| `team.describe` | `{}` | Takes optional context; without one, resolves the caller's single authenticated team. Returns caller's `team_id`, `user_id`, role, limits, capabilities (`stream`/`reactions`/`search` are `true` since PR 3). |
 | `conversations.create_dm` | `{peer_user_id}` | One DM per pair per team: `UNIQUE(team_id, dm_key) WHERE kind='dm'` plus an immediate transaction; concurrent creators receive the same conversation. |
 | `conversations.create_group` | `{member_ids ≤ 32, title ≤ 200}` | Creator included; every member must be an active team member. |
 | `conversations.list` / `conversations.open` | `{}` / `{conversation_id}` | Only active participation; returns the conversation, the caller's participant row and member summaries (`user_id`, `state`, `joined_seq`). `list` items add `unread_count` (messages after the caller's `read_seq`, excluding the caller's own) and `last_message_at` (newest message the caller may see, else `null`). |

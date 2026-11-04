@@ -72,3 +72,5 @@ per-user sliding-minute limits for sends/reactions/search/agent calls
 (backs the agent `TeamReferencePort` with `repo_access` + `@mars/code-refs`).
 Operated through `mars team serve|enable|disable|stats|export|import|revoke|readmit|grant|rotate-tokens`;
 see `documentation/TEAM_CHAT_RUNBOOK.md`.
+
+Only `team.describe` accepts an omitted context, and then only when the caller has exactly one authenticated team.

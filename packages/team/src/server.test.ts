@@ -16,6 +16,52 @@ function start(limits?: Parameters<typeof fixture>[0]) {
   return f;
 }
 
+test("team.describe without context resolves a single-team caller", async () => {
+  const f = start();
+  const response = await f.raw({ method: "team.describe", params: {} });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    result: { team_id: TEAM, user_id: "alice" },
+  });
+});
+
+test("team.describe without context answers while the team is disabled", async () => {
+  const f = start({ enabled: false });
+  const response = await f.raw({ method: "team.describe", params: {} });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    result: { team_id: TEAM, user_id: "alice", enabled: false },
+  });
+});
+
+test("context-less describe rejects ambiguous users and other methods still require context", async () => {
+  const f = start();
+  const ambiguous = await f.raw(
+    { method: "team.describe", params: {} },
+    { authorization: `Bearer ${TOKENS.multi}` },
+  );
+  expect(ambiguous.status).toBe(400);
+  expect(await ambiguous.json()).toMatchObject({
+    error: { code: "invalid_request" },
+  });
+
+  const otherMethod = await f.raw({ method: "conversations.list", params: {} });
+  expect(otherMethod.status).toBe(400);
+  expect(await otherMethod.json()).toMatchObject({
+    error: { code: "invalid_request" },
+  });
+
+  const forbidden = await f.raw({
+    method: "team.describe",
+    context: { schema_version: 1, team_id: "team-2", request_id: "describe" },
+    params: {},
+  });
+  expect(forbidden.status).toBe(403);
+  expect(await forbidden.json()).toMatchObject({
+    error: { code: "forbidden" },
+  });
+});
+
 test("(a) a team member outside a conversation cannot open, read, poll or mark it and sees no outbox rows", async () => {
   const f = start();
   const dm = await f.ok<View>("alice", "conversations.create_dm", {
@@ -607,7 +653,7 @@ test("(h) authentication, origin, route, size and shape checks match the workben
     [],
     {},
     { method: "shell.execute", context, params: {} },
-    { method: "team.describe", params: {} },
+    { method: "conversations.list", params: {} },
     {
       method: "team.describe",
       context: { ...context, schema_version: 2 },
