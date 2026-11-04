@@ -38,6 +38,12 @@
           "type": "webview",
           "id": "mars.workbench",
           "name": "Tasks"
+        },
+        {
+          "type": "webview",
+          "id": "mars.teamChat",
+          "name": "Team Chat (fixture)",
+          "when": "config.mars.teamChat.enabled"
         }
       ]
     },
@@ -75,6 +81,11 @@
       {
         "command": "mars.cancelTask",
         "title": "Cancel selected task",
+        "category": "MARS"
+      },
+      {
+        "command": "mars.teamChat.open",
+        "title": "Open Team Chat (fixture prototype)",
         "category": "MARS"
       }
     ],
@@ -120,19 +131,27 @@
           "maximum": 120000,
           "scope": "application",
           "description": "Per-request timeout for task server calls."
+        },
+        "mars.teamChat.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "Show the Team Chat prototype view. Off by default. The view is fed by a deterministic local fixture (`FIXTURE` label); it never contacts a network service."
         }
       }
     }
   },
   "scripts": {
-    "build": "bun build src/extension.ts --target=node --format=cjs --external vscode --outfile dist/extension.js && bun build src/webview/main.ts --target=browser --format=iife --outfile dist/webview.js",
+    "build": "bun build src/extension.ts --target=node --format=cjs --external vscode --outfile dist/extension.js && bun build src/webview/main.ts --target=browser --format=iife --outfile dist/webview.js && bun build src/webview/teamChat/main.ts --target=browser --format=iife --outfile dist/team-chat.js",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.webview.json",
     "test": "bun test test",
-    "smoke": "bun run build && node scripts/node-smoke.cjs"
+    "smoke": "bun run build && node scripts/node-smoke.cjs",
+    "harness:team-chat": "bun scripts/team-chat-harness.ts"
   },
   "dependencies": {
     "@mars/contracts": "workspace:*",
     "@mars/output-format": "workspace:*",
+    "@mars/team-chat": "workspace:*",
     "zod": "3.25.76"
   },
   "devDependencies": {

@@ -31,7 +31,13 @@ Run it in VS Code: open `apps/vscode` and launch an Extension Development Host (
 | `mars.modelId` | empty | Optional model id sent with `tasks.start`; empty uses the server's free-cloud default. Paid models are governed only by server policy. |
 | `mars.requestTimeoutMs` | `15000` | Per-request timeout. |
 
-Commands: `mars.connect`, `mars.importConnection`, `mars.setToken`, `mars.clearToken`, `mars.newTask`, `mars.refresh`, `mars.cancelTask`.
+| `mars.teamChat.enabled` | `false` | Shows the **Team Chat (fixture)** view, a feature-flagged prototype fed by the deterministic fixture in `@mars/team-chat` (see below). |
+
+Commands: `mars.connect`, `mars.importConnection`, `mars.setToken`, `mars.clearToken`, `mars.newTask`, `mars.refresh`, `mars.cancelTask`, `mars.teamChat.open`.
+
+## Team Chat prototype (fixture, flag off by default)
+
+With `mars.teamChat.enabled` on, a second view **Team Chat (fixture)** appears in the MARS container (`mars.teamChat`, `src/teamChat/*`, `src/webview/teamChat/main.ts`, `media/team-chat.css`). It is PR 1 of the Team Chat plan ([documentation/TEAM_CHAT.md](../../documentation/TEAM_CHAT.md)): a three-pane inbox (conversations | messages + composer | code panel opened by a chip click, a drawer at narrow widths) over `FixtureTeamService` — one fixture team, three users, a DM and a group, replies, reactions, pins, an unread divider, and code chips from two fixture repos that open the fixture blob at its pinned SHA with the range highlighted. Everything is labelled `FIXTURE`; the "Viewing as" switcher exists only to show membership filtering (a member outside a conversation sees nothing, a member without repo access sees `Restricted reference`). The webview follows the same safety model as the task view (strict CSP, `textContent` only, `TeamChatWebviewMessageSchema` validation in `TeamChatController`); it never contacts a server, and the extension's task client is untouched. `bun scripts/team-chat-harness.ts --out DIR` renders the view in headless Chrome with a stub VS Code API for screenshots.
 
 ## Protocol
 
