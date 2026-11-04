@@ -5,6 +5,7 @@ import { processOutput, renderTerminal } from "@mars/output-format";
 import type { ColourDepth, GlyphPreset } from "@mars/ui-core";
 import { SLASH_COMMANDS } from "@mars/ui-core";
 import { FIXTURE_ROOT, FIXTURE_TASK_ID } from "@mars/ui-core/testing";
+import { DescribeResultSchema, InspectResultSchema } from "@mars/workbench";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { SessionView } from "./app";
 import { READ_METHODS, SessionClient } from "./client";
@@ -162,9 +163,9 @@ describe("§2.11 read-only views over fixtures", () => {
     expect(proposals).toContain("mars vault import --accept");
     expect(proposals).toContain("revision");
     const model = await text("/model");
-    expect(model).toContain("capabilities: unknown");
-    expect(model).toContain("unavailable · terms");
-    expect(model).toContain("stale");
+    expect(model).toContain("pinned at launch");
+    expect(model).toContain("unavailable");
+    expect(model).toContain("catalog stale");
     const context = await text("/context");
     expect(context).toContain("$ —");
     expect(context).toContain("/new");
@@ -241,4 +242,24 @@ describe("§8.1 budgets (fixture, 10,000 events)", () => {
     expect(result.idle_cpu_ratio).toBeLessThan(0.01);
     expect(result.rss_delta_mb).toBeLessThanOrEqual(150);
   }, 30_000);
+});
+
+test("platform fixtures parse with the host's own strict schemas", async () => {
+  const workbench = fixtureWorkbench();
+  const described = DescribeResultSchema.parse(
+    await workbench.transport({ method: "workbench.describe", params: {} }),
+  );
+  const inspected = InspectResultSchema.parse(
+    await workbench.transport({
+      method: "tasks.inspect",
+      context: {
+        schema_version: 1,
+        scope: described.scope,
+        request_id: "fixture-request",
+      },
+      params: { task_id: FIXTURE_TASK_ID },
+    }),
+  );
+  expect(described.graph?.isolation).toBe("process_env");
+  expect(inspected.context_rows?.some((row) => row.tokens === null)).toBe(true);
 });

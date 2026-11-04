@@ -27,13 +27,6 @@ export interface OverlayView {
   lines: string[];
 }
 
-type Bag = Record<string, unknown>;
-const bag = (value: unknown): Bag =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Bag)
-    : {};
-const list = (value: unknown): Bag[] =>
-  Array.isArray(value) ? value.map(bag) : [];
 const text = (value: unknown, fallback = "—"): string =>
   typeof value === "string" && value
     ? sanitize(value)
@@ -103,23 +96,14 @@ export function resumeView(
   extras: Partial<InspectExtras>,
 ): OverlayView {
   const { painter: p } = ctx;
-  const approvals = extras.approvals;
   const rows: [string, string][] = [
     ["task", task.task_id],
     ["status", task.status],
     ["revision", String(task.revision)],
+    ["model tier", extras.model_tier ?? "—"],
     [
-      "model",
-      extras.model_tier
-        ? `${sanitize(extras.model_tier.model_id)} · ${extras.model_tier.tier}`
-        : "—",
-    ],
-    ["mode", extras.mode ? sanitize(extras.mode) : "—"],
-    [
-      "approvals",
-      approvals
-        ? `${approvals.read ? "read" : "·"} ${approvals.write ? "write" : "·"} ${approvals.execute ? "execute" : "·"}`
-        : "—",
+      "pinned",
+      extras.pinned ? `${extras.pinned.length} file(s) · untrusted` : "—",
     ],
     ["max tokens", String(task.budget.max_tokens)],
     ["max cost", money(task.budget.max_usd)],
@@ -147,9 +131,19 @@ export function resumeView(
   };
 }
 
-const ISOLATION_LABEL: Readonly<Record<string, string>> = {
+const ISOLATION_LABEL = {
   process_env: "process-level confinement, not a kernel sandbox",
-};
+  os_wrapper: "OS-level wrapper (host-reported)",
+} as const;
+
+const GRAPH_TOKEN = {
+  ready: "success",
+  failed: "error",
+  stale: "warning",
+  building: "muted",
+  not_built: "muted",
+  unavailable: "muted",
+} as const;
 
 export function graphView(
   ctx: ViewContext,
@@ -158,68 +152,82 @@ export function graphView(
 ): OverlayView {
   const { painter: p } = ctx;
   const graph = extras.graph;
-  if (!graph)
-    return {
-      title: "Knowledge graph",
-      lines: [
-        p.fg(
-          "dim",
-          "this workbench does not report a knowledge graph (describe.graph absent)",
-        ),
-      ],
-    };
-  const token =
-    graph.state === "ready"
-      ? "success"
-      : graph.state === "failed"
-        ? "error"
-        : graph.state === "stale"
-          ? "warning"
-          : "muted";
-  const counts = bag(bag(graph).counts);
-  const lines = [
-    `${columns([p.fg("dim", "state"), p.fg(token, graph.state)], [14, 40])}`,
-    `${columns([p.fg("dim", "revision"), text(graph.revision)], [14, 40])}`,
-    `${columns([p.fg("dim", "built at"), text(graph.built_at)], [14, 40])}`,
-    `${columns([p.fg("dim", "workspace"), text(graph.workspace_revision)], [14, 40])}`,
-    `${columns([p.fg("dim", "counts"), counts.nodes !== undefined ? `${text(counts.nodes)} nodes · ${text(counts.edges)} edges` : "—"], [14, 40])}`,
-    `${columns([p.fg("dim", "isolation"), graph.isolation ? (ISOLATION_LABEL[graph.isolation] ?? sanitize(graph.isolation)) : "—"], [14, Math.max(20, ctx.width - 20)])}`,
-  ];
-  if (graph.state === "stale")
+  const lines: string[] = [];
+  if (graph === undefined)
     lines.push(
-      "",
-      p.fg(
-        "warning",
-        `the workspace is at ${text(graph.workspace_revision)}; the graph was built at ${text(graph.revision)}`,
-      ),
       p.fg(
         "dim",
-        "action (a steer draft, not in this read-only client): ask the coordinator to rebuild",
+        "this workbench does not report a knowledge graph (describe.graph absent)",
       ),
     );
-  if (graph.state === "not_built")
-    lines.push("", p.fg("dim", "no graph has been built for this workspace"));
-  if (graph.state === "unavailable")
+  else if (graph === null)
     lines.push(
-      "",
-      p.fg("dim", "the knowledge-graph CLI is not installed on the host"),
+      p.fg("dim", "no unambiguous workspace binding · describe.graph is null"),
+      p.fg(
+        "dim",
+        "per-task graph state comes from the graph.build / graph.query cards below",
+      ),
     );
-  if (graph.state === "failed")
+  else {
     lines.push(
-      "",
-      p.fg("error", "the last graph build failed · see the graph.build record"),
+      `${columns([p.fg("dim", "state"), p.fg(GRAPH_TOKEN[graph.state], graph.state)], [14, 40])}`,
+      `${columns([p.fg("dim", "revision"), text(graph.revision)], [14, 40])}`,
+      `${columns([p.fg("dim", "built at"), text(graph.built_at)], [14, 40])}`,
+      `${columns([p.fg("dim", "isolation"), graph.isolation ? ISOLATION_LABEL[graph.isolation] : "—"], [14, Math.max(20, ctx.width - 20)])}`,
     );
-  const builds = (projection?.entries ?? []).filter(
+    if (graph.state === "stale")
+      lines.push(
+        "",
+        p.fg(
+          "warning",
+          `the graph built at ${text(graph.revision)} is stale for this workspace`,
+        ),
+        p.fg(
+          "dim",
+          "action (a steer draft, not in this read-only client): ask the coordinator to rebuild",
+        ),
+      );
+    if (graph.state === "not_built")
+      lines.push("", p.fg("dim", "no graph has been built for this workspace"));
+    if (graph.state === "building")
+      lines.push("", p.fg("dim", "a graph build is in progress"));
+    if (graph.state === "unavailable")
+      lines.push(
+        "",
+        p.fg("dim", "the knowledge-graph CLI is not installed on the host"),
+      );
+    if (graph.state === "failed")
+      lines.push(
+        "",
+        p.fg(
+          "error",
+          "the last graph build failed · see the graph.build record",
+        ),
+      );
+  }
+  const cards = (projection?.entries ?? []).filter(
     (entry): entry is Extract<Entry, { kind: "graph" }> =>
-      entry.kind === "graph" && entry.operation === "graph.build",
+      entry.kind === "graph",
   );
-  const last = builds.at(-1);
-  lines.push("", p.bold("Last graph.build"));
+  const last = cards
+    .filter((entry) => entry.operation === "graph.build")
+    .at(-1);
+  lines.push("", p.bold("Last graph.build in this task"));
   lines.push(
     last
       ? `  ${last.status} · ${text(last.revision)} · ${sanitize(last.summary)} · model requests 0`
       : p.fg("dim", "  none in this task"),
   );
+  const queries = cards.filter((entry) => entry.operation === "graph.query");
+  if (queries.length)
+    lines.push(
+      "",
+      p.bold("graph.query in this task"),
+      ...queries.map(
+        (entry) =>
+          `  ${entry.status} · ${text(entry.revision)} · ${sanitize(entry.summary)}`,
+      ),
+    );
   return { title: "Knowledge graph · read only", lines };
 }
 
@@ -230,47 +238,50 @@ export function proposalsView(
 ): OverlayView {
   const { painter: p, glyphs: g } = ctx;
   const lines: string[] = [];
-  const vault = bag(extras.vault);
-  for (const proposal of list(vault.proposals)) {
-    const fence = bag(proposal.revision_fence);
-    const scan = bag(proposal.threat_scan);
-    const fenceOk =
-      fence.expected !== undefined && fence.expected === fence.current;
+  const vault = extras.vault;
+  if (vault) {
     lines.push(
-      `${p.bold("vault import")} ${g.dot} ${text(proposal.source)} ${g.dot} ${text(proposal.proposal_id)}`,
-      `  revision fence ${text(fence.expected)} → ${text(fence.current)} ${fenceOk ? p.fg("success", "holds") : p.fg("warning", "moved")}`,
-      `  threat scan ${scan.status === "clean" ? p.fg("success", "clean") : p.fg("warning", text(scan.status))}`,
-      ...(Array.isArray(scan.findings) ? scan.findings : []).map(
-        (finding) =>
-          `    ${p.fg("untrustedLabel", `[${STRINGS.untrusted}]`)} ${text(finding)}`,
+      p.fg(
+        "muted",
+        `${vault.pending_proposals} pending vault proposal(s) ${g.dot} last export ${text(vault.last_export_at, "never")}`,
       ),
-      `  ${p.fg("toolDiffAdded", `+ ${text(proposal.after, "")}`)}`,
-      `  ${p.fg("dim", "operator command (not run): mars vault import --accept")}`,
+    );
+    if (vault.pending_proposals)
+      lines.push(
+        `  ${p.fg("dim", "operator command (not run): mars vault import --accept")}`,
+        `  ${p.fg("dim", "it checks each proposal's revision fence and threat scan before writing")}`,
+      );
+    lines.push("");
+  } else if (vault === null)
+    lines.push(
+      p.fg(
+        "dim",
+        "no vault is bound to this workspace (describe.vault is null)",
+      ),
       "",
     );
-  }
+  let shown = 0;
   for (const entry of projection?.entries ?? []) {
     if (entry.kind !== "proposal") continue;
+    shown += 1;
     lines.push(
-      `${p.bold(`${entry.proposal_kind} proposal`)} ${g.dot} ${entry.scope} ${g.dot} rev ${text(entry.revision)} ${g.dot} ${entry.decision ?? "pending"}`,
+      `${p.bold(`${entry.proposal_kind} proposal`)} ${g.dot} ${entry.scope} ${g.dot} revision ${text(entry.revision)} ${g.dot} ${entry.decision ?? "pending"}`,
       `  ${p.fg("toolDiffRemoved", `- ${sanitize(entry.before)}`)}`,
       `  ${p.fg("toolDiffAdded", `+ ${sanitize(entry.after)}`)}`,
       `  ${p.fg("dim", `operator command (not run): ${entry.proposal_kind === "skill" ? "mars skills …" : "decided by the operator outside this client"}`)}`,
       "",
     );
   }
-  if (!lines.length) lines.push(p.fg("dim", "no pending proposals"));
-  const pending =
-    typeof vault.pending_proposals === "number"
-      ? `${vault.pending_proposals} pending vault proposal(s)`
-      : null;
-  return {
-    title: "Proposals · read only",
-    lines: pending ? [p.fg("muted", pending), "", ...lines] : lines,
-  };
+  if (!shown && !vault?.pending_proposals)
+    lines.push(p.fg("dim", "no pending proposals"));
+  return { title: "Proposals · read only", lines };
 }
 
-const DAY_MS = 86_400_000;
+const HEALTH_TOKEN = {
+  available: "success",
+  unavailable: "dim",
+  unknown: "muted",
+} as const;
 
 export function modelView(
   ctx: ViewContext,
@@ -278,73 +289,55 @@ export function modelView(
   inspect: Partial<InspectExtras>,
 ): OverlayView {
   const { painter: p, glyphs: g } = ctx;
-  const providers = extras.providers ?? [];
-  if (!providers.length)
-    return {
-      title: "Models",
-      lines: [
-        p.fg(
-          "dim",
-          "this workbench does not list providers (describe.providers absent)",
-        ),
-      ],
-    };
   const lines: string[] = [];
-  for (const provider of providers) {
-    const curated = text(bag(provider).catalog_curated_at, "");
-    if (
-      provider.catalog_stale ||
-      (curated && ctx.now.getTime() - Date.parse(curated) > 120 * DAY_MS)
-    )
-      lines.push(
-        p.fg(
-          "warning",
-          `${g.warning} ${provider.id} catalog curated ${curated || "unknown"} · stale`,
-        ),
-      );
-  }
-  const current = inspect.model_tier?.model_id ?? null;
-  for (const tier of ["free", "local", "paid"] as const) {
-    const rows = providers.flatMap((provider) =>
-      list(bag(provider).models).filter((model) => model.tier === tier),
-    );
-    if (!rows.length) continue;
+  const tier = inspect.model_tier;
+  if (tier)
     lines.push(
+      `this task ${g.dot} ${p.fg(tier === "paid" ? "paidTier" : tier === "local" ? "localTier" : "freeTier", p.bold(tier))} ${p.fg("dim", "(pinned at launch)")}`,
       "",
+    );
+  const providers = extras.providers;
+  if (!providers)
+    lines.push(
       p.fg(
-        tier === "paid"
-          ? "paidTier"
-          : tier === "local"
-            ? "localTier"
-            : "freeTier",
-        p.bold(tier),
+        "dim",
+        "this workbench does not list providers (describe.providers absent)",
       ),
     );
-    for (const model of rows) {
-      const unavailable =
-        typeof model.availability === "string" &&
-        model.availability.startsWith("unavailable");
-      const capabilities = text(model.capabilities, "unknown");
-      const price =
-        tier === "paid"
-          ? `$${text(model.input_usd_per_million, "?")} / $${text(model.output_usd_per_million, "?")} per M`
-          : "$ —";
+  else if (!providers.length)
+    lines.push(p.fg("dim", "no providers are configured"));
+  else {
+    lines.push(
+      p.fg(
+        "muted",
+        columns(["provider", "kind", "health", "catalog"], [28, 12, 14, 20]),
+      ),
+    );
+    for (const provider of providers) {
       const row = columns(
         [
-          `${text(model.model_id) === current ? g.user : " "} ${text(model.model_id)}`,
-          capabilities === "unknown"
-            ? p.fg("dim", "capabilities: unknown")
-            : capabilities,
-          price,
-          unavailable ? p.fg("dim", text(model.availability)) : "",
+          sanitize(provider.id),
+          provider.kind,
+          p.fg(HEALTH_TOKEN[provider.health], provider.health),
+          provider.catalog_stale
+            ? p.fg("warning", `${g.warning} catalog stale`)
+            : "catalog current",
         ],
-        [34, 22, 20, 22],
+        [28, 12, 14, 20],
       );
-      lines.push(unavailable ? p.fg("dim", row) : row);
+      lines.push(provider.health === "unavailable" ? p.fg("dim", row) : row);
     }
+    lines.push(
+      "",
+      p.fg("dim", `policy owner: ${providers[0]?.policy_owner ?? "mars"}`),
+    );
   }
   lines.push(
     "",
+    p.fg(
+      "dim",
+      "per-model capabilities and prices are not in workbench RPC · `mars models list` prints them (not run)",
+    ),
     p.fg("dim", "view only · launch settings are frozen once a task starts"),
   );
   return { title: "Models · read only", lines };
@@ -354,67 +347,57 @@ export function contextView(
   ctx: ViewContext,
   inspect: Partial<InspectExtras>,
 ): OverlayView {
-  const { painter: p, glyphs: g } = ctx;
+  const { painter: p } = ctx;
   const rows = inspect.context_rows;
-  if (!rows?.length)
-    return {
-      title: "Context",
-      lines: [
-        p.fg(
-          "dim",
-          "this workbench does not report context rows (tasks.inspect.context_rows absent)",
-        ),
-      ],
-    };
-  const used = rows.reduce((sum, row) => sum + row.tokens, 0);
-  const window = inspect.usage_totals?.context_window ?? null;
+  const usage = inspect.usage_totals;
   const lines: string[] = [];
-  if (window) {
-    const cells = 30;
-    const filled = Math.min(cells, Math.round((used / window) * cells));
-    lines.push(
-      `${p.fg("statusLineContext", g.filled.repeat(filled))}${p.fg("dim", g.empty.repeat(cells - filled))} ${Math.round((used / window) * 100)}% of ${window.toLocaleString("en-US")}`,
-      "",
-    );
-  }
-  const widths = [26, 9, 7, 24, Math.max(10, ctx.width - 74)];
-  lines.push(
-    p.fg("muted", columns(["item", "tokens", "$", "source", "remedy"], widths)),
-  );
-  for (const row of rows)
-    lines.push(
-      columns(
-        [
-          `${sanitize(row.item)}${row.trust === "untrusted" ? ` ${p.fg("untrustedLabel", "[untrusted]")}` : ""}`,
-          row.tokens.toLocaleString("en-US"),
-          row.cost_usd ? money(row.cost_usd) : "$ —",
-          sanitize(row.source),
-          row.remedy ? sanitize(row.remedy) : "—",
-        ],
-        widths,
-      ),
-    );
-  lines.push(
-    p.fg(
-      "muted",
-      columns(["total", used.toLocaleString("en-US"), "", "", ""], widths),
-    ),
-  );
-  if (window)
+  if (usage)
     lines.push(
       p.fg(
-        "muted",
+        "statusLineContext",
+        `cumulative usage ${usage.input_tokens.toLocaleString("en-US")} in · ${usage.output_tokens.toLocaleString("en-US")} out · ${usage.cost_usd === null ? "$ —" : money(usage.cost_usd)}`,
+      ),
+      p.fg(
+        "dim",
+        "the host records cumulative usage only; per-row tokens may be unknown",
+      ),
+      "",
+    );
+  if (!rows?.length)
+    lines.push(
+      p.fg(
+        "dim",
+        "this workbench does not report context rows (tasks.inspect.context_rows absent)",
+      ),
+    );
+  else {
+    const widths = [36, 9, 8, Math.max(10, ctx.width - 60)];
+    lines.push(
+      p.fg("muted", columns(["source", "tokens", "$", "remedy"], widths)),
+    );
+    for (const row of rows)
+      lines.push(
         columns(
           [
-            "free",
-            Math.max(0, window - used).toLocaleString("en-US"),
-            "",
-            "",
-            "compaction is off · /new with a summary",
+            sanitize(row.source),
+            row.tokens === null ? "—" : row.tokens.toLocaleString("en-US"),
+            row.cost_usd === null ? "$ —" : money(row.cost_usd),
+            sanitize(row.remedy),
           ],
           widths,
         ),
+      );
+  }
+  const pinned = inspect.pinned ?? [];
+  if (pinned.length)
+    lines.push(
+      "",
+      p.bold("Pinned"),
+      ...pinned.map(
+        (file) =>
+          `  ${sanitize(file.path)} ${p.fg("dim", `${file.bytes.toLocaleString("en-US")} B`)} ${p.fg("untrustedLabel", `[${STRINGS.untrusted}]`)}`,
       ),
     );
+  lines.push("", p.fg("muted", "compaction is off · /new with a summary"));
   return { title: "Context · read only", lines };
 }

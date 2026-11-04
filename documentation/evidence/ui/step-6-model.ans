@@ -1,18 +1,16 @@
 [1m[38;2;0;180;255mMARS[0m[39m[49m  ·  mars-fixture  ·  task-fixture  ·  completed  ·  [38;2;107;114;128mread-only session[39m
 [38;2;31;37;45m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 [38;2;0;180;255m╭─ Models · read only ─────────────────────────────────────────────────────────────────────────────────────────────────╮
-│[39m [38;2;255;179;71m⚠ omniroute catalog curated 2026-06-01 · stale[39m                                                                       [38;2;0;180;255m│
+│[39m this task  ·  [1m[38;2;0;255;136mfree[0m[39m[49m [38;2;107;114;128m(pinned at launch)[39m                                                                                [38;2;0;180;255m│
 │[39m                                                                                                                      [38;2;0;180;255m│
-│[39m [1m[38;2;0;255;136mfree[0m[39m[49m                                                                                                                 [38;2;0;180;255m│
-│[39m ❯ omniroute/openrouter/free-x      tools · 128k           $ —                                                        [38;2;0;180;255m│
-│[39m [38;2;107;114;128m  omniroute/openrouter/free-y      capabilities: unknown[39m  $ —                  [38;2;107;114;128munavailable · terms[39m                   [38;2;0;180;255m│
+│[39m [38;2;156;163;176mprovider                     kind         health         catalog[39m                                                     [38;2;0;180;255m│
+│[39m omniroute                    omniroute    [38;2;0;255;136mavailable[39m      [38;2;255;179;71m⚠ catalog stale[39m                                             [38;2;0;180;255m│
+│[39m local                        local        [38;2;0;255;136mavailable[39m      catalog current                                             [38;2;0;180;255m│
+│[39m [38;2;107;114;128manthropic-direct             direct       unavailable[39m    catalog current                                             [38;2;0;180;255m│
 │[39m                                                                                                                      [38;2;0;180;255m│
-│[39m [1m[38;2;0;180;255mlocal[0m[39m[49m                                                                                                                [38;2;0;180;255m│
-│[39m   local/qwen-coder-7b              tools · 32k            $ —                                                        [38;2;0;180;255m│
+│[39m [38;2;107;114;128mpolicy owner: mars[39m                                                                                                   [38;2;0;180;255m│
 │[39m                                                                                                                      [38;2;0;180;255m│
-│[39m [1m[38;2;255;179;71mpaid[0m[39m[49m                                                                                                                 [38;2;0;180;255m│
-│[39m   omniroute/anthropic/paid-z       tools · 200k           $3 / $15 per M                                             [38;2;0;180;255m│
-│[39m                                                                                                                      [38;2;0;180;255m│
+│[39m [38;2;107;114;128mper-model capabilities and prices are not in workbench RPC · `mars models list` prints them (not run)[39m                [38;2;0;180;255m│
 │[39m [38;2;107;114;128mview only · launch settings are frozen once a task starts[39m                                                            [38;2;0;180;255m│
 ╰────────────────────────────────────────────────────────────────────────────────────────────────────────── Esc close ─╯
 [39m
@@ -35,6 +33,8 @@
 
 
 
+
+
 [38;2;31;37;45m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 [38;2;0;180;255m❯[39m [38;2;107;114;128mread-only session · type / for commands · start, steer and cancel are not in this client yet[39m
-[38;2;0;180;255mmode ask[39m  [38;2;0;180;255momniroute/openrouter/free-x[39m  ·  [38;2;0;255;136mfree[39m  [38;2;156;163;176mcontext ━━━─ 68%[39m  [38;2;212;192;144mcost $0.00 / $0.50[39m  approvals r w  ·   [38;2;0;180;255mchildren 1[39m
+[38;2;0;180;255mread-only session[39m  model [38;2;0;255;136mfree[39m  [38;2;156;163;176mtokens 41.2k in  ·  6.1k out[39m  [38;2;212;192;144mcost $0.00 / $0.50[39m  [38;2;0;180;255mchildren 1[39m

@@ -85,35 +85,32 @@ function fit(line: string, width: number): string {
   return `${cut}${padding(width - visibleWidth(cut))}`;
 }
 
+const compact = (n: number) =>
+  n >= 1_000_000
+    ? `${(n / 1_000_000).toFixed(1)}M`
+    : n >= 1_000
+      ? `${(n / 1_000).toFixed(1)}k`
+      : String(n);
+
 /** §2.3 segments, most important first; narrow terminals drop them from the right. */
 export function statusSegments(state: SessionState): string[] {
   const p = createPainter(state.theme, state.depth);
   const g = glyphs(state.glyphs);
   const segments: string[] = [];
-  segments.push(
-    p.fg(
-      "statusLineModel",
-      state.inspect.mode
-        ? `mode ${sanitize(state.inspect.mode)}`
-        : STRINGS.readOnly,
-    ),
-  );
+  segments.push(p.fg("statusLineModel", STRINGS.readOnly));
   const tier = state.inspect.model_tier;
   if (tier)
     segments.push(
-      `${p.fg("statusLineModel", sanitize(tier.model_id))} ${g.dot} ${p.fg(tier.tier === "paid" ? "paidTier" : tier.tier === "local" ? "localTier" : "freeTier", tier.tier)}`,
+      `model ${p.fg(tier === "paid" ? "paidTier" : tier === "local" ? "localTier" : "freeTier", tier)}`,
     );
   const usage = state.inspect.usage_totals;
-  if (usage?.context_tokens !== undefined && usage.context_window) {
-    const ratio = Math.min(1, usage.context_tokens / usage.context_window);
-    const filled = Math.round(ratio * 4);
+  if (usage)
     segments.push(
       p.fg(
         "statusLineContext",
-        `context ${g.filled.repeat(filled)}${g.empty.repeat(4 - filled)} ${Math.round(ratio * 100)}%`,
+        `tokens ${compact(usage.input_tokens)} in ${g.dot} ${compact(usage.output_tokens)} out`,
       ),
     );
-  }
   if (state.task) {
     const spent = state.projection?.totals.cost_usd ?? usage?.cost_usd ?? null;
     segments.push(
@@ -123,11 +120,6 @@ export function statusSegments(state: SessionState): string[] {
       ),
     );
   }
-  const approvals = state.inspect.approvals;
-  if (approvals)
-    segments.push(
-      `approvals ${approvals.read ? "r" : g.dot} ${approvals.write ? "w" : g.dot} ${approvals.execute ? "x" : g.dot}`,
-    );
   const children = state.projection?.children ?? 0;
   if (children)
     segments.push(p.fg("statusLineSubagents", `children ${children}`));

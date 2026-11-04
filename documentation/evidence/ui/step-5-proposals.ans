@@ -1,26 +1,21 @@
 [1m[38;2;0;180;255mMARS[0m[39m[49m  ·  mars-fixture  ·  task-fixture  ·  completed  ·  [38;2;107;114;128mread-only session[39m
 [38;2;31;37;45m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 [38;2;0;180;255m╭─ Proposals · read only ──────────────────────────────────────────────────────────────────────────────────────────────╮
-│[39m [38;2;156;163;176m1 pending vault proposal(s)[39m                                                                                          [38;2;0;180;255m│
-│[39m                                                                                                                      [38;2;0;180;255m│
-│[39m [1mvault import[0m[39m[49m  ·  notes/obsidian/render-flags.md  ·  vault-import-1                                                   [38;2;0;180;255m│
-│[39m   revision fence vault-r7 → vault-r7 [38;2;0;255;136mholds[39m                                                                           [38;2;0;180;255m│
-│[39m   threat scan [38;2;255;179;71mflagged[39m                                                                                                [38;2;0;180;255m│
-│[39m     [38;2;212;192;144m[untrusted][39m instruction-like text: "ignore previous instructions"                                                [38;2;0;180;255m│
-│[39m   [38;2;0;255;136m+ mars render prints MARS Output Format; --json prints the processed document.[39m                                     [38;2;0;180;255m│
+│[39m [38;2;156;163;176m1 pending vault proposal(s)  ·  last export never[39m                                                                    [38;2;0;180;255m│
 │[39m   [38;2;107;114;128moperator command (not run): mars vault import --accept[39m                                                             [38;2;0;180;255m│
+│[39m   [38;2;107;114;128mit checks each proposal's revision fence and threat scan before writing[39m                                            [38;2;0;180;255m│
 │[39m                                                                                                                      [38;2;0;180;255m│
-│[39m [1mmemory proposal[0m[39m[49m  ·  project  ·  rev mem-r3  ·  pending                                                               [38;2;0;180;255m│
+│[39m [1mmemory proposal[0m[39m[49m  ·  project  ·  revision mem-r3  ·  pending                                                          [38;2;0;180;255m│
 │[39m   [38;2;255;71;87m- Use npm for scripts.[39m                                                                                             [38;2;0;180;255m│
 │[39m   [38;2;0;255;136m+ Use bun for scripts; npm is not installed.[39m                                                                       [38;2;0;180;255m│
 │[39m   [38;2;107;114;128moperator command (not run): decided by the operator outside this client[39m                                            [38;2;0;180;255m│
 │[39m                                                                                                                      [38;2;0;180;255m│
-│[39m [1mskill proposal[0m[39m[49m  ·  project  ·  rev skill-r2  ·  pending                                                              [38;2;0;180;255m│
+│[39m [1mskill proposal[0m[39m[49m  ·  project  ·  revision skill-r2  ·  pending                                                         [38;2;0;180;255m│
 │[39m   [38;2;255;71;87m- Run tests with bun test.[39m                                                                                         [38;2;0;180;255m│
 │[39m   [38;2;0;255;136m+ Run tests with bun test apps packages scripts.[39m                                                                   [38;2;0;180;255m│
 │[39m   [38;2;107;114;128moperator command (not run): mars skills …[39m                                                                          [38;2;0;180;255m│
 │[39m                                                                                                                      [38;2;0;180;255m│
-│[39m [1mgepa proposal[0m[39m[49m  ·  project  ·  rev prompt-r4  ·  pending                                                              [38;2;0;180;255m│
+│[39m [1mgepa proposal[0m[39m[49m  ·  project  ·  revision prompt-r4  ·  pending                                                         [38;2;0;180;255m│
 │[39m   [38;2;255;71;87m- Answer briefly.[39m                                                                                                  [38;2;0;180;255m│
 │[39m   [38;2;0;255;136m+ Answer briefly; cite files.[39m                                                                                      [38;2;0;180;255m│
 │[39m   [38;2;107;114;128moperator command (not run): decided by the operator outside this client[39m                                            [38;2;0;180;255m│
@@ -35,6 +30,11 @@
 
 
 
+
+
+
+
+
 [38;2;31;37;45m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 [38;2;0;180;255m❯[39m [38;2;107;114;128mread-only session · type / for commands · start, steer and cancel are not in this client yet[39m
-[38;2;0;180;255mmode ask[39m  [38;2;0;180;255momniroute/openrouter/free-x[39m  ·  [38;2;0;255;136mfree[39m  [38;2;156;163;176mcontext ━━━─ 68%[39m  [38;2;212;192;144mcost $0.00 / $0.50[39m  approvals r w  ·   [38;2;0;180;255mchildren 1[39m
+[38;2;0;180;255mread-only session[39m  model [38;2;0;255;136mfree[39m  [38;2;156;163;176mtokens 41.2k in  ·  6.1k out[39m  [38;2;212;192;144mcost $0.00 / $0.50[39m  [38;2;0;180;255mchildren 1[39m

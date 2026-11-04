@@ -47,4 +47,4 @@ sum completed  -  29s  -  2.1k in / 640 out  -  $0.00  -  5 tools
      [untrusted] final artifact (tasks.artifact)                                                                                                                                                        
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 > read-only session · type / for commands · start, steer and cancel are not in this client yet                                                                                                          
-mode ask  omniroute/openrouter/free-x  -  free  context ===- 68%  cost $0.00 / $0.50  approvals r w  -   children 1  verify [ok]1 [!!]1  -  Verification failed  mars-fixture                           
+read-only session  model free  tokens 41.2k in  -  6.1k out  cost $0.00 / $0.50  children 1  verify [ok]1 [!!]1  -  Verification failed  mars-fixture                                                   

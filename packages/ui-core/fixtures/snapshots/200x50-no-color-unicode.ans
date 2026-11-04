@@ -47,4 +47,4 @@ MARS  ·  mars-fixture  ·  task-fixture  ·  completed  ·  read-only session
      [untrusted] final artifact (tasks.artifact)                                                                                                                                                        
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯ read-only session · type / for commands · start, steer and cancel are not in this client yet                                                                                                          
-mode ask  omniroute/openrouter/free-x  ·  free  context ━━━─ 68%  cost $0.00 / $0.50  approvals r w  ·   children 1  verify ✔1 ✘1  ·  Verification failed  mars-fixture                                 
+read-only session  model free  tokens 41.2k in  ·  6.1k out  cost $0.00 / $0.50  children 1  verify ✔1 ✘1  ·  Verification failed  mars-fixture                                                         

@@ -37,4 +37,4 @@
      [38;5;180m[untrusted][39m [38;5;243mfinal artifact (tasks.artifact)[39m                                                                        
 [38;5;235m------------------------------------------------------------------------------------------------------------------------[39m
 [38;5;39m>[39m [38;5;243mread-only session · type / for commands · start, steer and cancel are not in this client yet[39m                          
-[38;5;39mmode ask[39m  [38;5;39momniroute/openrouter/free-x[39m  -  [38;5;48mfree[39m  [38;5;248mcontext ===- 68%[39m  [38;5;180mcost $0.00 / $0.50[39m  approvals r w  -   [38;5;39mchildren 1[39m     
+[38;5;39mread-only session[39m  model [38;5;48mfree[39m  [38;5;248mtokens 41.2k in  -  6.1k out[39m  [38;5;180mcost $0.00 / $0.50[39m  [38;5;39mchildren 1[39m                             

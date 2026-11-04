@@ -8,11 +8,12 @@
     "result": [
       {
         "entry_id": "entry-1",
-        "kind": "thinking",
+        "kind": "reasoning",
         "text": "The flag belongs in parseArgs; the renderer already has a JSON path.",
         "usage": {
           "input_tokens": 400,
-          "output_tokens": 120
+          "output_tokens": 120,
+          "cost_usd": null
         }
       },
       {

@@ -55,14 +55,7 @@ export class SessionController {
     const described = await this.client.describe();
     this.state.workspaceLabel = described.result.workspaceLabel;
     this.state.describeExtras = described.extras;
-    this.state.connectorIds = (described.extras.connectors ?? []).flatMap(
-      (c) =>
-        c &&
-        typeof c === "object" &&
-        typeof (c as { id?: unknown }).id === "string"
-          ? [(c as { id: string }).id]
-          : [],
-    );
+    this.state.connectorIds = [];
     this.state.tasks = await this.client.list();
     const chosen =
       this.options.taskId ?? this.state.tasks.at(0)?.task_id ?? null;

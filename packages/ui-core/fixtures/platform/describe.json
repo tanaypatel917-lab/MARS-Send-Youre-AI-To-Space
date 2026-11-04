@@ -8,19 +8,14 @@
     "execute": true,
     "checkpoint": true
   },
-  "connectors": [
-    {
-      "id": "github",
-      "label": "GitHub"
-    }
-  ],
+  "connectors": [],
   "image": {
     "digest": "sha256:4f2c9a0e1b7d3c5a6e8f9012345678901234567890abcdef1234567890abcdef"
   },
   "conventions": {
-    "instructions": ["AGENTS.md"],
-    "hooks": ["pre-tool: ./scripts/lint"],
-    "commands": ["review:pr"]
+    "instructions": 1,
+    "hooks": 1,
+    "commands": 1
   },
   "policy": {
     "allow_paid": false,
@@ -30,81 +25,33 @@
     "state": "ready",
     "revision": "r12",
     "built_at": "2026-11-04T11:58:00.000Z",
-    "isolation": "process_env",
-    "workspace_revision": "r12",
-    "counts": {
-      "nodes": 412,
-      "edges": 1280
-    }
+    "isolation": "process_env"
   },
   "vault": {
     "pending_proposals": 1,
-    "last_export_at": null,
-    "proposals": [
-      {
-        "proposal_id": "vault-import-1",
-        "kind": "vault_import",
-        "source": "notes/obsidian/render-flags.md",
-        "revision_fence": {
-          "expected": "vault-r7",
-          "current": "vault-r7"
-        },
-        "threat_scan": {
-          "status": "flagged",
-          "findings": [
-            "instruction-like text: \"ignore previous instructions\""
-          ]
-        },
-        "before": "",
-        "after": "mars render prints MARS Output Format; --json prints the processed document."
-      }
-    ]
+    "last_export_at": null
   },
   "providers": [
     {
       "id": "omniroute",
       "kind": "omniroute",
-      "health": "ok",
+      "health": "available",
       "catalog_stale": true,
-      "policy_owner": "workbench",
-      "models": [
-        {
-          "model_id": "omniroute/openrouter/free-x",
-          "tier": "free",
-          "capabilities": "tools \u00b7 128k",
-          "availability": "available",
-          "input_usd_per_million": 0,
-          "output_usd_per_million": 0
-        },
-        {
-          "model_id": "omniroute/openrouter/free-y",
-          "tier": "free",
-          "capabilities": "unknown",
-          "availability": "unavailable \u00b7 terms"
-        },
-        {
-          "model_id": "omniroute/anthropic/paid-z",
-          "tier": "paid",
-          "capabilities": "tools \u00b7 200k",
-          "availability": "available",
-          "input_usd_per_million": 3,
-          "output_usd_per_million": 15
-        }
-      ],
-      "catalog_curated_at": "2026-06-01"
+      "policy_owner": "mars"
     },
     {
       "id": "local",
       "kind": "local",
-      "health": "ok",
-      "models": [
-        {
-          "model_id": "local/qwen-coder-7b",
-          "tier": "local",
-          "capabilities": "tools \u00b7 32k",
-          "availability": "available"
-        }
-      ]
+      "health": "available",
+      "catalog_stale": false,
+      "policy_owner": "mars"
+    },
+    {
+      "id": "anthropic-direct",
+      "kind": "direct",
+      "health": "unavailable",
+      "catalog_stale": false,
+      "policy_owner": "mars"
     }
   ]
 }

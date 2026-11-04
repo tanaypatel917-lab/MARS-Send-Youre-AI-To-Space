@@ -443,9 +443,9 @@ export const EVENT_FIXTURES: Record<FixtureEventType, FixtureEventSpec[]> = {
 export const JOURNAL_ENTRIES: JournalEntry[] = [
   {
     entry_id: "entry-1",
-    kind: "thinking",
+    kind: "reasoning",
     text: "The flag belongs in parseArgs; the renderer already has a JSON path.",
-    usage: { input_tokens: 400, output_tokens: 120 },
+    usage: { input_tokens: 400, output_tokens: 120, cost_usd: null },
   },
   {
     entry_id: "entry-2",

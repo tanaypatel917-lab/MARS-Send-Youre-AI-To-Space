@@ -1,71 +1,53 @@
 {
-  "mode": "ask",
-  "approvals": { "read": true, "write": true, "execute": false },
-  "model_tier": {
-    "model_id": "omniroute/openrouter/free-x",
-    "tier": "free",
-    "input_usd_per_million": 0,
-    "output_usd_per_million": 0,
-    "route": "omniroute"
-  },
+  "model_tier": "free",
   "usage_totals": {
     "input_tokens": 41200,
     "output_tokens": 6100,
-    "cost_usd": null,
-    "context_tokens": 87040,
-    "context_window": 128000
+    "cost_usd": null
   },
   "pinned": [
-    { "path": "apps/cli/src/render.ts", "bytes": 4210, "trust": "workspace" }
+    {
+      "path": "apps/cli/src/render.ts",
+      "bytes": 4210,
+      "trust": "untrusted"
+    }
   ],
   "context_rows": [
     {
-      "item": "system prompt",
+      "source": "system prompt",
       "tokens": 3200,
       "cost_usd": null,
-      "source": "oh-my-pi",
-      "remedy": null,
-      "trust": "trusted"
+      "remedy": "set by the workbench"
     },
     {
-      "item": "AGENTS.md",
+      "source": "repository instructions AGENTS.md",
       "tokens": 1800,
       "cost_usd": null,
-      "source": "repository instructions",
-      "remedy": "edit AGENTS.md",
-      "trust": "repository"
+      "remedy": "edit AGENTS.md"
     },
     {
-      "item": "tools",
+      "source": "tools",
       "tokens": 9400,
       "cost_usd": null,
-      "source": "workbench",
-      "remedy": null,
-      "trust": "trusted"
+      "remedy": "set by the workbench"
     },
     {
-      "item": "apps/cli/src/render.ts",
+      "source": "pinned apps/cli/src/render.ts",
       "tokens": 1100,
       "cost_usd": null,
-      "source": "pinned",
-      "remedy": "/drop apps/cli/src/render.ts",
-      "trust": "workspace"
+      "remedy": "unpin the file in a new task"
     },
     {
-      "item": "research finding-1",
-      "tokens": 600,
+      "source": "research finding-1",
+      "tokens": null,
       "cost_usd": null,
-      "source": "research",
-      "remedy": null,
-      "trust": "untrusted"
+      "remedy": "start a /new task without it"
     },
     {
-      "item": "messages",
-      "tokens": 70940,
-      "cost_usd": null,
       "source": "transcript",
-      "remedy": null,
-      "trust": "untrusted"
+      "tokens": null,
+      "cost_usd": null,
+      "remedy": "/new with a summary"
     }
   ]
 }

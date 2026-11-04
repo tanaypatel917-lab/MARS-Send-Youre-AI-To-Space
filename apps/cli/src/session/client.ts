@@ -16,7 +16,6 @@ import {
   type JournalEntry,
   JournalReplySchema,
   LIMITS,
-  readExtras,
 } from "@mars/ui-core";
 import {
   ArtifactDataSchema,
@@ -26,6 +25,7 @@ import {
   DiffResultSchema,
   type EvidenceResult,
   EvidenceResultSchema,
+  InspectResultSchema,
 } from "@mars/workbench";
 import { z } from "zod";
 import type { LocalConnection } from "./connection";
@@ -199,7 +199,7 @@ export class SessionClient {
       "server description",
     );
     this.scope = result.scope;
-    return { result, extras: readExtras(DescribeExtrasSchema, raw) };
+    return { result, extras: DescribeExtrasSchema.parse(result) };
   }
 
   private task(value: unknown, taskId?: string): Task {
@@ -227,9 +227,14 @@ export class SessionClient {
 
   async inspect(taskId: string): Promise<Inspected> {
     const raw = await this.send("tasks.inspect", { task_id: taskId });
+    const inspected = validate(
+      InspectResultSchema,
+      knownKeys(InspectResultSchema, raw),
+      "task",
+    );
     return {
-      task: this.task(raw, taskId),
-      extras: readExtras(InspectExtrasSchema, raw),
+      task: this.task(inspected, taskId),
+      extras: InspectExtrasSchema.parse(inspected),
     };
   }
 
