@@ -20,7 +20,7 @@ import type {
   ResearchRequest,
   Task,
 } from "@mars/contracts";
-import { createTaskStore } from "@mars/tasks";
+import { createTaskStore, TaskStoreError } from "@mars/tasks";
 import {
   createResearchService,
   type DurableResearchService,
@@ -643,6 +643,105 @@ describe("@mars/research durable control plane", () => {
     ]) {
       expect(await errorCode(operation)).toBe("not_found");
     }
+  });
+
+  test("maps only unresolvable known_context references to not_found", async () => {
+    let failure: unknown = null;
+    const readCodes: string[] = [];
+    const worker: ResearchWorker = {
+      id: "known-context-failure-worker",
+      version: "1",
+      async run(input, workerContext) {
+        const known = input.known_context[0] as ArtifactRef;
+        for (const next of [
+          new TaskStoreError("not_found", "missing"),
+          new TaskStoreError("invalid_input", "mismatched reference"),
+          new TaskStoreError("corrupt_record", "hash mismatch"),
+          new TaskStoreError("closed", "store closed"),
+          new Error("EIO"),
+        ]) {
+          failure = next;
+          readCodes.push(
+            await errorCode(() => workerContext.readKnownContext(known)),
+          );
+        }
+        failure = null;
+        const evidence = await capture(
+          workerContext,
+          Date.now,
+          input.request_id,
+        );
+        await workerContext.publish(
+          proposal(evidence.ref, evidence.url, evidence.retrievedAt),
+        );
+      },
+    };
+    const env = await setup({ worker });
+    const realArtifacts = env.tasks.artifacts;
+    const artifacts: Parameters<typeof createResearchService>[0]["artifacts"] =
+      {
+        put: (ctx, data, mediaType) => realArtifacts.put(ctx, data, mediaType),
+        async get(ctx, ref) {
+          if (failure !== null) throw failure;
+          return realArtifacts.get(ctx, ref);
+        },
+      };
+    await env.service.close();
+    const service = await createResearchService({
+      rootDir: env.researchRoot,
+      tasks: env.tasks,
+      artifacts,
+      worker,
+      leaseMs: 150,
+      pollMs: 10,
+      now: env.now,
+    });
+    services.push(service);
+    const known = await realArtifacts.put(
+      context("known-failure-artifact"),
+      new TextEncoder().encode("known"),
+      "text/plain",
+    );
+
+    const submitCodes: string[] = [];
+    for (const [index, next] of [
+      new TaskStoreError("not_found", "missing"),
+      new TaskStoreError("invalid_input", "mismatched reference"),
+      new TaskStoreError("corrupt_record", "hash mismatch"),
+      new TaskStoreError("closed", "store closed"),
+      new Error("EIO"),
+    ].entries()) {
+      failure = next;
+      submitCodes.push(
+        await errorCode(() =>
+          request(service, env.now, `known-failure-${index}`, {
+            known_context: [known],
+          }),
+        ),
+      );
+    }
+    expect(submitCodes).toEqual([
+      "not_found",
+      "not_found",
+      "corrupt_record",
+      "closed",
+      "other",
+    ]);
+
+    failure = null;
+    const id = await request(service, env.now, "known-read-failures", {
+      known_context: [known],
+    });
+    await waitFor(
+      async () => (await service.inspect(context(), id)).status === "completed",
+    );
+    expect(readCodes).toEqual([
+      "not_found",
+      "not_found",
+      "corrupt_record",
+      "closed",
+      "other",
+    ]);
   });
 
   test("enforces revisions, reconciliation, and used-finding semantics", async () => {

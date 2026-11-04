@@ -457,6 +457,18 @@ function mapTaskError(error: unknown): ResearchError {
   return new ResearchError("invalid_input", "Task validation failed");
 }
 
+// Missing, cross-scope, and mismatched references all read as not_found so a
+// caller cannot probe artifacts outside its scope; storage faults still surface.
+function mapKnownContextError(error: unknown): unknown {
+  if (isErrorCode(error, "not_found") || isErrorCode(error, "invalid_input")) {
+    return new ResearchError("not_found", NOT_FOUND_MESSAGE);
+  }
+  if (isErrorCode(error, "corrupt_record") || isErrorCode(error, "closed")) {
+    return mapTaskError(error);
+  }
+  return error;
+}
+
 function usageFromJson(value: string): ResearchUsage {
   let parsed: unknown;
   try {
@@ -1255,8 +1267,8 @@ export async function createResearchService(
             ),
             known,
           );
-        } catch {
-          throw new ResearchError("not_found", NOT_FOUND_MESSAGE);
+        } catch (error) {
+          throw mapKnownContextError(error);
         }
       },
       async captureEvidence(capture) {
@@ -1858,8 +1870,8 @@ export async function createResearchService(
       for (const ref of request.known_context) {
         try {
           await options.artifacts.get(parsedContext.context, ref);
-        } catch {
-          throw new ResearchError("not_found", NOT_FOUND_MESSAGE);
+        } catch (error) {
+          throw mapKnownContextError(error);
         }
       }
       const record = canonicalRecord(request);
