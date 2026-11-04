@@ -1,0 +1,2 @@
+# Fixtures deliberately use the ignored convention directories.
+!.mars/

@@ -59,3 +59,54 @@ Scoping by owner/project; semantic discovery; a scheduler for `runCurator` (noth
 ## Attribution
 
 Lifecycle semantics adapted from `openclaw/openclaw` at `7d9677ce36db4aeea2ce36a3bb78588829e80933` (`src/skills/workshop/{skill-versions,drafts,review-undo,unused-archive,changes}.ts`, MIT) and stale/archive policy characterised from `NousResearch/hermes-agent` `agent/curator.py` at `7020ea3e96c3fdbc768c5296493e186df46f075b` (MIT). MARS modifications: Bun/TypeScript port, directory lock, transactional persistence, proposal queue, threat scanning, contracts adapter. Details in `NOTICE`.
+
+## Repository conventions
+
+`discovery.ts`, `hooks.ts` and `commands.ts` read Claude Code / Codex CLI style convention files from a **trusted project checkout** and turn them into bounded data for the workbench host. They are pure, offline libraries: no model call, no agent loop, no process spawn, no writes. Everything they return is repository text — the host labels it with its provenance and bounds it; it never grants permissions. Shared types live in `src/conventions-types.ts` (`DiscoveredSkill`, `SkillDiscoveryResult`, `HookSpec`, `HookExecutor`, `HookResult`, `SlashCommand`, `ExpandedCommand`).
+
+**Attribution.** anthropics/claude-code is proprietary; only its *formats* are reproduced here (file names `.claude/skills/<name>/SKILL.md`, `.claude/commands/<dir>/<name>.md`; frontmatter keys `name`, `description`, `argument-hint`, `allowed-tools`; hook event names `SessionStart`/`PreToolUse`/`PostToolUse`; the `$ARGUMENTS` / `$1`…`$9` placeholders; "exit code 2 blocks"). No Claude Code source was read or copied. Codex CLI's `.codex/skills` and `.agents/skills` folders are supported as plain file layouts.
+
+### Skill folders (`discoverSkills`)
+
+```ts
+const report = await discoverSkills({ root, maxSkills: 256, maxContentBytes: 65_536 });
+report.skills   // DiscoveredSkill[]: { name, description, path, source, content, bytes, frontmatter }
+report.shadowed // later copies of a name already taken by an earlier source
+report.skipped  // { path, reason: "symlink" | "oversize" | "encoding" | "frontmatter" | "missing-name-or-description" | "invalid-name" | "limit" | ... }
+report.warnings // e.g. frontmatter name differs from the folder name
+const records = toSkillRecords(report); // SkillRecord[] (status "active", unpinned, epoch timestamps, useCount 0) for freezeSkills
+```
+
+Scanned in order: `skills/<name>/SKILL.md` (plus `skills/vendor/<vendor>/<name>/SKILL.md`, the layout this repository vendors watch-skill in), `.claude/skills/<name>/SKILL.md`, `.codex/skills/<name>/SKILL.md`, `.agents/skills/<name>/SKILL.md`. One folder level only; dot-folders (for example the store's `skills/.archive`) are ignored. Frontmatter goes through `parseFrontmatter`; `name` and `description` are required and `name` must satisfy the store rule `^[a-z0-9][a-z0-9-]{0,63}$`. First location wins; results are ordered by source then path, so output is deterministic. Symlinked folders or files, non-UTF-8 content, files over `maxContentBytes` (default 64 KiB) and anything past `maxSkills` (default 256) are skipped and reported.
+
+### Hooks (`loadHooks`, `runHooks`)
+
+`<root>/.mars/hooks.json`, validated with a strict zod schema (unknown keys and events rejected, ≤ 256 KiB, not a symlink):
+
+```json
+{ "schema_version": 1,
+  "hooks": {
+    "session-start": [ { "command": ["bun", "run", "lint"], "timeout_ms": 60000 } ],
+    "pre-tool":  [ { "matcher": "mars_write|mars_apply_patch", "command": ["bun", "run", "check:fast", "{tool}", "{path}"], "timeout_ms": 30000 } ],
+    "post-tool": [ { "matcher": "mars_write", "command": ["bun", "run", "biome", "format", "--write", "{path}"] } ] } }
+```
+
+- Events: `session-start`, `pre-tool`, `post-tool`; `SessionStart`, `PreToolUse`, `PostToolUse` are accepted as aliases (configuring both spellings of one event is an error).
+- `command` is an argv array — never a shell string. A token equal to `{tool}` or `{path}` is replaced by the value (`renderHookArgv`); a placeholder with no value drops its token; partial matches such as `x{path}y` are literal. ≤ 64 tokens of ≤ 1024 bytes, no control characters.
+- `matcher` is `*` or a `|`-separated list of exact tool names (absent = every tool); `session-start` takes no matcher. ≤ 32 hooks per event; `timeout_ms` 1 000–300 000 (default 60 000).
+- `loadHooks(root)` → `HooksRegistry | null` (null when the file is missing; `HooksError` with code `invalid`/`unreadable` otherwise). `registry.select(event, toolName?)`, `registry.list()`, `parseHooksFile(json)`.
+- `runHooks(registry, event, { tool?, path? }, executor)` runs the selected hooks **in order through the injected executor** — the host passes its approval-gated, sandboxed `WorkspaceHost.execute`. The executor may answer `{ skipped: reason }` (no execute approval, no sandbox); nothing here ever spawns a process. Each `HookResult` carries `outcome: "ran" | "skipped" | "timeout" | "error"`, `exit_code`, `stdout`/`stderr` truncated to 4 KiB and `blocked`. For `pre-tool`, exit code 2 ⇒ `blocked: true` and the remaining pre-tool hooks are not run; the host refuses the tool call with the hook's stderr. Any other non-zero exit is recorded and does not block; exit 2 outside `pre-tool` does not block. A hook that outlives `timeout_ms` is recorded as `timeout`. `isBlocked(results)` is the one-line check.
+
+### Slash commands (`loadCommands`, `expandCommand`)
+
+`<root>/.mars/commands/<name>.md` and `<root>/.claude/commands/<name>.md`; one level of `<dir>/<name>.md` namespacing yields `dir:name`. Names are the file stem, `^[a-z0-9][a-z0-9_-]{0,63}$` per segment. Optional frontmatter (`description`, `argument-hint`; `allowed-tools` and other keys are preserved in `frontmatter` but never enforced here). `.mars/commands` wins over `.claude/commands`; shadowed copies and skipped files (bad name, symlink, oversize, bad frontmatter, non-UTF-8, past the 128-command cap) are reported on the registry. Bodies are capped at 16 KiB.
+
+```ts
+const registry = await loadCommands(root); // registry.list(), registry.get(name), .shadowed, .skipped
+expandCommand(registry, "/review src/foo.ts security");
+// → { name: "review", prompt: "Review src/foo.ts for bugs. Focus: security. …", command }
+```
+
+Expansion substitutes `$ARGUMENTS` (everything after the name) and `$1`…`$9` (whitespace-split, quotes not interpreted, missing → empty) in a single pass, so argument text is never re-expanded. When the body uses no placeholder the argument text is appended after a blank line. Returns `null` when the input is not `/name …` or the name is unknown; throws `CommandError("too-large")` when the expanded prompt exceeds 64 KiB. `` !`command` `` shell inclusion is **never executed**: it is listed in `command.unsupported` and left verbatim; `@file` references are left as-is for the host.
+
+Tests: `src/discovery.test.ts`, `src/hooks.test.ts`, `src/commands.test.ts` with committed fixtures under `test/fixtures/{discovery,hooks,commands}` (the fixtures' `.gitignore` re-includes `.mars/`, which the repository root ignores). `discovery.test.ts` also loads the real `skills/vendor/watch-skill/*/SKILL.md` folders.

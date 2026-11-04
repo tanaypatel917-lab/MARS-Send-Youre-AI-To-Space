@@ -36,6 +36,8 @@ provider.read(context: RequestContext, workspace: WorkspaceRef, relativePath: st
   Promise<ArtifactRef>;
 provider.write(context: RequestContext, workspace: WorkspaceRef, relativePath: string,
   artifact: ArtifactRef, options?: { executable?: boolean }): Promise<void>;
+provider.remove(context: RequestContext, workspace: WorkspaceRef, relativePath: string):
+  Promise<void>;
 provider.execute(context: RequestContext, workspace: WorkspaceRef, argv: readonly string[],
   budget: Budget, options?: { signal?: AbortSignal }): Promise<LocalExecutionResult>;
 provider.checkpoint(context: RequestContext, workspace: WorkspaceRef): Promise<CheckpointRef>;

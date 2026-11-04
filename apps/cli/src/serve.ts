@@ -3,6 +3,7 @@ import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { applyPatch, discoverInstructions } from "@mars/codex-tools";
 import { registerRuntimeCleanup } from "@mars/execution";
 import {
   createBraveSearch,
@@ -12,6 +13,7 @@ import {
 } from "@mars/research-worker";
 import {
   createWorkbenchService,
+  loadWorkbenchConventions,
   type WorkbenchResearchOptions,
 } from "@mars/workbench";
 
@@ -122,6 +124,21 @@ export function researchFromFlags(
   };
 }
 
+/**
+ * The @mars/codex-tools pieces the loader is given: the apply_patch applier
+ * and the instruction-file discovery. Kept in one place so the CLI is the only
+ * composition point.
+ */
+export function conventionsAdapters(): Pick<
+  Parameters<typeof loadWorkbenchConventions>[0],
+  "applyPatch" | "discoverInstructions"
+> {
+  return {
+    applyPatch: (patch, files) => applyPatch(patch, files),
+    discoverInstructions: (root) => discoverInstructions({ root }),
+  };
+}
+
 export async function runServer(args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
@@ -134,11 +151,14 @@ export async function runServer(args: string[]): Promise<void> {
       project: { type: "string" },
       image: { type: "string" },
       "trust-project": { type: "boolean" },
+      "no-conventions": { type: "boolean" },
       "research-search": { type: "string" },
       "research-api-key-env": { type: "string" },
       "research-searxng-url": { type: "string" },
       "research-model": { type: "string" },
       "research-deny-host": { type: "string", multiple: true },
+      graphify: { type: "string", multiple: true },
+      "graphify-os-wrapper": { type: "boolean" },
       omniroute: { type: "boolean" },
       "omniroute-url": { type: "string" },
       "omniroute-start": { type: "boolean" },
@@ -149,10 +169,12 @@ export async function runServer(args: string[]): Promise<void> {
   if (values.help) {
     console.log(
       [
-        "Usage: mars serve [--source DIR] [--state PRIVATE_DIR] [--port 7331] [--owner ID] [--project ID] [--image REPO@sha256:DIGEST] [--trust-project]",
-        "                  [--research-search brave|searxng|tavily] [--research-api-key-env NAME] [--research-searxng-url URL] [--research-model ID] [--research-deny-host PATTERN]...",
+        "Usage: mars serve [--source DIR] [--state PRIVATE_DIR] [--port 7331] [--owner ID] [--project ID] [--image REPO@sha256:DIGEST] [--trust-project] [--no-conventions]",
+        "                  [--research-search brave|searxng|tavily] [--research-api-key-env NAME] [--research-searxng-url URL] [--research-model ID] [--research-deny-host PATTERN]... [--graphify ARG]... [--graphify-os-wrapper]",
         "                  [--omniroute] [--omniroute-url http://localhost:20128] [--omniroute-start] [--omniroute-allow web-session|browser-session|caution|ambiguous|unknown]...",
         "Without a pre-pulled digest-pinned image, command execution is disabled. No model request is made at startup. Connection credentials are written only to the private connection file.",
+        "Code knowledge graph tools (mars_graph_build, mars_graph_query) are offered only with --graphify ARG (repeatable; the argv prefix of the pinned graphify 0.9.101 executable from a uv/venv install, optionally behind an OS sandbox such as bwrap, then pass --graphify-os-wrapper). Confinement without a wrapper is process-level only (argv, env allowlist, offline flags); the graph is a derived, rebuildable artifact.",
+        "Repository conventions are read once from --source at startup: skill folders (skills/, .claude/skills, .codex/skills, .agents/skills) and slash commands (.mars/commands, .claude/commands) always; AGENTS.md/AGENTS.override.md/CLAUDE.md instruction files and .mars/hooks.json only with --trust-project. Hook commands run only through the sandboxed execute path with execute approval. --no-conventions disables all of it, including mars_apply_patch.",
         "Background research runs only with --research-search. The search credential is read from BRAVE_SEARCH_API_KEY / TAVILY_API_KEY (or --research-api-key-env NAME) at startup and never stored; the worker uses the free default model unless --research-model names another free model. Live research is unverified.",
         "--omniroute adds a self-hosted OmniRoute gateway as the `omniroute` provider target (attach to a running instance; --omniroute-start spawns the pinned omniroute CLI on 127.0.0.1). Only free, non-excluded catalog models route; MARS keeps policy and sends its paid-consent state. OMNIROUTE_API_KEY (OmniRoute's own key) is read by name; upstream credentials stay in OmniRoute. Live OmniRoute use is unverified.",
       ].join("\n"),
@@ -198,6 +220,17 @@ export async function runServer(args: string[]): Promise<void> {
   const state = resolve(
     values.state ?? join(homedir(), ".mars", "workbench", project),
   );
+  const trustProject =
+    values["trust-project"] === true ||
+    process.env.MARS_TRUST_PROJECT_CONFIG === "1";
+  const conventions =
+    values["no-conventions"] === true
+      ? null
+      : await loadWorkbenchConventions({
+          sourceRoot: source,
+          trustProject,
+          ...conventionsAdapters(),
+        });
   const service = await createWorkbenchService({
     sourceRoot: source,
     stateRoot: state,
@@ -205,10 +238,17 @@ export async function runServer(args: string[]): Promise<void> {
     port: values.port === undefined ? 7331 : Number(values.port),
     ...(values.image ? { image: values.image } : {}),
     ...(research ? { research } : {}),
+    ...(values.graphify?.length
+      ? {
+          knowledgeGraph: {
+            command: values.graphify,
+            osWrapper: values["graphify-os-wrapper"] === true,
+          },
+        }
+      : {}),
+    ...(conventions ? { conventions: conventions.conventions } : {}),
     ...(omniroute ? { omniroute } : {}),
-    trustProjectConfig:
-      values["trust-project"] === true ||
-      process.env.MARS_TRUST_PROJECT_CONFIG === "1",
+    trustProjectConfig: trustProject,
   });
   await new Promise<void>((resolve, reject) => {
     registerRuntimeCleanup("mars-workbench", async () => {
@@ -226,6 +266,15 @@ export async function runServer(args: string[]): Promise<void> {
         connection_file: service.connectionFile,
         execute_enabled: Boolean(values.image),
         research: research ? { search: research.search.id, live: true } : null,
+        knowledge_graph: values.graphify?.length
+          ? {
+              command: values.graphify,
+              isolation: values["graphify-os-wrapper"]
+                ? "os_wrapper"
+                : "process_env",
+            }
+          : null,
+        conventions: conventions ? conventions.summary : null,
         omniroute: service.omniroute,
       }),
     );

@@ -1139,7 +1139,7 @@
         ]
       },
       "risks": [
-        "HEAD is untagged dev commit past v0.25.0 — choose tag pin or this SHA explicitly in manifest",
+        "HEAD is untagged dev commit past v0.25.0 \u2014 choose tag pin or this SHA explicitly in manifest",
         "CLI exit 0 on errored trials can hide failures",
         "separate-verifier no-network tasks cannot run on this VM's Docker; requires nftables-capable host or cloud provider",
         "custom agent module must be importable (PYTHONPATH) from Harbor process",
@@ -1323,7 +1323,7 @@
         "additional_notices": [
           {
             "path": "dspy/clients/model_metadata/LICENSE",
-            "spdx": "MIT for non-restricted content; derived LiteLLM model metadata with provenance.json — verify upstream LiteLLM license terms before redistribution",
+            "spdx": "MIT for non-restricted content; derived LiteLLM model metadata with provenance.json \u2014 verify upstream LiteLLM license terms before redistribution",
             "url": "https://github.com/stanfordnlp/dspy/blob/25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007/dspy/clients/model_metadata/LICENSE"
           }
         ],
@@ -1449,7 +1449,7 @@
         "litellm (optional extras)"
       ],
       "acceptance_plan": [
-        "D1 (no LLM): implement a fake GEPAAdapter returning deterministic scores and run gepa.optimize(seed_candidate={'system':'x'}, trainset=T, valset=V, adapter=fake, reflection_lm=lambda p:'y', max_metric_calls=30, run_dir=tmp, seed=0); assert every evaluated example id is in T∪V, none in final set F; assert len(outputs)==len(scores)==len(batch); rerun with same seed reproduces val_aggregate_scores; resume from run_dir works.",
+        "D1 (no LLM): implement a fake GEPAAdapter returning deterministic scores and run gepa.optimize(seed_candidate={'system':'x'}, trainset=T, valset=V, adapter=fake, reflection_lm=lambda p:'y', max_metric_calls=30, run_dir=tmp, seed=0); assert every evaluated example id is in T\u222aV, none in final set F; assert len(outputs)==len(scores)==len(batch); rerun with same seed reproduces val_aggregate_scores; resume from run_dir works.",
         "D2 (Harbor-backed, needs model budget approval): HarborGEPAAdapter over 3 train + 3 val Harbor tasks, max_metric_calls small; final 5-task held-out slice scored after optimize() for seed and best candidate with recorded cost."
       ],
       "audit_checks": {
@@ -2461,6 +2461,211 @@
       "integration_status": "host-bound-tools"
     },
     {
+      "id": "graphify",
+      "group": "code-knowledge-graph",
+      "repository_url": "https://github.com/Graphify-Labs/graphify",
+      "revision": "ab26b1ec1da995743ef5a165a07b0d45ad3314c8",
+      "version_note": "0.9.101 (pyproject.toml, tag v0.9.101); PyPI distribution name `graphifyy`",
+      "license": {
+        "spdx": "Apache-2.0",
+        "path": "LICENSE",
+        "url": "https://github.com/Graphify-Labs/graphify/blob/ab26b1ec1da995743ef5a165a07b0d45ad3314c8/LICENSE",
+        "additional_notices": ["LICENSE-MIT", "NOTICE"],
+        "notes": "Apache-2.0 at the pinned LICENSE with an upstream NOTICE and a LICENSE-MIT for parts relicensed from the original MIT release. Nothing is copied or vendored: MARS runs the pinned CLI as an external subprocess and parses its JSON output; packages/knowledge-graph/NOTICE records the attribution."
+      },
+      "sources": [
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/Graphify-Labs/graphify/blob/ab26b1ec1da995743ef5a165a07b0d45ad3314c8/pyproject.toml",
+          "purpose": "Version 0.9.101, requires-python >=3.10, dependencies (networkx, tree-sitter grammars, rapidfuzz, pyyaml); source of the `graphify --version` gate."
+        },
+        {
+          "path": "README.md",
+          "url": "https://github.com/Graphify-Labs/graphify/blob/ab26b1ec1da995743ef5a165a07b0d45ad3314c8/README.md",
+          "purpose": "Feature and install overview; audited for the `extract --code-only` offline path and the LLM-backed commands MARS does not call."
+        },
+        {
+          "path": "ARCHITECTURE.md",
+          "url": "https://github.com/Graphify-Labs/graphify/blob/ab26b1ec1da995743ef5a165a07b0d45ad3314c8/ARCHITECTURE.md",
+          "purpose": "Pipeline detect \u2192 extract \u2192 build \u2192 cluster \u2192 analyze \u2192 report \u2192 export and the graph.json node/edge schema mapped into KnowledgeGraphArtifactSchema."
+        },
+        {
+          "path": "graphify/cli.py",
+          "url": "https://github.com/Graphify-Labs/graphify/blob/ab26b1ec1da995743ef5a165a07b0d45ad3314c8/graphify/cli.py",
+          "purpose": "CLI subcommands and flags; only `extract <root> --code-only --out <dir>` and `--version` are invoked by @mars/knowledge-graph."
+        },
+        {
+          "path": "graphify/cluster.py",
+          "url": "https://github.com/Graphify-Labs/graphify/blob/ab26b1ec1da995743ef5a165a07b0d45ad3314c8/graphify/cluster.py",
+          "purpose": "Deterministic community detection (fixed seed) behind the artifact's communities."
+        },
+        {
+          "path": "graphify/export.py",
+          "url": "https://github.com/Graphify-Labs/graphify/blob/ab26b1ec1da995743ef5a165a07b0d45ad3314c8/graphify/export.py",
+          "purpose": "graph.json export shape (nodes, links, hyperedges) consumed by normalizeGraph."
+        },
+        {
+          "path": "graphify/__main__.py",
+          "url": "https://github.com/Graphify-Labs/graphify/blob/ab26b1ec1da995743ef5a165a07b0d45ad3314c8/graphify/__main__.py",
+          "purpose": "Entry point and version printing wrapped by the subprocess sandbox."
+        },
+        {
+          "path": "LICENSE",
+          "url": "https://github.com/Graphify-Labs/graphify/blob/ab26b1ec1da995743ef5a165a07b0d45ad3314c8/LICENSE",
+          "purpose": "Apache-2.0 license text."
+        },
+        {
+          "path": "NOTICE",
+          "url": "https://github.com/Graphify-Labs/graphify/blob/ab26b1ec1da995743ef5a165a07b0d45ad3314c8/NOTICE",
+          "purpose": "Upstream attribution notice reproduced in packages/knowledge-graph/NOTICE."
+        }
+      ],
+      "background_references": [],
+      "runtime_requirements": [
+        "Python >=3.10 (external runtime, not installed into the Bun workspace)",
+        "pip/uv install graphifyy==0.9.101 into a dedicated venv; `graphify --version` must print 0.9.101",
+        "No network: only `extract --code-only` (tree-sitter AST) is used; LLM-backed commands are never invoked"
+      ],
+      "integration_owner": "@mars/knowledge-graph host-bound tools; Oh My Pi owns execution",
+      "target_milestone": "Milestone 3 context / persistent human-readable memory",
+      "adaptation_decision": "Wrapped, not ported: the pinned CLI runs as a sandboxed subprocess (argv only, env allowlist, HOME/GRAPHIFY_OUT/cache pinned to a host-private data root, proxy variables pointed at a closed loopback port, cwd = task workspace, 96 KiB output cap, 180 s timeout) behind @mars/knowledge-graph host-bound tools mars_graph_build and mars_graph_query. Its graph.json is normalised into a derived, rebuildable KnowledgeGraphArtifact stored by the @mars/context derived artifact store next to the repository map (never a memory owner; SQLite stores stay authoritative). Version gate 0.9.101, otherwise unavailable; an empty graph, a missing graph.json, a crash or a timeout is a failed build and nothing is stored; queries against another workspace revision answer stale, never from the old graph. Launch summaries are labelled derived evidence and fit the existing instruction/context budget. No MCP server, no second agent loop.",
+      "dependencies": [
+        "External Python >=3.10 runtime with graphifyy==0.9.101 (pip/uv); not a Bun workspace dependency"
+      ],
+      "acceptance_plan": {
+        "offline_tests": "packages/knowledge-graph tests run a fixture CLI (packages/knowledge-graph/test/fake-graphify.ts via bun) with scenario files; model_requests: 0; bun run check must pass.",
+        "doctor_gate": "Wrong or missing `graphify --version` makes mars_graph_build answer unavailable and nothing is stored.",
+        "build_semantics": "Only a non-empty, schema-valid graph.json for the current workspace revision is stored; relative paths only, host paths dropped, deterministic ordering and content digest.",
+        "query_semantics": "neighbours, paths and communities answer from the stored artifact only when its workspace revision matches; otherwise not_built or stale.",
+        "sandbox": "argv only, no shell, stdin ignored, env allowlist, HOME and output pinned to the private data root, proxy variables closed, output cap 96 KiB, 180 s timeout.",
+        "status": "Proposed and held by packages/knowledge-graph fixture tests only; the real CLI run listed in audit_checks is the only live evidence."
+      },
+      "audit_checks": {
+        "environment": "2026-11-02, Ubuntu VM, python3 -m venv + pip install from the read-only clone at tag v0.9.101, Python 3.12, no network during extraction.",
+        "version": "`graphify --version` printed `graphify 0.9.101`.",
+        "extract": "`graphify extract <fixture> --code-only --out <dir>` on a 3-file TypeScript/Python fixture exit 0: `found 3 code, 0 docs, 0 papers, 0 images`, wrote graphify-out/graph.json with 8 nodes, 10 edges, 2 communities plus manifest.json, .graphify_analysis.json, .graphify_build.json and .graphify_root (absolute host path, never copied into the artifact).",
+        "unexecuted": [
+          "cluster-only",
+          "query",
+          "path",
+          "report generation",
+          "any LLM-backed command",
+          "upstream test suite"
+        ]
+      },
+      "risks": [
+        "External Python runtime: version or grammar drift changes extraction; mitigated only by the version gate and the fixture tests.",
+        "graphify writes caches and a `.graphify_root` file containing the absolute scan root; MARS pins HOME/GRAPHIFY_OUT to a private data root, deletes the raw output after normalisation and drops absolute paths from the artifact.",
+        "Upstream LLM-backed commands (cluster naming, query) would imply egress and model calls; MARS never invokes them and closes proxy variables.",
+        "Graph labels and community names are untrusted, model-steering content derived from workspace files; summaries are labelled derived evidence.",
+        "Only `extract --code-only` and `--version` were run against the real CLI; the wrapper is fixture-verified otherwise."
+      ],
+      "integration_status": "host-bound-tools"
+    },
+    {
+      "id": "codex-tooling",
+      "group": "execution-ide",
+      "repository_url": "https://github.com/openai/codex",
+      "revision": "f58acd6ede312266a7a0eaa63fd8dadacb4de239",
+      "version_note": "HEAD of main at audit (2026-11-02); no release tag resolved for this commit",
+      "license": {
+        "spdx": "Apache-2.0",
+        "path": "LICENSE",
+        "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/LICENSE",
+        "additional_notices": [
+          "packages/codex-tools/NOTICE",
+          "packages/codex-tools/third_party/codex/LICENSE.txt",
+          "packages/codex-tools/third_party/codex/NOTICE.txt"
+        ],
+        "notes": "Apache-2.0 with an upstream NOTICE ('OpenAI Codex, Copyright 2025 OpenAI'; Ratatui-derived code is noted upstream but not copied). packages/codex-tools/src/apply-patch/* is a MARS TypeScript port of codex-rs/apply-patch (parser, streaming parser, seek_sequence, file_update, text_file) and carries per-file Apache-2.0 headers naming the upstream file and this revision; upstream LICENSE and NOTICE are copied verbatim under packages/codex-tools/third_party/codex/. The apply_patch test scenarios are copied from codex-rs/apply-patch/tests/fixtures/scenarios with their origin recorded in packages/codex-tools/test/fixtures/apply-patch/README.md. No Codex agent loop, prompt text, TUI, sandbox or MCP code is copied."
+      },
+      "sources": [
+        {
+          "path": "codex-rs/apply-patch/src/parser.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/apply-patch/src/parser.rs",
+          "purpose": "Patch grammar, hunk model and strict/lenient boundary rules ported to packages/codex-tools/src/apply-patch/parser.ts."
+        },
+        {
+          "path": "codex-rs/apply-patch/src/streaming_parser.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/apply-patch/src/streaming_parser.rs",
+          "purpose": "Line-by-line hunk state machine and error messages ported."
+        },
+        {
+          "path": "codex-rs/apply-patch/src/seek_sequence.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/apply-patch/src/seek_sequence.rs",
+          "purpose": "Exact → rtrim → trim → Unicode-punctuation-normalised context matching ported."
+        },
+        {
+          "path": "codex-rs/apply-patch/src/file_update.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/apply-patch/src/file_update.rs",
+          "purpose": "compute_replacements and chunk application semantics ported."
+        },
+        {
+          "path": "codex-rs/apply-patch/src/text_file.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/apply-patch/src/text_file.rs",
+          "purpose": "Per-line line-ending preservation ported."
+        },
+        {
+          "path": "codex-rs/apply-patch/tests/fixtures/scenarios",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/apply-patch/tests/fixtures/scenarios",
+          "purpose": "Scenario fixtures copied verbatim as the port's characterization tests."
+        },
+        {
+          "path": "codex-rs/core/assets/tools/apply_patch.lark",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/core/assets/tools/apply_patch.lark",
+          "purpose": "Official apply_patch grammar used to check the port's acceptance set."
+        },
+        {
+          "path": "codex-rs/core/src/agents_md.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/core/src/agents_md.rs",
+          "purpose": "AGENTS.md / AGENTS.override.md discovery (root-to-cwd concatenation, byte budget, untrusted projects skipped) mirrored by packages/codex-tools/src/instructions.ts; MARS adds CLAUDE.md and reads only the trusted checkout root."
+        },
+        {
+          "path": "codex-rs/protocol/src/protocol.rs",
+          "url": "https://github.com/openai/codex/blob/f58acd6ede312266a7a0eaa63fd8dadacb4de239/codex-rs/protocol/src/protocol.rs",
+          "purpose": "AskForApproval (untrusted | on-request | never | granular) and SandboxPolicy (read-only | workspace-write | danger-full-access | external-sandbox) definitions mapped onto MARS read/write/execute approvals in packages/codex-tools/src/policy.ts."
+        }
+      ],
+      "background_references": [
+        {
+          "url": "https://developers.openai.com/codex/guides/agents-md",
+          "notes": "Official AGENTS.md guidance referenced by docs/agents_md.md at the pinned revision."
+        },
+        {
+          "url": "https://developers.openai.com/codex/security",
+          "notes": "Official sandbox and approval documentation referenced by docs/sandbox.md at the pinned revision."
+        }
+      ],
+      "runtime_requirements": "None at runtime: the TypeScript port runs inside the Bun workspace with zod only. The upstream Rust crate is not built or installed.",
+      "integration_owner": "MARS workbench host (packages/workbench/src/host.ts) owns the mars_apply_patch tool binding, approval gating and instruction freezing; @mars/codex-tools owns the pure parser/applier, policy mapping and discovery loader. Oh My Pi remains the sole execution owner. No human owner assigned.",
+      "target_milestone": "Milestone 1 usability (coding workbench ergonomics); no milestone acceptance claim.",
+      "adaptation_decision": "PORT, not wrap: the apply_patch format and applier are ported to TypeScript behind a filesystem seam so the workbench writes only through the workspace provider; the Codex agent loop, tool router, sandbox and MCP layers are not adopted. Sandbox policies and approval modes are mapped onto the existing workbench approvals (danger-full-access refused, never ≡ on-request because MARS approvals are fixed at launch). AGENTS.md discovery is reimplemented against the trusted checkout root (plus CLAUDE.md) and the text is bounded and frozen into the launch, labelled as repository instructions.",
+      "dependencies": [
+        "No upstream runtime dependency; zod 3.25.76 (already pinned in the workspace)."
+      ],
+      "acceptance_plan": {
+        "offline_tests": "bun test packages/codex-tools runs the copied upstream scenarios and MARS cases through an in-memory PatchFileSystem; packages/workbench host tests cover tool binding, approval gating and hooks; model_requests: 0; bun run check must pass.",
+        "privacy": "The applier never touches node:fs; every path goes through WorkspaceHost.read/write/remove and is re-validated by the provider.",
+        "status": "Offline-verified only; no live model has emitted a patch through mars_apply_patch."
+      },
+      "audit_checks": {
+        "environment": "2026-11-02, Ubuntu VM, git clone --depth 1 of openai/codex at f58acd6ede312266a7a0eaa63fd8dadacb4de239; no Rust toolchain used, upstream tests not run.",
+        "license": "LICENSE is Apache-2.0; NOTICE names OpenAI Codex (Copyright 2025 OpenAI) and Ratatui-derived code.",
+        "grammar": "codex-rs/core/assets/tools/apply_patch.lark read; parser.rs doc comment adds the optional '*** Environment ID:' preamble and lenient heredoc stripping.",
+        "unexecuted": [
+          "cargo test for codex-rs/apply-patch",
+          "Codex CLI itself",
+          "any live model run"
+        ]
+      },
+      "risks": [
+        "Port drift: upstream apply_patch semantics may change after this revision; the copied scenarios pin the behaviour we claim.",
+        "Repository instruction files are model-steering text; they are loaded only from the trusted checkout (--trust-project), bounded, frozen whole-or-omitted and labelled, and never grant tool permissions.",
+        "A hook or command file is also repository text: hooks run only through the approval-gated sandbox and are skipped otherwise; slash commands only expand prompt text."
+      ],
+      "integration_status": "host-bound-tools"
+    },
+    {
       "id": "omniroute",
       "group": "model-gateway",
       "repository_url": "https://github.com/cheaper-inference/OmniRoute",
@@ -2590,7 +2795,7 @@
     },
     {
       "group": "evaluation",
-      "findings": "Pins: Harbor c23909f47508af47a70321eb22c2b40aa190ca5d (0.25.0+, not tag), mini-swe-agent 04d809ceab9df28f9adaed044884180159172930 (v2.4.6), DSPy 25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007 (3.4.1), GEPA 02ea4152ff6e512484cb5298046bfe967aea4735 (HEAD; DSPy requires 0.1.4 = 8b0ce6cd99a234f6b74daf37558a2ac0ce18f975). (1) Adapter: MARS plugs into Harbor as a BaseAgent subclass referenced by 'module:Class'; verified E2E with Harbor's no-LLM MarkerAgent on hello-world (reward 1.0, marker artifact present) after PYTHONPATH fix and mirror.gcr.io image retag; oracle=1.0, nop=0.0 show verifier discrimination on this deterministic task only. (2) Baseline: Harbor ships an installed mini-swe-agent adapter (ATIF v1.7 conversion, version pin via --ak version); use it so baseline and candidate share env/verifier; no model run executed. (3) Scoring: Harbor reward = finite numeric from /logs/verifier/reward.txt|json -> VerifierResult.rewards dict; GEPA needs per-example float higher-is-better with fallback 0.0 on per-example failure — direct mapping, but harbor CLI exit code is 0 even when trials error, so wrappers must read result.json n_errored_trials. (4) Holdout: DSPy GEPA.compile and gepa.optimize take train+val only; final test isolation is caller-enforced (optimize_anything has a test_set evaluated post-budget). Harbor separate-verifier mode / RewardKit secure worker keep private tests out of candidate env, but separate-verifier E2E could not run here. (5) Missing capability: no Harbor<->GEPA adapter upstream; MARS must write HarborGEPAAdapter (closest reference: gepa terminal_bench_adapter). Unit evidence: Harbor 138 passed, mini-swe-agent 302 passed/16 deselected, DSPy GEPA 97 passed, GEPA 18 passed/1 skipped. No interoperability between GEPA/DSPy and Harbor, and no LLM run, was executed.",
+      "findings": "Pins: Harbor c23909f47508af47a70321eb22c2b40aa190ca5d (0.25.0+, not tag), mini-swe-agent 04d809ceab9df28f9adaed044884180159172930 (v2.4.6), DSPy 25162c4fc05c2d2d019b0ffb5b6b2a9f315ec007 (3.4.1), GEPA 02ea4152ff6e512484cb5298046bfe967aea4735 (HEAD; DSPy requires 0.1.4 = 8b0ce6cd99a234f6b74daf37558a2ac0ce18f975). (1) Adapter: MARS plugs into Harbor as a BaseAgent subclass referenced by 'module:Class'; verified E2E with Harbor's no-LLM MarkerAgent on hello-world (reward 1.0, marker artifact present) after PYTHONPATH fix and mirror.gcr.io image retag; oracle=1.0, nop=0.0 show verifier discrimination on this deterministic task only. (2) Baseline: Harbor ships an installed mini-swe-agent adapter (ATIF v1.7 conversion, version pin via --ak version); use it so baseline and candidate share env/verifier; no model run executed. (3) Scoring: Harbor reward = finite numeric from /logs/verifier/reward.txt|json -> VerifierResult.rewards dict; GEPA needs per-example float higher-is-better with fallback 0.0 on per-example failure \u2014 direct mapping, but harbor CLI exit code is 0 even when trials error, so wrappers must read result.json n_errored_trials. (4) Holdout: DSPy GEPA.compile and gepa.optimize take train+val only; final test isolation is caller-enforced (optimize_anything has a test_set evaluated post-budget). Harbor separate-verifier mode / RewardKit secure worker keep private tests out of candidate env, but separate-verifier E2E could not run here. (5) Missing capability: no Harbor<->GEPA adapter upstream; MARS must write HarborGEPAAdapter (closest reference: gepa terminal_bench_adapter). Unit evidence: Harbor 138 passed, mini-swe-agent 302 passed/16 deselected, DSPy GEPA 97 passed, GEPA 18 passed/1 skipped. No interoperability between GEPA/DSPy and Harbor, and no LLM run, was executed.",
       "blockers": "Harbor separate-verifier isolation E2E not verified: examples/tasks/separate-verifier-environment fails on this VM's Docker with ValueError network_mode='no-network' not supported (egress-control nftables kernel support not detected). Needs nftables-capable Linux host or a cloud provider (e.g. Daytona/Modal)., Docker Hub rate limit (HTTP 429) on ubuntu:24.04 blocked first Harbor E2E attempts; workaround used: docker pull mirror.gcr.io/library/ubuntu:24.04 && docker tag as ubuntu:24.04. Reproducible E2E needs a registry mirror or authenticated pulls., No upstream Harbor GEPA adapter; HarborGEPAAdapter must be implemented by MARS (M4)., No model/LLM runs executed (mini-swe-agent baseline, GEPA/DSPy optimization) by scope; baseline/candidate comparison and prompt-improvement claims remain unverified., Version skew: GEPA audited at HEAD while DSPy 3.4.1 hard-pins gepa==0.1.4; Harbor audited HEAD is past v0.25.0 tag. Manifest must choose one pin per component., harbor run returns exit 0 when trials error (observed); CI gates must parse result.json."
     },
     {

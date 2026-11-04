@@ -896,6 +896,89 @@ export async function createLocalWorkspaceProvider(
         }
       });
     },
+    async remove(context, workspace, relativePath) {
+      const meta = await assertWorkspace(context, workspace);
+      return withMutex(lockFor(meta.workspace_id), async () => {
+        assertOpen();
+        const current = await reloadWorkspaceMeta(meta.workspace_id);
+        await assertWorkspaceAvailable(current);
+        const path = validateRelativePath(relativePath, limits, extraIgnores);
+        const tree = treeDir(current);
+        const absolute = await resolveSafePath(tree, path);
+        const existing = await lstat(absolute).catch(
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return undefined;
+            throw error;
+          },
+        );
+        if (!existing) throw new WorkspaceNotFoundError();
+        if (!existing.isFile())
+          throw new WorkspacePolicyError(
+            "Workspace remove target is not a regular file",
+          );
+        const priorPath = join(
+          rootDir,
+          "staging",
+          `${current.workspace_id}-prior-${randomUUID().replaceAll("-", "")}`,
+        );
+        const previous = {
+          counter: current.counter,
+          revision: current.revision,
+          tree_digest: current.tree_digest,
+          skipped: current.skipped,
+        };
+        let markerSaved = false;
+        let targetRemoved = false;
+        let committed = false;
+        try {
+          current.write_in_progress = { started_at: now().toISOString() };
+          await saveMeta(rootDir, current);
+          markerSaved = true;
+          await link(absolute, priorPath);
+          await rm(absolute);
+          targetRemoved = true;
+          await options.testHooks?.removePhase?.("after-remove");
+          const after = await treeSnapshot(current, true, false);
+          updateUnsupportedSkipped(current, after);
+          current.counter += 1;
+          current.tree_digest = after.digest;
+          current.revision = revision(current.counter, after.digest);
+          delete current.write_in_progress;
+          await saveMeta(rootDir, current);
+          committed = true;
+        } catch (error) {
+          if (targetRemoved) {
+            try {
+              await rename(priorPath, absolute);
+              targetRemoved = false;
+            } catch {
+              lostWorkspaces.add(current.workspace_id);
+              throw error;
+            }
+          }
+          if (markerSaved) {
+            current.counter = previous.counter;
+            current.revision = previous.revision;
+            current.tree_digest = previous.tree_digest;
+            current.skipped = previous.skipped;
+            delete current.write_in_progress;
+            try {
+              await saveMeta(rootDir, current);
+            } catch {
+              current.write_in_progress = {
+                started_at: now().toISOString(),
+              };
+              lostWorkspaces.add(current.workspace_id);
+            }
+          }
+          throw error;
+        } finally {
+          // A failed restore leaves the staged link as the file's only copy.
+          if (committed || !targetRemoved)
+            await rm(priorPath, { force: true }).catch(() => undefined);
+        }
+      });
+    },
     async execute(context, workspace, argv, budget, executeOptions) {
       const meta = await assertWorkspace(context, workspace);
       return withMutex(lockFor(meta.workspace_id), async () => {
@@ -1324,6 +1407,7 @@ export async function createLocalWorkspaceProvider(
     prepare: (...args) => track(() => provider.prepare(...args)),
     read: (...args) => track(() => provider.read(...args)),
     write: (...args) => track(() => provider.write(...args)),
+    remove: (...args) => track(() => provider.remove(...args)),
     execute: (...args) => track(() => provider.execute(...args)),
     checkpoint: (...args) => track(() => provider.checkpoint(...args)),
     restore: (...args) => track(() => provider.restore(...args)),

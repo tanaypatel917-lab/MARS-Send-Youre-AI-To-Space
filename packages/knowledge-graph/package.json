@@ -1,0 +1,13 @@
+{
+  "name": "@mars/knowledge-graph",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@mars/context": "workspace:*",
+    "@mars/contracts": "workspace:*",
+    "@mars/execution": "workspace:*",
+    "zod": "3.25.76"
+  }
+}

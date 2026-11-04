@@ -6,9 +6,11 @@ import {
   loadModelRegistry,
   ModelRouter,
 } from "@mars/providers";
+import { runCommands } from "./commands";
 import { omnirouteDoctorReport } from "./omniroute";
 import { runRender } from "./render";
 import { RESEARCH_SEARCH_PROVIDERS, runServer, ServeUsageError } from "./serve";
+import { runVault, VaultUsageError } from "./vault";
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -265,6 +267,8 @@ try {
     await runModels(process.argv.slice(3));
   } else if (command === "render") {
     await runRender(process.argv.slice(3));
+  } else if (command === "commands") {
+    await runCommands(process.argv.slice(3));
   } else if (command === "serve") {
     try {
       await runServer(process.argv.slice(3));
@@ -276,13 +280,19 @@ try {
       );
       process.exitCode = 1;
     }
+  } else if (command === "vault") {
+    await runVault(process.argv.slice(3));
   } else {
     console.error(
-      "Usage: bun apps/cli/src/main.ts <doctor|smoke|models|serve|render>",
+      "Usage: bun apps/cli/src/main.ts <doctor|smoke|models|serve|render|commands|vault>",
     );
     process.exitCode = 2;
   }
 } catch (error) {
-  console.error(error instanceof Error ? error.message : "MARS command failed");
+  console.error(
+    error instanceof VaultUsageError || error instanceof Error
+      ? error.message
+      : "MARS command failed",
+  );
   process.exitCode = 1;
 }

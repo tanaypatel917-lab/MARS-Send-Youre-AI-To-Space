@@ -5,10 +5,12 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@mars/codex-tools": "workspace:*",
     "@mars/collaboration": "workspace:*",
     "@mars/context": "workspace:*",
     "@mars/contracts": "workspace:*",
     "@mars/execution": "workspace:*",
+    "@mars/knowledge-graph": "workspace:*",
     "@mars/memory": "workspace:*",
     "@mars/optimization": "workspace:*",
     "@mars/providers": "workspace:*",

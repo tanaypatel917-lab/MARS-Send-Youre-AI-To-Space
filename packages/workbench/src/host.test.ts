@@ -20,6 +20,7 @@ import {
   type RepositoryMapProvider,
 } from "@mars/context";
 import type {
+  ArtifactRef,
   RequestContext,
   SkillRecord,
   Task,
@@ -37,6 +38,7 @@ import { createMemoryStore } from "@mars/memory";
 import type { ModelProviderRegistry } from "@mars/providers";
 import { loadModelRegistry } from "@mars/providers";
 import type { Turn } from "@mars/review";
+import { CommandError } from "@mars/skills";
 import type { RoutingRequest } from "@mars/specialists";
 import { createTaskStore } from "@mars/tasks";
 import {
@@ -50,6 +52,8 @@ import type {
   ChildWorkspaceBinder,
   WorkbenchCollaboration,
 } from "./collaboration-context";
+import type { WorkbenchConventions } from "./conventions-context";
+import type { WorkbenchKnowledgeGraph } from "./graph-context";
 import {
   createWorkbenchHost,
   type WorkbenchHostOptions,
@@ -129,6 +133,8 @@ async function fixture() {
   let restoreCalls = 0;
   let diffFiles: DiffResult["files"] = [];
   const writes: string[] = [];
+  const removes: string[] = [];
+  const readArtifacts = new Map<string, ArtifactRef | string | null>();
   const writeModes = new Map<string, boolean | undefined>();
   const artifact = await store.artifacts.put(
     context(),
@@ -148,12 +154,26 @@ async function fixture() {
     async cwd() {
       return join(root, "isolated");
     },
-    async read() {
-      return artifact;
+    async read(_context, _workspace, path) {
+      const override = readArtifacts.get(path);
+      if (override === null) {
+        throw Object.assign(new Error(`fixture: ${path} not found`), {
+          code: "not_found",
+        });
+      }
+      if (typeof override === "string") {
+        throw Object.assign(new Error(`fixture: ${path} ${override}`), {
+          code: override,
+        });
+      }
+      return override ?? artifact;
     },
     async write(_context, _workspace, path, _artifact, options) {
       writes.push(path);
       writeModes.set(path, options?.executable);
+    },
+    async remove(_context, _workspace, path) {
+      removes.push(path);
     },
     async execute() {
       return {
@@ -226,7 +246,10 @@ async function fixture() {
     specialists?: WorkbenchSpecialists,
     collaboration?: WorkbenchCollaboration,
     research?: WorkbenchResearch,
-    extras: Pick<WorkbenchHostOptions, "skills" | "review" | "watch"> = {},
+    extras: Pick<
+      WorkbenchHostOptions,
+      "skills" | "review" | "watch" | "knowledgeGraph" | "conventions"
+    > & { canExecute?: boolean } = {},
   ) =>
     createWorkbenchHost({
       ...extras,
@@ -236,7 +259,7 @@ async function fixture() {
       store,
       workspace,
       registry: modelRegistry,
-      canExecute: false,
+      canExecute: extras.canExecute ?? false,
       ...(memory ? { memory } : {}),
       ...(repositoryMap ? { repositoryMap } : {}),
       ...(specialists ? { specialists } : {}),
@@ -409,6 +432,8 @@ async function fixture() {
       return prepareCalls;
     },
     writes,
+    removes,
+    readArtifacts,
     writeModes,
     prepareIds,
     set diffFiles(files: DiffResult["files"]) {
@@ -3099,6 +3124,184 @@ test("read-denied tasks never reach background review, even when completed", asy
   await api.close();
 });
 
+test.skipIf(process.platform !== "linux")(
+  "knowledge graph summary is injected only for the current revision and graph tools are host-bound",
+  async () => {
+    const f = await fixture();
+    await repositoryFixture(f.root);
+    const bindings: Array<Record<string, unknown>> = [];
+    let lookupStatus: "ready" | "stale" | "not_built" = "ready";
+    const artifact = (workspaceId: string, revision: string) => ({
+      schema_version: 1 as const,
+      producer: {
+        name: "graphify" as const,
+        version: "0.9.101",
+        wrapper: "@mars/knowledge-graph" as const,
+        wrapper_version: "0.0.1",
+      },
+      workspace: { workspace_id: workspaceId, revision },
+      built_at: "2026-01-01T00:00:00.000Z",
+      content_digest: "b".repeat(64),
+      complete: true,
+      nodes: [
+        {
+          id: "src/verifier.ts::OriginalMapVerifier",
+          label: "OriginalMapVerifier",
+          kind: "symbol" as const,
+          source_file: "src/verifier.ts",
+          source_location: "L1",
+          community: 0,
+          callable: true,
+        },
+      ],
+      edges: [],
+      communities: [
+        {
+          id: 0,
+          label: "verifier core",
+          cohesion: 1,
+          members: ["src/verifier.ts::OriginalMapVerifier"],
+        },
+      ],
+      stats: {
+        files: 1,
+        nodes: 1,
+        edges: 0,
+        communities: 1,
+        dropped_nodes: 0,
+        dropped_edges: 0,
+      },
+    });
+    const knowledgeGraph: WorkbenchKnowledgeGraph = {
+      async lookup(binding) {
+        bindings.push({ op: "lookup", ...binding, evidence: undefined });
+        if (lookupStatus === "ready")
+          return {
+            status: "ready",
+            artifact: artifact(binding.workspace_id, binding.revision),
+          };
+        if (lookupStatus === "stale")
+          return { status: "stale", built_for: "r0", current: "r1" };
+        return { status: "not_built" };
+      },
+      toolsFor(binding) {
+        bindings.push({ op: "tools", ...binding, evidence: undefined });
+        return {
+          async build() {
+            await binding.evidence?.append({
+              schema_version: 1,
+              operation: "graph.build",
+              status: "built",
+              workspace_id: binding.workspace_id,
+              revision: binding.revision,
+              content_digest: "b".repeat(64),
+              graphify_version: "0.9.101",
+              isolation: "process_env",
+              stats: artifact(binding.workspace_id, binding.revision).stats,
+              limitations: [],
+              summary: "code graph built",
+              recorded_at: "2026-01-01T00:00:00.000Z",
+            });
+            return "[derived evidence · code knowledge graph · mars_graph_build · built]";
+          },
+          async query(input) {
+            return `query:${input.kind}:${await binding.currentRevision?.()}`;
+          },
+        };
+      },
+    };
+    const api = await f.makeHost(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { knowledgeGraph },
+    );
+    await api.create(context(), task());
+    await api.start(context(), {
+      task_id: "task",
+      expected_revision: 0,
+      approvals: { read: true, write: false, execute: false },
+    });
+    const session = required(f.sessions[0]);
+    const instruction = required(session.instructions[0]);
+    expect(instruction).toContain("Code knowledge graph summary at launch");
+    expect(instruction).toContain("derived evidence");
+    expect(instruction).toContain(
+      "- c0 verifier core [1]: OriginalMapVerifier",
+    );
+    expect(instruction).not.toContain(f.root);
+    const launch = JSON.parse(
+      await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+    );
+    expect(launch.knowledge_graph).toMatchObject({
+      scope,
+      workspace: { revision: "r1" },
+      content_digest: "b".repeat(64),
+      graphify_version: "0.9.101",
+    });
+    expect(launch.knowledge_graph.text).not.toContain(f.root);
+    const lookup = bindings.find((b) => b.op === "lookup");
+    expect(lookup).toMatchObject({
+      task_id: "task",
+      owner_id: scope.owner_id,
+      project_id: scope.project_id,
+      cwd: session.options.cwd,
+      revision: "r1",
+      approvals: { read: true },
+    });
+    const tools = required(session.options.knowledgeGraph);
+    expect(await tools.query({ kind: "communities" })).toBe(
+      "query:communities:r1",
+    );
+    const reopen = f.workspace.reopen;
+    f.workspace.reopen = async () => ({
+      provider: "local",
+      workspace_id: "workspace",
+      revision: "r2",
+    });
+    expect(await tools.query({ kind: "communities" })).toBe(
+      "query:communities:r2",
+    );
+    f.workspace.reopen = reopen;
+    expect(await tools.build()).toContain("mars_graph_build · built");
+    const events: Array<{ event_type: string; producer: string }> = [];
+    for await (const event of f.store.events(context(), "task"))
+      events.push({ event_type: event.event_type, producer: event.producer });
+    expect(
+      events.filter(
+        (event) =>
+          event.event_type === "tool.completed" &&
+          event.producer === "@mars/knowledge-graph",
+      ),
+    ).toHaveLength(1);
+    session.finish("completed");
+    await session.disposed;
+
+    lookupStatus = "stale";
+    await api.create(context(), task("task-2"));
+    await api.start(context(), {
+      task_id: "task-2",
+      expected_revision: 0,
+      approvals: { read: true, write: false, execute: false },
+    });
+    const second = required(f.sessions[1]);
+    expect(required(second.instructions[0])).not.toContain(
+      "Code knowledge graph summary",
+    );
+    const secondLaunch = JSON.parse(
+      await readFile(join(second.options.stateDir, "launch.json"), "utf8"),
+    );
+    expect(secondLaunch.knowledge_graph).toBeUndefined();
+    expect(second.options.knowledgeGraph).toBeDefined();
+    second.finish("completed");
+    await second.disposed;
+    await api.close();
+  },
+);
+
 test("watch tools are host-bound per task and their verdicts become reviewable tool.completed evidence", async () => {
   const f = await fixture();
   const bindings: Array<{
@@ -3212,5 +3415,470 @@ test("watch tools are host-bound per task and their verdicts become reviewable t
   ).toHaveLength(2);
   session.finish("completed");
   await session.disposed;
+  await api.close();
+});
+
+const conventionsHost = (
+  f: Awaited<ReturnType<typeof fixture>>,
+  conventions: WorkbenchConventions,
+  canExecute = false,
+) =>
+  f.makeHost(undefined, undefined, undefined, undefined, undefined, undefined, {
+    conventions,
+    canExecute,
+  });
+
+const taskEvents = async (
+  f: Awaited<ReturnType<typeof fixture>>,
+  taskId: string,
+  operation: string,
+) => {
+  const payloads: Record<string, unknown>[] = [];
+  for await (const event of f.store.events(context(), taskId)) {
+    if (
+      event.event_type !== "tool.completed" ||
+      event.producer !== "@mars/workbench"
+    )
+      continue;
+    const payload = JSON.parse(
+      new TextDecoder().decode(
+        await f.store.artifacts.get(context(), event.payload),
+      ),
+    ) as Record<string, unknown>;
+    if (payload.operation === operation) payloads.push(payload);
+  }
+  return payloads;
+};
+
+test("repository conventions expand slash commands and freeze instruction files and skill folders into the launch", async () => {
+  const f = await fixture();
+  const repoSkill: SkillRecord = {
+    name: "release-notes",
+    content:
+      "---\nname: release-notes\ndescription: Write release notes\n---\nList user-facing changes.",
+    status: "active",
+    pinned: false,
+    createdAt: 0,
+    lastActivity: 0,
+    useCount: 0,
+  };
+  const instructionsText =
+    "Repository instructions (from the trusted project checkout; conventions to follow, not permission to use tools):\n\n--- AGENTS.md ---\nRun bun run check before finishing.";
+  const conventions: WorkbenchConventions = {
+    commands: {
+      expand(input) {
+        if (!input.startsWith("/review ")) return null;
+        return {
+          name: "review",
+          prompt: `Review ${input.slice("/review ".length)} for defects.`,
+          command: {
+            name: "review",
+            path: ".mars/commands/review.md",
+            source: ".mars/commands",
+            body: "Review $ARGUMENTS for defects.",
+            unsupported: [],
+          },
+        };
+      },
+    },
+    instructions: {
+      files: [
+        {
+          path: "AGENTS.md",
+          kind: "AGENTS.md",
+          bytes: 40,
+          truncated: false,
+          text: "Run bun run check before finishing.",
+        },
+      ],
+      total_bytes: 40,
+      omitted: 1,
+      text: instructionsText,
+      sha256: createHash("sha256").update(instructionsText).digest("hex"),
+    },
+    repositorySkills: [repoSkill],
+  };
+  const api = await conventionsHost(f, conventions);
+  await api.create(context(), { ...task(), request: "/review src/app.ts" });
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  const instruction = required(session.instructions[0]);
+  expect(instruction.startsWith("Review src/app.ts for defects.")).toBe(true);
+  expect(instruction).toContain("### release-notes (active)");
+  expect(instruction.endsWith(instructionsText)).toBe(true);
+  expect(instruction.indexOf("### release-notes")).toBeLessThan(
+    instruction.indexOf("Repository instructions"),
+  );
+  expect(session.options.patch).toBeUndefined();
+  const launch = JSON.parse(
+    await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+  ) as {
+    instructions?: {
+      text: string;
+      sha256: string;
+      files: string[];
+      omitted: number;
+    };
+    skills?: { skills: string[] };
+  };
+  expect(launch.instructions).toEqual({
+    text: instructionsText,
+    sha256: createHash("sha256").update(instructionsText).digest("hex"),
+    files: ["AGENTS.md"],
+    omitted: 1,
+  });
+  expect(launch.skills?.skills).toEqual(["release-notes"]);
+  expect((await f.store.inspect(context(), "task")).request).toBe(
+    "/review src/app.ts",
+  );
+  expect(await taskEvents(f, "task", "conventions.applied")).toEqual([
+    {
+      operation: "conventions.applied",
+      command: "review",
+      instructions: "frozen",
+    },
+  ]);
+  session.finish("completed");
+  await session.disposed;
+  await api.close();
+});
+
+test("oversized instruction files are omitted whole and recorded, never truncated into the prompt", async () => {
+  const f = await fixture();
+  const text = `Repository instructions:\n${"x".repeat(40_000)}`;
+  const api = await conventionsHost(f, {
+    instructions: {
+      files: [
+        {
+          path: "CLAUDE.md",
+          kind: "CLAUDE.md",
+          bytes: text.length,
+          truncated: false,
+          text,
+        },
+      ],
+      total_bytes: text.length,
+      omitted: 0,
+      text,
+      sha256: createHash("sha256").update(text).digest("hex"),
+    },
+  });
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: false, write: false, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  expect(required(session.instructions[0])).not.toContain("xxxx");
+  const launch = JSON.parse(
+    await readFile(join(session.options.stateDir, "launch.json"), "utf8"),
+  ) as { instructions?: unknown };
+  expect(launch.instructions).toBeUndefined();
+  expect(await taskEvents(f, "task", "conventions.applied")).toEqual([
+    { operation: "conventions.applied", instructions: "omitted" },
+  ]);
+  session.finish("completed");
+  await session.disposed;
+  await api.close();
+});
+
+test("an oversized slash-command expansion is rejected as too_large, not an internal error", async () => {
+  const f = await fixture();
+  const conventions: WorkbenchConventions = {
+    commands: {
+      expand() {
+        throw new CommandError(
+          "too-large",
+          "expanded prompt exceeds 65536 bytes",
+        );
+      },
+    },
+  };
+  const api = await conventionsHost(f, conventions);
+  await api.create(context(), { ...task(), request: "/huge x" });
+  await expect(
+    api.start(context(), {
+      task_id: "task",
+      expected_revision: 0,
+      approvals: { read: true, write: false, execute: false },
+    }),
+  ).rejects.toMatchObject({ code: "too_large" });
+  expect(f.sessions).toHaveLength(0);
+});
+
+test("hooks only run through the approval-gated sandboxed execute and a blocking pre-tool hook refuses the write", async () => {
+  const f = await fixture();
+  const calls: Array<{ event: string; tool?: string; path?: string }> = [];
+  const hooks: WorkbenchConventions["hooks"] = {
+    async run(event, hookContext, executor) {
+      calls.push({ event, ...hookContext });
+      const argv = ["hook", event, hookContext.tool ?? "-"];
+      const execution = await executor(argv, 5_000);
+      if ("skipped" in execution)
+        return [
+          {
+            event,
+            ...(hookContext.tool ? { tool: hookContext.tool } : {}),
+            argv,
+            outcome: "skipped",
+            stdout: "",
+            stderr: "",
+            blocked: false,
+            reason: execution.skipped,
+          },
+        ];
+      return [
+        {
+          event,
+          ...(hookContext.tool ? { tool: hookContext.tool } : {}),
+          argv,
+          outcome: "ran",
+          exit_code: 0,
+          stdout: "",
+          stderr:
+            event === "pre-tool" && hookContext.tool === "mars_write"
+              ? "formatting required"
+              : "",
+          blocked: event === "pre-tool" && hookContext.tool === "mars_write",
+        },
+      ];
+    },
+  };
+  // Without execute approval every hook is skipped and nothing is blocked.
+  const skippedApi = await conventionsHost(f, { hooks });
+  await api_start(skippedApi, "task", {
+    read: true,
+    write: true,
+    execute: false,
+  });
+  const skipped = required(f.sessions[0]);
+  await skipped.options.tools.write("a.txt", new TextEncoder().encode("a"));
+  expect(f.writes).toEqual(["a.txt"]);
+  const skippedEvents = await taskEvents(f, "task", "hook.completed");
+  expect(skippedEvents.map((event) => event.event)).toEqual([
+    "session-start",
+    "pre-tool",
+    "post-tool",
+  ]);
+  expect(
+    skippedEvents.flatMap((event) =>
+      (event.results as Array<{ outcome: string; reason?: string }>).map(
+        (result) => `${result.outcome}:${result.reason}`,
+      ),
+    ),
+  ).toEqual(Array(3).fill("skipped:execute approval not granted"));
+  skipped.finish("completed");
+  await skipped.disposed;
+  await skippedApi.close();
+  f.writes.length = 0;
+  calls.length = 0;
+
+  // With execute approval and a sandbox the hook runs; exit 2 semantics are
+  // reported by the registry as blocked and the host refuses the tool call.
+  const api = await conventionsHost(f, { hooks }, true);
+  await api_start(api, "task-2", { read: true, write: true, execute: true });
+  const session = required(f.sessions[1]);
+  await expect(
+    session.options.tools.write("b.txt", new TextEncoder().encode("b")),
+  ).rejects.toThrow("Blocked by pre-tool hook (hook): formatting required");
+  expect(f.writes).toEqual([]);
+  const content = await session.options.tools.read("b.txt");
+  expect(content.byteLength).toBeGreaterThan(0);
+  expect(calls).toEqual([
+    { event: "session-start" },
+    { event: "pre-tool", tool: "mars_write", path: "b.txt" },
+    { event: "pre-tool", tool: "mars_read", path: "b.txt" },
+    { event: "post-tool", tool: "mars_read", path: "b.txt" },
+  ]);
+  const ran = await taskEvents(f, "task-2", "hook.completed");
+  expect(
+    ran.map((event) =>
+      (event.results as Array<{ outcome: string; blocked: boolean }>).map(
+        (result) => `${result.outcome}:${result.blocked}`,
+      ),
+    ),
+  ).toEqual([["ran:false"], ["ran:true"], ["ran:false"], ["ran:false"]]);
+  session.finish("completed");
+  await session.disposed;
+  await api.close();
+});
+
+test("a tool call the task is not allowed to make runs no hook at all", async () => {
+  const f = await fixture();
+  const calls: Array<{ event: string; tool?: string }> = [];
+  const api = await conventionsHost(
+    f,
+    {
+      hooks: {
+        async run(event, hookContext) {
+          calls.push({
+            event,
+            ...(hookContext.tool ? { tool: hookContext.tool } : {}),
+          });
+          return [];
+        },
+      },
+    },
+    true,
+  );
+  await api_start(api, "task", { read: true, write: false, execute: true });
+  const session = required(f.sessions[0]);
+  await expect(
+    session.options.tools.write("a.txt", new TextEncoder().encode("a")),
+  ).rejects.toMatchObject({ code: "forbidden" });
+  expect(f.writes).toEqual([]);
+  expect(calls.filter((call) => call.event !== "session-start")).toEqual([]);
+  await session.options.tools.read("a.txt");
+  expect(calls.filter((call) => call.event !== "session-start")).toEqual([
+    { event: "pre-tool", tool: "mars_read" },
+    { event: "post-tool", tool: "mars_read" },
+  ]);
+  session.finish("completed");
+  await session.disposed;
+  await api.close();
+});
+
+test("mars_apply_patch can delete or move a binary file: existence never decodes content", async () => {
+  const f = await fixture();
+  const png = await f.store.artifacts.put(
+    context(),
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x80]),
+    "image/png",
+  );
+  f.readArtifacts.set("assets/logo.png", png);
+  f.readArtifacts.set("missing.txt", null);
+  f.readArtifacts.set("assets/huge.bin", "limit_exceeded");
+  f.readArtifacts.set("assets", "policy");
+  f.readArtifacts.set(".mars/secret.json", "policy");
+  const api = await conventionsHost(f, {
+    async applyPatch(_patch, files) {
+      expect(await files.exists("assets/logo.png")).toBe("file");
+      expect(await files.exists("assets/huge.bin")).toBe("file");
+      await expect(files.exists("assets")).rejects.toMatchObject({
+        code: "policy",
+      });
+      await expect(files.exists(".mars/secret.json")).rejects.toMatchObject({
+        code: "policy",
+      });
+      expect(await files.exists("missing.txt")).toBeNull();
+      await expect(files.read("assets/logo.png")).rejects.toThrow();
+      await files.remove("assets/logo.png");
+      return {
+        ok: true,
+        applied: { added: [], modified: [], deleted: ["assets/logo.png"] },
+        summary: "Success. Updated the following files:\nD assets/logo.png",
+      };
+    },
+  });
+  await api_start(api, "task", { read: true, write: true, execute: false });
+  const session = required(f.sessions[0]);
+  expect(
+    await required(session.options.patch).apply(
+      "*** Begin Patch\n*** Delete File: assets/logo.png\n*** End Patch",
+    ),
+  ).toContain("D assets/logo.png");
+  expect(f.removes).toEqual(["assets/logo.png"]);
+  session.finish("completed");
+  await session.disposed;
+  await api.close();
+});
+
+test("a slash command whose expansion exceeds the prompt bound fails start with too_large", async () => {
+  const f = await fixture();
+  const api = await conventionsHost(f, {
+    commands: {
+      expand(input) {
+        if (!input.startsWith("/huge")) return null;
+        throw Object.assign(new Error("expanded prompt exceeds 65536 bytes"), {
+          code: "too-large",
+        });
+      },
+    },
+  });
+  await api.create(context(), {
+    ...task("huge"),
+    request: "/huge everything",
+  });
+  await expect(
+    api.start(context(), {
+      task_id: "huge",
+      expected_revision: 0,
+      approvals: { read: true, write: false, execute: false },
+    }),
+  ).rejects.toMatchObject({ code: "too_large" });
+  expect(f.sessions).toHaveLength(0);
+  await api.close();
+});
+
+async function api_start(
+  api: Awaited<ReturnType<typeof createWorkbenchHost>>,
+  taskId: string,
+  approvals: { read: boolean; write: boolean; execute: boolean },
+) {
+  await api.create(context(), task(taskId));
+  await api.start(context(), {
+    task_id: taskId,
+    expected_revision: 0,
+    approvals,
+  });
+}
+
+test("mars_apply_patch is declared only with read and write approval and writes, removes and reads through the workspace provider", async () => {
+  const f = await fixture();
+  const seen: string[] = [];
+  const api = await conventionsHost(f, {
+    async applyPatch(patch, files) {
+      seen.push(patch);
+      expect(await files.exists("tracked.txt")).toBe("file");
+      expect(await files.read("tracked.txt")).toBe("checkpoint");
+      await files.write("added.txt", "new\n");
+      await files.remove("obsolete.txt");
+      return {
+        ok: false,
+        applied: {
+          added: ["added.txt"],
+          modified: [],
+          deleted: ["obsolete.txt"],
+        },
+        failed_hunk: 2,
+        error: "Failed to find expected lines in missing.txt:\nold",
+      };
+    },
+  });
+  await api_start(api, "task", { read: true, write: true, execute: false });
+  const writable = required(f.sessions[0]);
+  const patch = required(writable.options.patch);
+  expect(
+    await patch.apply(
+      "*** Begin Patch\n*** Add File: added.txt\n+new\n*** End Patch",
+    ),
+  ).toBe(
+    "apply_patch failed at hunk 3: Failed to find expected lines in missing.txt:\nold\nHunks before it were applied:\nA added.txt\nD obsolete.txt",
+  );
+  expect(seen).toHaveLength(1);
+  expect(f.writes).toEqual(["added.txt"]);
+  expect(f.removes).toEqual(["obsolete.txt"]);
+  writable.finish("completed");
+  await writable.disposed;
+
+  await api_start(api, "task-2", { read: true, write: false, execute: false });
+  const readOnly = required(f.sessions[1]);
+  expect(readOnly.options.patch).toBeUndefined();
+  readOnly.finish("completed");
+  await readOnly.disposed;
+
+  // Update and Delete hunks read the workspace, so a write-only session
+  // (no read gate) gets no patch tool either.
+  await api_start(api, "task-3", { read: false, write: true, execute: false });
+  const writeOnly = required(f.sessions[2]);
+  expect(writeOnly.options.patch).toBeUndefined();
+  writeOnly.finish("completed");
+  await writeOnly.disposed;
+  expect(seen).toHaveLength(1);
   await api.close();
 });

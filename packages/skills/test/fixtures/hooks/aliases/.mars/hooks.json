@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "hooks": {
+    "SessionStart": [{ "command": ["echo", "start"] }],
+    "PreToolUse": [{ "matcher": "mars_write", "command": ["echo", "pre", "{tool}"] }],
+    "PostToolUse": [{ "command": ["echo", "post"] }]
+  }
+}
