@@ -173,6 +173,8 @@ The final assistant artifact (`text/plain`, `task.artifacts`) and any assistant 
 
 ### 2.11 Context, knowledge graph, vault and provider panels
 
+Without an unambiguous workspace binding, `describe.graph` is null; per-task graph state comes from existing `graph.build`/`graph.query` event cards, not a new inspect graph field.
+
 - `/context` overlay: the Oh My Pi usage bar at the top, then an Aider-style table `[ran]` (A.5) with one row per item in the live window — system prompt, repository instructions (per file, with trust label), tools, skills, pinned files, messages, graph answers, research excerpts — columns `tokens · $ (— when free) · source · remedy`, remedies being literal commands the user can run (`/drop path`, `/clear` is **not** offered: runtime compaction is off, so the remedy is `/new` with a summary). Totals and the free/autocompact buffer close the table.
 - `/graph`: read-only view of `describe.graph` (state, revision, built-at, counts) and the last `graph.build` record (`tool.completed` card): stages, model requests (always 0 for the fake CLI fixtures), isolation (`process_env` is shown as "process-level confinement, not a kernel sandbox" verbatim from the package README), and the stale-revision explanation. `graph.query` results appear only as tool cards in the transcript (neighbours / paths / communities), quoted and labelled `graph · derived from revision r<N>`. The client does not call `mars_graph_build`; a `stale` graph shows the one action `ask the coordinator to rebuild` as a steer draft.
 - `/proposals`: one list for skill, memory and **vault import** proposals (`describe.vault.pending_proposals`), each with revision fence, threat-scan result and a `view` action (read-only text); accept/reject stay operator commands (`mars vault import --accept`, `mars skills …`) until the proposal RPC exists (§8.2 later) — the overlay prints the exact command, it does not run it.
@@ -434,6 +436,8 @@ All checks run under `bun run check` with `model_requests: 0`, on fixtures in `p
 - Later (not in this spec's PRs): `/research` and `/proposals` actions once the proposal RPC exists; `/evidence capture on` once the policy call exists; compaction UI when the runtime enables it.
 
 ### 8.3 Additive host changes the plan may need (read-only, decided in PR 1)
+
+`describe.graph` is null whenever no unambiguous workspace binding exists (never choose the latest task); clients use per-task `graph.build`/`graph.query` event cards instead of an additional inspect field.
 
 `workbench.describe` → `connectors: []`, `image: {digest} | null`, `conventions: {instructions, hooks, commands}`, `policy: {allow_paid, allow_screen_capture}`, `graph: {state, revision, built_at, isolation} | null`, `vault: {pending_proposals, last_export_at} | null`, `providers: [{id, kind: 'local' | 'omniroute' | 'direct', health, catalog_stale, policy_owner: 'mars'}]`; `tasks.inspect` → `model_tier`, `usage_totals`, `pinned: [{path, bytes, trust}]`, `context_rows` (the `/context` table source); **one new read method** `tasks.journal {task_id, entry_ids}` → `[{entry_id, kind, text, usage?}]` resolving the `entry_ids` that `execution.observed` already carries (host-side read of the Oh My Pi journal for that task's session only, same access check as `tasks.events`, text returned as untrusted data). Without it the transcript has no live assistant text (A.6 §10). Nothing else; no new write methods — `/drop`, `/review`, review comments, `/undo` and graph rebuild requests are all `tasks.steer` or `tasks.restore`.
 

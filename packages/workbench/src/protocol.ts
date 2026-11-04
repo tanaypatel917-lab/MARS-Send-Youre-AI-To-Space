@@ -1,9 +1,12 @@
 import {
   ArtifactRefSchema,
+  JournalEntryIdsSchema,
   RequiredCheckSchema,
   SCHEMA_VERSION,
   ScopeSchema,
   TaskSchema,
+  WorkbenchDescribeFields,
+  WorkbenchInspectFields,
 } from "@mars/contracts";
 import { z } from "zod";
 
@@ -49,6 +52,7 @@ export const CheckpointRefSchema = z
   .strict();
 export const DescribeResultSchema = z
   .object({
+    ...WorkbenchDescribeFields,
     scope: ScopeSchema,
     workspaceLabel: z.string().min(1).max(200),
     capabilities: z
@@ -57,6 +61,10 @@ export const DescribeResultSchema = z
   })
   .strict();
 export type DescribeResult = z.infer<typeof DescribeResultSchema>;
+export const InspectResultSchema = TaskSchema.extend(
+  WorkbenchInspectFields,
+).strict();
+export type InspectResult = z.infer<typeof InspectResultSchema>;
 export const DiffResultSchema = z
   .object({
     files: z
@@ -156,6 +164,10 @@ export const RpcRequestSchema = z.discriminatedUnion("method", [
   ),
   method("tasks.list", empty),
   method("tasks.inspect", taskId),
+  method(
+    "tasks.journal",
+    z.object({ task_id: id, entry_ids: JournalEntryIdsSchema }).strict(),
+  ),
   method("tasks.start", StartParamsSchema),
   method(
     "tasks.resume",
