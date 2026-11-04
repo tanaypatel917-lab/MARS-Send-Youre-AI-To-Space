@@ -1,10 +1,13 @@
 import {
-  MessageViewSchema as ContractMessageViewSchema,
   ConversationSchema,
+  MessageSchema,
   ParticipantSchema,
-  type ReactionSummarySchema,
+  ReactionSummarySchema,
+  ReferenceChipSchema,
   TEAM_MAX_EMOJI_CHARS,
   TEAM_MAX_EXCERPT_CHARS,
+  TEAM_MAX_REACTION_SUMMARIES,
+  TEAM_MAX_REFERENCES,
   TEAM_MAX_SEARCH_QUERY_CHARS,
   TeamDeliveryEventSchema,
   TeamMemberStateSchema,
@@ -77,7 +80,7 @@ export const TeamCapabilitiesSchema = z
     stream: z.boolean(),
     reactions: z.boolean(),
     search: z.boolean(),
-    references: z.boolean(),
+    references: z.boolean().optional(),
   })
   .catchall(z.boolean());
 
@@ -107,11 +110,15 @@ export const ConversationViewSchema = z
   .strict();
 export type ConversationView = z.infer<typeof ConversationViewSchema>;
 
-/** `conversations.list` item: the view plus per-participant counters. */
+/**
+ * `conversations.list` item: the view plus per-participant counters. The
+ * counters are optional so a service built before #64 still lists; the
+ * adapter then falls back to its cache-based count.
+ */
 export const ConversationListItemSchema = ConversationViewSchema.extend({
   /** Messages after the caller's `read_seq` not authored by the caller. */
-  unread_count: seq,
-  last_message_at: z.string().datetime({ offset: true }).nullable(),
+  unread_count: seq.optional(),
+  last_message_at: z.string().datetime({ offset: true }).nullable().optional(),
 }).strict();
 export type ConversationListItem = z.infer<typeof ConversationListItemSchema>;
 export const ConversationListSchema = z
@@ -124,8 +131,20 @@ export type ReactionSummary = z.infer<typeof ReactionSummarySchema>;
  * `messages.history` / `messages.send` item: the stored record plus the
  * viewer's chips, reaction summaries and a bounded reply excerpt (`null`
  * with `reply_restricted: true` when the target predates the join point).
+ * The additions are optional so a pre-#64/#66 service still works: without
+ * chips every `reference_id` renders restricted, without summaries there
+ * are no reactions, without an excerpt the cached same-conversation target
+ * is used.
  */
-export const MessageViewSchema = ContractMessageViewSchema;
+export const MessageViewSchema = MessageSchema.extend({
+  references: z.array(ReferenceChipSchema).max(TEAM_MAX_REFERENCES).optional(),
+  reactions: z
+    .array(ReactionSummarySchema)
+    .max(TEAM_MAX_REACTION_SUMMARIES)
+    .optional(),
+  reply_excerpt: z.string().max(TEAM_MAX_EXCERPT_CHARS).nullable().optional(),
+  reply_restricted: z.boolean().optional(),
+}).strict();
 export type MessageView = z.infer<typeof MessageViewSchema>;
 export const MessageListSchema = z
   .array(MessageViewSchema)

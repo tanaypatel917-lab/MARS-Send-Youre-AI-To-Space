@@ -939,3 +939,58 @@ describe("review fixes, round 2", () => {
     expect(last().notice).toBeNull();
   });
 });
+
+describe("older servers", () => {
+  test("a service built before #64/#66 (no counters, chips, summaries or references capability) still loads", async () => {
+    const server = new FakeTeamServer();
+    const dm = server.seedDm(ADA, GRACE, ["old", "server", "shape"]);
+    const strip = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(strip);
+      if (value && typeof value === "object") {
+        const out: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(value as Record<string, unknown>))
+          if (
+            ![
+              "unread_count",
+              "last_message_at",
+              "references",
+              "reactions",
+              "reply_excerpt",
+              "reply_restricted",
+            ].includes(k)
+          )
+            out[k] = k === "capabilities" ? strip(v) : v;
+        return out;
+      }
+      return value;
+    };
+    const inner = server.transport(ADA);
+    const client = new TeamClient({
+      send: async (request, signal) => strip(await inner.send(request, signal)),
+    });
+    const service = new RpcTeamService(client);
+    const states: TeamChatViewState[] = [];
+    const controller = new TeamChatController({
+      post: (state) => states.push(state),
+      service,
+      viewer: "service",
+      pageSize: 50,
+    });
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    const last = states[states.length - 1];
+    expect(last?.conversations.map((c) => c.conversation_id)).toEqual([dm]);
+    expect(last?.selected?.messages).toHaveLength(3);
+    // Cache covers the span: the count skips the viewer's own post.
+    expect(last?.selected?.conversation.unread_count).toBe(2);
+    expect(last?.selected?.messages[0]?.reactions).toEqual([]);
+    expect(last?.capabilities).toEqual({
+      reactions: false,
+      search: false,
+      realtime: true,
+    });
+  });
+});

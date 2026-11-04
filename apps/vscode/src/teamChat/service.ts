@@ -1,3 +1,4 @@
+import type { ReferenceChip } from "@mars/contracts";
 import {
   type ConversationPage,
   type ConversationSummary,
@@ -177,7 +178,8 @@ export class RpcTeamService implements TeamService {
       this.messages.set(message.conversation_id, cached);
     }
     cached.set(message.seq, message);
-    this.reactions.set(message.message_id, message.reactions);
+    if (message.reactions)
+      this.reactions.set(message.message_id, message.reactions);
     if (cached.size > MAX_CACHED_PER_CONVERSATION) {
       const seqs = [...cached.keys()].sort((a, b) => a - b);
       for (const seq of seqs.slice(
@@ -275,9 +277,15 @@ export class RpcTeamService implements TeamService {
       candidate && candidate.conversation_id === message.conversation_id
         ? candidate
         : undefined;
-    // The server sends per-viewer chips; a restricted chip renders with no
-    // path, sha or excerpt.
-    const references: ReferenceView[] = message.references.map((chip) =>
+    // The server sends per-viewer chips (a restricted chip renders with no
+    // path, sha or excerpt); a pre-#66 record without chips fails closed.
+    const references: ReferenceView[] = (
+      message.references ??
+      message.reference_ids.map((id: string) => ({
+        reference_id: id,
+        restricted: true as const,
+      }))
+    ).map((chip: ReferenceChip) =>
       chip.restricted
         ? { reference_id: chip.reference_id, state: "restricted" }
         : {
