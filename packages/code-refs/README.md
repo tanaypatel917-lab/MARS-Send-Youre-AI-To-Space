@@ -69,7 +69,7 @@ Runs before any `git` process starts:
 | --- | --- |
 | `repo_id` | `^[A-Za-z0-9_.-]{1,64}$` |
 | `commit_sha` | exactly 40 lowercase hex; no abbreviations, refs, `HEAD`, `^`, `~` |
-| `path` | NFC-normalised, then the rules of `apps/vscode/src/pathSafety.ts` `checkRelativePath` (no scheme/drive, no absolute or `~`, no `.`/`..`/empty segment, no control chars, no backslash, no `<>:"|?*`, no `.git` segment, ≤ 1024 chars) plus the invisible code point denylist of `packages/memory/src/threats.ts`. `sync.test.ts` fails if either source drifts. |
+| `path` | kept **verbatim** (git looks names up by bytes and never normalises Unicode); the rules of `apps/vscode/src/pathSafety.ts` `checkRelativePath` are applied to the path and to its NFC form (no scheme/drive, no absolute or `~`, no `.`/`..`/empty segment, no control chars, no backslash, no `<>:"|?*`, no `.git` segment, ≤ 1024 chars) plus the invisible code point denylist of `packages/memory/src/threats.ts`. `sync.test.ts` fails if either source drifts. |
 | `line_start`/`line_end` | both or neither; positive integers; `line_start ≤ line_end`; inclusive span ≤ `max_range_lines` (default 400) |
 
 ### Resolution states (`resolveReference`)
@@ -88,8 +88,9 @@ Runs before any `git` process starts:
 | `range_out_of_bounds` | `line_start` or `line_end` beyond the last line | `blob_sha`, `total_lines` |
 | `error` | git could not run, timed out, failed or exceeded the output cap | `reason`: `git_unavailable` / `timeout` / `git_error` / `output_truncated` |
 
-Every state except `invalid` carries `repo_id`, `commit_sha`, `path` and
-`git_version` (the `git --version` string, probed once per runner). Lines are
+Every state except `invalid` carries `repo_id`, `commit_sha` and `path`;
+every state that reached git (all but `invalid` and `unknown_repo`) also
+carries `git_version` (the `git --version` string, probed once per runner). Lines are
 split on `\n` or `\r\n`; a missing final newline still counts as a line; an
 empty blob is `ok` with `total_lines: 0` and `text: ""`. Without a range the
 whole file is returned, cut at `max_range_lines` with `truncated: true`.
@@ -105,9 +106,10 @@ entry, never by path again.
 `git ls-tree -r -z --name-only <sha>` and stops after `max_entries` (default
 50 000) with `truncated: true`. Matching is case-insensitive substring/prefix
 ranking (0 exact file name, 1 file-name prefix, 2 path prefix, 3 file-name
-substring, 4 path substring); the query is plain text, never a regex. Only
-paths that pass the locator path rules are returned (`skipped` counts the
-rest). Symbol search is out of scope; the `@mars/context` extractors could
+substring, 4 path substring); the query is plain text, never a regex. Memory
+is bounded to `5 × limit` candidates however broad the query; paths are
+returned exactly as committed (matching compares NFC forms). Only paths that
+pass the locator path rules are returned (`skipped` counts the rest). Symbol search is out of scope; the `@mars/context` extractors could
 back it later.
 
 ### Verification helpers
@@ -122,7 +124,12 @@ back it later.
 Same discipline as `@mars/watch` and `@mars/knowledge-graph`: `Bun.spawn`
 with an argv array (never a shell string), `cwd` = the registered directory,
 stdin detached, bounded stdout, SIGKILL on timeout (`timeout_ms`, default
-10 s), global flags `--no-replace-objects --literal-pathspecs`, and
+10 s), global flags `--no-replace-objects --literal-pathspecs`, `-c`
+overrides that beat the repository's own `.git/config` so a registered
+repository can never make the resolver run a program or open a transport
+(`core.fsmonitor=false`, `core.hooksPath=/dev/null`, `core.pager=cat`,
+`core.editor=:`, `core.sshCommand=:`, `core.askPass=`, `credential.helper=`,
+`protocol.allow=never`), and
 user-controlled values placed only after `--` (the path) or validated as 40
 hex (the SHA). The environment is an allowlist: `PATH`, `HOME` and
 `XDG_CONFIG_HOME` pinned to a private 0700 directory, `GIT_CONFIG_NOSYSTEM=1`,

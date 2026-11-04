@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -12,6 +14,8 @@ import { join } from "node:path";
 import {
   createGitRunner,
   createRepoRegistry,
+  GIT_CONFIG_OVERRIDES,
+  GIT_GLOBAL_FLAGS,
   type GitSpawn,
   isSameReference,
   type LocatorRejectReason,
@@ -67,6 +71,8 @@ const POISONED_ENV: Record<string, string> = {
   AWS_SECRET_ACCESS_KEY: "secret",
 };
 
+const NFD_NAME = "cafe\u0301.txt";
+
 function fixtureGit(cwd: string, home: string, ...args: string[]): string {
   const result = Bun.spawnSync(
     [
@@ -77,6 +83,10 @@ function fixtureGit(cwd: string, home: string, ...args: string[]): string {
       "user.email=fixture@example.invalid",
       "-c",
       "commit.gpgsign=false",
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.hooksPath=/dev/null",
       "-c",
       "init.defaultBranch=main",
       ...args,
@@ -109,6 +119,8 @@ describe.skipIf(!GIT)("@mars/code-refs", () => {
   let homeDir: string;
   let c1: string;
   let c2: string;
+  let c3: string;
+  let marker: string;
   let foreign: string;
   const calls: SpawnCall[] = [];
   const spawn: GitSpawn = (argv, options) => {
@@ -214,6 +226,11 @@ describe.skipIf(!GIT)("@mars/code-refs", () => {
     fixtureGit(repoDir, fixtureHome, "commit", "-q", "-m", "c2");
     c2 = fixtureGit(repoDir, fixtureHome, "rev-parse", "HEAD");
 
+    writeFileSync(join(repoDir, "docs", NFD_NAME), "d\u00e9compos\u00e9\n");
+    fixtureGit(repoDir, fixtureHome, "add", "-A");
+    fixtureGit(repoDir, fixtureHome, "commit", "-q", "-m", "c3");
+    c3 = fixtureGit(repoDir, fixtureHome, "rev-parse", "HEAD");
+
     otherDir = join(root, "other");
     mkdirSync(join(otherDir, "src"), { recursive: true });
     fixtureGit(otherDir, fixtureHome, "init", "-q");
@@ -224,6 +241,28 @@ describe.skipIf(!GIT)("@mars/code-refs", () => {
 
     bareDir = join(root, "bare.git");
     fixtureGit(root, fixtureHome, "clone", "-q", "--bare", repoDir, bareDir);
+
+    // A hostile repository-local config: every program git could be told to
+    // run writes `marker`; the resolver must never trigger any of them.
+    marker = join(root, "config-ran");
+    const hook = join(root, "hostile.sh");
+    writeFileSync(
+      hook,
+      `#!/bin/sh\necho "$0 $* :: $(tr "\\0" " " < /proc/$PPID/cmdline)" >> "${marker}"\nexit 0\n`,
+      {
+        mode: 0o755,
+      },
+    );
+    for (const key of [
+      "core.fsmonitor",
+      "core.pager",
+      "core.editor",
+      "core.sshCommand",
+      "core.askPass",
+      "credential.helper",
+    ])
+      fixtureGit(repoDir, fixtureHome, "config", key, hook);
+    fixtureGit(repoDir, fixtureHome, "config", "core.hooksPath", root);
 
     registry = createRepoRegistry({
       git: createGitRunner({ spawn, homeDir, processEnv: POISONED_ENV }),
@@ -296,6 +335,13 @@ describe.skipIf(!GIT)("@mars/code-refs", () => {
         { repo_id: "main-repo", dir: otherDir, label: "x" },
         "repo_id_taken",
       );
+      const dotdot = join(repoDir, "..nested");
+      mkdirSync(dotdot);
+      fixtureGit(dotdot, join(root, "fixture-home"), "init", "-q");
+      await rejects(
+        { repo_id: "dotdot", dir: dotdot, label: "x" },
+        "dir_overlaps_registered",
+      );
       const link = join(root, "repo-link");
       symlinkSync(otherDir, link);
       await rejects(
@@ -328,6 +374,32 @@ describe.skipIf(!GIT)("@mars/code-refs", () => {
         { repo_id: "missing", dir: join(root, "nope"), label: "x" },
         "dir_not_directory",
       );
+    });
+
+    test("concurrent registrations never both win", async () => {
+      const fresh = createRepoRegistry({ git: registry.git });
+      const outcomes = await Promise.allSettled([
+        fresh.register({ repo_id: "race", dir: repoDir, label: "a" }),
+        fresh.register({ repo_id: "race", dir: otherDir, label: "b" }),
+        fresh.register({ repo_id: "other", dir: otherDir, label: "c" }),
+        fresh.register({ repo_id: "same-dir", dir: otherDir, label: "d" }),
+      ]);
+      const codes = outcomes.map((o) =>
+        o.status === "fulfilled"
+          ? "ok"
+          : (o.reason as RepoRegistrationFailed).code,
+      );
+      expect(codes).toEqual([
+        "ok",
+        "repo_id_taken",
+        "ok",
+        "dir_overlaps_registered",
+      ]);
+      expect(fresh.lookup("race")?.dir).toBe(repoDir);
+      expect(fresh.list()).toEqual([
+        { repo_id: "race", label: "a" },
+        { repo_id: "other", label: "c" },
+      ]);
     });
 
     test("accepts a bare repository and resolves from it", async () => {
@@ -591,14 +663,22 @@ describe.skipIf(!GIT)("@mars/code-refs", () => {
       expect(calls.length).toBe(before);
     });
 
-    test("NFC normalisation keeps the locator path canonical", () => {
-      const decomposed = "docs/cafe\u0301.md";
+    test("the committed spelling is kept verbatim (git never normalises names)", async () => {
+      const decomposed = `docs/${NFD_NAME}`;
       const checked = validateLocator(
         { repo_id: "r", commit_sha: c1, path: decomposed },
         { max_range_lines: 400 },
       );
       expect(checked.ok).toBe(true);
-      if (checked.ok) expect(checked.locator.path).toBe("docs/caf\u00e9.md");
+      if (checked.ok) expect(checked.locator.path).toBe(decomposed);
+      expect(await resolve(locate(decomposed, c3))).toMatchObject({
+        state: "ok",
+        path: decomposed,
+        text: "d\u00e9compos\u00e9",
+      });
+      expect(await resolve(locate("docs/caf\u00e9.txt", c3))).toMatchObject({
+        state: "unavailable",
+      });
     });
   });
 
@@ -607,13 +687,12 @@ describe.skipIf(!GIT)("@mars/code-refs", () => {
       expect(calls.length).toBeGreaterThan(0);
       for (const call of calls) {
         expect(call.argv[0]).toBe("git");
-        expect(call.argv.slice(1, 3)).toEqual([
-          "--no-replace-objects",
-          "--literal-pathspecs",
-        ]);
+        const fixed = 1 + GIT_GLOBAL_FLAGS.length;
+        expect(call.argv.slice(1, fixed)).toEqual([...GIT_GLOBAL_FLAGS]);
+        for (const kv of GIT_CONFIG_OVERRIDES) expect(call.argv).toContain(kv);
         const dash = call.argv.indexOf("--");
-        const positional = call.argv.slice(3).filter((arg, i, all) => {
-          if (dash >= 0 && i + 3 > dash) return false;
+        const positional = call.argv.slice(fixed).filter((arg, i, all) => {
+          if (dash >= 0 && i + fixed > dash) return false;
           return !arg.startsWith("-") && i > 0 && all[0] !== arg;
         });
         for (const arg of positional)
@@ -627,6 +706,29 @@ describe.skipIf(!GIT)("@mars/code-refs", () => {
         const dash = lsTree.argv.indexOf("--");
         expect(lsTree.argv.slice(dash + 1)).toHaveLength(1);
       }
+    });
+
+    test("repository-local config never runs a program", async () => {
+      expect(await resolve(locate("src/app.ts", c3))).toMatchObject({
+        state: "ok",
+      });
+      expect(
+        await searchPaths(registry, {
+          repo_id: "main-repo",
+          commit_sha: c3,
+          query: "app",
+        }),
+      ).toMatchObject({ state: "ok" });
+      // Every resolver process carries the fixed flags; a hook started by one
+      // of them would record that argv as its parent. Fixture git commands
+      // (and anything git daemonises) are not what is under test here.
+      const ran = existsSync(marker) ? readFileSync(marker, "utf8") : "";
+      const byResolver = ran
+        .split("\n")
+        .filter((line) =>
+          line.includes("--literal-pathspecs -c core.fsmonitor=false"),
+        );
+      expect(byResolver).toEqual([]);
     });
 
     test("environment is the allowlist only: no proxy, credential or GIT_* overrides", () => {
@@ -824,6 +926,63 @@ describe.skipIf(!GIT)("@mars/code-refs", () => {
         state: "ok",
         truncated: true,
         scanned: 5,
+      });
+    });
+
+    test("a tree of exactly max_entries entries is not truncated", async () => {
+      const full = await search({
+        repo_id: "main-repo",
+        commit_sha: c1,
+        query: "txt",
+      });
+      if (full.state !== "ok") throw new Error(full.state);
+      expect(full.truncated).toBe(false);
+      const exact = await search(
+        { repo_id: "main-repo", commit_sha: c1, query: "txt" },
+        { max_entries: full.scanned },
+      );
+      expect(exact).toMatchObject({
+        truncated: false,
+        scanned: full.scanned,
+        matches: full.matches,
+      });
+      const short = await search(
+        { repo_id: "main-repo", commit_sha: c1, query: "txt" },
+        { max_entries: full.scanned - 1 },
+      );
+      expect(short).toMatchObject({
+        truncated: true,
+        scanned: full.scanned - 1,
+      });
+    });
+
+    test("limit bounds memory without changing the order", async () => {
+      const all = await search({
+        repo_id: "main-repo",
+        commit_sha: c3,
+        query: "/",
+        limit: 100,
+      });
+      if (all.state !== "ok") throw new Error(all.state);
+      expect(all.matches.length).toBeGreaterThan(3);
+      const two = await search({
+        repo_id: "main-repo",
+        commit_sha: c3,
+        query: "/",
+        limit: 2,
+      });
+      expect(two).toMatchObject({ matches: all.matches.slice(0, 2) });
+    });
+
+    test("returns decomposed names exactly as committed and matches their NFC form", async () => {
+      const result = await search({
+        repo_id: "main-repo",
+        commit_sha: c3,
+        query: "caf\u00e9",
+      });
+      expect(result).toMatchObject({
+        state: "ok",
+        matches: [{ path: `docs/${NFD_NAME}`, rank: 1 }],
       });
     });
 

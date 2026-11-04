@@ -56,9 +56,27 @@ export interface GitRunnerOptions {
   versionTimeoutMs?: number;
 }
 
+/**
+ * Repository-local config (`.git/config`) is still read by git; these `-c`
+ * overrides win over it so a registered repository can never make the
+ * resolver run a program (fsmonitor, hooks, pager, editor, ssh, askpass,
+ * credential helpers) or touch a transport.
+ */
+export const GIT_CONFIG_OVERRIDES = [
+  "core.fsmonitor=false",
+  "core.hooksPath=/dev/null",
+  "core.pager=cat",
+  "core.editor=:",
+  "core.sshCommand=:",
+  "core.askPass=",
+  "credential.helper=",
+  "protocol.allow=never",
+] as const;
+
 export const GIT_GLOBAL_FLAGS = [
   "--no-replace-objects",
   "--literal-pathspecs",
+  ...GIT_CONFIG_OVERRIDES.flatMap((kv) => ["-c", kv]),
 ] as const;
 
 export function gitEnvironment(options: {
