@@ -41,6 +41,8 @@ interface Participant {
 
 export interface FakeTeamOptions {
   capabilities?: { stream: boolean; reactions: boolean; search: boolean };
+  /** Advertised and enforced `limits.page_limit` (default 200). */
+  pageLimit?: number;
 }
 
 export class FakeTeamServer {
@@ -83,6 +85,7 @@ export class FakeTeamServer {
       reactions: false,
       search: false,
     };
+    this.pageLimit = options.pageLimit ?? 200;
   }
 
   private nextId(prefix: string): string {
@@ -289,7 +292,7 @@ export class FakeTeamServer {
           team_id: TEAM_ID,
           user_id: userId,
           role: "member",
-          limits: { page_limit: 200, max_body_bytes: 16384 },
+          limits: { page_limit: this.pageLimit, max_body_bytes: 16384 },
           // `references` is always present on `main` (PR 4).
           capabilities: { ...this.capabilities, references: false },
         };
@@ -358,6 +361,8 @@ export class FakeTeamServer {
         const view = this.view(String(p.conversation_id), userId);
         const floor = view.participant.joined_seq;
         const limit = Number(p.limit ?? 50);
+        if (limit < 1 || limit > this.pageLimit)
+          throw rpc("server", "invalid_request", 400);
         let rows = this.messages
           .filter(
             (m) =>

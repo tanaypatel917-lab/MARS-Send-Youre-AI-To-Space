@@ -389,7 +389,7 @@ export class RpcTeamService implements TeamService {
             view.conversation.last_seq > floor
               ? await this.client.history(id, {
                   after_seq: floor,
-                  limit: MAX_PAGE,
+                  limit: this.client.pageLimit(),
                 })
               : await this.client.history(id, { limit: 1 });
           for (const m of page) this.remember(m);
@@ -418,12 +418,15 @@ export class RpcTeamService implements TeamService {
       if (decoded === null) return Promise.resolve(fail("invalid"));
       before = decoded;
     }
-    const limit = Math.min(
+    const wanted = Math.min(
       MAX_PAGE,
       Math.max(1, Math.floor(options.limit ?? DEFAULT_PAGE)),
     );
     return this.guard(conversationId, async () => {
       const me = await this.identity();
+      // The server may accept a smaller page than asked for; size the
+      // "older exists" check by what was actually requested.
+      const limit = Math.min(wanted, this.client.pageLimit());
       const opened = await this.client.openConversation(conversationId);
       const listed = this.views.get(conversationId);
       const view =

@@ -1034,3 +1034,43 @@ describe("older servers: unread counts", () => {
     expect(spans).toHaveLength(1);
   });
 });
+
+describe("older servers: page limits", () => {
+  test("history requests never exceed the server's advertised page_limit", async () => {
+    const server = new FakeTeamServer({ pageLimit: 3 });
+    const dm = server.seedDm(ADA, GRACE, ["a", "b", "c", "d", "e", "f"]);
+    const inner = server.transport(ADA);
+    const client = new TeamClient({
+      send: async (request, signal) => {
+        const result = (await inner.send(request, signal)) as unknown;
+        if (request.method !== "conversations.list") return result;
+        return (result as Record<string, unknown>[]).map(
+          ({ unread_count: _u, last_message_at: _l, ...rest }) => rest,
+        );
+      },
+    });
+    const service = new RpcTeamService(client);
+    const states: TeamChatViewState[] = [];
+    const controller = new TeamChatController({
+      post: (state) => states.push(state),
+      service,
+      viewer: "service",
+      pageSize: 50,
+    });
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    const last = states[states.length - 1];
+    expect(last?.conversations.map((c) => c.conversation_id)).toEqual([dm]);
+    expect(last?.selected?.messages.map((m) => m.sequence)).toEqual([4, 5, 6]);
+    expect(last?.selected?.older_cursor).toBe("seq:4");
+    for (const call of server.calls)
+      if (call.method === "messages.history")
+        expect(Number(call.params.limit)).toBeLessThanOrEqual(3);
+    // Partial span: the count stays conservative-but-bounded and the
+    // boundary at the read cursor.
+    expect(last?.selected?.conversation.first_unread_sequence).toBe(1);
+  });
+});

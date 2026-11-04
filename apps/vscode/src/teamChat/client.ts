@@ -83,6 +83,15 @@ export class TeamClient {
     this.described = undefined;
   }
 
+  /** Largest history page this server accepts (`limits.page_limit`), never above the client bound. */
+  pageLimit(): number {
+    const advertised = this.described?.limits.page_limit;
+    return Math.min(
+      MAX_HISTORY_LIMIT,
+      advertised && advertised > 0 ? advertised : MAX_HISTORY_LIMIT,
+    );
+  }
+
   private context(): TeamContext {
     if (!this.described)
       throw new RpcError("disconnected", "Not connected to a team server.");
@@ -178,7 +187,7 @@ export class TeamClient {
     if (window.after_seq !== undefined) params.after_seq = window.after_seq;
     if (window.before_seq !== undefined) params.before_seq = window.before_seq;
     params.limit = Math.min(
-      MAX_HISTORY_LIMIT,
+      this.pageLimit(),
       Math.max(1, Math.floor(window.limit ?? 50)),
     );
     const result = await this.call(TEAM_RPC_METHODS.history, params, signal);
