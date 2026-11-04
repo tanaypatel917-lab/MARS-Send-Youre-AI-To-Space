@@ -97,7 +97,7 @@ export const MessageSchema = z
     body: z.string().max(TEAM_MAX_BODY_CHARS),
     body_sha256: sha256,
     reply_to: id.nullable(),
-    /** Opaque reference ids; resolution is a later PR. */
+    /** Opaque reference ids (`Reference.reference_id`), author-supplied order. */
     reference_ids: z.array(id).max(TEAM_MAX_REFERENCES),
     created_at: timestamp,
     edited_at: timestamp.nullable(),
@@ -111,6 +111,54 @@ export const MessageSchema = z
   })
   .strict();
 export type Message = z.infer<typeof MessageSchema>;
+
+/**
+ * Per-viewer rendering of one attached reference. `restricted` is the whole
+ * chip for a conversation member without access to the referenced repo: no
+ * path, label, SHA, range or size leaks. The chip is derived at read time and
+ * is never part of the stored message record.
+ */
+export const ReferenceChipSchema = z.discriminatedUnion("restricted", [
+  z.object({ reference_id: id, restricted: z.literal(true) }).strict(),
+  z
+    .object({
+      reference_id: id,
+      restricted: z.literal(false),
+      repo_id: id,
+      commit_sha: z.string().regex(/^[a-f0-9]{40}$/),
+      path: z.string().min(1).max(1024),
+      line_start: z.number().int().positive().nullable(),
+      line_end: z.number().int().positive().nullable(),
+    })
+    .strict(),
+]);
+export type ReferenceChip = z.infer<typeof ReferenceChipSchema>;
+
+/** A stored message as returned to one authenticated viewer. */
+/** Per-message reaction aggregate; counts only, never who reacted. */
+export const ReactionSummarySchema = z
+  .object({
+    emoji: z.string().min(1).max(TEAM_MAX_EMOJI_CHARS),
+    count: z.number().int().positive(),
+    reacted: z.boolean(),
+  })
+  .strict();
+export type ReactionSummary = z.infer<typeof ReactionSummarySchema>;
+export const TEAM_MAX_REACTION_SUMMARIES = 256;
+
+/**
+ * `messages.history` / `messages.send` item: the stored record plus per-viewer
+ * reference chips, reaction summaries and a bounded excerpt of the reply
+ * target (`null` with `reply_restricted: true` when the target is before the
+ * viewer's `joined_seq`).
+ */
+export const MessageViewSchema = MessageSchema.extend({
+  references: z.array(ReferenceChipSchema).max(TEAM_MAX_REFERENCES),
+  reactions: z.array(ReactionSummarySchema).max(TEAM_MAX_REACTION_SUMMARIES),
+  reply_excerpt: z.string().max(TEAM_MAX_EXCERPT_CHARS).nullable(),
+  reply_restricted: z.boolean(),
+}).strict();
+export type MessageView = z.infer<typeof MessageViewSchema>;
 
 export const ReactionSchema = z
   .object({
@@ -140,28 +188,116 @@ export const TeamDeliveryEventSchema = z
 export type TeamDeliveryEvent = z.infer<typeof TeamDeliveryEventSchema>;
 
 // ---------------------------------------------------------------------------
-// Reserved for later Team Chat PRs (references, @MARS requests, task links,
-// result shares). Exported so field names are fixed now; nothing uses them yet.
+// Code references (Team Chat PR 4, implemented in `@mars/team` + `@mars/code-refs`)
+// and schemas reserved for later Team Chat PRs (@MARS requests, task links,
+// result shares). Exported so field names are fixed now.
 // ---------------------------------------------------------------------------
 
 export const WorkspaceRefSchema = z
   .object({ workspace_id: id, provider: id, revision: id })
   .strict();
 
-export const ReferenceSchema = z.discriminatedUnion("kind", [
+/** Access state of one user on one registered repo; `removed` revokes. */
+export const RepoAccessStateSchema = z.enum(["active", "removed"]);
+export type RepoAccessState = z.infer<typeof RepoAccessStateSchema>;
+
+/**
+ * A repo the host registered for a team. `repo_id` is the opaque id the host
+ * also registered in the `@mars/code-refs` registry; the team service never
+ * stores or returns a filesystem path.
+ */
+export const RepoSchema = z
+  .object({
+    team_id: id,
+    repo_id: id,
+    label: z.string().min(1).max(TEAM_MAX_TITLE_CHARS),
+    revision,
+  })
+  .strict();
+export type Repo = z.infer<typeof RepoSchema>;
+
+export const RepoAccessSchema = z
+  .object({
+    team_id: id,
+    repo_id: id,
+    user_id: id,
+    state: RepoAccessStateSchema,
+    revision,
+  })
+  .strict();
+export type RepoAccess = z.infer<typeof RepoAccessSchema>;
+
+/**
+ * Immutable committed code reference (TEAM_CHAT_DISCOVERY.md section 4.1).
+ * `reference_id` is `referenceDigest(...)` from `@mars/code-refs` over the
+ * locator fields, so identical references dedupe per team. `blob_sha256` is
+ * the SHA-256 of the resolved excerpt at creation time (`text_sha256` of the
+ * `ok` resolution), null when the object resolved to a non-text state.
+ * `@mars/code-refs` imports this schema; there is no second copy.
+ */
+export const GitRangeReferenceSchema = z
+  .object({
+    kind: z.literal("git_range"),
+    reference_id: id,
+    team_id: id,
+    repo_id: id,
+    commit_sha: z.string().regex(/^[a-f0-9]{40}$/),
+    path: z.string().min(1).max(1024),
+    line_start: z.number().int().positive().nullable(),
+    line_end: z.number().int().positive().nullable(),
+    blob_sha256: sha256.nullable(),
+  })
+  .strict();
+export type GitRangeReference = z.infer<typeof GitRangeReferenceSchema>;
+
+/** Resolver states a stored reference can be in; `restricted` is viewer-side only. */
+export const ReferencePreviewStateSchema = z.enum([
+  "ok",
+  "unavailable",
+  "binary",
+  "oversized",
+  "is_directory",
+  "unsupported_symlink",
+  "unsupported_submodule",
+  "range_out_of_bounds",
+  "error",
+]);
+export type ReferencePreviewState = z.infer<typeof ReferencePreviewStateSchema>;
+
+const previewLocator = {
+  reference_id: id,
+  repo_id: id,
+  commit_sha: z.string().regex(/^[a-f0-9]{40}$/),
+  path: z.string().min(1).max(1024),
+  line_start: z.number().int().positive().nullable(),
+  line_end: z.number().int().positive().nullable(),
+};
+
+/**
+ * `references.resolve` result. A viewer without repo access receives exactly
+ * `{ state: "restricted" }`; a nonmember receives `not_found` instead.
+ */
+export const ReferencePreviewSchema = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("restricted") }).strict(),
   z
     .object({
-      kind: z.literal("git_range"),
-      reference_id: id,
-      team_id: id,
-      repo_id: id,
-      commit_sha: z.string().regex(/^[a-f0-9]{40}$/),
-      path: z.string().min(1).max(1024),
-      line_start: z.number().int().positive().nullable(),
-      line_end: z.number().int().positive().nullable(),
-      blob_sha256: sha256.nullable(),
+      state: z.literal("ok"),
+      ...previewLocator,
+      text: z.string(),
+      total_lines: z.number().int().nonnegative(),
+      truncated: z.boolean(),
     })
     .strict(),
+  ...ReferencePreviewStateSchema.options
+    .filter((state) => state !== "ok")
+    .map((state) =>
+      z.object({ state: z.literal(state), ...previewLocator }).strict(),
+    ),
+]);
+export type ReferencePreview = z.infer<typeof ReferencePreviewSchema>;
+
+export const ReferenceSchema = z.discriminatedUnion("kind", [
+  GitRangeReferenceSchema,
   z
     .object({
       kind: z.literal("artifact"),

@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RepoRegistry } from "@mars/code-refs";
 import type { TeamDeliveryEvent } from "@mars/contracts";
 import { createDevAuthenticator } from "../src/auth";
 import type { StreamClose } from "../src/protocol";
@@ -45,7 +46,18 @@ export interface OpenStream {
   waitFor(predicate: () => boolean, timeoutMs?: number): Promise<void>;
 }
 
-export function fixture(limits: Partial<TeamLimits> = {}) {
+export interface FixtureOptions {
+  limits?: Partial<TeamLimits>;
+  /** Host registry; when given, `references.*` are served. */
+  repos?: RepoRegistry;
+}
+
+export function fixture(options: Partial<TeamLimits> | FixtureOptions = {}) {
+  const resolved: FixtureOptions =
+    "limits" in options || "repos" in options
+      ? (options as FixtureOptions)
+      : { limits: options as Partial<TeamLimits> };
+  const limits = resolved.limits ?? {};
   const rootDir = mkdtempSync(join(tmpdir(), "mars-team-"));
   const store = createTeamStore({ rootDir, limits });
   for (const user of ["alice", "bob", "carol"])
@@ -59,7 +71,12 @@ export function fixture(limits: Partial<TeamLimits> = {}) {
     // Authenticated but never added to the team store.
     { token: TOKENS.stranger, user_id: "stranger", team_ids: [TEAM] },
   ]);
-  const server = serveTeam({ store, authenticator, port: 0 });
+  const server = serveTeam({
+    store,
+    authenticator,
+    port: 0,
+    ...(resolved.repos ? { repos: resolved.repos } : {}),
+  });
   const url = `http://127.0.0.1:${server.port}/v1/rpc`;
   let counter = 0;
   const raw = (

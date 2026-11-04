@@ -29,6 +29,9 @@ VS Code extension host (apps/vscode)      ──HTTP loopback, team bearer token
 | Model execution | Oh My Pi via `@mars/execution` | The team service never calls a model. |
 | Agent-to-agent rooms | `@mars/collaboration` | Different thing; its idempotency / seq / delivery patterns were copied, not extended. |
 | Team token on the client | VS Code `SecretStorage` (own key, VS Code wiring PR) | Never the workbench token, never in `ViewState`. |
+| Repo registration (`repo_id` → directory) and repo access (`repos`, `repo_access` tables) | Host administers both: `createRepoRegistry().register` (`@mars/code-refs`) and `store.setRepo` / `setRepoAccess` / `revokeRepoAccess` (`@mars/team`) | No RPC grants access in the pilot. The team store never holds a path; `repo_id` is opaque. |
+| Reading committed Git objects | `@mars/code-refs` | Argv-only `git`, pinned commit, bounded output; **no authorization in the package**. |
+| Who may see a reference | `@mars/team` (`references.*`, message chips) | Re-checks team membership, conversation visibility and `repo_access` inside each call; renders `restricted` otherwise. |
 
 ## RPC (`POST /v1/rpc`, loopback only)
 
@@ -48,18 +51,107 @@ Envelope, limits, auth handling and error vocabulary are the workbench's
 | `conversations.leave` | `{conversation_id}` | Self-removal from a DM or a group (no `expected_revision`); the answer shows the caller's participant `removed`; emits a `membership` event; idempotent by `request_id`. DM re-entry stays `create_dm`, group re-entry stays `add_member`. |
 | `conversations.mark_read` | `{conversation_id, read_seq}` | Monotonic; `read_seq` ≤ the conversation's `last_seq` (always ≥ `joined_seq`, so it is also the unread floor). |
 | `conversations.pin` | `{conversation_id, pinned}` | Per participant. |
-| `messages.send` | `{conversation_id, client_message_id ≤ 128, body ≤ 16 KiB, reply_to?}` | `UNIQUE(conversation_id, author_id, client_message_id)`; same key + same `body_sha256` → the original `{message_id, seq}`; different body → `conflict`. Message and outbox row commit together. `reply_to` must be a message the author may see in the same conversation. |
-| `messages.history` | `{conversation_id, after_seq? \| before_seq?, limit ≤ 200}` | Membership re-checked inside the read transaction; page cut by count and serialized bytes, never skipping (a single oversized message → `too_large`); a participant sees only `seq > joined_seq`. Each item is the stored record plus `reactions: [{emoji, count, reacted}]` (sorted by key; no user lists) and, for replies, `reply_excerpt` (first 200 UTF-16 units of the target, never splitting a surrogate pair) or `null` with `reply_restricted: true` when the target is before the caller's `joined_seq`. |
+| `messages.send` | `{conversation_id, client_message_id ≤ 128, body ≤ 16 KiB, reply_to?, reference_ids? ≤ 16}` | `UNIQUE(conversation_id, author_id, client_message_id)`; same key + same `body_sha256` + same `reference_ids` → the original message; different body or references → `conflict`. Message, `message_references` rows and outbox row commit together. `reply_to` must be a message the author may see in the same conversation. Every `reference_id` must exist in the team and the sender must have `active` access to its repo at send time, else `not_found`. Returns a `MessageView` (the message plus per-viewer `references` chips). |
+| `messages.history` | `{conversation_id, after_seq? \| before_seq?, limit ≤ 200}` | Membership re-checked inside the read transaction; page cut by count and serialized bytes, never skipping (a single oversized message → `too_large`); a participant sees only `seq > joined_seq`. Each message carries `references` chips rendered for the caller (see "Code references"). Each item is the stored record plus `reactions: [{emoji, count, reacted}]` (sorted by key; no user lists) and, for replies, `reply_excerpt` (first 200 UTF-16 units of the target, never splitting a surrogate pair) or `null` with `reply_restricted: true` when the target is before the caller's `joined_seq`. |
 | `events.poll` | `{cursors: [{conversation_id, after_event_seq}] ≤ 50, limit ≤ 1000}` | Membership-filtered outbox; events carry `{conversation_id, event_seq, kind, message_seq, message_id, revision}` only — never a body. `kind` is `message`, `membership` or `reaction`. Cursors are per conversation. |
 | `reactions.set` | `{message_id, emoji ≤ 32, on}` | Idempotent set/remove of the caller's reaction on a message they may see (`seq > joined_seq`; otherwise `not_found`). The key is validated with the invisible-code-point denylist from `packages/memory/src/threats.ts` (so no zero-width or variation-selector smuggling; `❤` is valid, `❤\ufe0f` is not) and must contain no whitespace. A change emits one outbox row `kind: "reaction"` with the message's `seq`/`message_id`; a no-op emits nothing. Returns `{message_id, emoji, count, reacted}`. Distinct keys per message are bounded (`max_reactions_per_message` → `too_large`). |
 | `messages.search` | `{query 2..200, conversation_id?, limit ≤ 50, cursor?}` | Membership is applied in SQL before any body is read: `JOIN participants … state='active' AND m.seq > p.joined_seq` on the caller's team, optional conversation filter (a conversation the caller is not in → `not_found`). Case-insensitive (ASCII, SQLite `LIKE` semantics; `%`, `_`, `\` are literal) substring match, newest first (`created_at DESC, message_id DESC`), ≤ 200-UTF-16-unit excerpt around the first hit (whole code points only) with `cut_before`/`cut_after`, opaque `next_cursor` bound to (caller, query, filter) — a reused or altered cursor is `invalid_request`. Rate-limited per (team, user) in a sliding minute (`max_search_per_minute` → `unavailable`). |
+| `repos.list` | `{}` | Repos of the caller's team the caller has `active` access to: `{team_id, repo_id, label, revision}`. Never a path. |
+| `references.create` | `{repo_id, commit_sha (40 hex), path, line_start?, line_end?}` | Sender must be an active team member with access to `repo_id` (else `not_found`); locator validated with `validateLocator`; the object is resolved once through the host registry. `ok` (stores `blob_sha256` = SHA-256 of the excerpt), `binary` and `oversized` objects are stored; `unavailable` → `not_found`; directory / symlink / submodule / out-of-range → `invalid_request`; registry or git failure → `unavailable`. `reference_id = referenceDigest(locator)` so an identical reference dedupes per team. |
+| `references.resolve` | `{reference_id}` | The reference must be attached to a message the caller can see (active participant, `seq > joined_seq`), else `not_found`. With repo access: `{state: ok, reference_id, repo_id, commit_sha, path, line_start, line_end, text, total_lines, truncated}` re-read from the pinned commit/blob (branch moves and renames do not change it), or the same locator fields with a non-`ok` state. Without repo access: exactly `{state: "restricted"}`. Rate limited per user (`max_resolves_per_minute`, excess → `unavailable`). |
+| `references.search_paths` | `{repo_id, commit_sha, query ≤ 256, limit ≤ 50}` | Repo access required (else `not_found`); delegates to `searchPaths`; returns `{state: ok, matches: [{path, rank}], truncated}` or `{state: unavailable}`. Repo-relative paths only. |
+
+Not implemented (TODO markers in `packages/team/src/protocol.ts`): `events.stream`
+(SSE), `reactions.set`, `messages.search` (PR 3); @MARS requests, task links
+and result shares (PR 5–6; their schemas are reserved in
+`packages/contracts/src/team.ts`); any VS Code wiring (the reference picker and
+preview panel are a later UI task).
+
+## Code references (PR 4, service half)
+
+**Reference model.** A reference is an immutable committed Git locator,
+`GitRangeReferenceSchema` in `packages/contracts/src/team.ts` (the single
+schema; `@mars/code-refs` re-exports it): `{kind: "git_range", reference_id,
+team_id, repo_id, commit_sha, path, line_start | null, line_end | null,
+blob_sha256 | null}`. `reference_id` is `referenceDigest` over the locator, so
+the same locator is one row per team (`code_references`, keyed
+`(team_id, reference_id)`, canonical JSON + `record_sha256` like messages).
+Ledger order is `0001_initial` → `0002_task_links` (PR 6) → `0003_references`
+(this PR); the tables land in `0003_references`.
+`blob_sha256` is the SHA-256 of the excerpt resolved at creation (`text_sha256`
+of the `ok` resolution) and null for `binary`/`oversized`; `resolved_state` and
+`created_by` are stored beside the record. A message lists its references in
+`reference_ids` (author order, part of the hashed record) and in
+`message_references` rows. Branch movement, force pushes and renames never
+alter a reference: everything is re-read at the pinned commit by blob id.
+
+**Repo access model.** `repos (team_id, repo_id, label, revision)` and
+`repo_access (team_id, repo_id, user_id, state active|removed, revision)`,
+host-administered through `store.setRepo`, `store.setRepoAccess` and
+`store.revokeRepoAccess`. `repo_id` is the opaque id the host also registered
+in the `@mars/code-refs` registry (`createRepoRegistry().register({repo_id,
+dir, label})`); the directory lives only in the registry, never in the team
+store or in any response. Access means: active team member AND the repo is
+registered for the team AND the `repo_access` row is `active`. It is re-read
+on every call (`store.hasRepoAccess`); nothing is cached, so revoking access
+restricts the very next read, including the revoking user's own earlier
+messages and idempotent replays of their earlier sends.
+
+**Access matrix** (`u1`: access to A and B; `u2`: A only; `u3`: team member
+outside the conversation; stranger: valid token, not a team member):
+
+| Surface | u1 | u2 | u3 | stranger |
+| --- | --- | --- | --- | --- |
+| `repos.list` | A, B | A | `[]` | `forbidden` |
+| `references.create` on B | reference | `not_found` | `not_found` | `forbidden` |
+| `messages.send` with a B reference | message | `not_found` (no row written) | `not_found` | `forbidden` |
+| `messages.history` chip for A | `{reference_id, restricted: false, repo_id, commit_sha, path, line_start, line_end}` | same | `not_found` | `forbidden` |
+| `messages.history` chip for B | resolved chip | `{reference_id, restricted: true}` — nothing else | `not_found` | `forbidden` |
+| `references.resolve` on B | preview from the pinned commit | `{state: "restricted"}` — nothing else | `not_found` | `forbidden` |
+| `references.search_paths` on B | matches | `not_found` | `not_found` | `forbidden` |
+| `events.poll` | `{cursors: [{conversation_id, after_event_seq}] ≤ 50, limit ≤ 1000}` | Membership-filtered outbox; events carry `{conversation_id, event_seq, kind, message_seq, message_id, revision}` only — never a body. `kind` is `message`, `membership` or `reaction`. Cursors are per conversation. |
+| `reactions.set` | `{message_id, emoji ≤ 32, on}` | Idempotent set/remove of the caller's reaction on a message they may see (`seq > joined_seq`; otherwise `not_found`). The key is validated with the invisible-code-point denylist from `packages/memory/src/threats.ts` (so no zero-width or variation-selector smuggling; `❤` is valid, `❤\ufe0f` is not) and must contain no whitespace. A change emits one outbox row `kind: "reaction"` with the message's `seq`/`message_id`; a no-op emits nothing. Returns `{message_id, emoji, count, reacted}`. Distinct keys per message are bounded (`max_reactions_per_message` → `too_large`). |
+| `messages.search` | `{query 2..200, conversation_id?, limit ≤ 50, cursor?}` | Membership is applied in SQL before any body is read: `JOIN participants … state='active' AND m.seq > p.joined_seq` on the caller's team, optional conversation filter (a conversation the caller is not in → `not_found`). Case-insensitive (ASCII, SQLite `LIKE` semantics; `%`, `_`, `\` are literal) substring match, newest first (`created_at DESC, message_id DESC`), ≤ 200-UTF-16-unit excerpt around the first hit (whole code points only) with `cut_before`/`cut_after`, opaque `next_cursor` bound to (caller, query, filter) — a reused or altered cursor is `invalid_request`. Rate-limited per (team, user) in a sliding minute (`max_search_per_minute` → `unavailable`). |
+
+**Restricted representation.** A conversation member without repo access gets
+exactly `{reference_id, restricted: true}` in a chip and exactly
+`{state: "restricted"}` from `references.resolve`: no path, repo label, SHA,
+range, size, excerpt or resolver state. Absent and inaccessible repos and
+references share `not_found`, the same choice as conversations. The server's
+`validateResult` re-checks every chip, preview, repo row and search hit against
+the store after the handler ran (restricted shapes have no extra keys, every
+exposed `repo_id` is one the caller has access to, every path is
+repo-relative), so a handler bug still fails closed. Fixed error strings only;
+no response or error ever carries a directory, a repo label of a restricted
+repo, or a message body.
+
+**Same gate everywhere.** `messages.send` and `messages.history` chips,
+`references.resolve` and `references.search_paths` all go through
+`store.hasRepoAccess` / `store.viewReference`. `events.*` carry no reference
+fields at all. Not on `main` yet, but bound to the same gate when they land:
+`messages.search` (PR 3) must render hits through the chip projection and must
+never index or match the path/SHA of a reference the searcher cannot see;
+reply excerpts and @MARS/result-card payloads (PR 5–6) render references the
+same way. The VS Code picker and preview panel call `references.search_paths`
+and `references.resolve`; no client ever calls `git`.
+
+**Limits** (`TeamLimitsSchema`): `max_references_per_message` (≤ 16),
+`max_resolves_per_minute` (default 120, per user, in-memory sliding window),
+`max_preview_lines` and `max_preview_blob_bytes` (the `@mars/code-refs`
+defaults, 400 lines / 1 MiB, passed to the resolver as `max_range_lines` /
+`max_blob_bytes`), `max_search_hits` (≤ 50).
+
+**Host wiring.** `serveTeam({store, authenticator, repos})` takes the
+registry; without it `references.*` answer `unavailable` and
+`team.describe.capabilities.references` is `false`. A `mars serve`
+`--team-repo <repo_id>=<dir>` option and a doctor row are not written yet.
 
 | `tasks.link_draft` | `{conversation_id, message_ids 1–50, reference_ids ≤ 16}` | Requester must be a participant and every message visible to them (`seq > joined_seq`). Creates a `TaskLink` (`status: draft`, server-generated `launch_key`, provenance `{message_id, seq, body_sha256}` frozen now) and returns bounded excerpts (≤ 280 chars each) for the confirmation step. Idempotent on `request_id`. |
 | `tasks.link_confirm` | `{link_id, workbench: {scope, task_id, request_id}, target: {repo_id?, base_revision?}}` | Requester only (`forbidden` for other members, `not_found` for non-participants). `draft → confirmed`. A retry with the same binding returns the same link (same `launch_key`); a different binding → `conflict`. |
 | `tasks.link_created` | `{link_id, task_revision}` | Requester only. `confirmed → created`; a `shared` link keeps `shared` while recording a newer revision; the revision may only move forward (`conflict` otherwise). |
 | `tasks.link_inspect` | `{link_id}` | Participants who can read every quoted message (`provenance[*].seq > joined_seq`); a member who joined or rejoined later gets `not_found`, like history. The requester gets `{view: "requester", link}`; everyone else `{view: "member", link}` with `launch_key`, `target` and `workbench` **omitted** (never another user's scope ids). |
 | `shares.preview` | `{link_id, evidence: <caller's tasks.evidence result>, run_status, selection: {summary ≤ 2000, include_diff_digest, verify_event_ids ≤ 8, artifacts?}}` | Requester only; link must be `created`/`shared`. Returns `{preview_sha256, card}` — exactly what `shares.create` would post. `artifacts` non-empty → `unavailable` (artifact access gate is a later PR). |
-| `shares.create` | `{link_id, preview_sha256, ...same}` | Recomputes the card; `preview_sha256` must match byte-for-byte (`conflict` otherwise). Posts a message `kind: "result_card"` whose `body` is the summary and whose `payload` is the `ResultShare`; link becomes `shared`. A card that would not fit one `messages.history` page (with its stale overlay) is refused with `too_large`. Idempotent on `request_id`; the replay re-reads the stale overlay so it agrees with history. |
+| `shares.create` | `{link_id, preview_sha256, ...same}` | Recomputes the card; `preview_sha256` must match byte-for-byte (`conflict` otherwise). Posts a message `kind: "result_card"` whose `body` is the summary and whose `payload` is the `ResultShare` (returned as a `MessageView`, like `messages.send`); link becomes `shared`. A card that would not fit one `messages.history` page (with its stale overlay) is refused with `too_large`. Idempotent on `request_id`; the replay re-reads the stale overlay so it agrees with history. |
 
 Not implemented (TODO markers in `packages/team/src/protocol.ts`): `events.stream`
 (SSE), `reactions.set`, `messages.search` (PR 3); references and @MARS
@@ -138,8 +230,8 @@ does not return the task's execution status, so the client passes
 attests two reads, not one); an artifact access gate before `ArtifactRef`
 shares; the client wiring in `apps/vscode` (PR 1's webview is fixture-only).
 
-Not implemented: references and @MARS requests (PR 4–5; their schemas are
-reserved in `packages/contracts/src/team.ts`); any VS Code wiring (the inbox client of the stream lives in the extension host and
+Not implemented: @MARS requests (PR 5; schema reserved in
+`packages/contracts/src/team.ts`); any VS Code wiring (the inbox client of the stream lives in the extension host and
 is a separate task after the PR 1 prototype).
 
 ## Streaming (`POST /v1/stream`, Server-Sent Events)
@@ -258,14 +350,23 @@ connection is `too_large`), `stream_heartbeat_ms` (15 000), `max_stream_batch_ev
   (variation selector 16). Clients that render emoji with VS16 must strip it
   before calling `reactions.set` (and will see the stripped key in summaries).
   Whether to strip server-side instead is an owner call.
+- **Repo administration is host-side too** (`store.setRepo` / `setRepoAccess`
+  / `revokeRepoAccess`, plus the `@mars/code-refs` registry); no RPC grants
+  repo access in the pilot. Repo and reference reads answer `not_found` for
+  "absent" and "no access" alike; a member of the conversation who lacks repo
+  access gets the `restricted` shape instead, because the message itself is
+  theirs to see.
+- **Rate-limit code.** The RPC vocabulary is frozen to the workbench's eight
+  codes, so an exceeded `references.resolve` budget answers `unavailable`
+  (503), the same code a failing host registry answers.
 
 ## Assumptions (owner defaults)
 
 Pilot deployment is a loopback Bun process with a SQLite store whose schema is
 Postgres-portable; identity is the pluggable `Authenticator` with a local dev
-provider only; the Git provider (PR 4) reads committed objects through a
-host-trusted repo mapping with argv-only `git`; @MARS models are free-first
-only, no paid.
+provider only; the Git provider reads committed objects through a host-trusted
+repo mapping with argv-only `git` (`@mars/code-refs`, wired in PR 4); @MARS
+models are free-first only, no paid.
 
 ## Verification
 
@@ -274,11 +375,16 @@ with the dev authenticator and a second Bun process for the DM race;
 `packages/team/src/features.test.ts` opens real SSE connections (interrupted
 acknowledgement + reconnect, backfill/live race with 4-row pages, nonmember
 denial, same-call revocation, idempotent reactions, join-window search
-filtering, stream/search limits); `handoff.test.ts` covers link
-draft/confirm/created with interrupted confirms, frozen provenance, every
-unverified reason, stale-on-re-share, member/non-member visibility and
-`preview_sha256` mismatch with fixture evidence only. No live identity
-provider, no remote host, no workbench process, no VS Code window.
+filtering, stream/search limits); `handoff.test.ts` covers link draft/confirm/created with interrupted confirms,
+frozen provenance, every unverified reason, stale-on-re-share, member/non-member
+visibility and `preview_sha256` mismatch with fixture evidence only; the
+reference tests (`packages/team/src/references.test.ts`) build two temporary
+`git init` repositories and prove the access matrix above, pinning across a
+branch move and rename, immediate revocation, the rate limit and that no
+response to a restricted viewer contains a directory, the restricted repo's
+label, path or SHA (skipped with a warning when `git` is absent). No live
+identity provider, no remote host, no workbench process, no VS Code window, no
+real multi-GiB repo.
 
 
 ---
