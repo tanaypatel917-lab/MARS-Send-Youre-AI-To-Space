@@ -323,6 +323,11 @@ export const TeamErrorCodeSchema = z.enum([
   "reference_not_attachable",
   "too_many_references",
   "empty_message",
+  /** The same `client_message_id` was committed with a different body: edit and resend. */
+  "conflict",
+  /** The service could not be reached or rejected the credential; fixed text only. */
+  "unavailable",
+  "unauthorized",
 ]);
 export type TeamErrorCode = z.infer<typeof TeamErrorCodeSchema>;
 

@@ -45,6 +45,31 @@ async function pressEnter(): Promise<void> {
 }
 
 async function run(): Promise<void> {
+  if (scenario === "service") {
+    // Real adapter over the in-page stub: wait for the inbox, send through
+    // messages.send, then let a poll deliver another member's message.
+    await waitFor(".fixture-badge");
+    await waitFor<HTMLElement>('[data-focus-key^="conv-"]');
+    await typeInComposer("Sent through the RPC adapter.");
+    await pressEnter();
+    const server = (
+      globalThis as {
+        __teamServer?: {
+          post(user: string, conversation: string, body: string): void;
+          conversationIds(): string[];
+        };
+      }
+    ).__teamServer;
+    const first = server?.conversationIds()[0];
+    if (server && first)
+      server.post("user_grace", first, "Delivered by events.poll.");
+    for (let i = 0; i < 100; i++) {
+      if (document.body.textContent?.includes("Delivered by events.poll."))
+        break;
+      await tick();
+    }
+    return;
+  }
   await waitFor(key("conv-conv_dm_ada_grace"));
   await tick();
   switch (scenario) {

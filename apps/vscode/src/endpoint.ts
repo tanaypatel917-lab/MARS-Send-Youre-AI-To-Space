@@ -21,6 +21,7 @@ export function isLoopbackHost(hostname: string): boolean {
 export function checkServerUrl(
   raw: string,
   allowNonLoopback: boolean,
+  allowSetting = "mars.allowNonLoopbackServer",
 ): EndpointCheck {
   let url: URL;
   try {
@@ -42,8 +43,7 @@ export function checkServerUrl(
     if (!allowNonLoopback)
       return {
         ok: false,
-        reason:
-          "Non-loopback servers are blocked. Enable mars.allowNonLoopbackServer in user settings to allow one.",
+        reason: `Non-loopback servers are blocked. Enable ${allowSetting} in user settings to allow one.`,
       };
     if (url.protocol !== "https:")
       return { ok: false, reason: "Non-loopback servers must use https." };
