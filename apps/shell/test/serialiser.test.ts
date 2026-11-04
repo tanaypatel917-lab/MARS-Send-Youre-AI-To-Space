@@ -132,7 +132,7 @@ test("pending task details stay visible when workspace sections are unavailable"
   ).toHaveLength(2);
 });
 
-test("verification and event failures are section-local and verification stays unverified", async () => {
+test("verification and event failures are section-local", async () => {
   const data = await loadFixtureData();
   const delegate = fakeBridge(data);
   const notFound = {
@@ -165,13 +165,62 @@ test("verification and event failures are section-local and verification stays u
   await controller.settled();
 
   const snapshot = serialize(document.root);
-  expect(snapshot).toContain("Unverified");
+  expect(snapshot).toContain("Verification unavailable");
+  expect(snapshot).not.toContain("Unverified");
   expect(snapshot).toContain("unavailable · Workbench resource was not found.");
   expect(snapshot).toContain("Task fixture-pending");
   expect(snapshot).toContain("fixture-completed-verified");
 });
 
-test("task events page with cursors and stop at 1,000 entries", async () => {
+test("verification errors never present a successful or unverified verdict", async () => {
+  const data = await loadFixtureData();
+  const taskId = "fixture-completed-verified";
+  const delegate = fakeBridge(data);
+  const bridge: ShellBridge = {
+    ...delegate,
+    "tasks.verification": (params) =>
+      params.task_id === taskId
+        ? Promise.resolve({
+            ok: false,
+            error: {
+              kind: "unavailable",
+              message: "Workbench is unavailable.",
+            },
+          })
+        : delegate["tasks.verification"](params),
+  };
+  const document = new MiniDocument();
+  const controller = createController(bridge, document, document.root);
+  await controller.load();
+  findAll(
+    document.root,
+    (element) => element.getAttribute("data-task-id") === taskId,
+  )
+    .find((element) => element.tagName === "BUTTON")
+    ?.click();
+  await controller.settled();
+
+  const header = findAll(
+    document.root,
+    (element) => element.tagName === "HEADER",
+  )[0];
+  expect(header?.textContent).toContain("Verification unavailable");
+  expect(header?.textContent).not.toContain("Unverified");
+  expect(header?.textContent).not.toContain("Verified");
+  expect(
+    findAll(
+      document.root,
+      (element) =>
+        element.getAttribute("class") ===
+        "verification verification-unavailable",
+    )[0]?.textContent,
+  ).toBe("Verification unavailable");
+  expect(serialize(document.root)).toContain(
+    "unavailable · Workbench is unavailable.",
+  );
+});
+
+test("task event paging continues through short pages", async () => {
   const data = await loadFixtureData();
   const baseEvent = data.details["fixture-running"]?.events[0];
   if (!baseEvent) throw new Error("Fixture event missing.");

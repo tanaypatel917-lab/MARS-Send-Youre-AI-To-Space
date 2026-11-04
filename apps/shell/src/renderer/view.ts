@@ -133,6 +133,7 @@ function taskHeader(
   doc: ShellDocument,
   task: InspectResult | undefined,
   verification: VerificationView | undefined,
+  verificationError: string | undefined,
 ): ShellElement {
   if (!task)
     return h(
@@ -142,9 +143,14 @@ function taskHeader(
       h(doc, "h1", {}, "No task selected"),
       h(doc, "p", {}, "Select a session to inspect its read-only details."),
     );
-  const state = verification?.state ?? "unverified";
   const candidateRevision =
     verification?.candidate?.revision ?? "not available";
+  const verificationClass = verificationError
+    ? "verification verification-unavailable"
+    : `verification verification-${verification?.state ?? "unverified"}`;
+  const verificationLabel = verificationError
+    ? "Verification unavailable"
+    : VERIFICATION_LABEL[verification?.state ?? "unverified"];
   return h(
     doc,
     "header",
@@ -154,12 +160,7 @@ function taskHeader(
       doc,
       "div",
       { class: "task-meta" },
-      h(
-        doc,
-        "span",
-        { class: `verification verification-${state}` },
-        VERIFICATION_LABEL[state],
-      ),
+      h(doc, "span", { class: verificationClass }, verificationLabel),
       status(doc, task),
       h(
         doc,
@@ -456,7 +457,7 @@ export function renderShell(
       doc,
       "div",
       { class: "main-toolbar" },
-      taskHeader(doc, task, state.verification),
+      taskHeader(doc, task, state.verification, state.verificationError),
       refresh,
     ),
     h(

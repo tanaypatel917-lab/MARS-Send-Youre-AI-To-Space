@@ -257,6 +257,10 @@ button:disabled {
   color: var(--error);
 }
 
+.verification-unavailable {
+  color: var(--muted);
+}
+
 .refresh {
   flex: 0 0 auto;
   padding: 5px 10px;
