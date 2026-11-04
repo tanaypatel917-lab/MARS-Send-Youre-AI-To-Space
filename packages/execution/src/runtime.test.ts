@@ -260,6 +260,56 @@ test("mars_proposals is a read-only host-bound tool rendering untrusted proposal
   }
 });
 
+test("delegation tools reject oversized output with a delegation-labelled error", async () => {
+  const f = await fixture(1_000_000);
+  const requests: Record<string, unknown>[] = [];
+  const unused = async () => "unused";
+  try {
+    const session = await f.open({
+      task: { ...f.task, budget: { ...f.task.budget, max_tokens: 400_000 } },
+      collaboration: {
+        send: unused,
+        inbox: unused,
+        ack: unused,
+        members: unused,
+        delegation: {
+          delegate: unused,
+          cancelChild: unused,
+          children: async () => "c".repeat(128 * 1024 + 1),
+          results: unused,
+          reviewResult: unused,
+        },
+      },
+      fetch: async (_url, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return requests.length === 1
+          ? sse(
+              {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_children",
+                    type: "function",
+                    function: { name: "mars_children", arguments: "{}" },
+                  },
+                ],
+              },
+              "tool_calls",
+            )
+          : sse({ content: "Children unavailable." });
+      },
+    });
+    await session.run(f.task.request);
+    expect(requests).toHaveLength(2);
+    const relayed = JSON.stringify(requests[1]);
+    expect(relayed).toContain("Delegation output exceeds tool output limit.");
+    expect(relayed).not.toContain("Room output");
+    expect(relayed).not.toContain("c".repeat(1024));
+  } finally {
+    await f.cleanup();
+  }
+}, 30000);
+
 test("mars_proposals is absent without read approval or a proposals source", async () => {
   const f = await fixture();
   const requests: Record<string, unknown>[] = [];
