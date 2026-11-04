@@ -41,6 +41,14 @@
         "@types/vscode": "1.96.0",
       },
     },
+    "packages/code-refs": {
+      "name": "@mars/code-refs",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
     "packages/codex-tools": {
       "name": "@mars/codex-tools",
       "version": "0.0.1",
@@ -371,6 +379,8 @@
     "@img/sharp-win32-x64": ["@img/sharp-win32-x64@0.35.5", "", { "os": "win32", "cpu": "x64" }, "sha512-x76eH0vEiHlcMQu8Y8IenntaACtddpT6W0wmXtWrnKcnKI7ME5DdgqhAD6SEWOEl1v2zDvkZDhFA9KnURwpfqg=="],
 
     "@mars/cli": ["@mars/cli@workspace:apps/cli"],
+
+    "@mars/code-refs": ["@mars/code-refs@workspace:packages/code-refs"],
 
     "@mars/codex-tools": ["@mars/codex-tools@workspace:packages/codex-tools"],
 
