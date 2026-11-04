@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   FIXTURE_CONVERSATIONS as C,
+  FIXTURE,
   FixtureTeamService,
   SITE_SHA,
   FIXTURE_USERS as U,
@@ -419,6 +420,78 @@ describe("review fixes", () => {
     expect(last().selected?.messages.map((m) => m.sequence)).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8,
     ]);
+  });
+
+  test("hitting the cap before the unread boundary never marks unseen messages read", async () => {
+    const service = new FixtureTeamService();
+    for (let i = 0; i < 5; i++)
+      service.sendMessage(U.ada, {
+        conversation_id: C.groupRelease,
+        client_message_id: `cm_burst_${i}`,
+        body: `update ${i}`,
+        reply_to: null,
+        references: [],
+      });
+    const states: TeamChatViewState[] = [];
+    const controller = new TeamChatController({
+      post: (state) => states.push(state),
+      service,
+      viewer: U.linus,
+      pageSize: 1,
+      maxLoaded: 2,
+    });
+    const last = () => states[states.length - 1] as TeamChatViewState;
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: C.groupRelease,
+    });
+    const cursor = last().selected?.older_cursor ?? "";
+    await controller.handleMessage({
+      type: "loadOlder",
+      conversationId: C.groupRelease,
+      cursor,
+    });
+    expect(last().selected?.messages.map((m) => m.sequence)).toEqual([7, 8]);
+    expect(last().selected?.older_cursor).toBeNull();
+    expect(last().selected?.older_blocked).toBe(true);
+    expect(last().selected?.conversation.read_cursor).toBe(2);
+    expect(last().selected?.conversation.unread_count).toBe(6);
+  });
+
+  test("the divider and read boundary follow the first visible unread message after a join point", async () => {
+    const dataset = structuredClone(FIXTURE);
+    for (const p of dataset.participants)
+      if (p.conversation_id === C.groupRelease && p.user_id === U.linus) {
+        p.joined_at_sequence = 1;
+        p.read_cursor = 0;
+      }
+    const states: TeamChatViewState[] = [];
+    const controller = new TeamChatController({
+      post: (state) => states.push(state),
+      service: new FixtureTeamService({ dataset }),
+      viewer: U.linus,
+      pageSize: 1,
+    });
+    const last = () => states[states.length - 1] as TeamChatViewState;
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: C.groupRelease,
+    });
+    // Visible history is #2-#3; the first visible unread is #2, not #1.
+    expect(last().selected?.divider_sequence).toBe(2);
+    expect(last().selected?.messages.map((m) => m.sequence)).toEqual([3]);
+    expect(last().selected?.conversation.read_cursor).toBe(0);
+    const cursor = last().selected?.older_cursor ?? "";
+    await controller.handleMessage({
+      type: "loadOlder",
+      conversationId: C.groupRelease,
+      cursor,
+    });
+    expect(last().selected?.messages.map((m) => m.sequence)).toEqual([2, 3]);
+    expect(last().selected?.conversation.read_cursor).toBe(3);
+    expect(last().selected?.divider_sequence).toBe(2);
   });
 
   test("reaching the in-memory cap withholds the older cursor instead of dropping a page", async () => {

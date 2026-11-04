@@ -103,6 +103,8 @@ describe("membership-filtered reads", () => {
     ]);
     expect(inbox[0]?.pinned).toBe(true);
     expect(inbox[0]?.unread_count).toBe(2);
+    expect(inbox[0]?.first_unread_sequence).toBe(3);
+    expect(inbox[1]?.first_unread_sequence).toBeNull();
     expect(inbox[0]?.title).toBe("Grace Oyelaran");
     expect(inbox[1]?.unread_count).toBe(0);
     expect(inbox[1]?.title).toBe("Release triage");

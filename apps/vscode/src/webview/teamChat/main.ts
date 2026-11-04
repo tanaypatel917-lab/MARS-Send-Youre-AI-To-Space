@@ -492,6 +492,14 @@ function renderThread(
       ),
     );
   }
+  if (selected.older_blocked)
+    list.append(
+      h(
+        "li",
+        { class: "muted small load-older", role: "status" },
+        "Older messages exist but are not loaded (in-memory limit reached).",
+      ),
+    );
   const panelRef = s.panel?.reference_id ?? null;
   for (const message of selected.messages) {
     if (selected.divider_sequence === message.sequence)

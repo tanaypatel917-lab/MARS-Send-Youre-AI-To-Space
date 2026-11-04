@@ -167,14 +167,14 @@ export class TeamChatController {
       };
       return;
     }
-    const cursor = page.value.conversation.read_cursor;
     this.selected = {
       conversation: page.value.conversation,
       messages: page.value.messages,
       older_cursor: page.value.older_cursor,
-      // The first unread sequence, whether or not that page is loaded yet.
-      divider_sequence:
-        page.value.conversation.unread_count > 0 ? cursor + 1 : null,
+      older_blocked: false,
+      // The first visible unread sequence (after the member's join point),
+      // whether or not that page is loaded yet.
+      divider_sequence: page.value.conversation.first_unread_sequence,
     };
     this.markReadIfBoundaryLoaded();
   }
@@ -186,13 +186,14 @@ export class TeamChatController {
   private markReadIfBoundaryLoaded(): void {
     const selected = this.selected;
     if (!selected) return;
-    const cursor = selected.conversation.read_cursor;
+    const firstUnread = selected.conversation.first_unread_sequence;
     const last = selected.conversation.last_sequence;
-    if (last <= cursor) return;
+    if (firstUnread === null || last <= selected.conversation.read_cursor)
+      return;
     const earliest = selected.messages[0]?.sequence;
+    const exhausted = selected.older_cursor === null && !selected.older_blocked;
     const boundaryLoaded =
-      selected.older_cursor === null ||
-      (earliest !== undefined && earliest <= cursor + 1);
+      exhausted || (earliest !== undefined && earliest <= firstUnread);
     if (boundaryLoaded)
       this.markRead(selected.conversation.conversation_id, last);
   }
@@ -212,12 +213,15 @@ export class TeamChatController {
     const older = page.value.messages.filter((m) => !known.has(m.message_id));
     const messages = [...older, ...this.selected.messages];
     // Never drop a fetched page: once the in-memory cap is reached the older
-    // cursor is withheld instead of silently skipping history.
+    // cursor is withheld (and flagged as blocked, not exhausted) instead of
+    // silently skipping history.
+    const blocked =
+      page.value.older_cursor !== null && messages.length >= this.maxLoaded;
     this.selected = {
       ...this.selected,
       messages,
-      older_cursor:
-        messages.length >= this.maxLoaded ? null : page.value.older_cursor,
+      older_cursor: blocked ? null : page.value.older_cursor,
+      older_blocked: blocked,
     };
     this.markReadIfBoundaryLoaded();
   }

@@ -36,6 +36,8 @@ export interface ConversationSummary {
   read_cursor: number;
   last_sequence: number;
   unread_count: number;
+  /** First visible unread sequence (join-point aware), or null when nothing is unread. */
+  first_unread_sequence: number | null;
   last_message: {
     author_id: string;
     excerpt: string;
@@ -652,6 +654,7 @@ export class FixtureTeamService implements TeamService {
       return undefined;
     const visible = this.visibleMessages(viewer, conversationId);
     const last = visible[visible.length - 1];
+    const unread = visible.filter((m) => m.sequence > participant.read_cursor);
     const title =
       conversation.kind === "group"
         ? (conversation.title ?? "Group")
@@ -664,8 +667,8 @@ export class FixtureTeamService implements TeamService {
       pinned: participant.pinned,
       read_cursor: participant.read_cursor,
       last_sequence: last?.sequence ?? 0,
-      unread_count: visible.filter((m) => m.sequence > participant.read_cursor)
-        .length,
+      unread_count: unread.length,
+      first_unread_sequence: unread[0]?.sequence ?? null,
       last_message: last
         ? {
             author_id: last.author_id,

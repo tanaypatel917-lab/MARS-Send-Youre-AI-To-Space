@@ -86,7 +86,9 @@ export interface SelectedConversation {
   conversation: ConversationSummary;
   messages: MessageView[];
   older_cursor: string | null;
-  /** First unread sequence when the conversation was opened; the divider stays put while reading. */
+  /** True when more history exists but the in-memory cap stops loading it; never treated as exhaustion. */
+  older_blocked: boolean;
+  /** First visible unread sequence when the conversation was opened; the divider stays put while reading. */
   divider_sequence: number | null;
 }
 
