@@ -1066,6 +1066,7 @@ export function serveTeam(options: TeamServerOptions) {
           return done(responseError("invalid_request"));
         }
         if (route === "stream") {
+          server.timeout(request, 0);
           const parsed = TeamStreamRequestSchema.safeParse(raw);
           if (!parsed.success) return done(responseError("invalid_request"));
           const teamId = parsed.data.context.team_id;
