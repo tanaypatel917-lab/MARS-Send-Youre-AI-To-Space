@@ -18,6 +18,7 @@ Merged since the recovery started (2026-11-02): #42 HANDOFF, #43 research worker
 
 | Workstream | PR | State |
 | --- | --- | --- |
+| UI §8.3 read-only workbench host metadata + task-scoped journal RPC (mirrored optional schemas, unchanged VS Code behavior) | #71 | offline `bun run check` passed; fixture evidence only, injected model / live model_requests: 0. Spec clarification: ambiguous workspace graph is null; task graph cards remain in events (§2.11/§8.3). Per-source context token/cost accounting is not recorded, so unknown values are null with explicit remedies; usage totals are cumulative, not context-window occupancy. No live model/OmniRoute/window claim. |
 | Codex tooling (`@mars/codex-tools`: attributed `apply_patch` port, sandbox/approval policy mapping, `AGENTS.md`/`CLAUDE.md` discovery) + Claude Code conventions in `@mars/skills` (skill discovery across `.claude/.codex/.agents`, `.mars/hooks.json`, slash commands), `documentation/COMPATIBILITY.md` | #53 | open, review in progress |
 | graphify code knowledge graph (`@mars/knowledge-graph`, derived artifact in `@mars/context`, `mars_graph_build`/`mars_graph_query`) | #54 (Part A + Part B) | open, CI green, review findings fixed, not merged |
 | Obsidian-compatible memory vault (`@mars/memory-vault`, `mars vault export\|import\|status`, `documentation/MEMORY_VAULT.md`) | #56 → merged into the #54 branch | delivered inside #54 |

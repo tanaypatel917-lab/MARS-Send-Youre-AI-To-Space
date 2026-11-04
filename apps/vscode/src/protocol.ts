@@ -6,6 +6,8 @@ import {
   type Scope,
   ScopeSchema,
   TaskSchema,
+  WorkbenchDescribeFields,
+  WorkbenchInspectFields,
 } from "@mars/contracts";
 import { z } from "zod";
 
@@ -30,6 +32,7 @@ export const CheckpointRefSchema = z
 
 export const DescribeResultSchema = z
   .object({
+    ...WorkbenchDescribeFields,
     scope: ScopeSchema,
     workspaceLabel: z.string().min(1).max(200),
     capabilities: z
@@ -38,6 +41,9 @@ export const DescribeResultSchema = z
   })
   .strict();
 export type DescribeResult = z.infer<typeof DescribeResultSchema>;
+export const InspectResultSchema = TaskSchema.extend(
+  WorkbenchInspectFields,
+).strict();
 
 export const ApprovalsSchema = z
   .object({ read: z.boolean(), write: z.boolean(), execute: z.boolean() })
@@ -125,6 +131,7 @@ export const RPC_METHODS = {
   create: "tasks.create",
   list: "tasks.list",
   inspect: "tasks.inspect",
+  journal: "tasks.journal",
   start: "tasks.start",
   resume: "tasks.resume",
   steer: "tasks.steer",

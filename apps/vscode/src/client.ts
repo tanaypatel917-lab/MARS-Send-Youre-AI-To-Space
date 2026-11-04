@@ -25,6 +25,7 @@ import {
   EventBatchSchema,
   type EvidenceResult,
   EvidenceResultSchema,
+  InspectResultSchema,
   LAUNCH_KEY_PATTERN,
   makeContext,
   NullResultSchema,
@@ -170,10 +171,18 @@ export class MarsClient {
   }
 
   async inspect(taskId: string, signal?: AbortSignal): Promise<Task> {
-    return this.checkTask(
+    const {
+      model_tier: _tier,
+      usage_totals: _usage,
+      pinned: _pinned,
+      context_rows: _context,
+      ...task
+    } = validate(
+      InspectResultSchema,
       await this.call(RPC_METHODS.inspect, { task_id: taskId }, signal),
-      taskId,
+      "task",
     );
+    return this.checkTask(task, taskId);
   }
 
   async start(

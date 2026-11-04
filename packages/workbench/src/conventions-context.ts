@@ -43,6 +43,7 @@ export type WorkbenchPatchApplier = (
 ) => Promise<ApplyPatchResult>;
 
 export interface WorkbenchConventions {
+  summary?: { instructions: number; hooks: number; commands: number };
   /** Discovered AGENTS.md / CLAUDE.md text (already rendered and bounded by the loader). */
   instructions?: DiscoveredInstructions;
   /** Skill folders discovered in the checkout; frozen with learned skills as untrusted evidence. */
@@ -63,6 +64,17 @@ export const FrozenInstructionsSchema = z
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
     files: z.array(z.string().min(1).max(1024)).max(MAX_INSTRUCTION_FILES),
     omitted: z.number().int().nonnegative(),
+    file_metadata: z
+      .array(
+        z
+          .object({
+            path: z.string().min(1).max(1024),
+            bytes: z.number().int().nonnegative(),
+          })
+          .strict(),
+      )
+      .max(MAX_INSTRUCTION_FILES)
+      .optional(),
   })
   .strict();
 export type FrozenInstructions = z.infer<typeof FrozenInstructionsSchema>;
@@ -95,6 +107,7 @@ export function freezeInstructions(
     sha256: createHash("sha256").update(text).digest("hex"),
     files: found.files.map((file) => file.path),
     omitted: found.omitted,
+    file_metadata: found.files.map(({ path, bytes }) => ({ path, bytes })),
   });
 }
 
