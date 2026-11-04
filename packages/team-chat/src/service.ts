@@ -134,37 +134,81 @@ export interface SendResult {
   duplicate: boolean;
 }
 
+export type MaybePromise<T> = T | Promise<T>;
+
+/** `FIXTURE` is the in-memory dataset; `SERVICE` is the authenticated `@mars/team` adapter. */
+export type TeamServiceLabel = "FIXTURE" | "SERVICE";
+
+/**
+ * Which optional operations the backing service really implements. The
+ * fixture answers everything; the RPC adapter reports what `team.describe`
+ * advertises so the UI can hide controls instead of failing them.
+ */
+export interface TeamCapabilities {
+  reactions: boolean;
+  search: boolean;
+  realtime: boolean;
+}
+
+export interface SearchResult {
+  query: string;
+  hits: MessageView[];
+}
+
+/**
+ * Operation shapes shared by the fixture and the real service. Every method
+ * may be synchronous (fixture) or asynchronous (RPC); callers always `await`.
+ * `viewer` is the authenticated identity: the fixture takes it as a parameter
+ * so tests can switch members, the RPC adapter ignores it and uses the
+ * server-derived `user_id`.
+ */
 export interface TeamService {
-  readonly label: "FIXTURE";
+  readonly label: TeamServiceLabel;
+  readonly capabilities: TeamCapabilities;
+  /** Server-derived identity when known (real service); absent for the fixture, whose viewer is a parameter. */
+  currentUser?(): string | undefined;
+  /** A delivery event said this message changed (edit/delete): drop any cached copy so the next read refetches it. */
+  forgetMessage?(conversationId: string, sequence: number): void;
   users(): UserView[];
-  listConversations(viewer: string): TeamResult<ConversationSummary[]>;
+  listConversations(
+    viewer: string,
+  ): MaybePromise<TeamResult<ConversationSummary[]>>;
   openConversation(
     viewer: string,
     conversationId: string,
     options?: { before?: string | null; limit?: number },
-  ): TeamResult<ConversationPage>;
-  sendMessage(viewer: string, input: SendMessageInput): TeamResult<SendResult>;
+  ): MaybePromise<TeamResult<ConversationPage>>;
+  sendMessage(
+    viewer: string,
+    input: SendMessageInput,
+  ): MaybePromise<TeamResult<SendResult>>;
   markRead(
     viewer: string,
     conversationId: string,
     sequence: number,
-  ): TeamResult<{ read_cursor: number }>;
+  ): MaybePromise<TeamResult<{ read_cursor: number }>>;
   setPinned(
     viewer: string,
     conversationId: string,
     pinned: boolean,
-  ): TeamResult<{ pinned: boolean }>;
+  ): MaybePromise<TeamResult<{ pinned: boolean }>>;
   setReaction(
     viewer: string,
     messageId: string,
     emoji: ReactionEmoji,
     on: boolean,
-  ): TeamResult<{ reactions: ReactionView[] }>;
+  ): MaybePromise<TeamResult<{ reactions: ReactionView[] }>>;
   resolveReference(
     viewer: string,
     messageId: string,
     referenceId: string,
-  ): TeamResult<ReferencePreview>;
+  ): MaybePromise<TeamResult<ReferencePreview>>;
+  /** Membership-filtered substring search; `conversationId` narrows to one thread. */
+  searchMessages(
+    viewer: string,
+    query: string,
+    conversationId?: string | null,
+  ): MaybePromise<TeamResult<SearchResult>>;
   mentionIndex(viewer: string): MentionIndex;
 }
 
@@ -176,6 +220,8 @@ export interface FixtureTeamServiceOptions {
 
 const DEFAULT_PAGE = 20;
 const MAX_PAGE = 200;
+export const MAX_SEARCH_QUERY_CHARS = 200;
+export const MAX_SEARCH_HITS = 50;
 const EXCERPT_CHARS = 80;
 const CURSOR_PREFIX = "seq:";
 
@@ -238,6 +284,11 @@ function fixedClock(): () => string {
  */
 export class FixtureTeamService implements TeamService {
   readonly label = "FIXTURE" as const;
+  readonly capabilities: TeamCapabilities = {
+    reactions: true,
+    search: true,
+    realtime: false,
+  };
   private readonly data: FixtureDataset;
   private readonly now: () => string;
   /** `${author}|${conversation}|${client_message_id}` → committed message + content fingerprint. */
@@ -534,6 +585,49 @@ export class FixtureTeamService implements TeamService {
       symbol: reference.symbol,
       lines,
       highlight,
+    });
+  }
+
+  searchMessages(
+    viewer: string,
+    query: string,
+    conversationId?: string | null,
+  ): TeamResult<SearchResult> {
+    if (!this.teamMember(viewer)) return fail("not_found");
+    const needle = query.trim().toLowerCase();
+    if (needle.length === 0 || needle.length > MAX_SEARCH_QUERY_CHARS)
+      return fail("invalid");
+    const scope = conversationId
+      ? this.data.conversations.filter(
+          (c) => c.conversation_id === conversationId,
+        )
+      : this.data.conversations;
+    if (conversationId && scope.length === 0) return fail("not_found");
+    const hits: MessageView[] = [];
+    for (const conversation of scope) {
+      if (
+        conversationId &&
+        !this.participant(viewer, conversation.conversation_id)
+      )
+        return fail("not_found");
+      for (const message of this.visibleMessages(
+        viewer,
+        conversation.conversation_id,
+      )) {
+        if (message.body.toLowerCase().includes(needle))
+          hits.push(this.messageView(viewer, message));
+      }
+    }
+    hits.sort((a, b) =>
+      a.created_at === b.created_at
+        ? a.sequence - b.sequence
+        : a.created_at < b.created_at
+          ? 1
+          : -1,
+    );
+    return succeed({
+      query: query.trim(),
+      hits: hits.slice(0, MAX_SEARCH_HITS),
     });
   }
 

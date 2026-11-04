@@ -32,15 +32,25 @@ export function isRpcError(error: unknown, kind?: RpcErrorKind): boolean {
   );
 }
 
-export interface RpcRequest {
-  method: RpcMethod;
-  context?: RequestContext;
+export interface RpcRequest<
+  M extends string = RpcMethod,
+  C extends object = RequestContext,
+> {
+  method: M;
+  context?: C;
   params: Record<string, unknown>;
 }
 
-/** Sends one RPC and returns the raw `result`, or throws {@link RpcError}. */
-export interface RpcTransport {
-  send(request: RpcRequest, signal?: AbortSignal): Promise<unknown>;
+/**
+ * Sends one RPC and returns the raw `result`, or throws {@link RpcError}.
+ * The type parameters let the same envelope serve a second service (the
+ * team service uses its own method names and `TeamContext`).
+ */
+export interface RpcTransport<
+  M extends string = RpcMethod,
+  C extends object = RequestContext,
+> {
+  send(request: RpcRequest<M, C>, signal?: AbortSignal): Promise<unknown>;
 }
 
 export type FetchLike = (
@@ -126,7 +136,11 @@ function kindForStatus(status: number): RpcErrorKind | undefined {
   return undefined;
 }
 
-export class HttpRpcTransport implements RpcTransport {
+export class HttpRpcTransport<
+  M extends string = RpcMethod,
+  C extends object = RequestContext,
+> implements RpcTransport<M, C>
+{
   private readonly fetchImpl: FetchLike;
   private readonly timeoutMs: number;
   private readonly maxBytes: number;
@@ -138,7 +152,10 @@ export class HttpRpcTransport implements RpcTransport {
     this.maxBytes = options.maxResponseBytes ?? 64 * 1024 * 1024;
   }
 
-  async send(request: RpcRequest, signal?: AbortSignal): Promise<unknown> {
+  async send(
+    request: RpcRequest<M, C>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     const token = await this.options.getToken();
     if (!token)
       throw new RpcError("no-token", "No MARS server token is configured.");

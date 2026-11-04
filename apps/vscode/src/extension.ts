@@ -15,13 +15,20 @@ import { buildWebviewHtml } from "./html";
 import type { HostMessage } from "./messages";
 import { openReviewTarget, type ReviewOpenerHost } from "./reviewOpener";
 import { HttpRpcTransport } from "./rpc";
+import { TeamClient } from "./teamChat/client";
 import { TeamChatController } from "./teamChat/controller";
 import type { TeamChatHostMessage } from "./teamChat/messages";
+import { TEAM_STREAM_PATH } from "./teamChat/protocol";
+import { TeamRealtime } from "./teamChat/realtime";
+import { RpcTeamService } from "./teamChat/service";
 
 const TOKEN_KEY = "mars.serverToken";
 const VIEW_ID = "mars.workbench";
 const TEAM_CHAT_VIEW_ID = "mars.teamChat";
 const TEAM_CHAT_FLAG = "teamChat.enabled";
+/** Separate SecretStorage key: the team token never shares the workbench token. */
+const TEAM_TOKEN_KEY = "mars.teamToken";
+const DEFAULT_TEAM_SERVER_URL = "http://127.0.0.1:7332";
 const VIEW_SCHEME = "mars-view";
 const MAX_VIEW_DOCS = 50;
 
@@ -54,6 +61,17 @@ function teamChatEnabled(): boolean {
       .getConfiguration("mars")
       .get<boolean>(TEAM_CHAT_FLAG, false) === true
   );
+}
+
+function teamSettings() {
+  const config = vscode.workspace.getConfiguration("mars");
+  const source = config.get<string>("teamChat.source", "fixture");
+  return {
+    source: source === "service" ? ("service" as const) : ("fixture" as const),
+    serverUrl: config.get<string>("teamServerUrl", DEFAULT_TEAM_SERVER_URL),
+    allowNonLoopback:
+      config.get<boolean>("teamChat.allowNonLoopbackServer", false) === true,
+  };
 }
 
 function settings() {
@@ -302,14 +320,17 @@ class WorkbenchViewProvider
 }
 
 /**
- * Feature-flagged Team Chat prototype (`mars.teamChat.enabled`, default off).
- * Same webview safety model as the workbench view; all data comes from the
- * deterministic fixture inside `@mars/team-chat`, never from a network.
+ * Feature-flagged Team Chat view (`mars.teamChat.enabled`, default off).
+ * Same webview safety model as the workbench view. `mars.teamChat.source`
+ * picks the deterministic fixture (default) or the `@mars/team` service; in
+ * the latter case every request leaves from this extension host with the
+ * `mars.teamToken` secret, and the webview still never touches the network.
  */
 class TeamChatViewProvider
   implements vscode.WebviewViewProvider, vscode.Disposable
 {
   private controller: TeamChatController | undefined;
+  private service: RpcTeamService | undefined;
   private view: vscode.WebviewView | undefined;
 
   constructor(private readonly context: vscode.ExtensionContext) {}
@@ -317,6 +338,75 @@ class TeamChatViewProvider
   dispose(): void {
     this.controller?.dispose();
     this.controller = undefined;
+    this.service = undefined;
+  }
+
+  /** Token cleared or source changed: drop every cached conversation and draft. */
+  async reset(): Promise<void> {
+    this.service?.forgetAll();
+    await this.controller?.reset();
+  }
+
+  /** Re-creates the controller for the current source/endpoint settings. */
+  rebuild(): void {
+    if (this.view) this.resolveWebviewView(this.view);
+  }
+
+  private buildController(
+    post: (message: TeamChatHostMessage) => void,
+  ): TeamChatController {
+    const team = teamSettings();
+    this.service = undefined;
+    if (team.source !== "service")
+      return new TeamChatController({
+        post: (state) => post({ type: "state", state }),
+      });
+    const endpoint = checkServerUrl(
+      team.serverUrl,
+      team.allowNonLoopback,
+      "mars.teamChat.allowNonLoopbackServer",
+    );
+    if (!endpoint.ok) {
+      void vscode.window.showErrorMessage(`MARS Team Chat: ${endpoint.reason}`);
+      return new TeamChatController({
+        post: (state) => post({ type: "state", state }),
+      });
+    }
+    const getToken = () =>
+      Promise.resolve(this.context.secrets.get(TEAM_TOKEN_KEY));
+    const client = new TeamClient(
+      new HttpRpcTransport({
+        rpcUrl: endpoint.rpcUrl,
+        getToken,
+        timeoutMs: settings().timeoutMs,
+      }),
+    );
+    const service = new RpcTeamService(client);
+    this.service = service;
+    let controller: TeamChatController | undefined;
+    const realtime = new TeamRealtime({
+      client,
+      streamUrl: endpoint.rpcUrl.replace(/\/v1\/rpc$/, TEAM_STREAM_PATH),
+      streamSupported: () => service.streamSupported,
+      getToken,
+      onEvent: (event) =>
+        controller?.notifyDelivery(
+          event.conversation_id,
+          event.kind,
+          event.message_seq,
+        ),
+      onStatus: (state) => controller?.notifyConnection(state),
+      onResync: () =>
+        controller?.handleMessage({ type: "ready" }).then(() => undefined),
+    });
+    controller = new TeamChatController({
+      post: (state) => post({ type: "state", state }),
+      service,
+      realtime,
+      viewer: "service",
+      pageSize: 50,
+    });
+    return controller;
   }
 
   post(message: TeamChatHostMessage): void {
@@ -344,11 +434,9 @@ class TeamChatViewProvider
       styleUri: view.webview
         .asWebviewUri(vscode.Uri.joinPath(media, "team-chat.css"))
         .toString(),
-      title: "MARS Team Chat (FIXTURE)",
+      title: "MARS Team Chat",
     });
-    const controller = new TeamChatController({
-      post: (state) => this.post({ type: "state", state }),
-    });
+    const controller = this.buildController((message) => this.post(message));
     this.controller = controller;
     const subscription = view.webview.onDidReceiveMessage(
       (message: unknown) => {
@@ -411,6 +499,23 @@ async function importLocalConnection(
     void vscode.window.showErrorMessage(outcome.reason);
 }
 
+async function promptForTeamToken(
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  const token = await vscode.window.showInputBox({
+    title: "MARS team token",
+    prompt:
+      "Paste your MARS team service bearer token. It is stored only in VS Code Secret Storage, separately from the task server token.",
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: (value) =>
+      /^[\x21-\x7e]{16,4096}$/.test(value)
+        ? undefined
+        : "Token must be 16-4096 visible ASCII characters.",
+  });
+  if (token) await context.secrets.store(TEAM_TOKEN_KEY, token);
+}
+
 async function promptForToken(context: vscode.ExtensionContext): Promise<void> {
   const token = await vscode.window.showInputBox({
     title: "MARS server token",
@@ -471,10 +576,17 @@ export function activate(context: vscode.ExtensionContext): void {
       else
         void vscode.window.showInformationMessage("Select a MARS task first.");
     }),
+    vscode.commands.registerCommand("mars.teamChat.setToken", async () => {
+      await promptForTeamToken(context);
+    }),
+    vscode.commands.registerCommand("mars.teamChat.clearToken", async () => {
+      await context.secrets.delete(TEAM_TOKEN_KEY);
+      await teamChat?.reset();
+    }),
     vscode.commands.registerCommand("mars.teamChat.open", async () => {
       if (!teamChatEnabled()) {
         void vscode.window.showInformationMessage(
-          "Team Chat is a fixture prototype. Enable the mars.teamChat.enabled setting to show it.",
+          "Team Chat is off. Enable the mars.teamChat.enabled setting to show it.",
         );
         return;
       }
@@ -484,10 +596,17 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     context.secrets.onDidChange((event) => {
       if (event.key === TOKEN_KEY) reconnect();
+      if (event.key === TEAM_TOKEN_KEY) teamChat?.rebuild();
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration(`mars.${TEAM_CHAT_FLAG}`))
         registerTeamChat();
+      if (
+        event.affectsConfiguration("mars.teamChat.source") ||
+        event.affectsConfiguration("mars.teamServerUrl") ||
+        event.affectsConfiguration("mars.teamChat.allowNonLoopbackServer")
+      )
+        teamChat?.rebuild();
       if (event.affectsConfiguration("mars")) reconnect();
     }),
   );
