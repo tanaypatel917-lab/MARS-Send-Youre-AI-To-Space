@@ -73,6 +73,17 @@ export const TeamLimitsSchema = z
       .positive()
       .max(TEAM_MAX_PREVIEW_BLOB_BYTES),
     max_search_hits: z.number().int().positive().max(TEAM_MAX_SEARCH_HITS),
+    /** Total bytes of message bodies and reference excerpts one @MARS request may freeze. */
+    max_agent_context_bytes: z
+      .number()
+      .int()
+      .positive()
+      .max(1024 * 1024),
+    max_reference_excerpt_bytes: z
+      .number()
+      .int()
+      .positive()
+      .max(256 * 1024),
   })
   .strict();
 export type TeamLimits = z.infer<typeof TeamLimitsSchema>;
@@ -98,4 +109,6 @@ export const DEFAULT_TEAM_LIMITS: TeamLimits = {
   max_preview_lines: TEAM_MAX_PREVIEW_LINES,
   max_preview_blob_bytes: TEAM_MAX_PREVIEW_BLOB_BYTES,
   max_search_hits: TEAM_MAX_SEARCH_HITS,
+  max_agent_context_bytes: 64 * 1024,
+  max_reference_excerpt_bytes: 16 * 1024,
 };

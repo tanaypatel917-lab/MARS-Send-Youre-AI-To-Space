@@ -168,6 +168,7 @@ describe.skipIf(!GIT)("@mars/team committed code references", () => {
       "0001_initial",
       "0002_task_links",
       "0003_references",
+      "0004_agent_requests",
     ]);
   });
 

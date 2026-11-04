@@ -1,4 +1,8 @@
 import {
+  AGENT_MAX_IDEMPOTENCY_KEY_CHARS,
+  AGENT_MAX_MESSAGES,
+  AgentPreviewSchema,
+  AgentRequestSchema,
   ConversationSchema,
   GitRangeReferenceSchema,
   MessageViewSchema,
@@ -44,6 +48,9 @@ import {
  * Task links (`tasks.link_*`) and result shares (`shares.*`) are the Team Chat
  * PR 6 chat half; the service stores workbench ids and cards only and never
  * calls a workbench itself.
+ *
+ * `agent.publish` is deliberately absent: answers are stored through the
+ * host-only `TeamAgentHostPort`, never by a client.
  */
 const id = z.string().min(1).max(256);
 const seq = z.number().int().nonnegative();
@@ -203,6 +210,21 @@ export const ShareCreateParamsSchema = SharePreviewParamsSchema.extend({
   preview_sha256: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 
+const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
+export const AgentSelectionParamsSchema = z
+  .object({
+    conversation_id: id,
+    message_ids: z.array(id).max(AGENT_MAX_MESSAGES),
+    reference_ids: z.array(id).max(TEAM_MAX_REFERENCES),
+  })
+  .strict();
+export const AgentRequestParamsSchema = AgentSelectionParamsSchema.extend({
+  idempotency_key: z.string().min(1).max(AGENT_MAX_IDEMPOTENCY_KEY_CHARS),
+  audience: z.literal("conversation"),
+  preview_sha256: sha256,
+}).strict();
+const requestId = z.object({ request_id: id }).strict();
+
 export const TeamRpcRequestSchema = z.discriminatedUnion("method", [
   method("team.describe", empty),
   method("conversations.create_dm", z.object({ peer_user_id: id }).strict()),
@@ -230,6 +252,16 @@ export const TeamRpcRequestSchema = z.discriminatedUnion("method", [
   ),
   method("messages.send", SendParamsSchema),
   method("messages.history", HistoryParamsSchema),
+  method(
+    "messages.edit",
+    z
+      .object({
+        message_id: id,
+        body: z.string().min(1).max(TEAM_MAX_BODY_CHARS),
+      })
+      .strict(),
+  ),
+  method("messages.delete", z.object({ message_id: id }).strict()),
   method("events.poll", PollParamsSchema),
   method("reactions.set", ReactionSetParamsSchema),
   method("messages.search", SearchParamsSchema),
@@ -248,7 +280,12 @@ export const TeamRpcRequestSchema = z.discriminatedUnion("method", [
   method("tasks.link_inspect", z.object({ link_id: id }).strict()),
   method("shares.preview", SharePreviewParamsSchema),
   method("shares.create", ShareCreateParamsSchema),
+  method("agent.preview", AgentSelectionParamsSchema),
+  method("agent.request", AgentRequestParamsSchema),
+  method("agent.cancel", requestId),
+  method("agent.inspect", requestId),
 ]);
+export { AgentPreviewSchema, AgentRequestSchema };
 export type TeamRpcRequest = z.infer<typeof TeamRpcRequestSchema>;
 export type TeamRpcMethod = TeamRpcRequest["method"];
 
@@ -282,6 +319,7 @@ export const TeamDescribeResultSchema = z
         search: z.boolean(),
         /** True when the host wired a `@mars/code-refs` registry into the server. */
         references: z.boolean(),
+        agent: z.boolean(),
       })
       .strict(),
   })

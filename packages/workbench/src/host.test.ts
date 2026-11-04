@@ -301,6 +301,7 @@ async function fixture() {
         });
         return {
           sessionId: "upstream",
+          toolNames: [],
           journalSnapshot: () => ({ session_id: "upstream", entries: [] }),
           modelId: options.modelId ?? "fixture/free",
           journalPath:
