@@ -130,6 +130,7 @@ async function fixture() {
   let prepareCalls = 0;
   const prepareIds: string[] = [];
   let failPrepare = false;
+  let failReopen = false;
   let restoreCalls = 0;
   let diffFiles: DiffResult["files"] = [];
   const writes: string[] = [];
@@ -150,6 +151,7 @@ async function fixture() {
       return { ...ref };
     },
     async reopen() {
+      if (failReopen) throw new Error("fixture: reopen failed");
       return { ...ref };
     },
     async cwd() {
@@ -428,6 +430,9 @@ async function fixture() {
     textOnlyRegistry,
     set failPrepare(value: boolean) {
       failPrepare = value;
+    },
+    set failReopen(value: boolean) {
+      failReopen = value;
     },
     routedRegistry,
     get prepareCalls() {
@@ -3916,7 +3921,7 @@ test("verification: a required check that times out or whose verifier fails is i
     "Required check timed out after 50 ms: slow.txt",
     "Verifier unavailable for broken.txt",
   ]);
-  expect(view.record?.candidate.revision).toBe("r1");
+  expect(view.record?.candidate?.revision).toBe("r1");
   expect(view.candidate?.revision).toBe("r1");
 
   // A matching read passes; a candidate that moves after the pass is stale.
@@ -3945,7 +3950,7 @@ test("verification: a required check that times out or whose verifier fails is i
   f.revision = "r2";
   const stale = await api.verification(context(), "task-2");
   expect(stale.state).toBe("stale");
-  expect(stale.record?.candidate.revision).toBe("r1");
+  expect(stale.record?.candidate?.revision).toBe("r1");
   expect(stale.candidate?.revision).toBe("r2");
 
   await api.create(context(), task("task-3"));
@@ -3961,5 +3966,79 @@ test("verification: a required check that times out or whose verifier fails is i
     record: null,
     records: [],
   });
+  await api.close();
+});
+
+test("verification: launch metadata keeps only check digests, so large accepted checks survive pause and resume", async () => {
+  const f = await fixture();
+  const api = await f.makeHost();
+  const big = (fill: string) => fill.repeat(60_000);
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: true, execute: false },
+    required_checks: [
+      { kind: "file_content", path: "a.txt", content: big("a") },
+      { kind: "file_content", path: "b.txt", content: big("b") },
+    ],
+  });
+  const launchFile = join(f.sessions[0]?.options.stateDir ?? "", "launch.json");
+  const launch = JSON.parse(await readFile(launchFile, "utf8"));
+  expect(Buffer.byteLength(JSON.stringify(launch))).toBeLessThan(128 * 1024);
+  expect(launch.required_checks).toEqual([
+    {
+      kind: "file_content",
+      path: "a.txt",
+      sha256: createHash("sha256").update(big("a")).digest("hex"),
+    },
+    {
+      kind: "file_content",
+      path: "b.txt",
+      sha256: createHash("sha256").update(big("b")).digest("hex"),
+    },
+  ]);
+  required(f.sessions[0]).finish("paused");
+  await required(f.sessions[0]).disposed;
+  const paused = await api.inspect(context(), "task");
+  expect(paused.status).toBe("paused");
+  await api.resume(context(), "task", paused.revision);
+  f.readArtifacts.set("a.txt", null);
+  f.readArtifacts.set("b.txt", null);
+  required(f.sessions[1]).finish("completed");
+  await required(f.sessions[1]).disposed;
+  expect((await api.inspect(context(), "task")).status).toBe("completed");
+  const view = await api.verification(context(), "task");
+  expect(view.state).toBe("failed");
+  expect(view.reasons).toEqual([
+    "Required file missing: a.txt",
+    "Required file missing: b.txt",
+  ]);
+  await api.close();
+});
+
+test("verification: a candidate that cannot be acquired records an inconclusive verdict instead of silence", async () => {
+  const f = await fixture();
+  const api = await f.makeHost();
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: true, execute: false },
+    required_checks: [{ kind: "file_content", path: "x.txt", content: "x" }],
+  });
+  f.failReopen = true;
+  required(f.sessions[0]).finish("completed");
+  await required(f.sessions[0]).disposed;
+  expect((await api.inspect(context(), "task")).status).toBe("completed");
+  f.failReopen = false;
+  const view = await api.verification(context(), "task");
+  expect(view.state).toBe("inconclusive");
+  expect(view.record?.candidate).toBeNull();
+  expect(view.record?.checks).toEqual([]);
+  expect(view.reasons).toEqual([
+    "Candidate revision could not be acquired; required checks did not run",
+  ]);
+  expect(view.candidate?.revision).toBe("r1");
   await api.close();
 });

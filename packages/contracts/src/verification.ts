@@ -98,6 +98,9 @@ export const VERIFICATION_EVIDENCE_OPERATION = "verification.verdict";
  * The persisted verdict for one run against one candidate revision, appended
  * to the task's events as `tool.completed` by `@mars/workbench`. `verified`
  * is true only when every required check passed for exactly `candidate`.
+ * `candidate` is null only when the host could not acquire the candidate
+ * revision at all; such a record is always `inconclusive` and carries no
+ * check results.
  */
 export const VerificationEvidenceRecordSchema = z
   .object({
@@ -106,10 +109,10 @@ export const VerificationEvidenceRecordSchema = z
     run_id: z.string().min(1).max(256),
     task_id: z.string().min(1).max(256),
     task_revision: z.number().int().nonnegative(),
-    candidate: VerificationCandidateSchema,
+    candidate: VerificationCandidateSchema.nullable(),
     verdict: VerificationVerdictSchema,
     verified: z.boolean(),
-    checks: z.array(VerificationCheckResultSchema).min(1).max(64),
+    checks: z.array(VerificationCheckResultSchema).max(64),
     reasons: z.array(z.string().max(1024)).max(64),
     /** Observations about the run that never change the verdict (e.g. a tool call emitted as text). */
     diagnostics: z.array(z.string().max(1024)).max(16),
@@ -120,13 +123,27 @@ export const VerificationEvidenceRecordSchema = z
   .refine(
     (record) =>
       record.verified ===
-      (record.verdict === "passed" &&
+      (record.candidate !== null &&
+        record.verdict === "passed" &&
+        record.checks.length >= 1 &&
         record.checks.every((check) => check.status === "passed")),
     {
       message:
-        "verified is exactly: verdict passed with every required check passed",
+        "verified is exactly: a candidate, verdict passed and every required check passed",
     },
-  );
+  )
+  .refine(
+    (record) =>
+      record.candidate !== null ||
+      (record.verdict === "inconclusive" && record.checks.length === 0),
+    {
+      message:
+        "A record without a candidate is an inconclusive verdict with no check results",
+    },
+  )
+  .refine((record) => record.candidate === null || record.checks.length >= 1, {
+    message: "A verdict on a candidate needs at least one check result",
+  });
 export type VerificationEvidenceRecord = z.infer<
   typeof VerificationEvidenceRecordSchema
 >;
@@ -181,12 +198,14 @@ export function verificationStateFor(
 ): VerificationPresentation {
   if (records.length === 0)
     return { state: "unverified", record: null, reasons: [] };
-  const matching =
-    candidateRevision === null
-      ? []
-      : records.filter(
-          (record) => record.candidate.revision === candidateRevision,
-        );
+  // A record without a candidate (the host could not acquire the revision)
+  // is an inconclusive verdict about whatever candidate is presented.
+  const matching = records.filter(
+    (record) =>
+      record.candidate === null ||
+      (candidateRevision !== null &&
+        record.candidate.revision === candidateRevision),
+  );
   const current = latest(matching);
   if (!current) {
     const previous = latest(records);
@@ -196,7 +215,7 @@ export function verificationStateFor(
       reasons: [
         candidateRevision === null
           ? "No candidate revision is available to compare with the recorded verdict"
-          : `Recorded verdict is bound to revision ${previous?.candidate.revision ?? "unknown"}, not the presented candidate`,
+          : `Recorded verdict is bound to revision ${previous?.candidate?.revision ?? "unknown"}, not the presented candidate`,
       ],
     };
   }

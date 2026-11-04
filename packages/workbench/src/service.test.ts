@@ -499,7 +499,7 @@ test("acceptance: textual tool call + missing file -> run completed, verificatio
     observed_sha256: null,
   });
   expect(view.record?.diagnostics[0]).toContain("<function=mars_write>");
-  expect(view.candidate?.revision).toBe(view.record?.candidate.revision);
+  expect(view.candidate?.revision).toBe(view.record?.candidate?.revision);
   // The launch metadata, not the model, carries the required check.
   const metadata = JSON.parse(
     await readFile(join(launch.stateDir, "launch.json"), "utf8"),
@@ -562,7 +562,7 @@ test("acceptance: structured write with correct content -> completed and verifie
   expect(finished.status).toBe("completed");
   const view = await client.verification(created.task_id);
   console.log(
-    `[acceptance:passed] status=${finished.status} verification=${view.state} candidate=${view.candidate?.revision} bound=${view.record?.candidate.revision}`,
+    `[acceptance:passed] status=${finished.status} verification=${view.state} candidate=${view.candidate?.revision} bound=${view.record?.candidate?.revision}`,
   );
   expect(view.state).toBe("verified");
   expect(view.record?.verified).toBe(true);
@@ -653,12 +653,12 @@ test("acceptance: candidate changes after a pass -> the pass stays bound to the 
   expect(restored.revision).not.toBe(passedRevision);
   const stale = await first.client.verification(created.task_id);
   console.log(
-    `[acceptance:stale] verification=${stale.state} candidate=${stale.candidate?.revision} pass_bound_to=${stale.record?.candidate.revision}`,
+    `[acceptance:stale] verification=${stale.state} candidate=${stale.candidate?.revision} pass_bound_to=${stale.record?.candidate?.revision}`,
   );
   expect(stale.state).toBe("stale");
   expect(stale.candidate?.revision).toBe(restored.revision);
   expect(stale.record?.verified).toBe(true);
-  expect(stale.record?.candidate.revision).toBe(passedRevision);
+  expect(stale.record?.candidate?.revision).toBe(passedRevision);
   expect(stale.records).toHaveLength(1);
   await first.service.close();
 

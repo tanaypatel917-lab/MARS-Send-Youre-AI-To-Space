@@ -98,7 +98,7 @@ function verificationBadge(view: VerificationView): VerificationBadge {
     state: presentation.state,
     label: VERIFICATION_STATE_LABEL[presentation.state],
     candidate: view.candidate?.revision ?? null,
-    bound: presentation.record?.candidate.revision ?? null,
+    bound: presentation.record?.candidate?.revision ?? null,
     verdict: presentation.record?.verdict ?? null,
     reasons: presentation.reasons,
     diagnostics: presentation.record?.diagnostics ?? [],
@@ -1086,6 +1086,14 @@ export class WorkbenchController {
       `Workspace ${restored.workspace_id} restored to checkpoint ${checkpointId}.`,
     );
     await this.reloadSelected();
+    // The candidate changed: a verdict shown for the old revision is no
+    // longer about what the user is looking at, so ask the host again.
+    const after = this.current(taskId);
+    if (after && TERMINAL.includes(after.task.status)) {
+      after.verification = null;
+      this.emit();
+      await this.loadVerification(taskId);
+    }
   }
 }
 

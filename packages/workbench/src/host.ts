@@ -175,6 +175,26 @@ function expectedDigest(check: RequiredCheck): string {
   );
 }
 
+/**
+ * Launch metadata keeps only the digest form of each required check, so a
+ * start that was accepted can never write a launch the host refuses to read
+ * (expected bytes travel in the request, not in `launch.json`).
+ */
+function freezeRequiredChecks(
+  checks: readonly RequiredCheck[],
+): RequiredCheck[] {
+  return checks.map((check) =>
+    RequiredCheckSchema.parse({
+      kind: check.kind,
+      path: check.path,
+      sha256: expectedDigest(check),
+      ...(check.timeout_ms !== undefined
+        ? { timeout_ms: check.timeout_ms }
+        : {}),
+    }),
+  );
+}
+
 class CheckTimeoutError extends Error {
   constructor(readonly timeoutMs: number) {
     super(`Required check timed out after ${timeoutMs} ms`);
@@ -1182,13 +1202,48 @@ export async function createWorkbenchHost(
     const diagnostics: string[] = [];
     const textual = textualToolCallDiagnostic(content);
     if (textual) diagnostics.push(textual);
+    const persist = async (record: VerificationEvidenceRecord) => {
+      await options.store
+        .appendEvent(context, task.task_id, {
+          event_type: "tool.completed",
+          producer: "@mars/workbench",
+          run_id: runtime.sessionId,
+          versions: [{ component: "@mars/workbench", revision: "0.0.1" }],
+          payload: record,
+        })
+        .catch(() => undefined);
+      return record;
+    };
     let candidate: WorkspaceRef;
     try {
       candidate = WorkspaceRefSchema.parse(
-        await options.workspace.reopen(context, task.task_id),
+        await withTimeout(
+          options.workspace.reopen(context, task.task_id),
+          REQUIRED_CHECK_DEFAULT_TIMEOUT_MS,
+        ),
       );
     } catch {
-      return null;
+      // No candidate can be named, so no check can run; the failure is still
+      // evidence (inconclusive), never silence that reads as "unverified".
+      return persist(
+        VerificationEvidenceRecordSchema.parse({
+          schema_version: 1,
+          operation: VERIFICATION_EVIDENCE_OPERATION,
+          run_id: runtime.sessionId,
+          task_id: task.task_id,
+          task_revision: task.revision,
+          candidate: null,
+          verdict: "inconclusive",
+          verified: false,
+          checks: [],
+          reasons: [
+            "Candidate revision could not be acquired; required checks did not run",
+          ],
+          diagnostics,
+          duration_ms: Math.max(0, Date.now() - startedAt),
+          recorded_at: new Date().toISOString(),
+        } satisfies VerificationEvidenceRecord),
+      );
     }
     const checks: VerificationCheckResult[] = [];
     const reasons: string[] = [];
@@ -1257,33 +1312,25 @@ export async function createWorkbenchHost(
       verdict = "inconclusive";
       reasons.push("Candidate revision could not be confirmed after checks");
     }
-    const record = VerificationEvidenceRecordSchema.parse({
-      schema_version: 1,
-      operation: VERIFICATION_EVIDENCE_OPERATION,
-      run_id: runtime.sessionId,
-      task_id: task.task_id,
-      task_revision: task.revision,
-      candidate,
-      verdict,
-      verified:
-        verdict === "passed" &&
-        checks.every((check) => check.status === "passed"),
-      checks,
-      reasons,
-      diagnostics,
-      duration_ms: Math.max(0, Date.now() - startedAt),
-      recorded_at: new Date().toISOString(),
-    } satisfies VerificationEvidenceRecord);
-    await options.store
-      .appendEvent(context, task.task_id, {
-        event_type: "tool.completed",
-        producer: "@mars/workbench",
+    return persist(
+      VerificationEvidenceRecordSchema.parse({
+        schema_version: 1,
+        operation: VERIFICATION_EVIDENCE_OPERATION,
         run_id: runtime.sessionId,
-        versions: [{ component: "@mars/workbench", revision: "0.0.1" }],
-        payload: record,
-      })
-      .catch(() => undefined);
-    return record;
+        task_id: task.task_id,
+        task_revision: task.revision,
+        candidate,
+        verdict,
+        verified:
+          verdict === "passed" &&
+          checks.every((check) => check.status === "passed"),
+        checks,
+        reasons,
+        diagnostics,
+        duration_ms: Math.max(0, Date.now() - startedAt),
+        recorded_at: new Date().toISOString(),
+      } satisfies VerificationEvidenceRecord),
+    );
   };
   const verificationRecords = async (
     context: RequestContext,
@@ -2341,7 +2388,7 @@ export async function createWorkbenchHost(
           ...(routing ? { routing } : {}),
           ...(collaboration ? { collaboration } : {}),
           ...(params.required_checks?.length
-            ? { required_checks: params.required_checks }
+            ? { required_checks: freezeRequiredChecks(params.required_checks) }
             : {}),
         });
         await options.store.bindUpstreamSession(
@@ -2631,13 +2678,20 @@ export async function createWorkbenchHost(
         candidate?.revision ?? null,
         records,
       );
-      return {
+      const view: VerificationView = {
         candidate,
         state: presentation.state,
         record: presentation.record,
         reasons: presentation.reasons,
         records,
       };
+      // Same guard as artifacts and diffs: nothing host-private leaves the
+      // service, even when a client named such a path in a required check.
+      assertPublicBytes(
+        new TextEncoder().encode(JSON.stringify(view)),
+        await privatePatterns(context, taskId),
+      );
+      return view;
     },
     async restore(context, taskId, checkpointId, revision) {
       checkContext(context);

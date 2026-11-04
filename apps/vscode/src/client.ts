@@ -191,7 +191,7 @@ export class MarsClient {
         (record) =>
           record.run_id === view.record?.run_id &&
           record.recorded_at === view.record?.recorded_at &&
-          record.candidate.revision === view.record?.candidate.revision,
+          record.candidate?.revision === view.record?.candidate?.revision,
       );
       if (!known) throw invalid("verification record");
     }

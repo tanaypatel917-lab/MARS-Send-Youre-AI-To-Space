@@ -78,6 +78,35 @@ describe("verificationStateFor", () => {
     expect(verificationStateFor("r1", [pass, failed]).state).toBe("verified");
     expect(verificationStateFor("r1", [failed, pass]).state).toBe("verified");
   });
+  test("a verdict without a candidate is inconclusive for any presented candidate", () => {
+    const unbound = VerificationEvidenceRecordSchema.parse({
+      ...record("r1", "inconclusive", "2026-11-03T00:00:02Z", [
+        "Candidate revision could not be acquired",
+      ]),
+      candidate: null,
+      checks: [],
+    });
+    expect(verificationStateFor("r9", [unbound])).toMatchObject({
+      state: "inconclusive",
+      reasons: ["Candidate revision could not be acquired"],
+    });
+    expect(verificationStateFor(null, [unbound]).state).toBe("inconclusive");
+    const pass = record("r9", "passed", "2026-11-03T00:00:05Z");
+    expect(verificationStateFor("r9", [unbound, pass]).state).toBe("verified");
+    expect(
+      VerificationEvidenceRecordSchema.safeParse({
+        ...unbound,
+        verdict: "passed",
+        verified: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      VerificationEvidenceRecordSchema.safeParse({
+        ...record("r1", "failed", "2026-11-03T00:00:02Z", ["x"]),
+        candidate: null,
+      }).success,
+    ).toBe(false);
+  });
   test("verified must agree with the verdict and checks", () => {
     const pass = record("r1", "passed", "2026-11-03T00:00:00Z");
     expect(

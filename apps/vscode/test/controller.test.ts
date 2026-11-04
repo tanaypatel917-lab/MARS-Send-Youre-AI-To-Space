@@ -759,6 +759,47 @@ describe("verification badge", () => {
     ctx.controller.dispose();
   });
 
+  test("restoring a checkpoint drops the Verified badge and re-asks the host, which reports stale", async () => {
+    const ctx = setup();
+    ctx.server.tasks.set("task-1", makeTask({ status: "completed" }));
+    let candidate = "rev-2";
+    ctx.server.on("tasks.verification", () => ({
+      candidate: { ...workspace, revision: candidate },
+      state: candidate === "rev-2" ? "verified" : "stale",
+      record: verdict("rev-2"),
+      reasons: [],
+      records: [verdict("rev-2")],
+    }));
+    ctx.server.on("tasks.restore", () => {
+      candidate = "rev-1";
+      return { ...workspace, revision: "rev-1" };
+    });
+    await ctx.controller.handleMessage({ type: "ready" });
+    await ctx.controller.handleMessage({
+      type: "selectTask",
+      taskId: "task-1",
+    });
+    await ctx.controller.handleMessage({
+      type: "createCheckpoint",
+      taskId: "task-1",
+    });
+    expect(ctx.last().selected?.verification?.state).toBe("verified");
+    await ctx.controller.handleMessage({
+      type: "restoreCheckpoint",
+      taskId: "task-1",
+      checkpointId: "cp-1",
+    });
+    expect(
+      ctx.server.methods().filter((m) => m === "tasks.verification"),
+    ).toHaveLength(2);
+    expect(ctx.last().selected?.verification).toMatchObject({
+      state: "stale",
+      candidate: "rev-1",
+      bound: "rev-2",
+    });
+    ctx.controller.dispose();
+  });
+
   test("a running task shows no badge and asks for the verdict once it completes", async () => {
     const ctx = await connectedWithTask("running");
     expect(ctx.last().selected?.verification).toBeNull();
