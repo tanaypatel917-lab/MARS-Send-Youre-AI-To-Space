@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Fixture evidence only: drives `mars session --fixture demo` in a 120×40 tmux pane under asciinema.
-# No workbench, no model, no network. Writes session-fixture.cast and per-step ANSI captures.
+# No workbench, no model, no network. Writes 2026-11-04-cli-fixture-run.cast and per-step ANSI captures.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 out=documentation/evidence/ui
-rm -f "$out"/session-fixture.cast "$out"/step-*.ans
+rm -f "$out"/2026-11-04-cli-fixture-run.cast "$out"/step-*.ans
 tmux kill-session -t mars-ui-evidence 2>/dev/null || true
 tmux new-session -d -s mars-ui-evidence -x 120 -y 40 \
-  "COLORTERM=truecolor TERM=xterm-256color asciinema rec -q --cols 120 --rows 40 -c 'bun apps/cli/src/main.ts session --fixture demo' $out/session-fixture.cast"
+  "COLORTERM=truecolor TERM=xterm-256color asciinema rec -q --cols 120 --rows 40 -c 'bun apps/cli/src/main.ts session --fixture demo' $out/2026-11-04-cli-fixture-run.cast"
 step() { sleep "${2:-1}"; tmux capture-pane -e -p -t mars-ui-evidence >"$out/step-$1.ans"; }
 keys() { tmux send-keys -t mars-ui-evidence "$@"; sleep 0.3; }
 close() { keys Escape; sleep 0.5; }

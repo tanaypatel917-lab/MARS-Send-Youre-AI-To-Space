@@ -1,0 +1,40 @@
+MARS  ·  mars-fixture  ·  task-fixture  ·  completed  ·  read-only session                                              
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+╭─ Proposals · read only ──────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 1 pending vault proposal(s)  ·  last export never                                                                    │
+│   operator command (not run): mars vault import --accept                                                             │
+│   it checks each proposal's revision fence and threat scan before writing                                            │
+│                                                                                                                      │
+│ memory proposal  ·  project  ·  revision mem-r3  ·  pending                                                          │
+│   - Use npm for scripts.                                                                                             │
+│   + Use bun for scripts; npm is not installed.                                                                       │
+│   operator command (not run): decided by the operator outside this client                                            │
+│                                                                                                                      │
+│ skill proposal  ·  project  ·  revision skill-r2  ·  pending                                                         │
+│   - Run tests with bun test.                                                                                         │
+│   + Run tests with bun test apps packages scripts.                                                                   │
+│   operator command (not run): mars skills …                                                                          │
+│                                                                                                                      │
+│ gepa proposal  ·  project  ·  revision prompt-r4  ·  pending                                                         │
+│   - Answer briefly.                                                                                                  │
+│   + Answer briefly; cite files.                                                                                      │
+│   operator command (not run): decided by the operator outside this client                                            │
+│                                                                                                                      │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────── Esc close ─╯
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ read-only session · type / for commands · start, steer and cancel are not in this client yet                          
+read-only session  model free  tokens 41.2k in  ·  6.1k out  cost $0.00 / $0.50  children 1                             

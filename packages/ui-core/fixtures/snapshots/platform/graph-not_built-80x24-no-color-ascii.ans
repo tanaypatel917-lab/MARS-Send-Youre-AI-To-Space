@@ -1,0 +1,24 @@
++- Knowledge graph · read only ------------------------------------------------+
+| state          not_built                                                     |
+| revision       —                                                             |
+| built at       —                                                             |
+| isolation      —                                                             |
+|                                                                              |
+| no graph has been built for this workspace                                   |
+|                                                                              |
+| Last graph.build in this task                                                |
+|   ready · r12 · graph built: 412 nodes, 1,280 edges · model requests 0       |
+|                                                                              |
+| graph.query in this task                                                     |
+|   ready · r12 · render.ts is imported by main.ts and serve.ts                |
++------------------------------------------------------------------ Esc close -+
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+--------------------------------------------------------------------------------
+> read-only session · type / for commands · start, steer and cancel are not in …
+read-only session  model free  tokens 41.2k in  -  6.1k out  cost $0.00 / $0.50 

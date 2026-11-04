@@ -5,7 +5,7 @@
 workbench, no model, no OmniRoute and no network in these runs; nothing here shows a live task or a
 real terminal emulator other than tmux.
 
-- `session-fixture.cast` — asciinema v2 recording of a 120×40 tmux pane (`record.sh` reproduces it).
+- `2026-11-04-cli-fixture-run.cast` — asciinema v2 recording of a 120×40 tmux pane (`record.sh` reproduces it).
 - `step-*.ans` — `tmux capture-pane -e` frames at each step; `step-*.png` are those frames rendered
   to HTML by `ans2html.py` and captured with headless Chrome (fonts may lack a few glyphs such as `⎿`).
 

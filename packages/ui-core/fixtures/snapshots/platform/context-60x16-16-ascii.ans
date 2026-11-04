@@ -1,0 +1,16 @@
+[34m+- Context · read only ------------------------------------+[39m
+[34m|[39m [37mcumulative usage 41,200 in · 6,100 out · $ —[39m             [34m|[39m
+[34m|[39m [90mthe host records cumulative usage only; per-row tokens [0m… [34m|[39m
+[34m|[39m                                                          [34m|[39m
+[34m|[39m [37msource                               tokens    $       [0m… [34m|[39m
+[34m|[39m system prompt                        3,200     $ —     … [34m|[39m
+[34m|[39m repository instructions AGENTS.md    1,800     $ —     … [34m|[39m
+[34m|[39m tools                                9,400     $ —     … [34m|[39m
+[34m|[39m pinned apps/cli/src/render.ts        1,100     $ —     … [34m|[39m
+[34m|[39m research finding-1                   —         $ —     … [34m|[39m
+[34m|[39m transcript                           —         $ —     … [34m|[39m
+[34m+---------------------------------- Esc close  -  +5 more -+[39m
+                                                            
+[30m------------------------------------------------------------[39m
+[34m>[39m [90mread-only session · type / for commands · start, steer an[0m…
+[34mread-only session[39m  model [32mfree[39m  [37mtokens 41.2k in  -  6.1k out[39m 

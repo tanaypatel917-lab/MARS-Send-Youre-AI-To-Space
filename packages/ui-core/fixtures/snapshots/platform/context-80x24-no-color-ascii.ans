@@ -1,0 +1,24 @@
++- Context · read only --------------------------------------------------------+
+| cumulative usage 41,200 in · 6,100 out · $ —                                 |
+| the host records cumulative usage only; per-row tokens may be unknown        |
+|                                                                              |
+| source                               tokens    $        remedy               |
+| system prompt                        3,200     $ —      set by the workbench |
+| repository instructions AGENTS.md    1,800     $ —      edit AGENTS.md       |
+| tools                                9,400     $ —      set by the workbench |
+| pinned apps/cli/src/render.ts        1,100     $ —      unpin the file in a… |
+| research finding-1                   —         $ —      start a /new task w… |
+| transcript                           —         $ —      /new with a summary  |
+|                                                                              |
+| Pinned                                                                       |
+|   apps/cli/src/render.ts 4,210 B [untrusted]                                 |
+|                                                                              |
+| compaction is off · /new with a summary                                      |
++------------------------------------------------------------------ Esc close -+
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+--------------------------------------------------------------------------------
+> read-only session · type / for commands · start, steer and cancel are not in …
+read-only session  model free  tokens 41.2k in  -  6.1k out  cost $0.00 / $0.50 

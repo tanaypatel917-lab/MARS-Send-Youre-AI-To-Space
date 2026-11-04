@@ -1,0 +1,24 @@
+[38;5;39m╭─ Context · read only ────────────────────────────────────────────────────────╮[39m
+[38;5;39m│[39m [38;5;248mcumulative usage 41,200 in · 6,100 out · $ —[39m                                 [38;5;39m│[39m
+[38;5;39m│[39m [38;5;243mthe host records cumulative usage only; per-row tokens may be unknown[39m        [38;5;39m│[39m
+[38;5;39m│[39m                                                                              [38;5;39m│[39m
+[38;5;39m│[39m [38;5;248msource                               tokens    $        remedy[39m               [38;5;39m│[39m
+[38;5;39m│[39m system prompt                        3,200     $ —      set by the workbench [38;5;39m│[39m
+[38;5;39m│[39m repository instructions AGENTS.md    1,800     $ —      edit AGENTS.md       [38;5;39m│[39m
+[38;5;39m│[39m tools                                9,400     $ —      set by the workbench [38;5;39m│[39m
+[38;5;39m│[39m pinned apps/cli/src/render.ts        1,100     $ —      unpin the file in a… [38;5;39m│[39m
+[38;5;39m│[39m research finding-1                   —         $ —      start a /new task w… [38;5;39m│[39m
+[38;5;39m│[39m transcript                           —         $ —      /new with a summary  [38;5;39m│[39m
+[38;5;39m│[39m                                                                              [38;5;39m│[39m
+[38;5;39m│[39m [1mPinned[22m                                                                       [38;5;39m│[39m
+[38;5;39m│[39m   apps/cli/src/render.ts [38;5;243m4,210 B[39m [38;5;180m[untrusted][39m                                 [38;5;39m│[39m
+[38;5;39m│[39m                                                                              [38;5;39m│[39m
+[38;5;39m│[39m [38;5;248mcompaction is off · /new with a summary[39m                                      [38;5;39m│[39m
+[38;5;39m╰────────────────────────────────────────────────────────────────── Esc close ─╯[39m
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+[38;5;235m────────────────────────────────────────────────────────────────────────────────[39m
+[38;5;39m❯[39m [38;5;243mread-only session · type / for commands · start, steer and cancel are not in [0m…
+[38;5;39mread-only session[39m  model [38;5;48mfree[39m  [38;5;248mtokens 41.2k in  ·  6.1k out[39m  [38;5;180mcost $0.00 / $0.50[39m 

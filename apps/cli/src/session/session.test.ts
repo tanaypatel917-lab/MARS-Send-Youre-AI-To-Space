@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { WorkbenchGraphSchema } from "@mars/contracts";
 import { processOutput, renderTerminal } from "@mars/output-format";
 import type { ColourDepth, GlyphPreset } from "@mars/ui-core";
 import { SLASH_COMMANDS } from "@mars/ui-core";
 import { FIXTURE_ROOT, FIXTURE_TASK_ID } from "@mars/ui-core/testing";
 import { DescribeResultSchema, InspectResultSchema } from "@mars/workbench";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
+import { z } from "zod";
 import { SessionView } from "./app";
 import { READ_METHODS, SessionClient } from "./client";
 import { SessionController } from "./controller";
@@ -200,6 +202,8 @@ const DEPTHS: ColourDepth[] = ["truecolor", "256", "16", "none"];
 const GLYPHS: GlyphPreset[] = ["unicode", "ascii"];
 const SNAPSHOTS = join(FIXTURE_ROOT, "snapshots");
 const update = process.env.MARS_UPDATE_SNAPSHOTS === "1";
+const GraphStatesSchema = z.array(WorkbenchGraphSchema);
+type WorkbenchGraph = z.infer<typeof WorkbenchGraphSchema>;
 
 describe("§8 snapshot matrix", () => {
   test("every size × colour depth × glyph preset is byte-exact", async () => {
@@ -222,6 +226,51 @@ describe("§8 snapshot matrix", () => {
           expect(bytes).toBe(readFileSync(file, "utf8"));
           if (depth === "none")
             expect(bytes).not.toContain(String.fromCharCode(27));
+        }
+      }
+  });
+
+  test("§8.1 #11 platform views and every graph state at the same matrix", async () => {
+    const dir = join(SNAPSHOTS, "platform");
+    if (update) mkdirSync(dir, { recursive: true });
+    const states = GraphStatesSchema.parse(
+      JSON.parse(
+        readFileSync(
+          join(FIXTURE_ROOT, "platform", "graph-states.json"),
+          "utf8",
+        ),
+      ),
+    );
+    const views: [string, string, WorkbenchGraph | null][] = [
+      ["graph", "/graph", null],
+      ["proposals", "/proposals", null],
+      ["model", "/model", null],
+      ["context", "/context", null],
+      ...states.map((graph): [string, string, WorkbenchGraph] => [
+        `graph-${graph.state}`,
+        "/graph",
+        graph,
+      ]),
+    ];
+    for (const depth of DEPTHS)
+      for (const preset of GLYPHS) {
+        const { controller, state } = await session(
+          {},
+          { depth, glyphs: preset },
+        );
+        for (const [label, command, graph] of views) {
+          if (graph) state.describeExtras = { ...state.describeExtras, graph };
+          await controller.command(command);
+          for (const [width, height] of SIZES) {
+            const frame = renderScreen(state, width, height);
+            expect(frame.length).toBe(height);
+            const name = `${label}-${width}x${height}-${depth === "none" ? "no-color" : depth}-${preset}.ans`;
+            const bytes = `${frame.join("\n")}\n`;
+            const file = join(dir, name);
+            if (update || !existsSync(file)) writeFileSync(file, bytes);
+            expect(bytes).toBe(readFileSync(file, "utf8"));
+          }
+          state.overlay = null;
         }
       }
   });
