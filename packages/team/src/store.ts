@@ -2388,7 +2388,8 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
               );
             const message = messageRecord(storedMessageRow(record.message_id));
             // A card must stay readable through messages.history even once the
-            // overlay marks it stale; the whole page budget is the ceiling.
+            // overlay marks it stale and every reaction key is in use: the
+            // history item (`MessageView`) at its ceiling is what is measured.
             const worstCase = {
               ...message,
               payload: message.payload && {
@@ -2396,6 +2397,19 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
                 stale: true,
                 superseded_by: message.message_id,
               },
+              reactions: Array.from(
+                { length: limits.max_reactions_per_message },
+                () => ({
+                  emoji: "\uffff".repeat(TEAM_MAX_EMOJI_CHARS),
+                  count: Number.MAX_SAFE_INTEGER,
+                  reacted: true,
+                }),
+              ),
+              reply_excerpt:
+                message.reply_to === null
+                  ? null
+                  : "\uffff".repeat(TEAM_MAX_EXCERPT_CHARS),
+              reply_restricted: false,
             };
             if (
               Buffer.byteLength(JSON.stringify(worstCase)) + ENVELOPE_BYTES >
