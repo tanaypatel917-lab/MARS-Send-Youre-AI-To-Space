@@ -160,6 +160,77 @@ describe("MarsClient", () => {
     expect(await kind(client.diff("task-1"))).toBe("protocol");
   });
 
+  test("create sends launch_key only when asked and rejects malformed keys locally", async () => {
+    const { client, server } = await connected();
+    const task = makeTask();
+    await client.create(task);
+    expect(server.calls.at(-1)?.params).toEqual({ task });
+    await client.create(task, { launchKey: "chat-msg_42" });
+    expect(server.calls.at(-1)?.params).toEqual({
+      task,
+      launch_key: "chat-msg_42",
+    });
+    const calls = server.calls.length;
+    expect(await kind(client.create(task, { launchKey: "bad key" }))).toBe(
+      "protocol",
+    );
+    expect(
+      await kind(client.create(task, { launchKey: "k".repeat(129) })),
+    ).toBe("protocol");
+    expect(server.calls.length).toBe(calls);
+  });
+
+  test("diff accepts an additive digest only when it is a sha256 hex string", async () => {
+    const { client, server } = await connected();
+    expect(await client.diff("task-1")).toEqual({ files: [] });
+    server.on("tasks.diff", () => ({ files: [], digest: "f".repeat(64) }));
+    expect((await client.diff("task-1")).digest).toBe("f".repeat(64));
+    server.on("tasks.diff", () => ({ files: [], digest: "not-a-digest" }));
+    expect(await kind(client.diff("task-1"))).toBe("protocol");
+  });
+
+  test("evidence validates workspace identity, verified/verdict pairing and duplicate events", async () => {
+    const { client, server } = await connected();
+    const record = {
+      event_id: "ev-1",
+      verdict: "pass" as const,
+      assurance: "isolated_local" as const,
+      verified: true,
+      contract_id: "c1",
+      recorded_at: "2026-01-01T00:00:00.000Z",
+      workspace_id: checkpoint.workspace.workspace_id,
+      workspace_revision: "rev-1",
+      diff_sha256: "a".repeat(64),
+      stale: false,
+    };
+    const result = {
+      task_revision: 3,
+      workspace: checkpoint.workspace,
+      diff_sha256: "a".repeat(64),
+      verify_records: [record],
+    };
+    server.on("tasks.evidence", () => result);
+    expect(await client.evidence("task-1")).toEqual(result);
+    expect(server.calls.at(-1)?.params).toEqual({ task_id: "task-1" });
+    server.on("tasks.evidence", () => ({
+      ...result,
+      verify_records: [{ ...record, verdict: "fail" }],
+    }));
+    expect(await kind(client.evidence("task-1"))).toBe("protocol");
+    server.on("tasks.evidence", () => ({
+      ...result,
+      verify_records: [record, record],
+    }));
+    expect(await kind(client.evidence("task-1"))).toBe("protocol");
+    server.on("tasks.evidence", () => ({
+      ...result,
+      workspace: { ...checkpoint.workspace, workspace_id: "ws-other" },
+    }));
+    expect(await kind(client.evidence("task-1"))).toBe("protocol");
+    server.on("tasks.evidence", () => ({ ...result, extra: true }));
+    expect(await kind(client.evidence("task-1"))).toBe("protocol");
+  });
+
   test("checkpoint/restore validate workspace identity and send exact params", async () => {
     const { client, server } = await connected();
     expect(await client.checkpoint("task-1")).toEqual(checkpoint);

@@ -88,6 +88,20 @@ export const TaskStatusSchema = z.enum([
 ]);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 
+/**
+ * Where a task was launched from, as opaque ids only (never bodies or
+ * excerpts). Optional and additive: a task without provenance is a local one.
+ */
+export const TaskProvenanceSchema = z
+  .object({
+    source: z.literal("team_chat"),
+    conversation_id: id.max(256),
+    message_ids: z.array(id.max(256)).max(50),
+    reference_ids: z.array(id.max(256)).max(16),
+  })
+  .strict();
+export type TaskProvenance = z.infer<typeof TaskProvenanceSchema>;
+
 export const TaskSchema = z
   .object({
     schema_version: z.literal(SCHEMA_VERSION),
@@ -101,6 +115,7 @@ export const TaskSchema = z
     status: TaskStatusSchema,
     specialist_revision: revision.nullable(),
     artifacts: z.array(ArtifactRefSchema),
+    provenance: TaskProvenanceSchema.optional(),
   })
   .strict();
 export type Task = z.infer<typeof TaskSchema>;

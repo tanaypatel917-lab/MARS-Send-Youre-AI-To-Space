@@ -34,6 +34,7 @@
       "dependencies": {
         "@mars/contracts": "workspace:*",
         "@mars/output-format": "workspace:*",
+        "@mars/team-chat": "workspace:*",
         "zod": "3.25.76",
       },
       "devDependencies": {
@@ -247,6 +248,13 @@
         "zod": "3.25.76",
       },
     },
+    "packages/team-chat": {
+      "name": "@mars/team-chat",
+      "version": "0.0.1",
+      "dependencies": {
+        "zod": "3.25.76",
+      },
+    },
     "packages/watch": {
       "name": "@mars/watch",
       "version": "0.0.1",
@@ -423,6 +431,8 @@
     "@mars/tasks": ["@mars/tasks@workspace:packages/tasks"],
 
     "@mars/team": ["@mars/team@workspace:packages/team"],
+
+    "@mars/team-chat": ["@mars/team-chat@workspace:packages/team-chat"],
 
     "@mars/vscode-client": ["@mars/vscode-client@workspace:apps/vscode"],
 

@@ -3,6 +3,7 @@ export interface HtmlOptions {
   nonce: string;
   scriptUri: string;
   styleUri: string;
+  title?: string;
 }
 
 const ATTR = /[&<>"']/g;
@@ -47,7 +48,7 @@ export function buildWebviewHtml(options: HtmlOptions): string {
 <meta http-equiv="Content-Security-Policy" content="${escapeAttribute(csp)}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${escapeAttribute(options.styleUri)}">
-<title>MARS Tasks</title>
+<title>${escapeAttribute(options.title ?? "MARS Tasks")}</title>
 </head>
 <body>
 <main id="app" aria-live="polite"></main>
