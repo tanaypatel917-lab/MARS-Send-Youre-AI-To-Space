@@ -4,6 +4,7 @@ import type {
   ArtifactData,
   BridgeErrorKind,
   BridgeResult,
+  JournalResult,
   ReadMethod,
 } from "../shared/methods";
 import { READ_METHODS } from "../shared/methods";
@@ -26,6 +27,7 @@ const ERROR_MESSAGES: Record<BridgeErrorKind, string> = {
   timeout: "Workbench did not respond in time.",
   unavailable: "Workbench is unavailable.",
   protocol: "Workbench returned an invalid response.",
+  invalid_response: "Workbench returned an invalid response.",
   hash_mismatch: "Workbench artifact failed integrity verification.",
 };
 
@@ -184,6 +186,12 @@ export function createBridge(options: BridgeOptions): Bridge {
             )
               return failure("protocol");
             ids.add(event.event_id);
+          }
+        } else if (method === "tasks.journal") {
+          const requestedIds = new Set(requestParams.entry_ids as string[]);
+          for (const entry of result as JournalResult) {
+            if (!requestedIds.has(entry.entry_id))
+              return failure("invalid_response");
           }
         } else if (method === "tasks.artifact") {
           const ref = requestParams.artifact as ArtifactRef;

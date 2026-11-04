@@ -9,7 +9,20 @@
     "capabilities": {
       "execute": false,
       "checkpoint": false
-    }
+    },
+    "policy": {
+      "allow_paid": false,
+      "allow_screen_capture": false
+    },
+    "providers": [
+      {
+        "id": "fixture-local",
+        "kind": "local",
+        "health": "available",
+        "catalog_stale": false,
+        "policy_owner": "mars"
+      }
+    ]
   },
   "tasks": [
     {
@@ -155,6 +168,7 @@
   ],
   "details": {
     "fixture-running": {
+      "model_tier": "free",
       "verification": {
         "candidate": null,
         "state": "unverified",
@@ -205,6 +219,7 @@
       ]
     },
     "fixture-completed-verified": {
+      "model_tier": "local",
       "verification": {
         "candidate": {
           "workspace_id": "fixture-workspace",
@@ -335,6 +350,7 @@
       ]
     },
     "fixture-completed-unverified": {
+      "model_tier": null,
       "verification": {
         "candidate": {
           "workspace_id": "fixture-workspace",

@@ -128,6 +128,7 @@ const ERROR_MESSAGES: Record<BridgeErrorKind, string> = {
   timeout: "Workbench did not respond in time.",
   unavailable: "Workbench is unavailable.",
   protocol: "Workbench returned an invalid response.",
+  invalid_response: "Workbench returned an invalid response.",
   hash_mismatch: "Workbench artifact failed integrity verification.",
 };
 

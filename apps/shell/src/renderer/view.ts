@@ -8,6 +8,7 @@ import type {
   DescribeResult,
   DiffResult,
   EvidenceResult,
+  InspectResult,
 } from "../shared/methods";
 import { h, type ShellDocument, type ShellElement } from "./dom";
 import { STATUS_LABEL, VERIFICATION_LABEL } from "./strings";
@@ -23,7 +24,7 @@ export type ArtifactView = {
 export type ShellState = {
   describe?: DescribeResult;
   tasks: Task[];
-  selectedTask?: Task;
+  selectedTask?: InspectResult;
   verification?: VerificationView;
   events: EventEnvelope[];
   diff?: DiffResult;
@@ -122,7 +123,7 @@ function taskList(
 
 function taskHeader(
   doc: ShellDocument,
-  task: Task | undefined,
+  task: InspectResult | undefined,
   verification: VerificationView | undefined,
 ): ShellElement {
   if (!task)
@@ -163,7 +164,7 @@ function taskHeader(
         doc,
         "span",
         { class: "meta-value" },
-        "Model · tier: not reported by host",
+        `Model · tier: ${task.model_tier ?? "not reported by host"}`,
       ),
       h(
         doc,
@@ -435,7 +436,7 @@ export function renderShell(
         doc,
         "p",
         {},
-        `Transcript projection arrives with @mars/ui-core. ${state.events.length >= 1000 ? "1000+" : state.events.length} task events available via tasks.events (content not rendered in this build).`,
+        `Transcript projection arrives with @mars/ui-core. ${state.events.length >= 1000 ? "1000+" : state.events.length} task event${state.events.length === 1 ? "" : "s"} available via tasks.events (content not rendered in this build).`,
       ),
     ),
   );

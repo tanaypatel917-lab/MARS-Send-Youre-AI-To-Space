@@ -1,5 +1,5 @@
 import { expect, mock, test } from "bun:test";
-import { RpcRequestSchema } from "@mars/workbench";
+import { RpcRequestSchema } from "../../../packages/workbench/src/protocol";
 import { createBridge } from "../src/main/bridge";
 import { registerBridge } from "../src/main/ipc";
 import {
@@ -32,8 +32,16 @@ test("the preload exposes exactly the frozen read-only bridge", async () => {
   expect(Object.isFrozen(api)).toBe(true);
   expect(Object.keys(api).sort()).toEqual([...READ_METHODS].sort());
   await api["tasks.list"]?.({});
+  await api["tasks.journal"]?.({ task_id: "fixture", entry_ids: [] });
   expect(calls).toEqual([
     [BRIDGE_CHANNEL, { method: "tasks.list", params: {} }],
+    [
+      BRIDGE_CHANNEL,
+      {
+        method: "tasks.journal",
+        params: { task_id: "fixture", entry_ids: [] },
+      },
+    ],
   ]);
   mock.restore();
 });
@@ -61,7 +69,6 @@ test("only whitelisted methods reach transport and IPC refuses untrusted senders
     "tasks.resume",
     "tasks.checkpoint",
     "tasks.restore",
-    "tasks.journal",
     "__proto__",
     "constructor",
     12,
@@ -118,5 +125,6 @@ test("read method names are server RPC discriminators", () => {
     "tasks.diff",
     "tasks.verification",
     "tasks.evidence",
+    "tasks.journal",
   ]);
 });

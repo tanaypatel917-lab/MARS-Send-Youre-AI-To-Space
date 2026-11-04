@@ -54,6 +54,7 @@ test("fixture task views match deterministic snapshots and keep untrusted text i
     expect(
       calls.every((call) => READ_METHODS.includes(call.method as never)),
     ).toBe(true);
+    expect(calls.some((call) => call.method === "tasks.journal")).toBe(false);
   }
 });
 

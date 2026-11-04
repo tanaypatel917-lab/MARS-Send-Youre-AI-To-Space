@@ -63,6 +63,12 @@ test("renderer sources and built bundle have no unsafe DOM, code, or network pri
         expect(specifier === "electron" || specifier.startsWith("node:")).toBe(
           true,
         );
+      if (file === "main.cjs") {
+        expect(source).not.toContain("bun:sqlite");
+        expect(new TextEncoder().encode(source).byteLength).toBeLessThan(
+          2 * 1024 * 1024,
+        );
+      }
     }
   } finally {
     await rm(output, { recursive: true, force: true });

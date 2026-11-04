@@ -11,6 +11,7 @@ import type {
   DescribeResult,
   DiffResult,
   EvidenceResult,
+  InspectResult,
   ShellBridge,
 } from "../src/shared/methods";
 import { READ_METHODS } from "../src/shared/methods";
@@ -25,6 +26,7 @@ export type FixtureData = {
       diff: DiffResult;
       evidence: EvidenceResult;
       events: EventEnvelope[];
+      model_tier?: InspectResult["model_tier"];
     }
   >;
   artifact_data: Record<string, ArtifactData>;
@@ -59,7 +61,20 @@ export function fakeBridge(
         result = data.tasks;
         break;
       case "tasks.inspect":
-        result = data.tasks.find((task) => task.task_id === request.task_id);
+        {
+          const task = data.tasks.find(
+            (candidate) => candidate.task_id === request.task_id,
+          );
+          const detail = data.details[request.task_id ?? ""];
+          result = task
+            ? {
+                ...task,
+                ...("model_tier" in (detail ?? {})
+                  ? { model_tier: detail?.model_tier }
+                  : {}),
+              }
+            : undefined;
+        }
         break;
       case "tasks.events":
         result = data.details[request.task_id ?? ""]?.events ?? [];

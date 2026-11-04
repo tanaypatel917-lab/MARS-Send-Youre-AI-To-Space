@@ -20,6 +20,7 @@ import type {
   DescribeResult,
   DiffResult,
   EvidenceResult,
+  InspectResult,
 } from "../src/shared/methods";
 
 type FixtureDetail = {
@@ -27,6 +28,7 @@ type FixtureDetail = {
   diff: DiffResult;
   evidence: EvidenceResult;
   events: EventEnvelope[];
+  model_tier?: InspectResult["model_tier"];
 };
 
 export type FixtureData = {
@@ -55,7 +57,22 @@ export function createFixtureOperations(
     async inspect(_context: RequestContext, taskId: string) {
       const task = data.tasks.find((candidate) => candidate.task_id === taskId);
       if (!task) throw new WorkbenchError("not_found");
-      return task;
+      const detail = operation(taskId);
+      return {
+        ...task,
+        ...("model_tier" in detail ? { model_tier: detail.model_tier } : {}),
+      };
+    },
+    async journal(
+      _context: RequestContext,
+      _taskId: string,
+      entryIds: string[],
+    ) {
+      return entryIds.map((entry_id) => ({
+        entry_id,
+        kind: "user" as const,
+        text: "Fixture journal entry.",
+      }));
     },
     async events(_context: RequestContext, taskId: string) {
       return operation(taskId).events;
