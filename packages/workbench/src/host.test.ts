@@ -135,6 +135,7 @@ async function fixture() {
   const writes: string[] = [];
   const removes: string[] = [];
   const readArtifacts = new Map<string, ArtifactRef | string | null>();
+  const readHangs = new Set<string>();
   const writeModes = new Map<string, boolean | undefined>();
   const artifact = await store.artifacts.put(
     context(),
@@ -155,6 +156,7 @@ async function fixture() {
       return join(root, "isolated");
     },
     async read(_context, _workspace, path) {
+      if (readHangs.has(path)) await new Promise<never>(() => {});
       const override = readArtifacts.get(path);
       if (override === null) {
         throw Object.assign(new Error(`fixture: ${path} not found`), {
@@ -434,6 +436,7 @@ async function fixture() {
     writes,
     removes,
     readArtifacts,
+    readHangs,
     writeModes,
     prepareIds,
     set diffFiles(files: DiffResult["files"]) {
@@ -3880,5 +3883,83 @@ test("mars_apply_patch is declared only with read and write approval and writes,
   writeOnly.finish("completed");
   await writeOnly.disposed;
   expect(seen).toHaveLength(1);
+  await api.close();
+});
+
+test("verification: a required check that times out or whose verifier fails is inconclusive, never passed; no checks means unverified", async () => {
+  const f = await fixture();
+  const api = await f.makeHost();
+  f.readHangs.add("slow.txt");
+  f.readArtifacts.set("broken.txt", "io_error");
+  await api.create(context(), task());
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: true, write: true, execute: false },
+    required_checks: [
+      { kind: "file_content", path: "slow.txt", content: "x", timeout_ms: 50 },
+      { kind: "file_content", path: "broken.txt", content: "x" },
+    ],
+  });
+  required(f.sessions[0]).finish("completed");
+  await required(f.sessions[0]).disposed;
+  expect((await api.inspect(context(), "task")).status).toBe("completed");
+  const view = await api.verification(context(), "task");
+  expect(view.state).toBe("inconclusive");
+  expect(view.record?.verdict).toBe("inconclusive");
+  expect(view.record?.verified).toBe(false);
+  expect(view.record?.checks.map((check) => check.status)).toEqual([
+    "inconclusive",
+    "inconclusive",
+  ]);
+  expect(view.reasons).toEqual([
+    "Required check timed out after 50 ms: slow.txt",
+    "Verifier unavailable for broken.txt",
+  ]);
+  expect(view.record?.candidate.revision).toBe("r1");
+  expect(view.candidate?.revision).toBe("r1");
+
+  // A matching read passes; a candidate that moves after the pass is stale.
+  f.readHangs.clear();
+  f.readArtifacts.clear();
+  f.readArtifacts.set(
+    "ok.txt",
+    await f.store.artifacts.put(
+      context(),
+      new TextEncoder().encode("checkpoint"),
+      "application/octet-stream",
+    ),
+  );
+  await api.create(context(), task("task-2"));
+  await api.start(context(), {
+    task_id: "task-2",
+    expected_revision: 0,
+    approvals: { read: true, write: true, execute: false },
+    required_checks: [
+      { kind: "file_content", path: "ok.txt", content: "checkpoint" },
+    ],
+  });
+  required(f.sessions[1]).finish("completed");
+  await required(f.sessions[1]).disposed;
+  expect((await api.verification(context(), "task-2")).state).toBe("verified");
+  f.revision = "r2";
+  const stale = await api.verification(context(), "task-2");
+  expect(stale.state).toBe("stale");
+  expect(stale.record?.candidate.revision).toBe("r1");
+  expect(stale.candidate?.revision).toBe("r2");
+
+  await api.create(context(), task("task-3"));
+  await api.start(context(), {
+    task_id: "task-3",
+    expected_revision: 0,
+    approvals: { read: true, write: true, execute: false },
+  });
+  required(f.sessions[2]).finish("completed");
+  await required(f.sessions[2]).disposed;
+  expect(await api.verification(context(), "task-3")).toMatchObject({
+    state: "unverified",
+    record: null,
+    records: [],
+  });
   await api.close();
 });

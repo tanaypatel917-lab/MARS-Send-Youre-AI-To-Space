@@ -16,9 +16,10 @@ tasks.create / tasks.list / tasks.inspect
 tasks.start / tasks.resume / tasks.steer / tasks.cancel
 tasks.events / tasks.artifact / tasks.diff
 tasks.checkpoint / tasks.restore
+tasks.verification
 ```
 
-Except for `workbench.describe`, every request includes a strict `context` with `schema_version: 1`, the exact host-bound owner/project/workspace scope, and a bounded `request_id`. `tasks.create` only accepts a fresh pending task with revision 0, no artifacts, and no specialist revision. Start accepts explicit read/write/execute approvals and an optional model ID; expected revisions protect start, resume, and restore operations. The host adapter must enforce the same scope, resource ownership, revisions, budgets, idempotency, and permissions at the service layer. Metadata approval is not an OS sandbox.
+Except for `workbench.describe`, every request includes a strict `context` with `schema_version: 1`, the exact host-bound owner/project/workspace scope, and a bounded `request_id`. `tasks.create` only accepts a fresh pending task with revision 0, no artifacts, and no specialist revision. Start accepts explicit read/write/execute approvals, an optional model ID and optional `required_checks` (host-run file checks frozen at launch; see `documentation/EXECUTION_WORKBENCH.md`); `tasks.verification` returns the host-owned verdict for the task's current candidate revision (`VerificationViewSchema`); expected revisions protect start, resume, and restore operations. The host adapter must enforce the same scope, resource ownership, revisions, budgets, idempotency, and permissions at the service layer. Metadata approval is not an OS sandbox.
 
 Responses have exactly one `result` key; steering/cancellation return `null`. Failures have one `error` with `code` and a fixed `message`. Task-store revision/transition conflicts become HTTP 409 with `code: "conflict"`, which the existing VS Code client recognizes. The transport validates result schemas, task/event identities and scopes, and duplicate list/cursor entries before serialization. Artifact ownership, bytes/hash verification, workspace identity, and safe diff generation remain mandatory responsibilities of the host adapter; the IDE client independently checks received artifacts and paths.
 
