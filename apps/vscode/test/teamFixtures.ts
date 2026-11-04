@@ -72,6 +72,7 @@ export class FakeTeamServer {
     reactions: boolean;
     search: boolean;
   };
+  readonly pageLimit: number;
   /** When true, `messages.send` commits but the acknowledgement is lost (transport error). */
   dropNextAck = false;
   /** When true, every call fails as unavailable (server down). */
