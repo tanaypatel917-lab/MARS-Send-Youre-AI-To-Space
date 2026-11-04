@@ -465,6 +465,27 @@ describe("repository map provider", () => {
     expect(recovered.stats.files_parsed).toBe(1);
   });
 
+  test("revalidation reports a vanished or moved root as a revision change", async () => {
+    const root = await tempRoot();
+    const other = await tempRoot();
+    await putFile(root, "a.ts", "export function alpha() { return 1; }\n");
+    for (const laterRoot of [join(root, "missing-root"), other]) {
+      let resolveCalls = 0;
+      const provider = createRepositoryMapProvider({
+        resolveRoot: async () => {
+          resolveCalls += 1;
+          return {
+            root: resolveCalls === 1 ? root : laterRoot,
+            revision: workspace.revision,
+          };
+        },
+      });
+      await expect(
+        provider.map(context, { workspace, max_output_tokens: 500 }),
+      ).rejects.toBeInstanceOf(ContextRevisionError);
+    }
+  });
+
   test("token count and returned tree never disclose local paths", async () => {
     const root = await tempRoot();
     await putFile(
