@@ -16,7 +16,11 @@ import {
 } from "@mars/ui-core/testing";
 import { type RpcBody, SessionRpcError, type SessionTransport } from "./client";
 
+/** `mars serve` pages `tasks.events` at most 100 events at a time. */
+const HOST_EVENT_PAGE = 100;
+
 /** Fixture evidence only: an in-process stand-in for the workbench RPC. No model, no network. */
+
 export interface FixtureOptions {
   journal?: "available" | "unavailable";
   large?: boolean;
@@ -179,7 +183,7 @@ export function fixtureWorkbench(
         const after = own.findIndex(
           (event) => event.event_id === params.after_event_id,
         );
-        return own.slice(after + 1, after + 1 + 1_000);
+        return own.slice(after + 1, after + 1 + HOST_EVENT_PAGE);
       }
       case "tasks.artifact": {
         const artifact = artifacts.get(

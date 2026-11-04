@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { projectTranscript } from "./projection";
+import { pendingJournalIds, projectTranscript } from "./projection";
 import {
   EVENT_TYPES,
   FIXTURE_ROOT,
@@ -54,6 +54,27 @@ describe("projectTranscript (criterion 1)", () => {
       ),
     ).toBe(false);
     expect(projection.journal).toBe("unavailable");
+  });
+
+  test("not_found and non-text journal rows fall back to turn markers", () => {
+    const events = loadEventFixture("execution.observed");
+    const ids = pendingJournalIds(events, new Set());
+    expect(ids.length).toBeGreaterThan(0);
+    for (const kind of ["not_found", "tool_result", "compaction"] as const) {
+      const projection = projectTranscript({
+        task: fixtureTask(),
+        events,
+        journal: {
+          status: "available",
+          entries: new Map(
+            ids.map((entry_id) => [entry_id, { entry_id, kind, text: "" }]),
+          ),
+        },
+      });
+      expect(projection.entries.filter((e) => e.kind === "turn")).toHaveLength(
+        4,
+      );
+    }
   });
 
   test("journal reply resolves thinking and assistant text; unmatched ids stay turns", () => {

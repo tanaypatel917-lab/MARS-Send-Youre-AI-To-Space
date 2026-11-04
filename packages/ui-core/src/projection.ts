@@ -433,7 +433,13 @@ export function projectTranscript(
         if (journal.status === "available")
           for (const entryId of entryIds) {
             const entry = journal.entries.get(entryId);
-            if (entry) resolved.push(entry);
+            if (
+              entry &&
+              !seenEntries.has(entry.entry_id) &&
+              (THINKING_KINDS.has(entry.kind) ||
+                (TEXT_KINDS.has(entry.kind) && entry.text.trim()))
+            )
+              resolved.push(entry);
           }
         if (resolved.length === 0) {
           entries.push({
@@ -448,7 +454,6 @@ export function projectTranscript(
           break;
         }
         for (const entry of resolved) {
-          if (seenEntries.has(entry.entry_id)) continue;
           seenEntries.add(entry.entry_id);
           const entryProvenance = {
             source: `tasks.journal ${entry.entry_id}`,
@@ -462,7 +467,7 @@ export function projectTranscript(
               tokens: entry.usage?.output_tokens ?? null,
               provenance: entryProvenance,
             });
-          else if (TEXT_KINDS.has(entry.kind) && entry.text.trim())
+          else
             entries.push({
               kind: "assistant",
               id: `journal:${entry.entry_id}`,

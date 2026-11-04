@@ -73,6 +73,7 @@ export class SessionController {
     this.state.expanded.clear();
     this.state.scroll = 0;
     this.state.focusedId = null;
+    this.limit = LIMITS.renderedEntries;
     const inspected = await this.client.inspect(taskId);
     this.state.task = inspected.task;
     this.state.inspect = inspected.extras;
@@ -90,8 +91,8 @@ export class SessionController {
         task.task_id,
         this.events.at(-1)?.event.event_id,
       );
+      if (!page.length) break;
       this.events.push(...page.map((event) => ({ event })));
-      if (page.length < 1_000) break;
     }
     const tailStart = Math.max(0, this.events.length - LIMITS.payloadTail);
     for (let index = tailStart; index < this.events.length; index++) {
@@ -121,7 +122,8 @@ export class SessionController {
           break;
         }
         for (const entry of reply.entries)
-          this.journalEntries.set(entry.entry_id, entry);
+          if (entry.kind !== "not_found" || task.status !== "running")
+            this.journalEntries.set(entry.entry_id, entry);
         this.journal = { status: "available", entries: this.journalEntries };
       }
     }
