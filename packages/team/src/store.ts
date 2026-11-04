@@ -542,8 +542,9 @@ export function canonicalJson(value: unknown): string {
 }
 
 /**
- * Idempotency results stored before migration 0004 lack `kind` and
- * `agent_request_id` on messages; replays add the values those rows had.
+ * Idempotency results stored before migration 0004 lack `agent_request_id`
+ * (and, for plain sends, `kind`) on messages; replays add the values those
+ * rows had.
  */
 function upgradeLegacyResult(operation: string, raw: unknown): unknown {
   if (
@@ -551,13 +552,17 @@ function upgradeLegacyResult(operation: string, raw: unknown): unknown {
     raw !== null &&
     typeof raw === "object" &&
     !Array.isArray(raw) &&
-    !("kind" in raw)
-  )
+    !("agent_request_id" in raw)
+  ) {
+    // Pre-0004 cards already carried `kind: "result_card"`; plain sends had no kind.
+    const legacy = raw as { kind?: unknown };
     return {
       ...raw,
-      kind: operation === "shares.create" ? "result_card" : "user",
+      kind:
+        legacy.kind ?? (operation === "shares.create" ? "result_card" : "user"),
       agent_request_id: null,
     };
+  }
   return raw;
 }
 

@@ -73,18 +73,22 @@ function downgrade(rootDir: string) {
         "UPDATE messages SET record_sha256 = ? WHERE message_id = ?",
       ).run(sha256(canonicalJson(legacy)), row.message_id);
     }
+    // Pre-0004 `messages.send` results had neither field; `shares.create`
+    // results already carried `kind: "result_card"` but no `agent_request_id`.
     for (const row of db
-      .query<{ rowid: number; result_json: string }, []>(
-        "SELECT rowid, result_json FROM idempotency WHERE operation IN ('messages.send', 'shares.create')",
+      .query<{ rowid: number; operation: string; result_json: string }, []>(
+        "SELECT rowid, operation, result_json FROM idempotency WHERE operation IN ('messages.send', 'shares.create')",
       )
       .all()) {
       const {
-        kind: _kind,
+        kind,
         agent_request_id: _agent,
         ...rest
       } = JSON.parse(row.result_json) as Record<string, unknown>;
       db.query("UPDATE idempotency SET result_json = ? WHERE rowid = ?").run(
-        canonicalJson(rest),
+        canonicalJson(
+          row.operation === "shares.create" ? { ...rest, kind } : rest,
+        ),
         row.rowid,
       );
     }
@@ -209,6 +213,13 @@ test("a pre-0004 store keeps its result cards, replays old sends and verifies ol
       body: "please fix the uploader",
     });
     expect(replay).toEqual(after[0] as MessageView);
+    expect(upgraded.history(bob, { conversation_id: id })).toHaveLength(2);
+    // A retry of the pre-upgrade share replays the card with its payload.
+    const cardReplay = upgraded.shareCreate(alice, "share-1", {
+      ...shareParams,
+      preview_sha256: preview.preview_sha256,
+    } as Parameters<typeof upgraded.shareCreate>[2]);
+    expect(cardReplay).toEqual(after[1] as MessageView);
     expect(upgraded.history(bob, { conversation_id: id })).toHaveLength(2);
     // Old rows can still be edited (digest is recomputed in the new shape) and new sends work.
     const edited = upgraded.editMessage(alice, {
