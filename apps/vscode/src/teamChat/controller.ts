@@ -221,9 +221,33 @@ export class TeamChatController {
 
   /** Called by the realtime source when its connection state changes. */
   notifyConnection(state: TeamConnectionState): Promise<void> {
-    return this.run(() => {
+    return this.run(async () => {
       if (this.connection === state) return;
       this.connection = state;
+      if (state === "live" || state === "polling") {
+        const selected = this.selected;
+        const conversationId = selected?.conversation.conversation_id;
+        const afterSequence = selected?.conversation.last_sequence;
+        await this.refreshInbox();
+        if (
+          conversationId &&
+          afterSequence !== undefined &&
+          this.selected?.conversation.conversation_id === conversationId
+        ) {
+          const summary = this.conversations.find(
+            (conversation) => conversation.conversation_id === conversationId,
+          );
+          if (summary) {
+            this.selected = { ...this.selected, conversation: summary };
+            if (summary.last_sequence > afterSequence)
+              await this.reloadSelectedAfter(
+                conversationId,
+                afterSequence,
+                summary,
+              );
+          }
+        }
+      }
       this.emit();
     });
   }
@@ -557,6 +581,39 @@ export class TeamChatController {
       messages: page.value.messages,
       older_cursor: blocked ? null : page.value.older_cursor,
       older_blocked: blocked,
+    };
+    this.reconcilePending();
+  }
+
+  private async reloadSelectedAfter(
+    conversationId: string,
+    afterSequence: number,
+    summary: ConversationSummary,
+  ): Promise<void> {
+    const result = await this.service.historyAfter?.(
+      this.viewer,
+      conversationId,
+      afterSequence,
+    );
+    if (!result?.ok || result.value.length === 0) {
+      await this.reloadSelected(
+        Math.max(1, summary.last_sequence - afterSequence),
+      );
+      return;
+    }
+    const selected = this.selected;
+    if (selected?.conversation.conversation_id !== conversationId) return;
+    const messages = new Map(
+      selected.messages.map((message) => [message.message_id, message]),
+    );
+    for (const message of result.value)
+      messages.set(message.message_id, message);
+    this.selected = {
+      ...selected,
+      conversation: summary,
+      messages: [...messages.values()]
+        .sort((a, b) => a.sequence - b.sequence)
+        .slice(-this.maxLoaded),
     };
     this.reconcilePending();
   }

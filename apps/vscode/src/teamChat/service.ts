@@ -440,6 +440,34 @@ export class RpcTeamService implements TeamService {
     });
   }
 
+  historyAfter(
+    _viewer: string,
+    conversationId: string,
+    afterSequence: number,
+  ): Promise<TeamResult<MessageView[]>> {
+    return this.guard(conversationId, async () => {
+      await this.identity();
+      const limit = this.client.pageLimit();
+      const messages: ServiceMessage[] = [];
+      let after = afterSequence;
+      for (;;) {
+        const page = await this.client.history(conversationId, {
+          after_seq: after,
+          limit,
+        });
+        if (page.length === 0) break;
+        for (const message of page) this.remember(message);
+        messages.push(...page);
+        if (messages.length > MAX_CACHED_PER_CONVERSATION)
+          messages.splice(0, messages.length - MAX_CACHED_PER_CONVERSATION);
+        const last = page[page.length - 1];
+        if (!last || last.seq <= after) break;
+        after = last.seq;
+      }
+      return messages.map((message) => this.messageView(message));
+    });
+  }
+
   openConversation(
     _viewer: string,
     conversationId: string,

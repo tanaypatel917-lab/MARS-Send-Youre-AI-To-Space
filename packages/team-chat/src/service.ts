@@ -180,6 +180,12 @@ export interface TeamService {
     conversationId: string,
     options?: { before?: string | null; limit?: number },
   ): MaybePromise<TeamResult<ConversationPage>>;
+  /** Re-reads messages strictly after a selected conversation's known sequence. */
+  historyAfter?(
+    viewer: string,
+    conversationId: string,
+    afterSequence: number,
+  ): MaybePromise<TeamResult<MessageView[]>>;
   sendMessage(
     viewer: string,
     input: SendMessageInput,

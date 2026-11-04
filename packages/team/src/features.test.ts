@@ -35,6 +35,38 @@ async function open(
 const messageSeqs = (events: TeamDeliveryEvent[]) =>
   events.filter((e) => e.kind === "message").map((e) => e.message_seq);
 
+test(
+  "an idle SSE stream survives Bun's request timeout and delivers a later event",
+  { timeout: 20_000 },
+  async () => {
+    const f = fixture();
+    fixtures.push(f);
+    const dm = await f.ok<View>("alice", "conversations.create_dm", {
+      peer_user_id: "bob",
+    });
+    const id = dm.conversation.conversation_id;
+    const stream = await open(f, "alice", [
+      { conversation_id: id, after_event_seq: 0 },
+    ]);
+    expect(stream.status).toBe(200);
+
+    await new Promise((resolve) => setTimeout(resolve, 11_500));
+
+    const rpc = await f.rpc("alice", "conversations.list", {});
+    expect(rpc.status).toBe(200);
+    const sent = await f.ok<Message>("bob", "messages.send", {
+      conversation_id: id,
+      client_message_id: "after-idle",
+      body: "still connected",
+    });
+    await stream.waitFor(() => messageSeqs(stream.events).includes(sent.seq));
+
+    expect(messageSeqs(stream.events)).toContain(sent.seq);
+    expect(stream.ended).toBe(false);
+    expect(stream.closes).toEqual([]);
+  },
+);
+
 test("(a) a lost acknowledgement plus a reconnecting reader yields exactly one message in the same order on both clients", async () => {
   const f = start();
   const dm = await f.ok<View>("alice", "conversations.create_dm", {

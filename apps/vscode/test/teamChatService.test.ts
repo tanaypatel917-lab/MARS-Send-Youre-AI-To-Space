@@ -591,6 +591,101 @@ describe("TeamRealtime", () => {
     await realtime?.settled();
   });
 
+  test("a reconnect refreshes the selected conversation through history without duplicates", async () => {
+    let disconnect: (() => void) | undefined;
+    let releaseReconnect: (() => void) | undefined;
+    const reconnectGate = new Promise<void>((resolve) => {
+      releaseReconnect = resolve;
+    });
+    let fetchCount = 0;
+    const fetch: StreamFetchLike = async (_url, init) => {
+      fetchCount += 1;
+      if (fetchCount === 2) await reconnectGate;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (fetchCount === 1)
+            disconnect = () =>
+              controller.error(new Error("simulated disconnect"));
+          init.signal.addEventListener(
+            "abort",
+            () => {
+              try {
+                controller.close();
+              } catch {
+                // The first stream may already have errored.
+              }
+            },
+            { once: true },
+          );
+          if (fetchCount > 2) controller.close();
+        },
+      });
+      return {
+        status: 200,
+        headers: {
+          get: (name) => (name === "content-type" ? "text/event-stream" : null),
+        },
+        body: stream,
+      };
+    };
+    const { controller, last, server, dm, realtime, statuses } = setup({
+      realtime: true,
+      streamUrl: "http://127.0.0.1:7332/v1/stream",
+      fetch,
+      capabilities: { stream: true, reactions: false, search: false },
+    });
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    await until(() => fetchCount === 1 && statuses.includes("live"));
+    const opensBeforeReconnect = server.calls.filter(
+      (call) =>
+        call.method === "conversations.open" &&
+        call.params.conversation_id === dm,
+    ).length;
+    disconnect?.();
+    await until(() => statuses.includes("retrying") && fetchCount >= 2);
+    const committed = server.post(GRACE, dm, "Committed during disconnect.");
+    releaseReconnect?.();
+    await until(
+      () =>
+        last().selected?.messages.some(
+          (message) => message.message_id === committed.message_id,
+        ) === true,
+    );
+
+    const selected = last().selected;
+    expect(selected?.conversation.conversation_id).toBe(dm);
+    expect(selected?.messages.map((message) => message.sequence)).toEqual([
+      1, 2, 3, 4,
+    ]);
+    expect(
+      selected?.messages.filter(
+        (message) => message.message_id === committed.message_id,
+      ),
+    ).toHaveLength(1);
+    expect(
+      server.calls.filter(
+        (call) =>
+          call.method === "messages.history" &&
+          call.params.conversation_id === dm &&
+          call.params.after_seq === 3,
+      ),
+    ).not.toHaveLength(0);
+    expect(
+      server.calls.filter(
+        (call) =>
+          call.method === "conversations.open" &&
+          call.params.conversation_id === dm,
+      ),
+    ).toHaveLength(opensBeforeReconnect);
+    realtime?.stop();
+    controller.dispose();
+    await realtime?.settled();
+  });
+
   test("parses only data lines and drops malformed events", () => {
     expect(parseSseBlock(": comment")).toBeNull();
     expect(parseSseBlock('data: {"nope": 1}')).toBeNull();

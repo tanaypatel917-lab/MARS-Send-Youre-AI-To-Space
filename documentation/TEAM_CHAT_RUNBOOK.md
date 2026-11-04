@@ -43,6 +43,8 @@ mars team serve --state /private/mars-team --port 7332 --team team-local \
   started by this command (follow-up).
 - Stop with `SIGTERM`: open streams receive `event: close` and the process exits
   143 after closing the store.
+- `/v1/stream` disables Bun's request idle timeout; stream heartbeats remain
+  15 seconds by default.
 - Structured log lines (`{"log":"team","op","id","method","code","status","ms"}`)
   go to stdout after the startup line (`--quiet` silences them). `id` is a
   server counter, never the client's `request_id`.
