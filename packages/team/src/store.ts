@@ -224,10 +224,12 @@ export const TEAM_MIGRATIONS: ReadonlyArray<{ id: string; sql: string }> = [
     sql: `
       ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'user' CHECK (kind IN ('user', 'agent', 'result_card'));
       ALTER TABLE messages ADD COLUMN agent_request_id TEXT;
+      UPDATE messages SET kind = 'result_card' WHERE message_id IN (SELECT message_id FROM result_shares);
       CREATE TABLE agent_requests (
         request_id TEXT PRIMARY KEY, team_id TEXT NOT NULL,
         conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id),
         requester_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, params_sha256 TEXT NOT NULL,
+        anchor_seq INTEGER NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled', 'restricted')),
         cancel_requested INTEGER NOT NULL DEFAULT 0,
         input_json TEXT NOT NULL, input_sha256 TEXT NOT NULL,
@@ -539,6 +541,26 @@ export function canonicalJson(value: unknown): string {
     .join(",")}}`;
 }
 
+/**
+ * Idempotency results stored before migration 0004 lack `kind` and
+ * `agent_request_id` on messages; replays add the values those rows had.
+ */
+function upgradeLegacyResult(operation: string, raw: unknown): unknown {
+  if (
+    (operation === "messages.send" || operation === "shares.create") &&
+    raw !== null &&
+    typeof raw === "object" &&
+    !Array.isArray(raw) &&
+    !("kind" in raw)
+  )
+    return {
+      ...raw,
+      kind: operation === "shares.create" ? "result_card" : "user",
+      agent_request_id: null,
+    };
+  return raw;
+}
+
 export function dmKey(userA: string, userB: string): string {
   return sha256(canonicalJson([userA, userB].sort()));
 }
@@ -601,6 +623,7 @@ interface AgentRequestRow {
   params_sha256: string;
   status: string;
   cancel_requested: number;
+  anchor_seq: number;
   input_json: string;
   input_sha256: string;
   record_json: string;
@@ -899,11 +922,11 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
       kind: row.kind,
       agent_request_id: row.agent_request_id,
     };
-    // Rows written before migration 0003 were digested without `kind`.
+    // Rows written before migration 0004 were digested without `kind` and
+    // `agent_request_id` (user text and result cards alike).
     const intact =
       sha256(canonicalJson(record)) === row.record_sha256 ||
-      (row.kind === "user" &&
-        row.agent_request_id === null &&
+      (row.agent_request_id === null &&
         sha256(canonicalJson(legacy)) === row.record_sha256);
     if (!intact)
       throw new TeamError("corrupt_record", "Stored message is invalid");
@@ -1374,7 +1397,9 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     const match = previous.find((row) => row.input_sha256 === inputHash);
     if (match) {
       try {
-        return schema.parse(JSON.parse(match.result_json));
+        return schema.parse(
+          upgradeLegacyResult(operation, JSON.parse(match.result_json)),
+        );
       } catch {
         throw new TeamError("corrupt_record", "Corrupt idempotency result");
       }
@@ -1796,8 +1821,15 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     const row = agentRow(requestId);
     if (!row || row.team_id !== actor.team_id) throw notFound();
     if (row.requester_id !== actor.user_id) {
+      // Only participants who could see the selected messages may see the
+      // request: a later joiner (`joined_seq` at or past the anchor) cannot.
       const participant = participantRow(row.conversation_id, actor.user_id);
-      if (!participant || participant.state !== "active") throw notFound();
+      if (
+        !participant ||
+        participant.state !== "active" ||
+        participant.joined_seq >= row.anchor_seq
+      )
+        throw notFound();
     }
     return row;
   };
@@ -1961,6 +1993,24 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
           null,
           { answer_body: body },
         );
+      });
+    },
+    recover() {
+      return write(() => {
+        const rows = db
+          .query<AgentRequestRow, []>(
+            "SELECT * FROM agent_requests WHERE status = 'running' ORDER BY created_seq",
+          )
+          .all()
+          .filter((row) => !cancelControllers.has(row.request_id));
+        for (const row of rows)
+          finish(
+            row,
+            agentRecord(row),
+            row.cancel_requested === 1 ? "cancelled" : "failed",
+            row.cancel_requested === 1 ? "cancelled" : "worker_lost",
+          );
+        return rows.length;
       });
     },
     fail(requestId, reasonCode) {
@@ -2550,6 +2600,10 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
           created_at: at,
           updated_at: at,
         } satisfies AgentRequest);
+        const anchorSeq =
+          frozen.messages.length > 0
+            ? Math.min(...frozen.messages.map((m) => m.seq))
+            : conversation.last_seq + 1;
         const inputJson = canonicalJson(frozen);
         const recordJson = canonicalJson(record);
         const createdSeq =
@@ -2559,7 +2613,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
             )
             .get()?.max ?? 0) + 1;
         db.query(
-          "INSERT INTO agent_requests (request_id, team_id, conversation_id, requester_id, idempotency_key, params_sha256, status, cancel_requested, input_json, input_sha256, record_json, record_sha256, answer_body, created_seq) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, NULL, ?)",
+          "INSERT INTO agent_requests (request_id, team_id, conversation_id, requester_id, idempotency_key, params_sha256, status, cancel_requested, anchor_seq, input_json, input_sha256, record_json, record_sha256, answer_body, created_seq) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, NULL, ?)",
         ).run(
           record.request_id,
           record.team_id,
@@ -2567,6 +2621,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
           record.requester_id,
           record.idempotency_key,
           paramsHash,
+          anchorSeq,
           inputJson,
           sha256(inputJson),
           recordJson,

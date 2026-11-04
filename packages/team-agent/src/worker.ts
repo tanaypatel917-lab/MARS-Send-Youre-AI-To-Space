@@ -73,6 +73,11 @@ export function createTeamAgentWorker(
     start() {
       if (!stopped) return;
       stopped = false;
+      try {
+        options.host.recover();
+      } catch (error) {
+        options.onError?.(error);
+      }
       void tick();
     },
     async stop() {

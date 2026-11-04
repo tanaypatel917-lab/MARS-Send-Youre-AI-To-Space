@@ -3,7 +3,6 @@ import {
   AgentPreviewSchema,
   AgentRequestSchema,
   MARS_AGENT_USER_ID,
-  MessageSchema,
   MessageViewSchema,
   ParticipantSchema,
   SharePreviewSchema,

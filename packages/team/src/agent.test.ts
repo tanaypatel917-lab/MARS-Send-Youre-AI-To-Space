@@ -455,3 +455,82 @@ test("host completion drops citations outside the frozen selection and refuses o
   expect(failed.status).toBe("failed");
   expect(failed.reason_code).toBe("model_failed");
 });
+
+test("a participant who joined after the selected messages cannot inspect the request; one who joined before can", async () => {
+  const f = start(agentOptions());
+  const view = await f.ok<View>("alice", "conversations.create_group", {
+    member_ids: ["bob"],
+    title: "Late joiners",
+  });
+  const id = view.conversation.conversation_id;
+  const m1 = await f.ok<Message>("alice", "messages.send", {
+    conversation_id: id,
+    client_message_id: "m1",
+    body: "early context",
+  });
+  const { record } = await request(f, id, [m1.message_id]);
+  await f.ok<View>("alice", "conversations.add_member", {
+    conversation_id: id,
+    user_id: "carol",
+    expected_revision: view.conversation.revision,
+  });
+  const denied = await f.rpc("carol", "agent.inspect", {
+    request_id: record.request_id,
+  });
+  expect(denied.status).toBe(404);
+  const allowed = await f.ok<AgentRequest>("bob", "agent.inspect", {
+    request_id: record.request_id,
+  });
+  expect(allowed.request_id).toBe(record.request_id);
+  // Her joining also changed the audience, so the answer is stored restricted
+  // and the request record stays hidden from her either way.
+  f.store.agentHost.claimNext();
+  const stored = f.store.agentHost.complete(record.request_id, {
+    answer_body: "ok",
+    citations: [],
+  });
+  expect(stored.status).toBe("restricted");
+  expect(
+    (await f.rpc("carol", "agent.inspect", { request_id: record.request_id }))
+      .status,
+  ).toBe(404);
+  expect(
+    await f.ok<Message[]>("carol", "messages.history", { conversation_id: id }),
+  ).toEqual([]);
+});
+
+test("recover() settles running rows left by another worker as worker_lost, never the rows this process holds", async () => {
+  const f = start(agentOptions());
+  const { id, m1, m2 } = await group(f);
+  const first = await request(f, id, [m1.message_id], [], "k-lost");
+  const second = await request(f, id, [m2.message_id], [], "k-held");
+  const claimedFirst = f.store.agentHost.claimNext();
+  expect(claimedFirst?.request.request_id).toBe(first.record.request_id);
+  // A second process (new store over the same file) finds a running row it never claimed.
+  const other = (await import("./store")).createTeamStore({
+    rootDir: f.rootDir,
+    agent: agentOptions(),
+  });
+  try {
+    expect(other.agentHost.recover()).toBe(1);
+    const lost = other.agentInspect(
+      { team_id: "team-1", user_id: "alice" },
+      { request_id: first.record.request_id },
+    );
+    expect([lost.status, lost.reason_code]).toEqual(["failed", "worker_lost"]);
+    // The pending row is untouched and the recovering process can claim it.
+    const claimedSecond = other.agentHost.claimNext();
+    expect(claimedSecond?.request.request_id).toBe(second.record.request_id);
+    // The process that holds a claim never recovers its own row.
+    expect(other.agentHost.recover()).toBe(0);
+    // The dead worker's late completion is refused.
+    expect(() =>
+      f.store.agentHost.complete(first.record.request_id, {
+        answer_body: "late",
+        citations: [],
+      }),
+    ).toThrow();
+  } finally {
+    other.close();
+  }
+});

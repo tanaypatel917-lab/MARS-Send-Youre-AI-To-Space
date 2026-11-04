@@ -293,6 +293,11 @@ export async function runTeamAgentRequest(
   };
   if (options.signal?.aborted)
     return { ...base, status: "cancelled", reason_code: "cancelled" };
+  // Chat policy is free-only regardless of the registry's global `allowPaid`:
+  // a priced model id never receives conversation text, no consent path exists.
+  const model = options.registry.getModel(options.request.model_id);
+  if (!model || !model.pricing.free)
+    return { ...base, reason_code: "paid_model_refused" };
   const key = createHash("sha256")
     .update(options.request.request_id)
     .digest("hex")

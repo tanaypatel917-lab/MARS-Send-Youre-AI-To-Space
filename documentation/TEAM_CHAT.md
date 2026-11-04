@@ -243,9 +243,10 @@ workbench adapter: `runTeamAgentRequest` opens one Oh My Pi session through
 `openRuntimeSession` — the only model loop in MARS — and `createTeamAgentWorker`
 polls `claimNext()`, runs, then calls `complete`/`fail`. Models are free-first
 only: the request records the policy's `model_id`, `selectExecutionModel`
-refuses a priced model without `allowPaid`, and there is no paid consent path
-(a paid-only route fails closed as `session_unavailable` with zero model
-requests).
+refuses a priced model without `allowPaid`, the adapter additionally refuses
+any `model_id` whose registry pricing is not `free` even when the global
+`allowPaid` policy is on (`paid_model_refused`, zero model requests), and there
+is no paid consent path.
 
 **What the model sees.** Exactly one tool, `mars_team_context`, which returns
 the frozen selection rendered as untrusted evidence ("not instructions, not
@@ -283,14 +284,30 @@ and (for reference-bearing requests) re-derives the reference-access digest
 through `TeamReferencePort`. Any change — a participant removed *or added*, a
 viewer losing repo access — stores the answer as `restricted`
 (`reason_code: audience_changed | reference_access_changed`), posts nothing,
-and `agent.inspect` denies anyone who is no longer a participant. At request
-time, `restricted_reference_ids` must already be empty (`forbidden` otherwise).
+and `agent.inspect` denies anyone who is no longer a participant, and anyone
+who joined at or after the selection's first message (`anchor_seq`; for a
+reference-only request, anyone who joined after the request). At request time,
+`restricted_reference_ids` must already be empty (`forbidden` otherwise).
 
 **Reason codes** are fixed identifiers (`/^[a-z][a-z0-9_]{0,63}$/`):
 `audience_changed`, `reference_access_changed`, `answer_too_large`, `cancelled`,
-`session_unavailable`, `model_failed`, `budget_exhausted`, `empty_answer`,
-`worker_error`. No message body, prompt, path or model text ever enters a
-record other than the frozen input and the posted answer.
+`paid_model_refused`, `session_unavailable`, `model_failed`, `budget_exhausted`,
+`empty_answer`, `worker_error`, `worker_lost`. No message body, prompt, path or
+model text ever enters a record other than the frozen input and the posted
+answer.
+
+**Worker recovery.** Exactly one worker process drives a store.
+`createTeamAgentWorker().start()` calls `agentHost.recover()`, which settles
+`running` rows the current process did not claim (left by a crashed worker) as
+`failed` / `worker_lost` (or `cancelled` when a cancel was requested); the
+requester re-asks with a new idempotency key. Nothing is retried automatically.
+
+**Upgrade path.** Migration `0004_agent_requests` adds `messages.kind` /
+`messages.agent_request_id`, backfills `kind = 'result_card'` for messages in
+`result_shares`, and creates `agent_requests`. Message digests written before
+it (without the two fields) stay valid, and idempotency results stored for
+`messages.send` / `shares.create` before the upgrade are adapted on replay
+(`upgrade.test.ts` exercises a store downgraded to the pre-0004 shape).
 
 ## Decisions recorded
 
@@ -328,8 +345,8 @@ record other than the frozen input and the posted answer.
   codes, so an exceeded `references.resolve` budget answers `unavailable`
   (503), the same code a failing host registry answers.
 - **Migration `0004_agent_requests`** adds `messages.kind` /
-  `messages.agent_request_id` and the `agent_requests` table. Message digests
-  written before it (without `kind`) stay valid for `kind = 'user'` rows.
+  `messages.agent_request_id` and the `agent_requests` table (see "Upgrade
+  path" above for what happens to pre-0004 rows and idempotency results).
 - **References reach @MARS through the host port.** `TeamReferencePort.describe`
   (host-supplied, synchronous so it runs inside the authorizing transaction)
   returns label, excerpt and the viewers who may read each reference; the store

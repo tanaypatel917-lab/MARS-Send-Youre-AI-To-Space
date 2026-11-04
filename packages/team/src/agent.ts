@@ -105,6 +105,13 @@ export interface TeamAgentHostPort {
   /** Re-checks the audience; a changed audience stores the answer as `restricted` without posting it. */
   complete(requestId: string, completion: AgentCompletion): AgentRequest;
   fail(requestId: string, reasonCode: string): AgentRequest;
+  /**
+   * Settles `running` rows this process did not claim (a previous worker
+   * crashed) as `failed` / `worker_lost` (or `cancelled` if a cancel was
+   * requested). Exactly one worker process drives a store; call it at worker
+   * start. Returns the number of rows settled.
+   */
+  recover(): number;
 }
 
 export const AGENT_PUBLISH_REASONS = [
@@ -112,4 +119,5 @@ export const AGENT_PUBLISH_REASONS = [
   "reference_access_changed",
   "answer_too_large",
   "cancelled",
+  "worker_lost",
 ] as const;

@@ -91,6 +91,8 @@ async function fixture(
         },
       ],
       routes: { default: ["fixture/paid", "fixture/free"] },
+      // The global policy allows paid routing; chat must still refuse it.
+      policy: { allowPaid: true },
     }),
   );
   const env = { FIXTURE_KEY: "dummy-not-real" };
@@ -373,7 +375,7 @@ test("(d) through the worker: a participant removed while the model runs makes t
   ).toHaveLength(1);
 });
 
-test("a paid-only route never runs: the request fails closed without a model request", async () => {
+test("a paid model id never runs even when the registry policy allows paid routing: refused without a model request", async () => {
   const f = await fixture();
   const m1 = f.send(alice, "m1", "Question");
   const record = f.request([m1.message_id]);
@@ -390,8 +392,19 @@ test("a paid-only route never runs: the request fails closed without a model req
     },
   });
   expect(result.status).toBe("failed");
-  expect(result.reason_code).toBe("session_unavailable");
+  expect(result.reason_code).toBe("paid_model_refused");
   expect(result.model_requests).toBe(0);
+  const unknown = await runTeamAgentRequest({
+    request: { ...claimed.request, model_id: "fixture/missing" },
+    input: claimed.input,
+    registry: f.registry,
+    rootDir: join(f.base, "agent-runs"),
+    env: { FIXTURE_KEY: "dummy-not-real" },
+    fetch: async () => {
+      throw new Error("must not be called");
+    },
+  });
+  expect(unknown.reason_code).toBe("paid_model_refused");
   const failed = f.store.agentHost.fail(
     record.request_id,
     result.reason_code ?? "failed",
