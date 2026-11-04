@@ -24,6 +24,24 @@ const workspace = {
   revision: "r1",
 };
 const checkpoint = { checkpoint_id: "checkpoint", workspace, artifact };
+const evidenceRecord = {
+  event_id: "evidence-1",
+  verdict: "pass" as const,
+  assurance: "isolated_local" as const,
+  verified: true,
+  contract_id: "contract",
+  recorded_at: "2026-11-01T12:00:00.000Z",
+  workspace_id: workspace.workspace_id,
+  workspace_revision: "r1",
+  diff_sha256: "a".repeat(64),
+  stale: false,
+};
+const evidence = {
+  task_revision: 0,
+  workspace,
+  diff_sha256: "a".repeat(64),
+  verify_records: [evidenceRecord],
+};
 const task: Task = {
   schema_version: 1,
   task_id: "task",
@@ -178,6 +196,10 @@ function fixture(overrides: Partial<WorkbenchOperations> = {}) {
     async diff() {
       calls.push("diff");
       return { files: [] };
+    },
+    async evidence() {
+      calls.push("evidence");
+      return evidence;
     },
     async checkpoint() {
       calls.push("checkpoint");
@@ -370,6 +392,7 @@ test("all frozen client methods dispatch and return contract-shaped result envel
     ["tasks.events", { task_id: "task", after_event_id: "cursor" }],
     ["tasks.artifact", { task_id: "task", artifact }],
     ["tasks.diff", { task_id: "task" }],
+    ["tasks.evidence", { task_id: "task" }],
     ["tasks.checkpoint", { task_id: "task" }],
     [
       "tasks.restore",
@@ -458,6 +481,91 @@ test("RPC rejects malformed service results and bounds responses", async () => {
       })
     ).status,
   ).toBe(413);
+});
+
+test("tasks.create forwards launch_key only when present and rejects malformed keys", async () => {
+  const seen: unknown[] = [];
+  const { send } = fixture({
+    async create(_context, input, options) {
+      seen.push(options);
+      return input;
+    },
+  });
+  expect(
+    (await send({ method: "tasks.create", context, params: { task } })).status,
+  ).toBe(200);
+  expect(
+    (
+      await send({
+        method: "tasks.create",
+        context,
+        params: { task, launch_key: "chat-msg_42" },
+      })
+    ).status,
+  ).toBe(200);
+  expect(seen).toEqual([undefined, { launch_key: "chat-msg_42" }]);
+  for (const launch_key of ["", "bad key", "k".repeat(129), 7]) {
+    const response = await send({
+      method: "tasks.create",
+      context,
+      params: { task, launch_key },
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "invalid_request" },
+    });
+  }
+  expect(seen).toHaveLength(2);
+});
+
+test("tasks.evidence never lets a forged verified verdict or a stale-shaped lie reach the wire", async () => {
+  const forged = fixture({
+    async evidence() {
+      return {
+        ...evidence,
+        verify_records: [{ ...evidenceRecord, verdict: "fail" as const }],
+      };
+    },
+  });
+  const response = await forged.send({
+    method: "tasks.evidence",
+    context,
+    params: { task_id: "task" },
+  });
+  expect(response.status).toBe(500);
+  expect(await response.json()).toEqual({
+    error: { code: "internal_error", message: "Workbench operation failed." },
+  });
+  const unbound = fixture({
+    async evidence() {
+      return {
+        ...evidence,
+        verify_records: [
+          { ...evidenceRecord, workspace_revision: null, stale: true },
+        ],
+      };
+    },
+  });
+  const ok = await unbound.send({
+    method: "tasks.evidence",
+    context,
+    params: { task_id: "task" },
+  });
+  expect(ok.status).toBe(200);
+  const dirty = fixture({
+    async evidence() {
+      throw Object.assign(new Error("Workspace was modified"), {
+        code: "workspace_modified",
+      });
+    },
+  });
+  const conflict = await dirty.send({
+    method: "tasks.evidence",
+    context,
+    params: { task_id: "task" },
+  });
+  expect(conflict.status).toBe(409);
+  expect(await conflict.json()).toMatchObject({ error: { code: "conflict" } });
 });
 
 test("RPC bounds request bodies without dispatch", async () => {
@@ -566,6 +674,7 @@ test("the actual VS Code typed client interoperates with every RPC over loopback
   expect(await client.events("task", undefined)).toEqual([]);
   expect((await client.artifact("task", artifact)).bytes.byteLength).toBe(0);
   expect(await client.diff("task")).toEqual({ files: [] });
+  expect(await client.evidence("task")).toEqual(evidence);
   expect(await client.checkpoint("task")).toEqual(checkpoint);
   expect(await client.restore("task", checkpoint, "r1")).toEqual(workspace);
   expect(calls).toEqual([
@@ -580,6 +689,7 @@ test("the actual VS Code typed client interoperates with every RPC over loopback
     "events",
     "artifact",
     "diff",
+    "evidence",
     "checkpoint",
     "restore",
   ]);

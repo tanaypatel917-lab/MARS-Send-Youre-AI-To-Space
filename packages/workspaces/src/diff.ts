@@ -47,6 +47,8 @@ export function createWorkspaceDiff(
   return { files };
 }
 
+const NO_FILE_SHA256 = "0".repeat(64);
+
 function makePatch(
   path: string,
   status: WorkspaceDiffFile["status"],
@@ -74,6 +76,12 @@ function makePatch(
   if (isBinary(oldData) || isBinary(newData)) {
     const oldName = status === "added" ? "/dev/null" : `a/${path}`;
     const newName = status === "deleted" ? "/dev/null" : `b/${path}`;
+    // Binary patches carry no bytes, so record both content hashes (git's
+    // `index` line) — otherwise two different binaries at one path would
+    // render the same patch and digest identically.
+    out.push(
+      `index ${oldFile?.sha256 ?? NO_FILE_SHA256}..${newFile?.sha256 ?? NO_FILE_SHA256}\n`,
+    );
     out.push(`Binary files ${oldName} and ${newName} differ\n`);
     return out.join("");
   }
