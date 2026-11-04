@@ -1,0 +1,53 @@
+{
+  "entries": [
+    {
+      "kind": "user",
+      "id": "request:task-fixture",
+      "text": "Add a --json flag to mars render and document it",
+      "source": "request",
+      "provenance": {
+        "source": "tasks.inspect.request",
+        "event_id": null
+      }
+    },
+    {
+      "kind": "research",
+      "id": "event:research-stale-00000",
+      "findings": [
+        {
+          "finding_id": "finding-2",
+          "claim": "Node 18 lacks util.parseArgs",
+          "source": "https://nodejs.org/api/util.html",
+          "confidence": 0.4,
+          "used": false,
+          "stale": true,
+          "excerpt": null
+        }
+      ],
+      "provenance": {
+        "source": "mars-research",
+        "event_id": "research-stale-00000"
+      }
+    },
+    {
+      "kind": "notice",
+      "id": "event:research-stale-00001",
+      "tone": "info",
+      "text": "1 research finding stale",
+      "detail": null
+    }
+  ],
+  "trimmed": 0,
+  "totals": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost_usd": null
+  },
+  "children": 0,
+  "verify": {
+    "pass": 0,
+    "fail": 0
+  },
+  "journal": "available",
+  "last_event_id": "research-stale-00001"
+}

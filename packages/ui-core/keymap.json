@@ -1,0 +1,71 @@
+{
+  "mars.global.help": {
+    "defaultKeys": ["?", "f1"],
+    "description": "Keybinding help (/help)"
+  },
+  "mars.global.quit": {
+    "defaultKeys": "ctrl+c",
+    "description": "Press twice within 2 s to quit (tasks keep running)"
+  },
+  "mars.global.quitEmpty": {
+    "defaultKeys": "ctrl+d",
+    "description": "Quit when the composer is empty"
+  },
+  "mars.global.redraw": { "defaultKeys": "ctrl+l", "description": "Redraw" },
+  "mars.transcript.expand": {
+    "defaultKeys": "ctrl+o",
+    "description": "Expand/collapse the focused entry"
+  },
+  "mars.transcript.expandAll": {
+    "defaultKeys": "ctrl+shift+o",
+    "description": "Expand/collapse all entries in view"
+  },
+  "mars.transcript.thinking": {
+    "defaultKeys": "ctrl+t",
+    "description": "Toggle thinking visibility"
+  },
+  "mars.transcript.focusPrevious": {
+    "defaultKeys": "shift+up",
+    "description": "Focus the previous entry"
+  },
+  "mars.transcript.focusNext": {
+    "defaultKeys": "shift+down",
+    "description": "Focus the next entry"
+  },
+  "mars.transcript.loadEarlier": {
+    "defaultKeys": "pageUp",
+    "description": "Load earlier entries"
+  },
+  "mars.transcript.top": {
+    "defaultKeys": "home",
+    "description": "Focus the first entry"
+  },
+  "mars.transcript.bottom": {
+    "defaultKeys": "end",
+    "description": "Focus the last entry"
+  },
+  "mars.composer.submit": {
+    "defaultKeys": "enter",
+    "description": "Run the slash command"
+  },
+  "mars.composer.complete": {
+    "defaultKeys": "tab",
+    "description": "Complete the slash command"
+  },
+  "mars.composer.clear": {
+    "defaultKeys": "ctrl+u",
+    "description": "Clear the composer"
+  },
+  "mars.overlay.close": {
+    "defaultKeys": "escape",
+    "description": "Close the overlay"
+  },
+  "mars.overlay.up": { "defaultKeys": "up", "description": "Move up" },
+  "mars.overlay.down": { "defaultKeys": "down", "description": "Move down" },
+  "mars.overlay.select": { "defaultKeys": "enter", "description": "Select" },
+  "mars.overlay.pageUp": { "defaultKeys": "pageUp", "description": "Page up" },
+  "mars.overlay.pageDown": {
+    "defaultKeys": "pageDown",
+    "description": "Page down"
+  }
+}

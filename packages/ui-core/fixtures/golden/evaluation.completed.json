@@ -1,0 +1,34 @@
+{
+  "entries": [
+    {
+      "kind": "user",
+      "id": "request:task-fixture",
+      "text": "Add a --json flag to mars render and document it",
+      "source": "request",
+      "provenance": {
+        "source": "tasks.inspect.request",
+        "event_id": null
+      }
+    },
+    {
+      "kind": "notice",
+      "id": "event:evaluation-completed-00000",
+      "tone": "info",
+      "text": "evaluation render-json-eval · score 0.91",
+      "detail": "11 of 12 cases pass"
+    }
+  ],
+  "trimmed": 0,
+  "totals": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost_usd": null
+  },
+  "children": 0,
+  "verify": {
+    "pass": 0,
+    "fail": 0
+  },
+  "journal": "available",
+  "last_event_id": "evaluation-completed-00000"
+}

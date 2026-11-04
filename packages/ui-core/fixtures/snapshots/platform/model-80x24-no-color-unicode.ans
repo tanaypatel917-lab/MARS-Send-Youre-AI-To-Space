@@ -1,0 +1,24 @@
+╭─ Models · read only ─────────────────────────────────────────────────────────╮
+│ this task  ·  free (pinned at launch)                                        │
+│                                                                              │
+│ provider                     kind         health         catalog             │
+│ omniroute                    omniroute    available      ⚠ catalog stale     │
+│ local                        local        available      catalog current     │
+│ anthropic-direct             direct       unavailable    catalog current     │
+│                                                                              │
+│ policy owner: mars                                                           │
+│                                                                              │
+│ per-model capabilities and prices are not in workbench RPC · `mars models l… │
+│ view only · launch settings are frozen once a task starts                    │
+╰────────────────────────────────────────────────────────────────── Esc close ─╯
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+❯ read-only session · type / for commands · start, steer and cancel are not in …
+read-only session  model free  tokens 41.2k in  ·  6.1k out  cost $0.00 / $0.50 

@@ -1,0 +1,16 @@
+[38;5;39m+- Proposals · read only ----------------------------------+[39m
+[38;5;39m|[39m [38;5;248m1 pending vault proposal(s)  -  last export never[39m        [38;5;39m|[39m
+[38;5;39m|[39m   [38;5;243moperator command (not run): mars vault import --accept[39m [38;5;39m|[39m
+[38;5;39m|[39m   [38;5;243mit checks each proposal's revision fence and threat s[0m… [38;5;39m|[39m
+[38;5;39m|[39m                                                          [38;5;39m|[39m
+[38;5;39m|[39m [1mmemory proposal[22m  -  project  -  revision mem-r3  -  pen[0m… [38;5;39m|[39m
+[38;5;39m|[39m   [38;5;203m- Use npm for scripts.[39m                                 [38;5;39m|[39m
+[38;5;39m|[39m   [38;5;48m+ Use bun for scripts; npm is not installed.[39m           [38;5;39m|[39m
+[38;5;39m|[39m   [38;5;243moperator command (not run): decided by the operator o[0m… [38;5;39m|[39m
+[38;5;39m|[39m                                                          [38;5;39m|[39m
+[38;5;39m|[39m [1mskill proposal[22m  -  project  -  revision skill-r2  -  pe[0m… [38;5;39m|[39m
+[38;5;39m+---------------------------------- Esc close  -  +9 more -+[39m
+                                                            
+[38;5;235m------------------------------------------------------------[39m
+[38;5;39m>[39m [38;5;243mread-only session · type / for commands · start, steer an[0m…
+[38;5;39mread-only session[39m  model [38;5;48mfree[39m  [38;5;248mtokens 41.2k in  -  6.1k out[39m 

@@ -1,0 +1,24 @@
+[34m+- Knowledge graph · read only ------------------------------------------------+[39m
+[34m|[39m [90mstate[39m          [37mnot_built[39m                                                     [34m|[39m
+[34m|[39m [90mrevision[39m       —                                                             [34m|[39m
+[34m|[39m [90mbuilt at[39m       —                                                             [34m|[39m
+[34m|[39m [90misolation[39m      —                                                             [34m|[39m
+[34m|[39m                                                                              [34m|[39m
+[34m|[39m [90mno graph has been built for this workspace[39m                                   [34m|[39m
+[34m|[39m                                                                              [34m|[39m
+[34m|[39m [1mLast graph.build in this task[22m                                                [34m|[39m
+[34m|[39m   ready · r12 · graph built: 412 nodes, 1,280 edges · model requests 0       [34m|[39m
+[34m|[39m                                                                              [34m|[39m
+[34m|[39m [1mgraph.query in this task[22m                                                     [34m|[39m
+[34m|[39m   ready · r12 · render.ts is imported by main.ts and serve.ts                [34m|[39m
+[34m+------------------------------------------------------------------ Esc close -+[39m
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+[30m--------------------------------------------------------------------------------[39m
+[34m>[39m [90mread-only session · type / for commands · start, steer and cancel are not in [0m…
+[34mread-only session[39m  model [32mfree[39m  [37mtokens 41.2k in  -  6.1k out[39m  [93mcost $0.00 / $0.50[39m 

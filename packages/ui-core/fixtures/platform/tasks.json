@@ -1,0 +1,20 @@
+[
+  {
+    "task_id": "task-fixture",
+    "request": "Add a --json flag to mars render and document it",
+    "status": "completed",
+    "revision": 4
+  },
+  {
+    "task_id": "task-child-2",
+    "request": "Write tests for mars render --json",
+    "status": "running",
+    "revision": 2
+  },
+  {
+    "task_id": "task-old-1",
+    "request": "Explain the workbench RPC",
+    "status": "failed",
+    "revision": 3
+  }
+]

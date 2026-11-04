@@ -1,0 +1,16 @@
+                                                            
+[~] Done. `mars render --json` prints the processed documen…
+     [93m[untrusted][39m [90mtasks.journal entry-4[39m                      
+                                                            
+[90msum completed  -  29s  -  2.1k in / 640 out  -  $0.00  -  5[0m…
+                                                            
+[~] Added `--json` to `mars render`.                        
+                                                            
+  - `apps/cli/src/render.ts` parses the flag                
+  - `documentation/CLI.md` documents it                     
+                                                            
+  Verification is reported separately by the workbench.     
+     [93m[untrusted][39m [90mfinal artifact (tasks.artifact)[39m            
+[30m------------------------------------------------------------[39m
+[34m>[39m [90mread-only session · type / for commands · start, steer an[0m…
+[34mread-only session[39m  model [32mfree[39m  [37mtokens 41.2k in  -  6.1k out[39m 

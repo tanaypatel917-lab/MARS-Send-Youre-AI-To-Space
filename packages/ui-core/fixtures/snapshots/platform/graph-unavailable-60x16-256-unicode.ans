@@ -1,0 +1,16 @@
+[38;5;39m╭─ Knowledge graph · read only ────────────────────────────╮[39m
+[38;5;39m│[39m [38;5;243mstate[39m          [38;5;248munavailable[39m                               [38;5;39m│[39m
+[38;5;39m│[39m [38;5;243mrevision[39m       —                                         [38;5;39m│[39m
+[38;5;39m│[39m [38;5;243mbuilt at[39m       —                                         [38;5;39m│[39m
+[38;5;39m│[39m [38;5;243misolation[39m      —                                         [38;5;39m│[39m
+[38;5;39m│[39m                                                          [38;5;39m│[39m
+[38;5;39m│[39m [38;5;243mthe knowledge-graph CLI is not installed on the host[39m     [38;5;39m│[39m
+[38;5;39m│[39m                                                          [38;5;39m│[39m
+[38;5;39m│[39m [1mLast graph.build in this task[22m                            [38;5;39m│[39m
+[38;5;39m│[39m   ready · r12 · graph built: 412 nodes, 1,280 edges · m… [38;5;39m│[39m
+[38;5;39m│[39m                                                          [38;5;39m│[39m
+[38;5;39m╰────────────────────────────────── Esc close  ·  +2 more ─╯[39m
+                                                            
+[38;5;235m────────────────────────────────────────────────────────────[39m
+[38;5;39m❯[39m [38;5;243mread-only session · type / for commands · start, steer an[0m…
+[38;5;39mread-only session[39m  model [38;5;48mfree[39m  [38;5;248mtokens 41.2k in  ·  6.1k out[39m 

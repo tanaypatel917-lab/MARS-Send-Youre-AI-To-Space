@@ -1,0 +1,57 @@
+{
+  "scope": {
+    "owner_id": "local",
+    "project_id": "project-fixture"
+  },
+  "workspaceLabel": "mars-fixture",
+  "capabilities": {
+    "execute": true,
+    "checkpoint": true
+  },
+  "connectors": [],
+  "image": {
+    "digest": "sha256:4f2c9a0e1b7d3c5a6e8f9012345678901234567890abcdef1234567890abcdef"
+  },
+  "conventions": {
+    "instructions": 1,
+    "hooks": 1,
+    "commands": 1
+  },
+  "policy": {
+    "allow_paid": false,
+    "allow_screen_capture": false
+  },
+  "graph": {
+    "state": "ready",
+    "revision": "r12",
+    "built_at": "2026-11-04T11:58:00.000Z",
+    "isolation": "process_env"
+  },
+  "vault": {
+    "pending_proposals": 1,
+    "last_export_at": null
+  },
+  "providers": [
+    {
+      "id": "omniroute",
+      "kind": "omniroute",
+      "health": "available",
+      "catalog_stale": true,
+      "policy_owner": "mars"
+    },
+    {
+      "id": "local",
+      "kind": "local",
+      "health": "available",
+      "catalog_stale": false,
+      "policy_owner": "mars"
+    },
+    {
+      "id": "anthropic-direct",
+      "kind": "direct",
+      "health": "unavailable",
+      "catalog_stale": false,
+      "policy_owner": "mars"
+    }
+  ]
+}

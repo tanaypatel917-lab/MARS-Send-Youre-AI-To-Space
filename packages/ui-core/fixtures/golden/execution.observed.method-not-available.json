@@ -1,0 +1,75 @@
+{
+  "entries": [
+    {
+      "kind": "user",
+      "id": "request:task-fixture",
+      "text": "Add a --json flag to mars render and document it",
+      "source": "request",
+      "provenance": {
+        "source": "tasks.inspect.request",
+        "event_id": null
+      }
+    },
+    {
+      "kind": "turn",
+      "id": "event:execution-observed-00000",
+      "observed": "message_end",
+      "summary": null,
+      "entry_ids": ["entry-1"],
+      "running": false,
+      "provenance": {
+        "source": "@mars/execution",
+        "event_id": "execution-observed-00000"
+      }
+    },
+    {
+      "kind": "turn",
+      "id": "event:execution-observed-00001",
+      "observed": "message_end",
+      "summary": null,
+      "entry_ids": ["entry-2"],
+      "running": false,
+      "provenance": {
+        "source": "@mars/execution",
+        "event_id": "execution-observed-00001"
+      }
+    },
+    {
+      "kind": "turn",
+      "id": "event:execution-observed-00002",
+      "observed": "tool_execution_end",
+      "summary": "mars_read",
+      "entry_ids": ["entry-3"],
+      "running": false,
+      "provenance": {
+        "source": "@mars/execution",
+        "event_id": "execution-observed-00002"
+      }
+    },
+    {
+      "kind": "turn",
+      "id": "event:execution-observed-00003",
+      "observed": "message_end",
+      "summary": null,
+      "entry_ids": ["entry-4"],
+      "running": false,
+      "provenance": {
+        "source": "@mars/execution",
+        "event_id": "execution-observed-00003"
+      }
+    }
+  ],
+  "trimmed": 0,
+  "totals": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost_usd": null
+  },
+  "children": 0,
+  "verify": {
+    "pass": 0,
+    "fail": 0
+  },
+  "journal": "unavailable",
+  "last_event_id": "execution-observed-00003"
+}
