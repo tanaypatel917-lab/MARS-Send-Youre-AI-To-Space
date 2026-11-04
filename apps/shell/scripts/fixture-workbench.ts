@@ -25,8 +25,8 @@ import type {
 
 type FixtureDetail = {
   verification: VerificationView;
-  diff: DiffResult;
-  evidence: EvidenceResult;
+  diff?: DiffResult;
+  evidence?: EvidenceResult;
   events: EventEnvelope[];
   model_tier?: InspectResult["model_tier"];
 };
@@ -91,10 +91,14 @@ export function createFixtureOperations(
       );
     },
     async diff(_context: RequestContext, taskId: string) {
-      return operation(taskId).diff;
+      const diff = operation(taskId).diff;
+      if (!diff) throw new WorkbenchError("not_found");
+      return diff;
     },
     async evidence(_context: RequestContext, taskId: string) {
-      return operation(taskId).evidence;
+      const evidence = operation(taskId).evidence;
+      if (!evidence) throw new WorkbenchError("not_found");
+      return evidence;
     },
     async verification(_context: RequestContext, taskId: string) {
       return operation(taskId).verification;

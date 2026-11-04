@@ -38,10 +38,12 @@ test("fixture data validates against the server schemas", async () => {
     expect(VerificationViewSchema.parse(detail.verification)).toEqual(
       detail.verification,
     );
-    expect(DiffResultSchema.parse(detail.diff)).toEqual(detail.diff);
-    expect(EvidenceResultSchema.parse(detail.evidence)).toEqual(
-      detail.evidence,
-    );
+    if (detail.diff)
+      expect(DiffResultSchema.parse(detail.diff)).toEqual(detail.diff);
+    if (detail.evidence)
+      expect(EvidenceResultSchema.parse(detail.evidence)).toEqual(
+        detail.evidence,
+      );
     for (const event of detail.events)
       expect(EventEnvelopeSchema.parse(event)).toEqual(event);
     const task = data.tasks.find((candidate) => candidate.task_id === taskId);

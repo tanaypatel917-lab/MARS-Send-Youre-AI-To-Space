@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { app, BrowserWindow, ipcMain, Menu, protocol, session } from "electron";
-import { createBridge } from "./bridge";
 import { resolveConnection } from "./connection";
 import { registerBridge } from "./ipc";
 import {
@@ -9,6 +8,7 @@ import {
   resolveAppAsset,
   SHELL_WEB_PREFERENCES,
 } from "./security";
+import { createReconnectingBridge } from "./session";
 import { layoutPath, loadWindowLayout, saveWindowLayout } from "./settings";
 import { createLoopbackTransport } from "./transport";
 
@@ -67,20 +67,10 @@ app.on("ready", async () => {
     }
   });
 
-  const connection = await resolveConnection();
-  const bridge = createBridge(
-    connection.ok
-      ? {
-          transport: createLoopbackTransport(connection.connection),
-          connectionScope: connection.connection.scope,
-        }
-      : {
-          connectionError: {
-            kind: "not_connected",
-            message: connection.reason,
-          },
-        },
-  );
+  const bridge = createReconnectingBridge({
+    resolve: () => resolveConnection(),
+    makeTransport: (connection) => createLoopbackTransport(connection),
+  });
   registerBridge(ipcMain, bridge, { trustedOrigin });
 
   const filePath = layoutPath(app.getPath("home"));

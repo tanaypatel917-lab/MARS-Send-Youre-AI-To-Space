@@ -1,10 +1,32 @@
 import { expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import type { EventEnvelope } from "@mars/contracts";
 import { createController } from "../src/renderer/controller";
 import { READ_METHODS, type ShellBridge } from "../src/shared/methods";
 import { findAll, MiniDocument, serialize } from "./mini-dom";
 import { fakeBridge, loadFixtureData, type RecordedCall } from "./test-utils";
+
+function pagedBridge(
+  data: Awaited<ReturnType<typeof loadFixtureData>>,
+  events: EventEnvelope[],
+  cursors: (string | undefined)[],
+): ShellBridge {
+  const delegate = fakeBridge(data);
+  return {
+    ...delegate,
+    "tasks.events": async ({ after_event_id }) => {
+      cursors.push(after_event_id);
+      const offset = after_event_id
+        ? Number(after_event_id.slice("page-".length))
+        : 0;
+      return {
+        ok: true,
+        result: events.slice(offset, offset + 100),
+      };
+    },
+  };
+}
 
 test("fixture task views match deterministic snapshots and keep untrusted text inert", async () => {
   const data = await loadFixtureData();
@@ -85,6 +107,110 @@ test("completed and unverified remain separate and the reserved control is disab
   expect(chat?.getAttribute("aria-disabled")).toBe("true");
 });
 
+test("pending task details stay visible when workspace sections are unavailable", async () => {
+  const data = await loadFixtureData();
+  const document = new MiniDocument();
+  const controller = createController(
+    fakeBridge(data),
+    document,
+    document.root,
+  );
+  await controller.load();
+  findAll(
+    document.root,
+    (element) => element.getAttribute("data-task-id") === "fixture-pending",
+  )
+    .find((element) => element.tagName === "BUTTON")
+    ?.click();
+  await controller.settled();
+
+  const snapshot = serialize(document.root);
+  expect(snapshot).toContain('data-task-id="fixture-pending"');
+  expect(snapshot).toContain("<h1>Task fixture-pending</h1>");
+  expect(snapshot).toContain("Pending sample task.");
+  expect(snapshot).toContain("unavailable · Workbench resource was not found.");
+  expect(
+    snapshot.match(/unavailable · Workbench resource was not found\./g),
+  ).toHaveLength(2);
+});
+
+test("verification and event failures are section-local and verification stays unverified", async () => {
+  const data = await loadFixtureData();
+  const delegate = fakeBridge(data);
+  const notFound = {
+    ok: false as const,
+    error: {
+      kind: "not_found" as const,
+      message: "Workbench resource was not found.",
+    },
+  };
+  const bridge: ShellBridge = {
+    ...delegate,
+    "tasks.verification": (params) =>
+      params.task_id === "fixture-pending"
+        ? Promise.resolve(notFound)
+        : delegate["tasks.verification"](params),
+    "tasks.events": (params) =>
+      params.task_id === "fixture-pending"
+        ? Promise.resolve(notFound)
+        : delegate["tasks.events"](params),
+  };
+  const document = new MiniDocument();
+  const controller = createController(bridge, document, document.root);
+  await controller.load();
+  findAll(
+    document.root,
+    (element) => element.getAttribute("data-task-id") === "fixture-pending",
+  )
+    .find((element) => element.tagName === "BUTTON")
+    ?.click();
+  await controller.settled();
+
+  const snapshot = serialize(document.root);
+  expect(snapshot).toContain("Unverified");
+  expect(snapshot).toContain("unavailable · Workbench resource was not found.");
+  expect(snapshot).toContain("Task fixture-pending");
+  expect(snapshot).toContain("fixture-completed-verified");
+});
+
+test("task events page with cursors and stop at 1,000 entries", async () => {
+  const data = await loadFixtureData();
+  const baseEvent = data.details["fixture-running"]?.events[0];
+  if (!baseEvent) throw new Error("Fixture event missing.");
+
+  for (const [count, expectedCalls, expectedCount] of [
+    [250, 3, "250 task events"],
+    [1500, 10, "1000+ task events"],
+  ] as const) {
+    const events = Array.from({ length: count }, (_, index) => ({
+      ...baseEvent,
+      event_id: `page-${index + 1}`,
+    }));
+    const cursors: (string | undefined)[] = [];
+    const document = new MiniDocument();
+    const controller = createController(
+      pagedBridge(data, events, cursors),
+      document,
+      document.root,
+    );
+    await controller.load();
+
+    expect(cursors).toHaveLength(expectedCalls);
+    expect(cursors[0]).toBeUndefined();
+    expect(cursors.slice(1)).toEqual(
+      Array.from(
+        { length: expectedCalls - 1 },
+        (_, index) => `page-${(index + 1) * 100}`,
+      ),
+    );
+    expect(
+      findAll(document.root, (element) => element.tagName === "P")
+        .map((element) => element.textContent)
+        .join(" "),
+    ).toContain(expectedCount);
+  }
+});
+
 test("session switching reloads the selected task and tampered artifact text is omitted", async () => {
   const data = await loadFixtureData();
   const calls: RecordedCall[] = [];
@@ -151,6 +277,42 @@ test("refresh repeats the read-only description and list requests", async () => 
     "workbench.describe",
     "tasks.list",
   ]);
+});
+
+test("connection error view retries the controller load", async () => {
+  const data = await loadFixtureData();
+  const delegate = fakeBridge(data);
+  let describeCalls = 0;
+  const bridge: ShellBridge = {
+    ...delegate,
+    "workbench.describe": (params) => {
+      describeCalls++;
+      if (describeCalls === 1)
+        return Promise.resolve({
+          ok: false,
+          error: {
+            kind: "not_connected",
+            message: "Workbench is unavailable.",
+          },
+        });
+      return delegate["workbench.describe"](params);
+    },
+  };
+  const document = new MiniDocument();
+  const controller = createController(bridge, document, document.root);
+
+  await controller.load();
+  expect(
+    findAll(document.root, (element) => element.textContent === "Retry"),
+  ).toHaveLength(1);
+  findAll(
+    document.root,
+    (element) => element.textContent === "Retry",
+  )[0]?.click();
+  await controller.settled();
+
+  expect(describeCalls).toBe(2);
+  expect(serialize(document.root)).toContain("Connected");
 });
 
 test("a session click during an in-flight load queues the selected task", async () => {

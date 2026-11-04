@@ -30,6 +30,10 @@ export type ShellState = {
   diff?: DiffResult;
   evidence?: EvidenceResult;
   artifacts: ArtifactView[];
+  verificationError?: string;
+  diffError?: string;
+  evidenceError?: string;
+  eventsError?: string;
   error?: string;
   onSelect?: (taskId: string) => void;
   onRefresh?: () => void;
@@ -46,6 +50,10 @@ const STATUS_ORDER: Task["status"][] = [
 
 function heading(doc: ShellDocument, text: string): ShellElement {
   return h(doc, "h2", { class: "section-title" }, text);
+}
+
+function unavailable(doc: ShellDocument, message: string): ShellElement {
+  return h(doc, "p", { class: "muted" }, `unavailable · ${message}`);
 }
 
 function firstLine(text: string): string {
@@ -207,7 +215,16 @@ function taskInspector(doc: ShellDocument, task: Task): ShellElement {
 function verificationSection(
   doc: ShellDocument,
   view: VerificationView | undefined,
+  error: string | undefined,
 ): ShellElement {
+  if (error)
+    return h(
+      doc,
+      "section",
+      { class: "inspector-section" },
+      heading(doc, "Verification"),
+      unavailable(doc, error),
+    );
   if (!view)
     return h(
       doc,
@@ -265,6 +282,7 @@ function countPatch(patch: string): { added: number; removed: number } {
 function changesSection(
   doc: ShellDocument,
   diff: DiffResult | undefined,
+  error: string | undefined,
 ): ShellElement {
   const files = (diff?.files ?? []).map((file) => {
     const counts = countPatch(file.patch);
@@ -296,13 +314,18 @@ function changesSection(
     "section",
     { class: "inspector-section" },
     heading(doc, "Changes"),
-    ...(files.length ? files : [h(doc, "p", {}, "No diff files.")]),
+    ...(error
+      ? [unavailable(doc, error)]
+      : files.length
+        ? files
+        : [h(doc, "p", {}, "No diff files.")]),
   );
 }
 
 function evidenceSection(
   doc: ShellDocument,
   evidence: EvidenceResult | undefined,
+  error: string | undefined,
 ): ShellElement {
   const records = (evidence?.verify_records ?? []).map((record) =>
     h(
@@ -323,7 +346,11 @@ function evidenceSection(
     "section",
     { class: "inspector-section" },
     heading(doc, "Evidence"),
-    ...(records.length ? records : [h(doc, "p", {}, "No evidence records.")]),
+    ...(error
+      ? [unavailable(doc, error)]
+      : records.length
+        ? records
+        : [h(doc, "p", {}, "No evidence records.")]),
   );
 }
 
@@ -374,14 +401,18 @@ export function renderShell(
   doc: ShellDocument,
   state: ShellState,
 ): ShellElement {
-  if (state.error)
+  if (state.error) {
+    const retry = h(doc, "button", { class: "retry", type: "button" }, "Retry");
+    retry.addEventListener("click", () => state.onRefresh?.());
     return h(
       doc,
       "main",
       { class: "connection-error", role: "alert" },
       h(doc, "h1", {}, "MARS Shell"),
       h(doc, "p", {}, state.error),
+      retry,
     );
+  }
   const task = state.selectedTask;
   const refresh = h(
     doc,
@@ -432,12 +463,14 @@ export function renderShell(
       doc,
       "section",
       { class: "transcript", role: "log", "aria-live": "polite" },
-      h(
-        doc,
-        "p",
-        {},
-        `Transcript projection arrives with @mars/ui-core. ${state.events.length >= 1000 ? "1000+" : state.events.length} task event${state.events.length === 1 ? "" : "s"} available via tasks.events (content not rendered in this build).`,
-      ),
+      state.eventsError
+        ? unavailable(doc, state.eventsError)
+        : h(
+            doc,
+            "p",
+            {},
+            `Transcript projection arrives with @mars/ui-core. ${state.events.length >= 1000 ? "1000+" : state.events.length} task event${state.events.length === 1 ? "" : "s"} available via tasks.events (content not rendered in this build).`,
+          ),
     ),
   );
   const inspector = h(
@@ -453,9 +486,9 @@ export function renderShell(
           heading(doc, "Task"),
           h(doc, "p", {}, "Select a task."),
         ),
-    verificationSection(doc, state.verification),
-    changesSection(doc, state.diff),
-    evidenceSection(doc, state.evidence),
+    verificationSection(doc, state.verification, state.verificationError),
+    changesSection(doc, state.diff, state.diffError),
+    evidenceSection(doc, state.evidence, state.evidenceError),
     artifactsSection(doc, state.artifacts),
   );
   const footer = h(

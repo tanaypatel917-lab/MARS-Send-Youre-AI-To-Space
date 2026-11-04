@@ -23,8 +23,8 @@ export type FixtureData = {
     string,
     {
       verification: VerificationView;
-      diff: DiffResult;
-      evidence: EvidenceResult;
+      diff?: DiffResult;
+      evidence?: EvidenceResult;
       events: EventEnvelope[];
       model_tier?: InspectResult["model_tier"];
     }
@@ -85,10 +85,32 @@ export function fakeBridge(
           : undefined;
         break;
       case "tasks.diff":
-        result = data.details[request.task_id ?? ""]?.diff;
+        {
+          const diff = data.details[request.task_id ?? ""]?.diff;
+          if (!diff)
+            return {
+              ok: false as const,
+              error: {
+                kind: "not_found" as const,
+                message: "Workbench resource was not found.",
+              },
+            };
+          result = diff;
+        }
         break;
       case "tasks.evidence":
-        result = data.details[request.task_id ?? ""]?.evidence;
+        {
+          const evidence = data.details[request.task_id ?? ""]?.evidence;
+          if (!evidence)
+            return {
+              ok: false as const,
+              error: {
+                kind: "not_found" as const,
+                message: "Workbench resource was not found.",
+              },
+            };
+          result = evidence;
+        }
         break;
       case "tasks.verification":
         result = data.details[request.task_id ?? ""]?.verification;

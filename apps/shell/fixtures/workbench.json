@@ -484,20 +484,6 @@
         "reasons": [],
         "records": []
       },
-      "diff": {
-        "files": [],
-        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      },
-      "evidence": {
-        "task_revision": 0,
-        "workspace": {
-          "workspace_id": "fixture-workspace",
-          "provider": "fixture",
-          "revision": "fixture-r0"
-        },
-        "diff_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "verify_records": []
-      },
       "events": []
     }
   },
