@@ -3596,7 +3596,7 @@ test("mars_apply_patch can delete or move a binary file: existence never decodes
       };
     },
   });
-  await api_start(api, "task", { read: false, write: true, execute: false });
+  await api_start(api, "task", { read: true, write: true, execute: false });
   const session = required(f.sessions[0]);
   expect(
     await required(session.options.patch).apply(
@@ -3649,7 +3649,7 @@ async function api_start(
   });
 }
 
-test("mars_apply_patch is declared only with write approval and writes, removes and reads through the workspace provider", async () => {
+test("mars_apply_patch is declared only with read and write approval and writes, removes and reads through the workspace provider", async () => {
   const f = await fixture();
   const seen: string[] = [];
   const api = await conventionsHost(f, {
@@ -3671,7 +3671,7 @@ test("mars_apply_patch is declared only with write approval and writes, removes 
       };
     },
   });
-  await api_start(api, "task", { read: false, write: true, execute: false });
+  await api_start(api, "task", { read: true, write: true, execute: false });
   const writable = required(f.sessions[0]);
   const patch = required(writable.options.patch);
   expect(
@@ -3692,5 +3692,14 @@ test("mars_apply_patch is declared only with write approval and writes, removes 
   expect(readOnly.options.patch).toBeUndefined();
   readOnly.finish("completed");
   await readOnly.disposed;
+
+  // Update and Delete hunks read the workspace, so a write-only session
+  // (no read gate) gets no patch tool either.
+  await api_start(api, "task-3", { read: false, write: true, execute: false });
+  const writeOnly = required(f.sessions[2]);
+  expect(writeOnly.options.patch).toBeUndefined();
+  writeOnly.finish("completed");
+  await writeOnly.disposed;
+  expect(seen).toHaveLength(1);
   await api.close();
 });

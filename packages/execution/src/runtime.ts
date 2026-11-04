@@ -142,7 +142,7 @@ export function initialRequestAllowance(options: {
     ...(options.approvals.read && options.proposals ? PROPOSAL_TOOLS : []),
     ...(options.watch ? WATCH_TOOLS : []),
     ...(options.approvals.write ? [TOOLS.mars_write] : []),
-    ...(options.approvals.write && options.patch
+    ...(options.approvals.write && options.approvals.read && options.patch
       ? [TOOLS.mars_apply_patch]
       : []),
     ...(options.approvals.execute ? [TOOLS.mars_execute] : []),
@@ -561,7 +561,7 @@ export interface RuntimeSessionOptions {
   research?: RuntimeResearch;
   proposals?: RuntimeProposals;
   watch?: RuntimeWatch;
-  /** Declared only with write approval; absent means no mars_apply_patch tool. */
+  /** Declared only with read and write approval; absent means no mars_apply_patch tool. */
   patch?: RuntimePatch;
   onEvent?(observation: RuntimeObservation): Promise<void>;
   env?: Record<string, string | undefined>;
@@ -1181,11 +1181,14 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
         );
       },
     });
+  // A patch reads workspace files before writing them, so the tool needs
+  // both approvals.
   const patch = options.patch;
-  if (approvals.write && patch)
+  if (approvals.write && approvals.read && patch)
     customTools.push({
       ...TOOLS.mars_apply_patch,
       async execute(_id, params, _update, _ctx, signal) {
+        await checkTool("read", signal);
         await checkTool("write", signal);
         const input = z
           .object({

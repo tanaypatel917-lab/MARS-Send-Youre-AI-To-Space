@@ -1399,9 +1399,11 @@ export async function createWorkbenchHost(
   };
   /**
    * Host-bound apply_patch: the applier only sees a filesystem seam whose
-   * every operation re-authorizes against the task's write approval and
-   * claimed paths and goes through the workspace provider. Declared only for
-   * write-approved sessions when the host has an applier.
+   * every operation re-authorizes against the task's approvals and claimed
+   * paths and goes through the workspace provider. A patch reads before it
+   * writes (Update hunks need the file text, Delete hunks its existence), so
+   * the tool is declared only for sessions approved for both read and write
+   * when the host has an applier.
    */
   const patchFor = (
     workspace: WorkspaceRef,
@@ -1412,9 +1414,10 @@ export async function createWorkbenchHost(
     writePaths: readonly string[] = [],
   ): { patch: RuntimePatch } | Record<string, never> => {
     const applyPatch = options.conventions?.applyPatch;
-    if (!applyPatch || !approvals.write) return {};
+    if (!applyPatch || !approvals.write || !approvals.read) return {};
     const authorize = async () => {
-      if (!approvals.write) throw new WorkbenchError("forbidden");
+      if (!approvals.write || !approvals.read)
+        throw new WorkbenchError("forbidden");
       await assertActive();
       return internalContext(options.scope);
     };
@@ -1594,6 +1597,7 @@ export async function createWorkbenchHost(
           if (view.status !== "open") throw new WorkbenchError("conflict");
         },
         launch.write_paths,
+        launch.task_id,
       ),
       base_revision: baseRevision,
     };

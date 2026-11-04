@@ -875,7 +875,7 @@ test("mars_apply_patch keeps a persisted patch successful when its summary excee
   }
 }, 30000);
 
-test("mars_apply_patch is not declared without write approval or without a host applier", async () => {
+test("mars_apply_patch is not declared without read approval, without write approval or without a host applier", async () => {
   const f = await fixture();
   const requests: Record<string, unknown>[] = [];
   try {
@@ -889,9 +889,15 @@ test("mars_apply_patch is not declared without write approval or without a host 
       fetch: respond,
     });
     await readOnly.run(f.task.request);
+    const writeOnly = await f.open({
+      approvals: { read: false, write: true, execute: false },
+      patch: { apply: async () => "unreachable" },
+      fetch: respond,
+    });
+    await writeOnly.run(f.task.request);
     const noApplier = await f.open({ fetch: respond });
     await noApplier.run(f.task.request);
-    expect(requests).toHaveLength(2);
+    expect(requests).toHaveLength(3);
     for (const request of requests)
       expect(JSON.stringify(request)).not.toContain("mars_apply_patch");
   } finally {
