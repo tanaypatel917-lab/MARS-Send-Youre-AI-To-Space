@@ -486,21 +486,22 @@ and cross-checked against the authenticated `team_id`/`user_id` from
 error. The webview CSP is untouched (`connect-src 'none'`); the view state it
 receives contains no token, transport error text or service handle.
 
-Methods used from `main` today: `team.describe`, `conversations.list/open/
-mark_read/pin`, `messages.send/history`, `events.poll`. Methods expected from
-the PR 3 service half (#64, not merged at the time of writing), already wired
-behind `team.describe().capabilities` and validated against the shapes that
-PR defines, falling back to host-side behaviour when absent:
+Methods wired (all on `main` since #60, #64 and #66): `team.describe`,
+`conversations.list` (`ConversationListItemSchema`, counters preferred over
+the sequence distance), `conversations.open/mark_read/pin`,
+`messages.send/history` (`MessageViewSchema` items: chips, reaction summaries,
+`reply_excerpt`/`reply_restricted`), `events.poll`, and — when
+`team.describe().capabilities` says so — `events.stream` on `POST /v1/stream`,
+`reactions.set` and `messages.search`:
 
-| Expected method | Request | Result the client validates | Fallback when `capabilities.*` is false |
+| Method | Request | Result the client validates | When the capability is false |
 | --- | --- | --- | --- |
-| `events.stream` on `POST /v1/stream` | RPC envelope `{method, context, params: {cursors: [{conversation_id, after_event_seq}]}}` | `text/event-stream` frames `id:` / `event: message\|membership\|reaction` / `data: <TeamDeliveryEvent>`; `event: close` with `{reason}` | `events.poll` every 2 s with the same cursors |
-| `reactions.set` | `{message_id, emoji, on}` | `{message_id, emoji, count, reacted}` | reaction controls hidden |
-| `messages.search` | `{query (2..200), conversation_id?, limit ≤ 50}` | `{hits: [{conversation_id, message_id, seq, author_id, created_at, excerpt, cut_before, cut_after}], next_cursor}` | substring search over the host cache of messages the server already returned to this viewer |
+| `events.stream` on `POST /v1/stream` | RPC envelope `{method: "events.stream", context, params: {cursors: [{conversation_id, after_event_seq}]}}` | `text/event-stream`: `: connected`/`: heartbeat` comments, `id:` / `event: message\|membership\|reaction` / `data: <TeamDeliveryEvent>`, `event: close` `{reason}` (`membership`/`not_found` re-list the inbox) | `events.poll` every 2 s with the same cursors |
+| `reactions.set` | `{message_id, emoji, on}` | `{message_id, emoji, count, reacted}` merged into the message's summaries | reaction controls hidden |
+| `messages.search` | `{query (2..200), conversation_id?, limit ≤ 50}` | `{hits: [{conversation_id, message_id, seq, author_id, created_at, excerpt, cut_before, cut_after}], next_cursor}` | substring search over the host cache of messages the server already returned |
 
-`messages.history` items may carry the PR 3 additive fields (`reactions`
-summaries, `reply_excerpt`, `reply_restricted`) and `conversations.list`
-items `unread_count`/`last_message_at`; the client accepts both shapes.
+`capabilities` accepts any further boolean flag (`references` since PR 4) so
+an additive capability never breaks the client.
 
 Client behaviour (all tested offline in `apps/vscode/test/teamChatService.test.ts`
 with `FakeTeamServer`, an in-memory stand-in for `@mars/team` behind the
@@ -525,11 +526,12 @@ transport interface):
   (`restricted: true` → `Restricted reference`, an allowed chip shows its
   locator); a record without chips falls back to one restricted chip per
   `reference_id`. No picker or preview panel yet.
-- Additive server fields never break the client: `capabilities` accepts any
-  further boolean flag (`references` since PR 4), history/send items accept
-  `references`, `reactions`, `reply_excerpt`, `reply_restricted`, list items
-  `unread_count`/`last_message_at` (preferred over the sequence distance, so
-  the viewer's own posts are never counted unread).
+- Unread counters come from `conversations.list` (`unread_count` excludes the
+  viewer's own posts); after `conversations.open` the client keeps that
+  counter while `last_seq`/`read_seq` are unchanged, otherwise counts cached
+  messages by others over a contiguous span and falls back to the sequence
+  distance. The first-unread boundary is taken from the cache only while it
+  is contiguous from the read cursor.
 - A reply excerpt is shown only when the target belongs to the same
   conversation; a mismatched `reply_to` from the server reveals nothing.
 - Search hits open their conversation, page back until the hit's sequence is
@@ -545,7 +547,8 @@ the cursor list in the request body (the stream is a `POST`), and the plan's
 
 Verified offline only: `cd apps/vscode && bun run typecheck && bun run test &&
 bun run smoke`, `bun run check`, the headless harness `service` scenario (real
-adapter + realtime poll against an in-page stub). Not verified: a VS Code
-window against a running `@mars/team`, the real `/v1/stream` once #64 merges
-(the frame layout and request envelope were taken from that PR's protocol and
-documentation).
+adapter + realtime poll against an in-page stub that speaks the `main`
+protocol shapes). Not verified: a VS Code window against a running
+`@mars/team` (the SSE frame layout and request envelope mirror
+`packages/team/src/server.ts`; no live stream has been held open from the
+extension host).

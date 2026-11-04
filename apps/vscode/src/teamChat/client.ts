@@ -4,6 +4,7 @@ import { TEAM_MAX_CLIENT_MESSAGE_ID_CHARS } from "@mars/contracts";
 import type { z } from "zod";
 import { RpcError, type RpcTransport } from "../rpc";
 import {
+  type ConversationListItem,
   ConversationListSchema,
   type ConversationView,
   ConversationViewSchema,
@@ -144,10 +145,13 @@ export class TeamClient {
     return messages;
   }
 
-  async listConversations(signal?: AbortSignal): Promise<ConversationView[]> {
+  async listConversations(
+    signal?: AbortSignal,
+  ): Promise<ConversationListItem[]> {
     const result = await this.call(TEAM_RPC_METHODS.list, {}, signal);
-    const views = validate(ConversationListSchema, result, "conversation list");
-    return views.map((v) => this.checkView(v));
+    const items = validate(ConversationListSchema, result, "conversation list");
+    for (const item of items) this.checkView(item);
+    return items;
   }
 
   async openConversation(
@@ -254,7 +258,7 @@ export class TeamClient {
     return events;
   }
 
-  /** Expected PR 3 service method; callers check `identity.capabilities.reactions` first. */
+  /** Callers check `identity.capabilities.reactions` first. */
   async setReaction(
     messageId: string,
     emoji: string,
@@ -272,7 +276,7 @@ export class TeamClient {
     return state;
   }
 
-  /** Expected PR 3 service method; callers check `identity.capabilities.search` first. */
+  /** Callers check `identity.capabilities.search` first. */
   async search(
     query: string,
     conversationId?: string | null,

@@ -127,7 +127,12 @@ describe("TeamClient", () => {
             user_id: ADA,
             role: "member",
             limits: {},
-            capabilities: { stream: false, reactions: false, search: false },
+            capabilities: {
+              stream: false,
+              reactions: false,
+              search: false,
+              references: false,
+            },
           };
         const [view] = list;
         if (!view) throw new Error("no view");

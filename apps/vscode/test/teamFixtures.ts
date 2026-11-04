@@ -10,9 +10,9 @@ import type {
 /**
  * In-memory stand-in for `@mars/team` behind the client's transport
  * interface (pattern: `test/fixtures.ts` `FakeServer`). It speaks the exact
- * RPC envelope and error vocabulary of `packages/team/src/server.ts` for the
- * methods on `main`, plus the expected PR 3 methods (`reactions.set`,
- * `messages.search`) when `capabilities` enables them. Identity comes from
+ * RPC envelope, result shapes and error vocabulary of `packages/team/src/
+ * server.ts` on `main` (PR 2 + PR 3 service half + PR 4); `capabilities`
+ * flags decide whether `reactions.set`/`messages.search` answer or reject. Identity comes from
  * the transport the test created, never from request fields.
  */
 export const TEAM_ID = "team_fixture";
@@ -290,7 +290,7 @@ export class FakeTeamServer {
           user_id: userId,
           role: "member",
           limits: { page_limit: 200, max_body_bytes: 16384 },
-          // `references` is what `main` ships since PR 4 (always present).
+          // `references` is always present on `main` (PR 4).
           capabilities: { ...this.capabilities, references: false },
         };
       case "conversations.list":
@@ -298,8 +298,7 @@ export class FakeTeamServer {
           .filter((id) => this.participant(id, userId)?.state === "active")
           .map((id) => {
             const view = this.conversationView(id, userId);
-            if (!this.capabilities.stream) return view;
-            // PR 3 service shape: per-participant counters on list items.
+            // `conversations.list` items carry per-participant counters.
             const rows = this.messages.filter(
               (m) =>
                 m.conversation_id === id && m.seq > view.participant.joined_seq,
@@ -338,7 +337,7 @@ export class FakeTeamServer {
         );
         if (existing) {
           if (existing.body !== p.body) throw rpc("conflict", "conflict", 409);
-          return existing;
+          return this.decorate(existing, userId, view.participant.joined_seq);
         }
         const message = this.post(
           userId,
@@ -473,16 +472,15 @@ export class FakeTeamServer {
     }
   }
 
-  /** PR 3 history item shape (reaction summaries + reply excerpt) when the server advertises reactions. */
+  /** History/send item as `main` returns it: chips, reaction summaries and the reply excerpt. */
   private decorate(message: Message, userId: string, floor: number): unknown {
-    // `main` (PR 4) always adds per-viewer chips to history/send results.
+    // Per-viewer chips on every history/send result.
     const withChips = {
       ...message,
       references: message.reference_ids.map(
         (id) => this.chips.get(id) ?? { reference_id: id, restricted: true },
       ),
     };
-    if (!this.capabilities.reactions) return withChips;
     const summaries = new Map<
       string,
       { emoji: string; count: number; reacted: boolean }
@@ -498,8 +496,14 @@ export class FakeTeamServer {
         if (r.user_id === userId) entry.reacted = true;
         summaries.set(r.emoji, entry);
       }
+    // Like the real store, a reply target is only ever one of this
+    // conversation's messages.
     const target = message.reply_to
-      ? this.messages.find((m) => m.message_id === message.reply_to)
+      ? this.messages.find(
+          (m) =>
+            m.message_id === message.reply_to &&
+            m.conversation_id === message.conversation_id,
+        )
       : undefined;
     const restricted = target !== undefined && target.seq <= floor;
     return {

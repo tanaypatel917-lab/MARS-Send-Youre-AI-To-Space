@@ -23,6 +23,7 @@ import {
 import { isRpcError, type RpcError } from "../rpc";
 import type { TeamClient } from "./client";
 import {
+  type ConversationListItem,
   type ConversationView,
   MIN_SEARCH_QUERY_CHARS,
   type ReactionSummary,
@@ -93,7 +94,12 @@ export class RpcTeamService implements TeamService {
     search: false,
     realtime: false,
   };
-  private readonly views = new Map<string, ConversationView>();
+  /** Latest view per conversation; list items also carry the server's counters. */
+  private readonly views = new Map<
+    string,
+    ConversationView &
+      Partial<Pick<ConversationListItem, "unread_count" | "last_message_at">>
+  >();
   private readonly messages = new Map<string, Map<number, ServiceMessage>>();
   /** Reaction summaries by message id (from history items or `reactions.set`). */
   private readonly reactions = new Map<string, ReactionSummary[]>();
@@ -171,8 +177,7 @@ export class RpcTeamService implements TeamService {
       this.messages.set(message.conversation_id, cached);
     }
     cached.set(message.seq, message);
-    if (message.reactions)
-      this.reactions.set(message.message_id, message.reactions);
+    this.reactions.set(message.message_id, message.reactions);
     if (cached.size > MAX_CACHED_PER_CONVERSATION) {
       const seqs = [...cached.keys()].sort((a, b) => a - b);
       for (const seq of seqs.slice(
@@ -197,14 +202,19 @@ export class RpcTeamService implements TeamService {
 
   // ---------------------------------------------------------------- views
 
-  private summary(view: ConversationView, me: string): ConversationSummary {
+  private summary(
+    view: ConversationView &
+      Partial<Pick<ConversationListItem, "unread_count" | "last_message_at">>,
+    me: string,
+  ): ConversationSummary {
     const { conversation, participant, members } = view;
     const floor = Math.max(participant.read_seq, participant.joined_seq);
     const cached = this.cachedSorted(conversation.conversation_id);
     const after = cached.filter((m) => m.seq > floor);
-    // Prefer the server's counter (excludes the viewer's own posts); without
-    // it, count cached messages by others when the cache covers the unread
-    // span, else fall back to the sequence distance.
+    // `conversations.list` carries the server's counter (excludes the
+    // viewer's own posts); `conversations.open` does not, so after an open
+    // count cached messages by others when the cache covers the unread span,
+    // else fall back to the sequence distance.
     const covered =
       after.length === conversation.last_seq - floor &&
       conversation.last_seq >= floor;
@@ -265,30 +275,25 @@ export class RpcTeamService implements TeamService {
       candidate && candidate.conversation_id === message.conversation_id
         ? candidate
         : undefined;
-    // PR 4 servers send per-viewer chips; without them every id fails
-    // closed to a restricted chip (no path, sha or excerpt).
-    const references: ReferenceView[] = message.references
-      ? message.references.map((chip) =>
-          chip.restricted
-            ? { reference_id: chip.reference_id, state: "restricted" }
-            : {
-                reference_id: chip.reference_id,
-                state: "ok",
-                kind: chip.line_start === null ? "file" : "range",
-                repo_id: chip.repo_id,
-                repo_name: chip.repo_id,
-                path: chip.path,
-                commit_sha: chip.commit_sha,
-                short_sha: chip.commit_sha.slice(0, 7),
-                line_start: chip.line_start,
-                line_end: chip.line_end,
-                symbol: null,
-              },
-        )
-      : message.reference_ids.map((id) => ({
-          reference_id: id,
-          state: "restricted",
-        }));
+    // The server sends per-viewer chips; a restricted chip renders with no
+    // path, sha or excerpt.
+    const references: ReferenceView[] = message.references.map((chip) =>
+      chip.restricted
+        ? { reference_id: chip.reference_id, state: "restricted" }
+        : {
+            reference_id: chip.reference_id,
+            state: "ok",
+            kind: chip.line_start === null ? "file" : "range",
+            repo_id: chip.repo_id,
+            repo_name: chip.repo_id,
+            path: chip.path,
+            commit_sha: chip.commit_sha,
+            short_sha: chip.commit_sha.slice(0, 7),
+            line_start: chip.line_start,
+            line_end: chip.line_end,
+            symbol: null,
+          },
+    );
     return {
       message_id: message.message_id,
       conversation_id: message.conversation_id,
@@ -397,7 +402,18 @@ export class RpcTeamService implements TeamService {
     );
     return this.guard(conversationId, async () => {
       const me = await this.identity();
-      const view = await this.client.openConversation(conversationId);
+      const opened = await this.client.openConversation(conversationId);
+      const listed = this.views.get(conversationId);
+      const view =
+        listed?.unread_count !== undefined &&
+        listed.conversation.last_seq === opened.conversation.last_seq &&
+        listed.participant.read_seq === opened.participant.read_seq
+          ? {
+              ...opened,
+              unread_count: listed.unread_count,
+              last_message_at: listed.last_message_at ?? null,
+            }
+          : opened;
       this.views.set(conversationId, view);
       const window =
         before === undefined ? { limit } : { before_seq: before, limit };
