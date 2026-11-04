@@ -1454,8 +1454,14 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
           input.cursors.length > limits.max_cursors_per_poll
         )
           throw invalidInput("Too many cursors");
+        // Every cursor is authorized and bounds-checked before any row is
+        // read, so a full page can never hide an invalid later cursor.
         const seen = new Set<string>();
-        const events: TeamDeliveryEvent[] = [];
+        const checked: {
+          conversation: ConversationRow;
+          participant: ParticipantRow;
+          after: number;
+        }[] = [];
         for (const cursor of input.cursors) {
           if (seen.has(cursor.conversation_id))
             throw invalidInput("Duplicate cursor");
@@ -1470,6 +1476,14 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
             cursor.after_event_seq > conversation.last_event_seq
           )
             throw new TeamError("unknown_cursor", "Unknown event cursor");
+          checked.push({
+            conversation,
+            participant,
+            after: cursor.after_event_seq,
+          });
+        }
+        const events: TeamDeliveryEvent[] = [];
+        for (const { conversation, participant, after } of checked) {
           const remaining = limit - events.length;
           if (remaining <= 0) break;
           const rows = db
@@ -1478,7 +1492,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
             )
             .all(
               conversation.conversation_id,
-              cursor.after_event_seq,
+              after,
               participant.joined_event_seq,
               remaining,
             );

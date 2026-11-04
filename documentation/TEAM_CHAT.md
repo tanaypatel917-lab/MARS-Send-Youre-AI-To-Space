@@ -49,10 +49,10 @@ Envelope, limits, auth handling and error vocabulary are the workbench's
 | `conversations.mark_read` | `{conversation_id, read_seq}` | Monotonic; `read_seq` ≤ the conversation's `last_seq` (always ≥ `joined_seq`, so it is also the unread floor). |
 | `conversations.pin` | `{conversation_id, pinned}` | Per participant. |
 | `messages.send` | `{conversation_id, client_message_id ≤ 128, body ≤ 16 KiB, reply_to?}` | `UNIQUE(conversation_id, author_id, client_message_id)`; same key + same `body_sha256` → the original `{message_id, seq}`; different body → `conflict`. Message and outbox row commit together. `reply_to` must be a message the author may see in the same conversation. |
-| `messages.history` | `{conversation_id, after_seq? \| before_seq?, limit ≤ 200}` | Membership re-checked inside the read transaction; page cut by count and serialized bytes, never skipping (a single oversized message → `too_large`); a participant sees only `seq > joined_seq`. Each item is the stored record plus `reactions: [{emoji, count, reacted}]` (sorted by key; no user lists) and, for replies, `reply_excerpt` (first 200 code points of the target) or `null` with `reply_restricted: true` when the target is before the caller's `joined_seq`. |
+| `messages.history` | `{conversation_id, after_seq? \| before_seq?, limit ≤ 200}` | Membership re-checked inside the read transaction; page cut by count and serialized bytes, never skipping (a single oversized message → `too_large`); a participant sees only `seq > joined_seq`. Each item is the stored record plus `reactions: [{emoji, count, reacted}]` (sorted by key; no user lists) and, for replies, `reply_excerpt` (first 200 UTF-16 units of the target, never splitting a surrogate pair) or `null` with `reply_restricted: true` when the target is before the caller's `joined_seq`. |
 | `events.poll` | `{cursors: [{conversation_id, after_event_seq}] ≤ 50, limit ≤ 1000}` | Membership-filtered outbox; events carry `{conversation_id, event_seq, kind, message_seq, message_id, revision}` only — never a body. `kind` is `message`, `membership` or `reaction`. Cursors are per conversation. |
 | `reactions.set` | `{message_id, emoji ≤ 32, on}` | Idempotent set/remove of the caller's reaction on a message they may see (`seq > joined_seq`; otherwise `not_found`). The key is validated with the invisible-code-point denylist from `packages/memory/src/threats.ts` (so no zero-width or variation-selector smuggling; `❤` is valid, `❤\ufe0f` is not) and must contain no whitespace. A change emits one outbox row `kind: "reaction"` with the message's `seq`/`message_id`; a no-op emits nothing. Returns `{message_id, emoji, count, reacted}`. Distinct keys per message are bounded (`max_reactions_per_message` → `too_large`). |
-| `messages.search` | `{query 2..200, conversation_id?, limit ≤ 50, cursor?}` | Membership is applied in SQL before any body is read: `JOIN participants … state='active' AND m.seq > p.joined_seq` on the caller's team, optional conversation filter (a conversation the caller is not in → `not_found`). Case-insensitive (ASCII, SQLite `LIKE` semantics; `%`, `_`, `\` are literal) substring match, newest first (`created_at DESC, message_id DESC`), ≤ 200-code-point excerpt around the first hit with `cut_before`/`cut_after`, opaque `next_cursor` bound to (caller, query, filter) — a reused or altered cursor is `invalid_request`. Rate-limited per (team, user) in a sliding minute (`max_search_per_minute` → `unavailable`). |
+| `messages.search` | `{query 2..200, conversation_id?, limit ≤ 50, cursor?}` | Membership is applied in SQL before any body is read: `JOIN participants … state='active' AND m.seq > p.joined_seq` on the caller's team, optional conversation filter (a conversation the caller is not in → `not_found`). Case-insensitive (ASCII, SQLite `LIKE` semantics; `%`, `_`, `\` are literal) substring match, newest first (`created_at DESC, message_id DESC`), ≤ 200-UTF-16-unit excerpt around the first hit (whole code points only) with `cut_before`/`cut_after`, opaque `next_cursor` bound to (caller, query, filter) — a reused or altered cursor is `invalid_request`. Rate-limited per (team, user) in a sliding minute (`max_search_per_minute` → `unavailable`). |
 
 Not implemented: references, @MARS requests, task links and result shares
 (PR 4–6; their schemas are reserved in `packages/contracts/src/team.ts`); any
@@ -102,7 +102,9 @@ Reconnect. The client keeps the last `event_seq` per conversation and resumes
 with those as `after_event_seq`. A cursor above the conversation's
 `last_event_seq`, negative, or duplicated is `invalid_request` (the workbench's
 `unknown_cursor` mapping); a conversation the caller cannot see is `not_found`
-and refuses the whole stream. `events.poll` with the same cursors is the
+and refuses the whole stream. Every cursor is authorized and bounds-checked
+before any row is read (in `events.poll` too), so a full first page cannot hide
+an invalid later cursor. `events.poll` with the same cursors is the
 fallback when a stream cannot be held open.
 
 Revocation. `remove_member`, `conversations.leave` and host-side
@@ -114,10 +116,18 @@ conversation is then `not_found` (or `forbidden` after a team removal). Nothing
 of the removed user remains server-side except their own authored rows and the
 `removed` participant row that records the join window.
 
+Backpressure. The response body is pull-driven: frames wait in the stream's
+own byte-bounded queue until the HTTP sink asks for them. A consumer that stops
+reading and falls more than `max_stream_buffer_bytes` behind receives only
+`event: close {"reason":"unavailable"}` and is disconnected; it resumes from
+its cursors. Nothing is queued per connection beyond that bound plus one
+backfill page.
+
 Limits (`TeamLimitsSchema`): `max_open_streams_per_user` (default 4; the next
 connection is `too_large`), `stream_heartbeat_ms` (15 000), `max_stream_batch_events`
-(200, capped by `max_poll_events`), `max_search_per_minute` (60 →
-`unavailable`), `max_reactions_per_message` (64 → `too_large`).
+(200, capped by `max_poll_events`), `max_stream_buffer_bytes` (1 MiB →
+`unavailable` close), `max_search_per_minute` (60 → `unavailable`),
+`max_reactions_per_message` (64 → `too_large`).
 
 ## Decisions recorded
 

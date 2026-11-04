@@ -9,7 +9,8 @@ import type {
   SearchResult,
 } from "./protocol";
 import { DEFAULT_TEAM_LIMITS } from "./schemas";
-import { excerptAround, isValidEmoji } from "./text";
+import { EventStream } from "./server";
+import { excerptAround, headExcerpt, isValidEmoji } from "./text";
 
 type View = ConversationViewResult;
 const fixtures: ReturnType<typeof fixture>[] = [];
@@ -546,7 +547,8 @@ test("(f) search is membership-filtered before excerpting: nothing from before a
   });
   const emoji = `${"😀".repeat(150)}HIT${"😀".repeat(150)}`;
   const cut = excerptAround(emoji, "hit", 200);
-  expect(Array.from(cut.text)).toHaveLength(200);
+  expect(cut.text.length).toBeLessThanOrEqual(200);
+  expect(cut.text.length).toBeGreaterThanOrEqual(198);
   expect(cut.text).toContain("HIT");
   expect(cut.text).not.toMatch(/[\ud800-\udfff](?![\udc00-\udfff])/u);
 });
@@ -776,4 +778,166 @@ test("conversations.list reports unread_count and last_message_at per participan
     pinned: true,
   });
   expect(pinned.pinned).toBe(true);
+});
+
+test("every cursor is validated before a full first page can hide it (review fix)", async () => {
+  const f = start({ max_stream_batch_events: 2, max_poll_events: 2 });
+  const dm = await f.ok<View>("alice", "conversations.create_dm", {
+    peer_user_id: "bob",
+  });
+  const id = dm.conversation.conversation_id;
+  for (let n = 1; n <= 5; n++)
+    await f.ok<Message>("alice", "messages.send", {
+      conversation_id: id,
+      client_message_id: `m${n}`,
+      body: `fill ${n}`,
+    });
+  const other = await f.ok<View>("bob", "conversations.create_dm", {
+    peer_user_id: "carol",
+  });
+  const foreign = other.conversation.conversation_id;
+  // Alice is not in bob↔carol; the first cursor alone fills the 2-row page.
+  const denied = await open(f, "alice", [
+    { conversation_id: id, after_event_seq: 0 },
+    { conversation_id: foreign, after_event_seq: 0 },
+  ]);
+  expect(denied.status).toBe(404);
+  const stale = await open(f, "alice", [
+    { conversation_id: id, after_event_seq: 0 },
+    { conversation_id: id.replace(/./, "x"), after_event_seq: 0 },
+  ]);
+  expect(stale.status).toBe(404);
+  expect(
+    (
+      await f.rpc("alice", "events.poll", {
+        cursors: [
+          { conversation_id: id, after_event_seq: 0 },
+          { conversation_id: id, after_event_seq: 0 },
+        ],
+        limit: 1,
+      })
+    ).status,
+  ).toBe(400);
+  expect(
+    (
+      await f.rpc("bob", "events.poll", {
+        cursors: [
+          { conversation_id: id, after_event_seq: 0 },
+          { conversation_id: foreign, after_event_seq: 99 },
+        ],
+        limit: 1,
+      })
+    ).status,
+  ).toBe(400);
+  expect(
+    (
+      await f.rpc("bob", "events.poll", {
+        cursors: [
+          { conversation_id: id, after_event_seq: 0 },
+          { conversation_id: foreign, after_event_seq: 0 },
+        ],
+        limit: 1,
+      })
+    ).status,
+  ).toBe(200);
+});
+
+test("excerpts are bounded in UTF-16 units and never split a surrogate pair (review fix)", async () => {
+  const f = start();
+  const dm = await f.ok<View>("alice", "conversations.create_dm", {
+    peer_user_id: "bob",
+  });
+  const id = dm.conversation.conversation_id;
+  const rockets = "🚀".repeat(150);
+  const target = await f.ok<Message>("alice", "messages.send", {
+    conversation_id: id,
+    client_message_id: "t",
+    body: rockets,
+  });
+  await f.ok<Message>("bob", "messages.send", {
+    conversation_id: id,
+    client_message_id: "r",
+    body: "reply",
+    reply_to: target.message_id,
+  });
+  const lone =
+    /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u;
+  const history = await f.ok<MessageView[]>("bob", "messages.history", {
+    conversation_id: id,
+  });
+  expect(history).toHaveLength(2);
+  const excerpt = history[1]?.reply_excerpt ?? "";
+  expect(excerpt.length).toBe(200);
+  expect(excerpt).toBe("🚀".repeat(100));
+  expect(lone.test(excerpt)).toBe(false);
+  const hits = await f.ok<SearchResult>("bob", "messages.search", {
+    query: "🚀🚀",
+  });
+  expect(hits.hits).toHaveLength(1);
+  expect(hits.hits[0]?.excerpt.length).toBeLessThanOrEqual(200);
+  expect(lone.test(hits.hits[0]?.excerpt ?? "")).toBe(false);
+  expect(hits.hits[0]).toMatchObject({ cut_before: false, cut_after: true });
+  // Odd cut positions move inwards instead of splitting a pair.
+  expect(headExcerpt(`a${"😀".repeat(100)}`, 200).text).toBe(
+    `a${"😀".repeat(99)}`,
+  );
+  const around = excerptAround(`${"😀".repeat(200)}HIT`, "hit", 200);
+  expect(around.text.length).toBeLessThanOrEqual(200);
+  expect(around.text.endsWith("HIT")).toBe(true);
+  expect(lone.test(around.text)).toBe(false);
+});
+
+test("a consumer that stops reading is disconnected at max_stream_buffer_bytes instead of growing the queue (review fix)", async () => {
+  const f = start({ max_stream_buffer_bytes: 1024 });
+  const dm = await f.ok<View>("alice", "conversations.create_dm", {
+    peer_user_id: "bob",
+  });
+  const id = dm.conversation.conversation_id;
+  let closed = 0;
+  const stream = new EventStream(
+    f.store,
+    { team_id: TEAM, user_id: "bob" },
+    new Map([[id, 0]]),
+    () => {
+      closed += 1;
+    },
+  );
+  const unsubscribe = f.store.subscribe((notice) => stream.notice(notice));
+  const response = stream.response(stream.initialPage());
+  // A detached ReadableStream pulls only when read; this reader never reads
+  // past the first chunk, so frames pile up in the stream's own queue.
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("no body");
+  await Bun.sleep(10);
+  let sent = 0;
+  while (!stream.closed && sent < 100) {
+    await f.ok<Message>("alice", "messages.send", {
+      conversation_id: id,
+      client_message_id: `m${sent}`,
+      body: "x",
+    });
+    sent += 1;
+  }
+  unsubscribe();
+  expect(stream.closed).toBe(true);
+  expect(closed).toBe(1);
+  expect(sent).toBeGreaterThan(3);
+  expect(sent).toBeLessThan(20);
+  const chunks: string[] = [];
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    chunks.push(new TextDecoder().decode(value));
+  }
+  const text = chunks.join("");
+  expect(text.startsWith(": connected")).toBe(true);
+  expect(
+    text.trimEnd().endsWith('event: close\ndata: {"reason":"unavailable"}'),
+  ).toBe(true);
+  // A live reader with the same bound keeps up without being disconnected.
+  const live = await open(f, "bob", [
+    { conversation_id: id, after_event_seq: 0 },
+  ]);
+  await live.waitFor(() => live.events.length === sent + 1);
+  expect(live.closes).toEqual([]);
 });

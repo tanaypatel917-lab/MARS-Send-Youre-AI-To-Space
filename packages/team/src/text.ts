@@ -82,13 +82,28 @@ export interface Excerpt {
   cut_after: boolean;
 }
 
-/** First `maxChars` code points. */
+const isHighSurrogate = (unit: number) => unit >= 0xd800 && unit <= 0xdbff;
+const isLowSurrogate = (unit: number) => unit >= 0xdc00 && unit <= 0xdfff;
+
+/**
+ * `text.slice(start, end)` moved inwards so it never starts on a low or ends
+ * on a high surrogate. Lengths are UTF-16 units, the unit the Zod `max`
+ * bounds of the response schemas use.
+ */
+function sliceWhole(text: string, start: number, end: number): string {
+  let from = start;
+  let to = Math.min(end, text.length);
+  if (from < to && isLowSurrogate(text.charCodeAt(from))) from += 1;
+  if (to > from && isHighSurrogate(text.charCodeAt(to - 1))) to -= 1;
+  return text.slice(from, to);
+}
+
+/** First `maxChars` UTF-16 units. */
 export function headExcerpt(text: string, maxChars: number): Excerpt {
-  const points = Array.from(text);
-  if (points.length <= maxChars)
+  if (text.length <= maxChars)
     return { text, cut_before: false, cut_after: false };
   return {
-    text: points.slice(0, maxChars).join(""),
+    text: sliceWhole(text, 0, maxChars),
     cut_before: false,
     cut_after: true,
   };
@@ -97,25 +112,26 @@ export function headExcerpt(text: string, maxChars: number): Excerpt {
 /**
  * Bounded window around the first case-folded hit, in the shape of
  * `excerptAround` in `packages/workbench/src/memory-context.ts`: the hit sits
- * a quarter of the way in, never splitting a surrogate pair.
+ * a quarter of the way in. `maxChars` is in UTF-16 units and the window never
+ * splits a surrogate pair.
  */
 export function excerptAround(
   text: string,
   query: string,
   maxChars: number,
 ): Excerpt {
-  const points = Array.from(text);
-  if (points.length <= maxChars)
+  if (text.length <= maxChars)
     return { text, cut_before: false, cut_after: false };
-  const unitIndex = foldAscii(text).indexOf(foldAscii(query));
-  const first = unitIndex < 0 ? 0 : Array.from(text.slice(0, unitIndex)).length;
+  const hit = foldAscii(text).indexOf(foldAscii(query));
+  const first = hit < 0 ? 0 : hit;
   const start = Math.max(
     0,
-    Math.min(first - Math.floor(maxChars / 4), points.length - maxChars),
+    Math.min(first - Math.floor(maxChars / 4), text.length - maxChars),
   );
+  const window = sliceWhole(text, start, start + maxChars);
   return {
-    text: points.slice(start, start + maxChars).join(""),
+    text: window,
     cut_before: start > 0,
-    cut_after: start + maxChars < points.length,
+    cut_after: start + maxChars < text.length,
   };
 }

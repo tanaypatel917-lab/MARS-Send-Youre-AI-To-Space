@@ -42,6 +42,12 @@ export const TeamLimitsSchema = z
     max_search_per_minute: z.number().int().positive().max(10_000),
     /** Distinct reaction keys per message. */
     max_reactions_per_message: z.number().int().positive().max(256),
+    /** Frame bytes a stream may hold for a consumer that is not reading. */
+    max_stream_buffer_bytes: z
+      .number()
+      .int()
+      .min(1024)
+      .max(64 * 1024 * 1024),
   })
   .strict();
 export type TeamLimits = z.infer<typeof TeamLimitsSchema>;
@@ -61,4 +67,5 @@ export const DEFAULT_TEAM_LIMITS: TeamLimits = {
   max_stream_batch_events: 200,
   max_search_per_minute: 60,
   max_reactions_per_message: 64,
+  max_stream_buffer_bytes: 1024 * 1024,
 };

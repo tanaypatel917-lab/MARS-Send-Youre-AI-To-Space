@@ -39,8 +39,8 @@ const server = serveTeam({
   `removed`) for the in-process server; nothing in a notice but ids.
 - `TeamLimitsSchema` / `DEFAULT_TEAM_LIMITS` — body bytes, group size, page
   size and bytes, cursors per poll, poll events, idempotency rows, open streams
-  per user, heartbeat period, stream batch, searches per minute, reaction keys
-  per message.
+  per user, heartbeat period, stream batch and buffer bytes, searches per
+  minute, reaction keys per message.
 - `TeamRpcRequestSchema` / `TeamStreamRequestSchema` — strict request shapes
   (see the method table in the documentation); `MessageViewSchema`,
   `ConversationListItemSchema`, `ReactionStateSchema`, `SearchResultSchema`

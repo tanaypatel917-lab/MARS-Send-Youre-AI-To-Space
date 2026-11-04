@@ -329,10 +329,20 @@ function checkEventOrder(
  * only marks the conversation dirty and the stream re-runs the same
  * membership-filtered `poll` from its own cursors, so backfill and live
  * frames come from one query and can neither skip nor repeat an event. The
- * fan-out state per connection is therefore bounded by the cursor count.
+ * fan-out state per connection is therefore bounded by the cursor count, and
+ * the output is pull-driven: frames wait in a byte-bounded queue until the
+ * consumer asks for them, and a consumer that falls more than
+ * `max_stream_buffer_bytes` behind is disconnected (`reason: "unavailable"`)
+ * and resumes from its cursors.
+ *
+ * Exported for the backpressure test only; `serveTeam` is the API.
  */
-class EventStream {
+export class EventStream {
   private controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+  private readonly pending: Uint8Array[] = [];
+  private pendingBytes = 0;
+  private pullWaiting: (() => void) | null = null;
+  private pullServed = false;
   private readonly dirty = new Set<string>();
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private scheduled = false;
@@ -366,6 +376,20 @@ class EventStream {
 
   response(firstPage: ReturnType<EventStream["initialPage"]>): Response {
     const body = new ReadableStream<Uint8Array>({
+      pull: (controller) => {
+        if (this.closed) return;
+        if (this.pending.length > 0) {
+          this.drain(controller);
+          return;
+        }
+        return new Promise<void>((resolve) => {
+          this.pullWaiting = () => {
+            this.pullWaiting = null;
+            this.drain(controller);
+            resolve();
+          };
+        });
+      },
       start: (controller) => {
         this.controller = controller;
         this.write(": connected\n\n");
@@ -445,30 +469,66 @@ class EventStream {
     );
   }
 
-  private write(frame: string) {
-    if (this.closed || !this.controller) return;
+  private drain(controller: ReadableStreamDefaultController<Uint8Array>) {
+    this.pullServed = true;
+    const chunks = this.pending.splice(0);
+    this.pendingBytes = 0;
     try {
-      this.controller.enqueue(encoder.encode(frame));
+      for (const chunk of chunks) controller.enqueue(chunk);
     } catch {
       this.close(null);
     }
   }
 
+  private write(frame: string) {
+    if (this.closed || !this.controller) return;
+    const chunk = encoder.encode(frame);
+    this.pending.push(chunk);
+    this.pendingBytes += chunk.byteLength;
+    if (this.pullWaiting) {
+      this.pullWaiting();
+      return;
+    }
+    // Before the first pull nothing is known about the consumer; after it,
+    // unclaimed frames beyond the bound mean it stopped reading.
+    if (
+      this.pullServed &&
+      this.pendingBytes > this.store.limits.max_stream_buffer_bytes
+    )
+      this.close("unavailable");
+  }
+
   close(reason: StreamClose["reason"] | null) {
     if (this.closed) return;
-    if (reason !== null)
-      this.write(
-        `event: close\ndata: ${JSON.stringify(StreamCloseSchema.parse({ reason }))}\n\n`,
-      );
     this.closed = true;
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = null;
-    try {
-      this.controller?.close();
-    } catch {
-      // Already closed by the peer.
-    }
+    const controller = this.controller;
     this.controller = null;
+    if (controller) {
+      try {
+        // A purposeful close drops what the consumer never took and delivers
+        // only the close frame; the client resumes from its cursors.
+        if (reason !== null) {
+          this.pending.length = 0;
+          controller.enqueue(
+            encoder.encode(
+              `event: close\ndata: ${JSON.stringify(StreamCloseSchema.parse({ reason }))}\n\n`,
+            ),
+          );
+        } else {
+          for (const chunk of this.pending.splice(0)) controller.enqueue(chunk);
+        }
+        controller.close();
+      } catch {
+        // Already closed by the peer.
+      }
+    }
+    this.pending.length = 0;
+    this.pendingBytes = 0;
+    const waiting = this.pullWaiting;
+    this.pullWaiting = null;
+    waiting?.();
     this.onClose();
   }
 }
