@@ -224,16 +224,26 @@ async function storeConnection(
   try {
     await host.storeGlobalServerUrl(connection.url);
   } catch {
-    try {
-      if (previousToken !== undefined) await host.storeToken(previousToken);
-      else await host.deleteToken();
-    } catch {
-      // Best effort: the original failure is what the user needs to see.
-    }
     return {
       status: "failed",
-      reason: "Could not save the server URL; the previous token was kept.",
+      reason: `Could not save the server URL; ${await rollBackToken(host, previousToken)}`,
     };
   }
   return { status: "imported", url: connection.url, scope: connection.scope };
+}
+
+async function rollBackToken(
+  host: ImportHost,
+  previousToken: string | undefined,
+): Promise<string> {
+  try {
+    if (previousToken !== undefined) {
+      await host.storeToken(previousToken);
+      return "the previous token was restored.";
+    }
+    await host.deleteToken();
+    return "the new token was removed.";
+  } catch {
+    return "the stored token could not be rolled back, re-import the connection file.";
+  }
 }
