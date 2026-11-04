@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export * from "./workbench-read";
+
 export const SCHEMA_VERSION = 1;
 const id = z.string().min(1);
 const revision = z.string().min(1);

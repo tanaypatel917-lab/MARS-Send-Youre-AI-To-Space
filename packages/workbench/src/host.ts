@@ -34,12 +34,15 @@ import type {
   WorkspaceRef,
 } from "@mars/contracts";
 import {
+  JournalEntryIdsSchema,
   REQUIRED_CHECK_DEFAULT_TIMEOUT_MS,
   RequiredCheckSchema,
   ScopeSchema,
   VERIFICATION_EVIDENCE_OPERATION,
   VerificationEvidenceRecordSchema,
   verificationStateFor,
+  WorkbenchProviderSchema,
+  WorkbenchVaultSchema,
 } from "@mars/contracts";
 import {
   EXECUTION_PACKAGE_VERSION,
@@ -57,7 +60,12 @@ import {
   type RuntimeWatch,
   selectExecutionModel,
 } from "@mars/execution";
+import type { StatusReport } from "@mars/memory-vault";
 import type { ModelProviderRegistry } from "@mars/providers";
+import {
+  isLoopbackUrl,
+  OMNIROUTE_PROVIDER_ID,
+} from "@mars/providers-omniroute";
 import type { Turn } from "@mars/review";
 import type { DurableTaskStore } from "@mars/tasks";
 import {
@@ -93,6 +101,7 @@ import {
   type WorkbenchKnowledgeGraph,
   withFrozenGraphSummary,
 } from "./graph-context";
+import { projectJournal, readJournalFile } from "./journal";
 import {
   FrozenMemorySchema,
   freezeMemory,
@@ -150,6 +159,10 @@ const launchSchema = z
     task_id: z.string().min(1),
     scope: ScopeSchema,
     model_id: z.string().min(1),
+    model_classification: z
+      .object({ tier: z.enum(["free", "paid", "local"]), free: z.boolean() })
+      .strict()
+      .optional(),
     deadline: z.number().int().positive().optional(),
     approvals: ApprovalsSchema,
     workspace: WorkspaceRefSchema,
@@ -259,6 +272,19 @@ export interface WorkbenchReview {
 const REVIEW_TRANSCRIPT_LENGTH = 8_000;
 
 export interface WorkbenchHostOptions {
+  image?: string;
+  /** Host-owned read seam; no vault path or store is accepted from an RPC client. */
+  vault?: { status(context: RequestContext): Promise<StatusReport> };
+  /** Cached discovery/doctor facts only; describe never probes a provider. */
+  providerStatus?: Readonly<
+    Record<
+      string,
+      {
+        health: "unknown" | "available" | "unavailable";
+        catalog_stale: boolean;
+      }
+    >
+  >;
   scope: Scope;
   workspaceLabel: string;
   stateRoot: string;
@@ -550,6 +576,20 @@ export async function createWorkbenchHost(
   };
   const taskState = (task: Task) =>
     join(root, scopeKey(options.scope, task.task_id));
+  const classifyModel = (modelId: string) => {
+    const model = options.registry.getModel(modelId);
+    if (!model) return null;
+    const provider = options.registry.getProvider(model.providerId);
+    const tier =
+      provider &&
+      provider.id !== OMNIROUTE_PROVIDER_ID &&
+      isLoopbackUrl(provider.baseUrl)
+        ? ("local" as const)
+        : model.pricing.free
+          ? ("free" as const)
+          : ("paid" as const);
+    return { tier, free: model.pricing.free };
+  };
   const readLaunch = async (task: Task): Promise<Launch> => {
     const dir = taskState(task);
     if (!inside(root, dir) || (await realpath(dir)) !== dir)
@@ -2076,14 +2116,65 @@ export async function createWorkbenchHost(
     runnerTimer.unref();
   }
 
-  const api: WorkbenchOperations = {
+  const api: WorkbenchOperations &
+    Required<Pick<WorkbenchOperations, "journal">> = {
     scope: options.scope,
     async describe() {
       if (closing) throw new WorkbenchError("unavailable");
+      let vault = null;
+      if (options.vault) {
+        const status = await options.vault.status(
+          internalContext(options.scope),
+        );
+        if (
+          status.scope.owner_id !== options.scope.owner_id ||
+          status.scope.project_id !== options.scope.project_id ||
+          status.scope.workspace_id !== options.scope.workspace_id
+        )
+          throw new WorkbenchError("forbidden");
+        vault = WorkbenchVaultSchema.parse({
+          pending_proposals:
+            status.memory.pending_vault_proposals +
+            status.skills.pending_vault_proposals,
+          last_export_at: status.exported_at,
+        });
+      }
+      const digest = options.image?.match(/@?(sha256:[a-f0-9]{64})$/)?.[1];
       return {
         scope: options.scope,
         workspaceLabel: options.workspaceLabel,
         capabilities: { execute: options.canExecute, checkpoint: true },
+        connectors: [],
+        image: digest ? { digest } : null,
+        conventions: options.conventions?.summary ?? {
+          instructions: options.conventions?.instructions?.files.length ?? 0,
+          hooks: 0,
+          commands: 0,
+        },
+        policy: {
+          allow_paid: options.registry.policy.allowPaid,
+          allow_screen_capture: false,
+        },
+        graph: null,
+        vault,
+        providers: options.registry.providers.map((provider) => {
+          const cached = options.providerStatus?.[provider.id];
+          return WorkbenchProviderSchema.parse({
+            id: provider.id,
+            kind:
+              provider.id === OMNIROUTE_PROVIDER_ID
+                ? "omniroute"
+                : isLoopbackUrl(provider.baseUrl)
+                  ? "local"
+                  : "direct",
+            health: options.registry.unavailableReason(provider.id)
+              ? "unavailable"
+              : (cached?.health ?? "unknown"),
+            catalog_stale:
+              cached?.catalog_stale ?? provider.id === OMNIROUTE_PROVIDER_ID,
+            policy_owner: "mars",
+          });
+        }),
       };
     },
     async create(context, task, createOptions) {
@@ -2100,7 +2191,89 @@ export async function createWorkbenchHost(
     },
     async inspect(context, taskId) {
       checkContext(context);
-      return options.store.inspect(context, taskId);
+      const task = await options.store.inspect(context, taskId);
+      const launch = await readLaunch(task).catch(() => null);
+      const classification = launch
+        ? (launch.model_classification ?? classifyModel(launch.model_id))
+        : null;
+      const usage = {
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_usd: 0 as number | null,
+      };
+      for await (const event of options.store.events(context, taskId)) {
+        if (!event.usage) continue;
+        usage.input_tokens += event.usage.input_tokens;
+        usage.output_tokens += event.usage.output_tokens;
+        usage.cost_usd =
+          usage.cost_usd === null || event.usage.cost_usd === null
+            ? null
+            : usage.cost_usd + event.usage.cost_usd;
+      }
+      return {
+        ...task,
+        model_tier: classification?.tier ?? null,
+        usage_totals: usage,
+        pinned: (launch?.instructions?.file_metadata ?? []).map((file) => ({
+          ...file,
+          trust: "untrusted" as const,
+        })),
+        context_rows: [
+          {
+            source: "durable task usage (all recorded turns and children)",
+            tokens: usage.input_tokens + usage.output_tokens,
+            cost_usd: usage.cost_usd,
+            remedy:
+              "Start a fresh task to reset cumulative usage; this is not the current context window.",
+          },
+          ...(launch
+            ? [
+                {
+                  source: "frozen launch context",
+                  tokens: null,
+                  cost_usd: null,
+                  remedy:
+                    "Start a new task to reload instructions, memory, skills, repository map and graph summary; per-source token counts are not recorded.",
+                },
+              ]
+            : []),
+        ],
+      };
+    },
+    async journal(context, taskId, entryIds) {
+      checkContext(context);
+      const task = await options.store.inspect(context, taskId);
+      JournalEntryIdsSchema.parse(entryIds);
+      const binding = await options.store.upstreamSession(context, taskId);
+      if (!binding || !entryIds.length)
+        return projectJournal([], entryIds, false);
+      const launch = await readLaunch(task).catch(() => null);
+      const free = launch
+        ? (launch.model_classification ?? classifyModel(launch.model_id))
+            ?.free === true
+        : false;
+      try {
+        const entries = await readJournalFile(
+          taskState(task),
+          binding.session_file,
+          binding.session_id,
+          entryIds,
+        );
+        const rows = projectJournal(entries, entryIds, free);
+        const patterns = await privatePatterns(context, taskId);
+        for (const row of rows)
+          assertPublicBytes(new TextEncoder().encode(row.text), patterns);
+        return rows;
+      } catch (error) {
+        if (
+          error !== null &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "ENOENT"
+        )
+          return projectJournal([], entryIds, free);
+        throw error;
+      }
     },
     async start(context, params) {
       checkContext(context);
@@ -2426,6 +2599,7 @@ export async function createWorkbenchHost(
           scope: task.scope,
           cwd,
           model_id: runtime.modelId,
+          model_classification: classifyModel(model.id) ?? undefined,
           deadline: launchDeadline,
           approvals: params.approvals,
           workspace: WorkspaceRefSchema.parse(workspace),
@@ -2870,6 +3044,7 @@ export async function createWorkbenchHost(
     steer: serialize((_, taskId) => taskId, api.steer),
     cancel: serialize((_, taskId) => taskId, api.cancel),
     events: track(api.events),
+    journal: track(api.journal),
     artifact: track(api.artifact),
     diff: track(api.diff),
     evidence: track(api.evidence),

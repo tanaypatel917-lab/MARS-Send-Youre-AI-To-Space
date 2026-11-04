@@ -17,8 +17,10 @@ import {
 import { type Scope, ScopeSchema } from "@mars/contracts";
 import { createKnowledgeGraphService } from "@mars/knowledge-graph";
 import { createMemoryStore, type DurableMemoryStore } from "@mars/memory";
+import { vaultStatus } from "@mars/memory-vault";
 import { loadModelRegistry, type ModelProviderRegistry } from "@mars/providers";
 import {
+  catalogHealth,
   createOmniRouteProcess,
   discoverOmniRouteCapabilities,
   type ExclusionOverrides,
@@ -26,6 +28,7 @@ import {
   type FreeTierCatalog,
   loadFreeTierCatalog,
   OMNIROUTE_DEFAULT_URL,
+  OMNIROUTE_PROVIDER_ID,
   type OmniRouteProcess,
   type OmniRouteProcessOptions,
   type OmniRouteProcessStatus,
@@ -134,6 +137,8 @@ export interface WorkbenchServiceOptions {
   scope: Scope;
   port?: number;
   image?: string;
+  /** Optional existing vault to report read-only status; never imported/exported by the workbench. */
+  vaultDir?: string;
   trustProjectConfig?: boolean;
   registry?: ModelProviderRegistry;
   /** Evidence-gated specialist router; launches use the registry default without it. */
@@ -167,7 +172,11 @@ export interface WorkbenchService {
 async function openOmniRoute(
   registry: ModelProviderRegistry,
   options: WorkbenchOmniRouteOptions,
-): Promise<{ process: OmniRouteProcess; registry: ModelProviderRegistry }> {
+): Promise<{
+  process: OmniRouteProcess;
+  registry: ModelProviderRegistry;
+  providerStatus: NonNullable<WorkbenchHostOptions["providerStatus"]>;
+}> {
   const url = options.url ?? OMNIROUTE_DEFAULT_URL;
   const env = options.env ?? process.env;
   const omniroute = createOmniRouteProcess({
@@ -194,6 +203,12 @@ async function openOmniRoute(
     });
     return {
       process: omniroute,
+      providerStatus: {
+        [OMNIROUTE_PROVIDER_ID]: {
+          health: discovered ? "available" : "unknown",
+          catalog_stale: catalogHealth(catalog).stale,
+        },
+      },
       registry: extendRegistryWithOmniRoute(registry, {
         catalog,
         url,
@@ -274,10 +289,12 @@ export async function createWorkbenchService(
     }));
   let omniroute: OmniRouteProcess | undefined;
   let registry = baseRegistry;
+  let providerStatus: WorkbenchHostOptions["providerStatus"];
   if (options.omniroute) {
     const opened = await openOmniRoute(baseRegistry, options.omniroute);
     omniroute = opened.process;
     registry = opened.registry;
+    providerStatus = opened.providerStatus;
   }
   let store: Awaited<ReturnType<typeof createTaskStore>>;
   try {
@@ -408,6 +425,21 @@ export async function createWorkbenchService(
       store,
       registry,
       canExecute: Boolean(sandbox),
+      ...(options.image ? { image: options.image } : {}),
+      ...(providerStatus ? { providerStatus } : {}),
+      ...(options.vaultDir
+        ? {
+            vault: {
+              status: (context) =>
+                vaultStatus(context, {
+                  vaultDir: options.vaultDir as string,
+                  memory: memory as DurableMemoryStore,
+                  skills,
+                  privateRoots: [root, source],
+                }),
+            },
+          }
+        : {}),
       memory,
       skills,
       ...(review ? { review } : {}),

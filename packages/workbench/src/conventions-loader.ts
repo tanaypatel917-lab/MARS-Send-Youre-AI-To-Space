@@ -98,5 +98,10 @@ export async function loadWorkbenchConventions(
       }
     }
   }
+  conventions.summary = {
+    instructions: summary.instruction_files.length,
+    hooks: summary.hooks,
+    commands: summary.commands.length,
+  };
   return { conventions, summary };
 }
