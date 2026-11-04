@@ -6,6 +6,12 @@ import {
   ConversationSchema,
   MessageSchema,
   ParticipantSchema,
+  ScopeSchema,
+  SharedEvidenceSchema,
+  ShareSelectionSchema,
+  TASK_LINK_MAX_MESSAGES,
+  TaskLinkSchema,
+  TaskStatusSchema,
   TEAM_MAX_BODY_CHARS,
   TEAM_MAX_CLIENT_MESSAGE_ID_CHARS,
   TEAM_MAX_REFERENCES,
@@ -24,6 +30,9 @@ import { TEAM_MAX_GROUP_SIZE, TeamLimitsSchema } from "./schemas";
  * appears in a request; the server derives it from the bearer token.
  *
  * TODO(PR 3): `events.stream` (SSE), `reactions.set`, `messages.search`.
+ * Task links (`tasks.link_*`) and result shares (`shares.*`) are the Team Chat
+ * PR 6 chat half; the service stores workbench ids and cards only and never
+ * calls a workbench itself.
  *
  * `agent.publish` is deliberately absent: answers are stored through the
  * host-only `TeamAgentHostPort`, never by a client.
@@ -84,6 +93,46 @@ export const PollParamsSchema = z
   })
   .strict();
 
+export const LinkDraftParamsSchema = z
+  .object({
+    conversation_id: id,
+    message_ids: z.array(id).min(1).max(TASK_LINK_MAX_MESSAGES),
+    reference_ids: z.array(id).max(TEAM_MAX_REFERENCES),
+  })
+  .strict();
+
+export const LinkConfirmParamsSchema = z
+  .object({
+    link_id: id,
+    workbench: z
+      .object({ scope: ScopeSchema, task_id: id, request_id: id })
+      .strict(),
+    target: z
+      .object({
+        repo_id: id.optional(),
+        base_revision: z.string().min(1).max(256).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+/**
+ * `evidence` is the caller's own workbench `tasks.evidence` result and
+ * `run_status` the caller's `tasks.inspect` status (the evidence result does
+ * not carry it; see the follow-up in `documentation/TEAM_CHAT.md`).
+ */
+export const SharePreviewParamsSchema = z
+  .object({
+    link_id: id,
+    evidence: SharedEvidenceSchema,
+    run_status: TaskStatusSchema,
+    selection: ShareSelectionSchema,
+  })
+  .strict();
+export const ShareCreateParamsSchema = SharePreviewParamsSchema.extend({
+  preview_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 export const AgentSelectionParamsSchema = z
   .object({
@@ -136,6 +185,17 @@ export const TeamRpcRequestSchema = z.discriminatedUnion("method", [
   ),
   method("messages.delete", z.object({ message_id: id }).strict()),
   method("events.poll", PollParamsSchema),
+  method("tasks.link_draft", LinkDraftParamsSchema),
+  method("tasks.link_confirm", LinkConfirmParamsSchema),
+  method(
+    "tasks.link_created",
+    z
+      .object({ link_id: id, task_revision: z.number().int().nonnegative() })
+      .strict(),
+  ),
+  method("tasks.link_inspect", z.object({ link_id: id }).strict()),
+  method("shares.preview", SharePreviewParamsSchema),
+  method("shares.create", ShareCreateParamsSchema),
   method("agent.preview", AgentSelectionParamsSchema),
   method("agent.request", AgentRequestParamsSchema),
   method("agent.cancel", requestId),
@@ -186,3 +246,22 @@ export const MessageListSchema = z.array(MessageSchema).max(MAX_HISTORY_LIMIT);
 export const EventListSchema = z
   .array(TeamDeliveryEventSchema)
   .max(MAX_POLL_LIMIT);
+
+export const TASK_LINK_EXCERPT_CHARS = 280;
+/** Shown to the requester in the confirmation step only; never stored. */
+export const TaskLinkExcerptSchema = z
+  .object({
+    message_id: id,
+    seq: z.number().int().positive(),
+    author_id: id,
+    excerpt: z.string().max(TASK_LINK_EXCERPT_CHARS),
+    truncated: z.boolean(),
+  })
+  .strict();
+export const TaskLinkDraftResultSchema = z
+  .object({
+    link: TaskLinkSchema,
+    excerpts: z.array(TaskLinkExcerptSchema).max(TASK_LINK_MAX_MESSAGES),
+  })
+  .strict();
+export type TaskLinkDraftResult = z.infer<typeof TaskLinkDraftResultSchema>;

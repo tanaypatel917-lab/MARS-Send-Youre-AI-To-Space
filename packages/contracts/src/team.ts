@@ -88,7 +88,8 @@ export const ParticipantSchema = z
   .strict();
 export type Participant = z.infer<typeof ParticipantSchema>;
 
-export const MessageKindSchema = z.enum(["user", "agent"]);
+/** `user` text, an @MARS `agent` answer, or a `result_card` share (PR 6). */
+export const MessageKindSchema = z.enum(["user", "agent", "result_card"]);
 export type MessageKind = z.infer<typeof MessageKindSchema>;
 
 export const MessageSchema = z
@@ -96,7 +97,7 @@ export const MessageSchema = z
     message_id: id,
     conversation_id: id,
     author_id: id,
-    /** `agent` messages are @MARS answers authored by `MARS_AGENT_USER_ID`; clients render them differently. */
+    /** `agent` messages are @MARS answers authored by `MARS_AGENT_USER_ID`; clients render `agent` and `result_card` differently. */
     kind: MessageKindSchema,
     /** Provenance of an `agent` message: the `AgentRequest` it answers. */
     agent_request_id: id.nullable(),
@@ -110,6 +111,8 @@ export const MessageSchema = z
     created_at: timestamp,
     edited_at: timestamp.nullable(),
     deleted: z.boolean(),
+    /** Only `result_card` messages carry the `ResultShare` the requester published. */
+    payload: z.lazy(() => ResultShareSchema).optional(),
   })
   .strict();
 export type Message = z.infer<typeof MessageSchema>;
@@ -290,36 +293,214 @@ export const AgentRequestSchema = z
   .strict();
 export type AgentRequest = z.infer<typeof AgentRequestSchema>;
 
+export const TASK_LINK_MAX_MESSAGES = 50;
+export const TASK_LINK_LAUNCH_KEY_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+export const TaskLinkStatusSchema = z.enum([
+  "draft",
+  "confirmed",
+  "created",
+  "shared",
+  "abandoned",
+]);
+export type TaskLinkStatus = z.infer<typeof TaskLinkStatusSchema>;
+
+/** What the requester chose to run against; opaque to the team service. */
+export const TaskLinkTargetSchema = z
+  .object({
+    repo_id: id.nullable(),
+    base_revision: z.string().min(1).max(256).nullable(),
+  })
+  .strict();
+export type TaskLinkTarget = z.infer<typeof TaskLinkTargetSchema>;
+
+/** The requester's binding to their own workbench; never shown to other members. */
+export const TaskLinkWorkbenchSchema = z
+  .object({ scope: scope, task_id: id, request_id: id })
+  .strict();
+export type TaskLinkWorkbench = z.infer<typeof TaskLinkWorkbenchSchema>;
+
+/**
+ * Chat-side record of a "Start task" handoff. The team service stores ids
+ * only: the workbench owns the task, the workspace and the evidence.
+ * `provenance` is frozen at draft time (message `seq` + `body_sha256`), so a
+ * later edit or deletion never changes what the task was started from.
+ */
 export const TaskLinkSchema = z
   .object({
     link_id: id,
     team_id: id,
     conversation_id: id,
     requester_id: id,
-    launch_key: z.string().min(1).max(128),
-    provenance: z.array(provenanceEntry),
-    reference_ids: z.array(id),
-    workbench: z
-      .object({ scope: scope, task_id: id, request_id: id })
-      .strict()
-      .nullable(),
-    status: z.enum(["draft", "confirmed", "created", "shared", "abandoned"]),
+    launch_key: z.string().regex(TASK_LINK_LAUNCH_KEY_PATTERN),
+    provenance: z.array(provenanceEntry).max(TASK_LINK_MAX_MESSAGES),
+    reference_ids: z.array(id).max(TEAM_MAX_REFERENCES),
+    target: TaskLinkTargetSchema.nullable(),
+    workbench: TaskLinkWorkbenchSchema.nullable(),
+    task_revision: revision.nullable(),
+    status: TaskLinkStatusSchema,
+    created_at: timestamp,
+    updated_at: timestamp,
   })
   .strict();
 export type TaskLink = z.infer<typeof TaskLinkSchema>;
 
-export const ResultShareSchema = z
+/** The link as every other conversation member sees it: no launch key, no workbench ids, no target. */
+export const TaskLinkSummarySchema = TaskLinkSchema.omit({
+  launch_key: true,
+  target: true,
+  workbench: true,
+}).strict();
+export type TaskLinkSummary = z.infer<typeof TaskLinkSummarySchema>;
+
+export const TaskLinkViewSchema = z.discriminatedUnion("view", [
+  z.object({ view: z.literal("requester"), link: TaskLinkSchema }).strict(),
+  z.object({ view: z.literal("member"), link: TaskLinkSummarySchema }).strict(),
+]);
+export type TaskLinkView = z.infer<typeof TaskLinkViewSchema>;
+
+// ---------------------------------------------------------------------------
+// Result shares. The evidence below is the caller's own `tasks.evidence`
+// result from `@mars/workbench` (`EvidenceResultSchema`), forwarded verbatim by
+// the client; the team service never talks to a workbench and cannot verify
+// it, so a card records who attested it and binds to the exact candidate.
+// ---------------------------------------------------------------------------
+
+export const SHARE_MAX_SUMMARY_CHARS = 2000;
+export const SHARE_MAX_VERIFY_EVENT_IDS = 8;
+export const SHARE_MAX_EVIDENCE_RECORDS = 1000;
+
+export const EvidenceVerdictSchema = z.enum([
+  "pass",
+  "fail",
+  "inconclusive",
+  "error",
+]);
+export const EvidenceAssuranceSchema = z.enum([
+  "none",
+  "visual_advisory",
+  "deterministic_local",
+  "isolated_local",
+  "remote_attested",
+]);
+
+/** Mirror of `@mars/workbench` `EvidenceRecordSchema` (additive change, Team Chat PR 6). */
+export const SharedEvidenceRecordSchema = z
   .object({
-    share_id: id,
-    link_id: id,
-    message_id: id,
+    event_id: id,
+    verdict: EvidenceVerdictSchema,
+    assurance: EvidenceAssuranceSchema,
+    verified: z.boolean(),
+    contract_id: id.optional(),
+    contract_digest: z.string().min(1).max(256).optional(),
+    recorded_at: z.string().datetime(),
+    workspace_id: id.nullable(),
+    workspace_revision: id.nullable(),
+    diff_sha256: sha256.nullable(),
+    stale: z.boolean(),
+  })
+  .strict()
+  .refine((record) => !record.verified || record.verdict === "pass", {
+    message: "Only a passed verdict may be verified",
+  });
+export type SharedEvidenceRecord = z.infer<typeof SharedEvidenceRecordSchema>;
+
+/** Mirror of `@mars/workbench` `EvidenceResultSchema` (`tasks.evidence`). */
+export const SharedEvidenceSchema = z
+  .object({
     task_revision: revision,
     workspace: WorkspaceRefSchema,
     diff_sha256: sha256,
-    evidence_event_id: id.nullable(),
+    verify_records: z
+      .array(SharedEvidenceRecordSchema)
+      .max(SHARE_MAX_EVIDENCE_RECORDS),
+  })
+  .strict();
+export type SharedEvidence = z.infer<typeof SharedEvidenceSchema>;
+
+export const ShareSelectionSchema = z
+  .object({
+    summary: z.string().max(SHARE_MAX_SUMMARY_CHARS),
+    include_diff_digest: z.boolean(),
+    verify_event_ids: z.array(id).max(SHARE_MAX_VERIFY_EVENT_IDS),
+    /** Artifact shares are gated on a later PR; any entry answers `unavailable`. */
+    artifacts: z.array(artifactRef).max(16).optional(),
+  })
+  .strict();
+export type ShareSelection = z.infer<typeof ShareSelectionSchema>;
+
+/** Why a card is not verified; `null` only when `verified` is true. */
+export const ShareUnverifiedReasonSchema = z.enum([
+  "failed",
+  "skipped",
+  "inconclusive",
+  "stale",
+  "missing",
+]);
+export type ShareUnverifiedReason = z.infer<typeof ShareUnverifiedReasonSchema>;
+
+/** Bounded copy of a selected verify record as the requester attested it. */
+export const ShareVerifyRecordSchema = z
+  .object({
+    event_id: id,
+    verdict: EvidenceVerdictSchema,
+    assurance: EvidenceAssuranceSchema,
     verified: z.boolean(),
+    stale: z.boolean(),
+    recorded_at: z.string().datetime(),
+  })
+  .strict();
+
+/**
+ * Deterministic card content: everything `shares.preview` shows and
+ * `shares.create` publishes. `preview_sha256` is the SHA-256 of its canonical
+ * JSON, so a card can only be posted exactly as previewed. Run status,
+ * verification verdict, export status and Git status stay separate fields.
+ */
+export const ResultCardSchema = z
+  .object({
+    link_id: id,
+    requester_id: id,
+    /** The team service cannot observe a workbench; the requester vouches. */
+    attested_by: id,
+    summary: z.string().max(SHARE_MAX_SUMMARY_CHARS),
     run_status: taskStatus,
+    verified: z.boolean(),
+    verified_reason: ShareUnverifiedReasonSchema.nullable(),
+    task_revision: revision,
+    workspace: WorkspaceRefSchema,
+    /** Null when the requester chose not to publish the digest; the service still binds to it. */
+    diff_sha256: sha256.nullable(),
+    evidence_event_id: id.nullable(),
+    /** SHA-256 of the canonical `tasks.evidence` result the card was built from. */
+    evidence_sha256: sha256,
+    verify_records: z
+      .array(ShareVerifyRecordSchema)
+      .max(SHARE_MAX_VERIFY_EVENT_IDS),
+    /** Patch/check artifacts are not exportable to chat until the artifact access gate lands. */
+    export_status: z.enum(["not_exported"]),
+    /** The service cannot observe git. */
     git_status: z.enum(["unknown", "clean", "dirty"]),
   })
   .strict();
+export type ResultCard = z.infer<typeof ResultCardSchema>;
+
+export const SharePreviewSchema = z
+  .object({ preview_sha256: sha256, card: ResultCardSchema })
+  .strict();
+export type SharePreview = z.infer<typeof SharePreviewSchema>;
+
+/**
+ * A posted card. `stale` / `superseded_by` are overlaid from the share
+ * binding at read time: a later share for the same link with a different
+ * `diff_sha256` marks earlier cards stale ("candidate changed") and points at
+ * the newer card; the posted content itself never changes.
+ */
+export const ResultShareSchema = ResultCardSchema.extend({
+  share_id: id,
+  message_id: id,
+  preview_sha256: sha256,
+  stale: z.boolean(),
+  superseded_by: id.nullable(),
+  created_at: timestamp,
+}).strict();
 export type ResultShare = z.infer<typeof ResultShareSchema>;

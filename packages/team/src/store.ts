@@ -24,6 +24,22 @@ import {
   MessageSchema,
   type Participant,
   ParticipantSchema,
+  type ResultCard,
+  ResultCardSchema,
+  type ResultShare,
+  ResultShareSchema,
+  SHARE_MAX_VERIFY_EVENT_IDS,
+  type SharedEvidence,
+  type SharedEvidenceRecord,
+  type SharePreview,
+  type ShareSelection,
+  type ShareUnverifiedReason,
+  TASK_LINK_MAX_MESSAGES,
+  type TaskLink,
+  TaskLinkSchema,
+  TaskLinkSummarySchema,
+  type TaskLinkView,
+  type TaskStatus,
   TEAM_MAX_REFERENCES,
   type TeamDeliveryEvent,
   TeamDeliveryEventSchema,
@@ -41,7 +57,18 @@ import {
   type TeamAgentHostPort,
   type TeamAgentOptions,
 } from "./agent";
-import { conflict, invalidInput, notFound, TeamError } from "./errors";
+import {
+  conflict,
+  invalidInput,
+  notFound,
+  TeamError,
+  unavailable,
+} from "./errors";
+import {
+  TASK_LINK_EXCERPT_CHARS,
+  type TaskLinkDraftResult,
+  TaskLinkDraftResultSchema,
+} from "./protocol";
 import {
   DEFAULT_TEAM_LIMITS,
   type TeamLimits,
@@ -115,9 +142,36 @@ export const TEAM_MIGRATIONS: ReadonlyArray<{ id: string; sql: string }> = [
     `,
   },
   {
-    id: "0002_agent_requests",
+    // Team Chat PR 6: chat-side task links and result cards. Workbench ids are
+    // opaque here; `provenance_json` is frozen at draft time and never rewritten.
+    id: "0002_task_links",
     sql: `
-      ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'user' CHECK (kind IN ('user', 'agent'));
+      CREATE TABLE task_links (
+        link_id TEXT PRIMARY KEY, team_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id),
+        requester_id TEXT NOT NULL, launch_key TEXT NOT NULL,
+        provenance_json TEXT NOT NULL, reference_ids_json TEXT NOT NULL,
+        target_json TEXT, workbench_json TEXT, task_revision INTEGER,
+        status TEXT NOT NULL CHECK (status IN ('draft', 'confirmed', 'created', 'shared', 'abandoned')),
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, record_sha256 TEXT NOT NULL,
+        UNIQUE (team_id, launch_key)
+      );
+      CREATE INDEX task_links_conversation ON task_links(conversation_id);
+      CREATE TABLE result_shares (
+        share_id TEXT PRIMARY KEY,
+        link_id TEXT NOT NULL REFERENCES task_links(link_id),
+        message_id TEXT NOT NULL UNIQUE REFERENCES messages(message_id),
+        message_seq INTEGER NOT NULL, preview_sha256 TEXT NOT NULL,
+        candidate_diff_sha256 TEXT NOT NULL, evidence_sha256 TEXT NOT NULL,
+        card_json TEXT NOT NULL, created_at TEXT NOT NULL, record_sha256 TEXT NOT NULL
+      );
+      CREATE INDEX result_shares_link ON result_shares(link_id, message_seq);
+    `,
+  },
+  {
+    id: "0003_agent_requests",
+    sql: `
+      ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'user' CHECK (kind IN ('user', 'agent', 'result_card'));
       ALTER TABLE messages ADD COLUMN agent_request_id TEXT;
       CREATE TABLE agent_requests (
         request_id TEXT PRIMARY KEY, team_id TEXT NOT NULL,
@@ -272,6 +326,30 @@ export interface TeamStore {
     actor: TeamActor,
     input: { cursors: PollCursor[]; limit?: number | undefined },
   ): TeamDeliveryEvent[];
+  /** Start-task handoff, chat half: the workbench task itself is created by the client. */
+  linkDraft(
+    actor: TeamActor,
+    requestId: string,
+    input: LinkDraftInput,
+  ): TaskLinkDraftResult;
+  linkConfirm(
+    actor: TeamActor,
+    requestId: string,
+    input: LinkConfirmInput,
+  ): TaskLink;
+  linkCreated(
+    actor: TeamActor,
+    requestId: string,
+    input: { link_id: string; task_revision: number },
+  ): TaskLink;
+  linkInspect(actor: TeamActor, linkId: string): TaskLinkView;
+  /** Exactly the card `shareCreate` would post, plus its digest. */
+  sharePreview(actor: TeamActor, input: ShareInput): SharePreview;
+  shareCreate(
+    actor: TeamActor,
+    requestId: string,
+    input: ShareInput & { preview_sha256: string },
+  ): Message;
   /** The exact context list a client shows before `agent.request`; its digest is `preview_sha256`. */
   agentPreview(actor: TeamActor, input: AgentSelection): AgentPreview;
   agentRequest(actor: TeamActor, input: AgentRequestInput): AgentRequest;
@@ -281,6 +359,71 @@ export interface TeamStore {
   /** Host-only driver; never exposed over RPC. */
   readonly agentHost: TeamAgentHostPort;
   close(): void;
+}
+
+export interface LinkDraftInput {
+  conversation_id: string;
+  message_ids: string[];
+  reference_ids: string[];
+}
+export interface LinkConfirmInput {
+  link_id: string;
+  workbench: NonNullable<TaskLink["workbench"]>;
+  target: { repo_id?: string | undefined; base_revision?: string | undefined };
+}
+export interface ShareInput {
+  link_id: string;
+  evidence: SharedEvidence;
+  run_status: TaskStatus;
+  selection: ShareSelection;
+}
+
+const UNVERIFIED_REASON_ORDER: readonly ShareUnverifiedReason[] = [
+  "missing",
+  "stale",
+  "failed",
+  "inconclusive",
+  "skipped",
+];
+
+/**
+ * The only path to `verified: true`: a selected record the workbench marked
+ * `verified && !stale` for this exact candidate. Everything else yields a
+ * reason; the service never judges evidence itself.
+ */
+export function assessVerification(
+  evidence: SharedEvidence,
+  selected: SharedEvidenceRecord[],
+): {
+  verified: boolean;
+  reason: ShareUnverifiedReason | null;
+  evidence_event_id: string | null;
+} {
+  if (selected.length === 0)
+    return { verified: false, reason: "missing", evidence_event_id: null };
+  const fresh = (record: SharedEvidenceRecord) =>
+    !record.stale &&
+    record.diff_sha256 === evidence.diff_sha256 &&
+    record.workspace_revision === evidence.workspace.revision;
+  const proof = selected.find((record) => record.verified && fresh(record));
+  if (proof)
+    return { verified: true, reason: null, evidence_event_id: proof.event_id };
+  const reasons = selected.map((record): ShareUnverifiedReason => {
+    if (!fresh(record)) return "stale";
+    if (record.verdict === "fail" || record.verdict === "error")
+      return "failed";
+    if (record.verdict === "inconclusive") return "inconclusive";
+    return "skipped";
+  });
+  const reason =
+    UNVERIFIED_REASON_ORDER.find((candidate) => reasons.includes(candidate)) ??
+    "missing";
+  const primary = selected[reasons.indexOf(reason)] ?? selected[0];
+  return {
+    verified: false,
+    reason,
+    evidence_event_id: primary?.event_id ?? null,
+  };
 }
 
 export function sha256(value: string | Uint8Array): string {
@@ -370,6 +513,34 @@ interface AgentRequestRow {
   record_sha256: string;
   answer_body: string | null;
   created_seq: number;
+}
+interface TaskLinkRow {
+  link_id: string;
+  team_id: string;
+  conversation_id: string;
+  requester_id: string;
+  launch_key: string;
+  provenance_json: string;
+  reference_ids_json: string;
+  target_json: string | null;
+  workbench_json: string | null;
+  task_revision: number | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  record_sha256: string;
+}
+interface ResultShareRow {
+  share_id: string;
+  link_id: string;
+  message_id: string;
+  message_seq: number;
+  preview_sha256: string;
+  candidate_diff_sha256: string;
+  evidence_sha256: string;
+  card_json: string;
+  created_at: string;
+  record_sha256: string;
 }
 interface OutboxRow {
   conversation_id: string;
@@ -606,7 +777,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
       kind: row.kind,
       agent_request_id: row.agent_request_id,
     };
-    // Rows written before migration 0002 were digested without `kind`.
+    // Rows written before migration 0003 were digested without `kind`.
     const intact =
       sha256(canonicalJson(record)) === row.record_sha256 ||
       (row.kind === "user" &&
@@ -614,7 +785,219 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
         sha256(canonicalJson(legacy)) === row.record_sha256);
     if (!intact)
       throw new TeamError("corrupt_record", "Stored message is invalid");
-    return MessageSchema.parse(record);
+    const share = row.kind === "result_card" ? shareRow(row.message_id) : null;
+    if (!share) return MessageSchema.parse(record);
+    return MessageSchema.parse({ ...record, payload: shareView(share) });
+  };
+
+  const storedMessageRow = (messageId: string): MessageRow => {
+    const row = db
+      .query<MessageRow, [string]>(
+        "SELECT * FROM messages WHERE message_id = ?",
+      )
+      .get(messageId);
+    if (!row)
+      throw new TeamError("corrupt_record", "Stored message is missing");
+    return row;
+  };
+
+  const shareRow = (messageId: string): ResultShareRow | null =>
+    db
+      .query<ResultShareRow, [string]>(
+        "SELECT * FROM result_shares WHERE message_id = ?",
+      )
+      .get(messageId) ?? null;
+
+  /** Posted content never changes; staleness is overlaid from later shares of the same link. */
+  const shareView = (row: ResultShareRow): ResultShare => {
+    const stored = {
+      share_id: row.share_id,
+      link_id: row.link_id,
+      message_id: row.message_id,
+      message_seq: row.message_seq,
+      preview_sha256: row.preview_sha256,
+      candidate_diff_sha256: row.candidate_diff_sha256,
+      evidence_sha256: row.evidence_sha256,
+      card_json: row.card_json,
+      created_at: row.created_at,
+    };
+    if (sha256(canonicalJson(stored)) !== row.record_sha256)
+      throw new TeamError("corrupt_record", "Stored result share is invalid");
+    const card = ResultCardSchema.safeParse(JSON.parse(row.card_json));
+    if (!card.success)
+      throw new TeamError("corrupt_record", "Stored result card is invalid");
+    const newer = db
+      .query<Pick<ResultShareRow, "message_id">, [string, number, string]>(
+        "SELECT message_id FROM result_shares WHERE link_id = ? AND message_seq > ? AND candidate_diff_sha256 != ? ORDER BY message_seq ASC LIMIT 1",
+      )
+      .get(row.link_id, row.message_seq, row.candidate_diff_sha256);
+    return ResultShareSchema.parse({
+      ...card.data,
+      share_id: row.share_id,
+      message_id: row.message_id,
+      preview_sha256: row.preview_sha256,
+      stale: newer !== null && newer !== undefined,
+      superseded_by: newer?.message_id ?? null,
+      created_at: row.created_at,
+    });
+  };
+
+  const linkRow = (linkId: string): TaskLinkRow | null =>
+    idSchema.safeParse(linkId).success
+      ? (db
+          .query<TaskLinkRow, [string]>(
+            "SELECT * FROM task_links WHERE link_id = ?",
+          )
+          .get(linkId) ?? null)
+      : null;
+
+  const linkRecord = (row: TaskLinkRow): TaskLink => {
+    const record = {
+      link_id: row.link_id,
+      team_id: row.team_id,
+      conversation_id: row.conversation_id,
+      requester_id: row.requester_id,
+      launch_key: row.launch_key,
+      provenance: JSON.parse(row.provenance_json) as unknown,
+      reference_ids: JSON.parse(row.reference_ids_json) as unknown,
+      target:
+        row.target_json === null
+          ? null
+          : (JSON.parse(row.target_json) as unknown),
+      workbench:
+        row.workbench_json === null
+          ? null
+          : (JSON.parse(row.workbench_json) as unknown),
+      task_revision: row.task_revision,
+      status: row.status,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+    if (sha256(canonicalJson(record)) !== row.record_sha256)
+      throw new TeamError("corrupt_record", "Stored task link is invalid");
+    return TaskLinkSchema.parse(record);
+  };
+
+  const saveLink = (link: TaskLink, insert: boolean) => {
+    const recordHash = sha256(canonicalJson(link));
+    if (insert)
+      db.query(
+        "INSERT INTO task_links (link_id, team_id, conversation_id, requester_id, launch_key, provenance_json, reference_ids_json, target_json, workbench_json, task_revision, status, created_at, updated_at, record_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        link.link_id,
+        link.team_id,
+        link.conversation_id,
+        link.requester_id,
+        link.launch_key,
+        canonicalJson(link.provenance),
+        canonicalJson(link.reference_ids),
+        link.target === null ? null : canonicalJson(link.target),
+        link.workbench === null ? null : canonicalJson(link.workbench),
+        link.task_revision,
+        link.status,
+        link.created_at,
+        link.updated_at,
+        recordHash,
+      );
+    else
+      db.query(
+        "UPDATE task_links SET target_json = ?, workbench_json = ?, task_revision = ?, status = ?, updated_at = ?, record_sha256 = ? WHERE link_id = ?",
+      ).run(
+        link.target === null ? null : canonicalJson(link.target),
+        link.workbench === null ? null : canonicalJson(link.workbench),
+        link.task_revision,
+        link.status,
+        link.updated_at,
+        recordHash,
+        link.link_id,
+      );
+  };
+
+  /**
+   * Resolves a link for the actor: absent, foreign-team and non-participant
+   * cases all answer the same `not_found`; `requesterOnly` rejects other
+   * members with `forbidden` (they may inspect, never act).
+   */
+  const requireLink = (
+    actor: TeamActor,
+    linkId: string,
+    requesterOnly: boolean,
+  ): {
+    link: TaskLink;
+    conversation: ConversationRow;
+    participant: ParticipantRow;
+  } => {
+    const row = linkRow(linkId);
+    if (!row || row.team_id !== actor.team_id) throw notFound();
+    const { conversation, participant } = requireParticipant(
+      actor,
+      row.conversation_id,
+    );
+    const link = linkRecord(row);
+    if (link.requester_id !== actor.user_id) {
+      // A member who joined (or rejoined) after the quoted messages cannot read
+      // them through history, so the link stays invisible to them as well.
+      if (link.provenance.some((entry) => entry.seq <= participant.joined_seq))
+        throw notFound();
+      if (requesterOnly)
+        throw new TeamError(
+          "forbidden",
+          "Only the requester may act on a link",
+        );
+    }
+    return { link, conversation, participant };
+  };
+
+  const linkRecordSchema: z.ZodType<TaskLink> = TaskLinkSchema;
+
+  const buildCard = (
+    actor: TeamActor,
+    link: TaskLink,
+    input: ShareInput,
+  ): SharePreview => {
+    if ((input.selection.artifacts?.length ?? 0) > 0)
+      throw unavailable("Artifact shares are not available yet");
+    if (link.status !== "created" && link.status !== "shared")
+      throw conflict("Link has no workbench task yet");
+    const ids = [...new Set(input.selection.verify_event_ids)];
+    if (ids.length > SHARE_MAX_VERIFY_EVENT_IDS)
+      throw invalidInput("Too many verify records");
+    const selected = ids.map((eventId) => {
+      const record = input.evidence.verify_records.find(
+        (candidate) => candidate.event_id === eventId,
+      );
+      if (!record) throw invalidInput("Verify record is not in the evidence");
+      return record;
+    });
+    const verdict = assessVerification(input.evidence, selected);
+    const card: ResultCard = {
+      link_id: link.link_id,
+      requester_id: link.requester_id,
+      attested_by: actor.user_id,
+      summary: input.selection.summary,
+      run_status: input.run_status,
+      verified: verdict.verified,
+      verified_reason: verdict.reason,
+      task_revision: input.evidence.task_revision,
+      workspace: input.evidence.workspace,
+      diff_sha256: input.selection.include_diff_digest
+        ? input.evidence.diff_sha256
+        : null,
+      evidence_event_id: verdict.evidence_event_id,
+      evidence_sha256: sha256(canonicalJson(input.evidence)),
+      verify_records: selected.map((record) => ({
+        event_id: record.event_id,
+        verdict: record.verdict,
+        assurance: record.assurance,
+        verified: record.verified,
+        stale: record.stale,
+        recorded_at: record.recorded_at,
+      })),
+      export_status: "not_exported",
+      git_status: "unknown",
+    };
+    const parsed = ResultCardSchema.parse(card);
+    return { preview_sha256: sha256(canonicalJson(parsed)), card: parsed };
   };
   const saveMessageBody = (
     row: MessageRow,
@@ -2042,6 +2425,298 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
             );
         }
         return events;
+      });
+    },
+    linkDraft(actor, requestId, input) {
+      return write(() => {
+        requireTeamMember(actor);
+        return idempotent(
+          actor,
+          requestId,
+          "tasks.link_draft",
+          input,
+          TaskLinkDraftResultSchema,
+          () => {
+            const parsed = z
+              .object({
+                conversation_id: idSchema,
+                message_ids: z
+                  .array(idSchema)
+                  .min(1)
+                  .max(TASK_LINK_MAX_MESSAGES),
+                reference_ids: z.array(idSchema).max(TEAM_MAX_REFERENCES),
+              })
+              .strict()
+              .safeParse(input);
+            if (!parsed.success) throw invalidInput("Invalid task link input");
+            const { conversation, participant } = requireParticipant(
+              actor,
+              parsed.data.conversation_id,
+            );
+            const rows: MessageRow[] = [];
+            for (const messageId of new Set(parsed.data.message_ids)) {
+              const row = db
+                .query<MessageRow, [string, string]>(
+                  "SELECT * FROM messages WHERE message_id = ? AND conversation_id = ?",
+                )
+                .get(messageId, conversation.conversation_id);
+              if (!row || row.seq <= participant.joined_seq)
+                throw invalidInput("Message is not in this conversation");
+              rows.push(row);
+            }
+            rows.sort((a, b) => a.seq - b.seq);
+            const at = timestamp();
+            const linkId = randomId();
+            const link: TaskLink = TaskLinkSchema.parse({
+              link_id: linkId,
+              team_id: actor.team_id,
+              conversation_id: conversation.conversation_id,
+              requester_id: actor.user_id,
+              launch_key: `tc-${sha256(canonicalJson([actor.team_id, linkId])).slice(0, 48)}`,
+              provenance: rows.map((row) => ({
+                message_id: row.message_id,
+                seq: row.seq,
+                body_sha256: row.body_sha256,
+              })),
+              reference_ids: [...new Set(parsed.data.reference_ids)],
+              target: null,
+              workbench: null,
+              task_revision: null,
+              status: "draft",
+              created_at: at,
+              updated_at: at,
+            });
+            saveLink(link, true);
+            return TaskLinkDraftResultSchema.parse({
+              link,
+              excerpts: rows.map((row) => {
+                const body = row.deleted === 1 ? "" : row.body;
+                const chars = Array.from(body);
+                return {
+                  message_id: row.message_id,
+                  seq: row.seq,
+                  author_id: row.author_id,
+                  excerpt: chars.slice(0, TASK_LINK_EXCERPT_CHARS).join(""),
+                  truncated: chars.length > TASK_LINK_EXCERPT_CHARS,
+                };
+              }),
+            });
+          },
+        );
+      });
+    },
+    linkConfirm(actor, requestId, input) {
+      return write(() => {
+        requireTeamMember(actor);
+        return idempotent(
+          actor,
+          requestId,
+          "tasks.link_confirm",
+          input,
+          linkRecordSchema,
+          () => {
+            const { link } = requireLink(actor, input.link_id, true);
+            const workbench = TaskLinkSchema.shape.workbench
+              .unwrap()
+              .safeParse(input.workbench);
+            if (!workbench.success)
+              throw invalidInput("Invalid workbench binding");
+            const target = {
+              repo_id: input.target.repo_id ?? null,
+              base_revision: input.target.base_revision ?? null,
+            };
+            if (link.status !== "draft") {
+              // An interrupted confirm retried with a new request id resolves to
+              // the same link only when it names the same workbench task.
+              if (
+                link.workbench !== null &&
+                canonicalJson(link.workbench) ===
+                  canonicalJson(workbench.data) &&
+                canonicalJson(link.target) === canonicalJson(target)
+              )
+                return link;
+              throw conflict("Link is already bound to a workbench task");
+            }
+            const confirmed = TaskLinkSchema.parse({
+              ...link,
+              workbench: workbench.data,
+              target,
+              status: "confirmed",
+              updated_at: timestamp(),
+            });
+            saveLink(confirmed, false);
+            return confirmed;
+          },
+        );
+      });
+    },
+    linkCreated(actor, requestId, input) {
+      return write(() => {
+        requireTeamMember(actor);
+        return idempotent(
+          actor,
+          requestId,
+          "tasks.link_created",
+          input,
+          linkRecordSchema,
+          () => {
+            if (
+              !Number.isInteger(input.task_revision) ||
+              input.task_revision < 0
+            )
+              throw invalidInput("Invalid task revision");
+            const { link } = requireLink(actor, input.link_id, true);
+            if (
+              link.status !== "confirmed" &&
+              link.status !== "created" &&
+              link.status !== "shared"
+            )
+              throw conflict("Link is not awaiting workbench creation");
+            if (
+              link.task_revision !== null &&
+              input.task_revision < link.task_revision
+            )
+              throw conflict("Task revision moved backwards");
+            if (link.task_revision === input.task_revision) return link;
+            const created = TaskLinkSchema.parse({
+              ...link,
+              task_revision: input.task_revision,
+              status: link.status === "shared" ? "shared" : "created",
+              updated_at: timestamp(),
+            });
+            saveLink(created, false);
+            return created;
+          },
+        );
+      });
+    },
+    linkInspect(actor, linkId) {
+      return read(() => {
+        requireTeamMember(actor);
+        const { link } = requireLink(actor, linkId, false);
+        if (link.requester_id === actor.user_id)
+          return { view: "requester" as const, link };
+        const {
+          launch_key: _key,
+          target: _target,
+          workbench: _wb,
+          ...rest
+        } = link;
+        return {
+          view: "member" as const,
+          link: TaskLinkSummarySchema.parse(rest),
+        };
+      });
+    },
+    sharePreview(actor, input) {
+      return read(() => {
+        requireTeamMember(actor);
+        const { link } = requireLink(actor, input.link_id, true);
+        return buildCard(actor, link, input);
+      });
+    },
+    shareCreate(actor, requestId, input) {
+      return write(() => {
+        requireTeamMember(actor);
+        // The idempotent replay carries the bytes as first posted; the
+        // stale/superseded overlay is re-read so a retry agrees with history.
+        const posted = idempotent(
+          actor,
+          requestId,
+          "shares.create",
+          input,
+          MessageSchema,
+          () => {
+            const { link, conversation } = requireLink(
+              actor,
+              input.link_id,
+              true,
+            );
+            const { preview_sha256, ...rest } = input;
+            const preview = buildCard(actor, link, rest);
+            if (preview.preview_sha256 !== preview_sha256)
+              throw conflict("Preview digest does not match the card");
+            if (Buffer.byteLength(preview.card.summary) > limits.max_body_bytes)
+              throw new TeamError(
+                "too_large",
+                "Message body exceeds the size limit",
+              );
+            const seq = conversation.last_seq + 1;
+            const shareId = randomId();
+            const at = timestamp();
+            const record = insertMessage(conversation, {
+              message_id: randomId(),
+              conversation_id: conversation.conversation_id,
+              author_id: actor.user_id,
+              kind: "result_card",
+              agent_request_id: null,
+              seq,
+              client_message_id: `share:${shareId}`,
+              body: preview.card.summary,
+              body_sha256: sha256(preview.card.summary),
+              reply_to: null,
+              reference_ids: [],
+              created_at: at,
+              edited_at: null,
+              deleted: false,
+            });
+            const stored = {
+              share_id: shareId,
+              link_id: link.link_id,
+              message_id: record.message_id,
+              message_seq: seq,
+              preview_sha256: preview.preview_sha256,
+              candidate_diff_sha256: input.evidence.diff_sha256,
+              evidence_sha256: preview.card.evidence_sha256,
+              card_json: canonicalJson(preview.card),
+              created_at: at,
+            };
+            db.query(
+              "INSERT INTO result_shares (share_id, link_id, message_id, message_seq, preview_sha256, candidate_diff_sha256, evidence_sha256, card_json, created_at, record_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ).run(
+              stored.share_id,
+              stored.link_id,
+              stored.message_id,
+              stored.message_seq,
+              stored.preview_sha256,
+              stored.candidate_diff_sha256,
+              stored.evidence_sha256,
+              stored.card_json,
+              stored.created_at,
+              sha256(canonicalJson(stored)),
+            );
+            if (link.status !== "shared")
+              saveLink(
+                TaskLinkSchema.parse({
+                  ...link,
+                  status: "shared",
+                  updated_at: at,
+                }),
+                false,
+              );
+            const message = messageRecord(storedMessageRow(record.message_id));
+            // A card must stay readable through messages.history even once the
+            // overlay marks it stale; the whole page budget is the ceiling.
+            const worstCase = {
+              ...message,
+              payload: message.payload && {
+                ...message.payload,
+                stale: true,
+                superseded_by: message.message_id,
+              },
+            };
+            if (
+              Buffer.byteLength(JSON.stringify(worstCase)) + ENVELOPE_BYTES >
+              limits.max_page_bytes
+            )
+              throw new TeamError(
+                "too_large",
+                "Result card exceeds the page size",
+              );
+            return message;
+          },
+        );
+        return messageRecord(storedMessageRow(posted.message_id));
       });
     },
     close() {

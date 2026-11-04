@@ -31,3 +31,5 @@ export const invalidInput = (message: string) =>
 export const notFound = () =>
   new TeamError("not_found", "Conversation or member not found");
 export const conflict = (message: string) => new TeamError("conflict", message);
+export const unavailable = (message: string) =>
+  new TeamError("unavailable", message);
