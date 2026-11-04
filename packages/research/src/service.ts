@@ -1058,7 +1058,7 @@ export async function createResearchService(
         `UPDATE requests
          SET status = 'cancelled', error_code = 'cancelled', finished_at = ?,
              lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
-         WHERE status IN ('queued', 'running') AND status = 'queued'
+         WHERE status = 'queued'
            AND cancel_requested = 1`,
       ).run(timestamp(now));
       const candidates = db
@@ -1157,7 +1157,7 @@ export async function createResearchService(
          SET status = 'completed', finished_at = ?, lease_owner = NULL,
              lease_token = NULL, lease_expires_at = NULL
          WHERE scope_key = ? AND request_id = ? AND lease_token = ?
-           AND status IN ('queued', 'running') AND status = 'running'
+           AND status = 'running'
            AND cancel_requested = 0
            AND lease_expires_at > ?`,
       ).run(
@@ -1201,7 +1201,7 @@ export async function createResearchService(
           `UPDATE requests SET status = 'queued', available_at = ?,
              lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
            WHERE scope_key = ? AND request_id = ? AND lease_token = ?
-             AND status IN ('queued', 'running') AND status = 'running'
+             AND status = 'running'
              AND lease_expires_at > ?`,
         ).run(
           currentTime() + configured.retryBackoffMs * row.attempts,
@@ -1216,7 +1216,7 @@ export async function createResearchService(
              finished_at = ?, lease_owner = NULL, lease_token = NULL,
              lease_expires_at = NULL
            WHERE scope_key = ? AND request_id = ? AND lease_token = ?
-             AND status IN ('queued', 'running') AND status = 'running'
+             AND status = 'running'
              AND lease_expires_at > ?`,
         ).run(
           nonRetryable ? "worker_failed" : "attempts_exhausted",
@@ -1555,7 +1555,7 @@ export async function createResearchService(
                  error_code = 'budget_exceeded', finished_at = ?,
                  lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
                WHERE scope_key = ? AND request_id = ? AND lease_token = ?
-                 AND status IN ('queued', 'running') AND status = 'running'`,
+                 AND status = 'running'`,
             ).run(
               JSON.stringify(nextUsage),
               timestamp(currentTime()),
@@ -2171,7 +2171,7 @@ export async function createResearchService(
                    lease_owner = NULL, lease_token = NULL,
                    lease_expires_at = NULL
                  WHERE scope_key = ? AND request_id = ? AND lease_token = ?
-                   AND status IN ('queued', 'running') AND status = 'running'`,
+                   AND status = 'running'`,
               ).run(currentTime(), run.scopeKey, run.requestId, run.token);
             });
           }
