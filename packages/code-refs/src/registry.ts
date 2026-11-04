@@ -57,7 +57,9 @@ export interface RepoRegistryOptions {
 
 function contains(parent: string, child: string): boolean {
   const rel = relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  if (rel === "") return true;
+  if (rel === ".." || rel.startsWith(`..${sep}`)) return false;
+  return !isAbsolute(rel);
 }
 
 function stripTrailingSeparator(path: string): string {
@@ -97,51 +99,62 @@ export function createRepoRegistry(
     }
   };
 
+  let chain: Promise<unknown> = Promise.resolve();
+
+  const registerUnlocked = async (
+    input: RepoRegistration,
+  ): Promise<RepoSummary> => {
+    const parsed = RepoRegistrationSchema.safeParse(input);
+    if (!parsed.success)
+      throw new RepoRegistrationFailed("invalid_registration");
+    const { repo_id, label } = parsed.data;
+    if (!isAbsolute(parsed.data.dir))
+      throw new RepoRegistrationFailed("dir_not_absolute");
+    const dir = stripTrailingSeparator(parsed.data.dir);
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(dir);
+    } catch {
+      throw new RepoRegistrationFailed("dir_not_directory");
+    }
+    if (stat.isSymbolicLink())
+      throw new RepoRegistrationFailed("dir_is_symlink");
+    if (!stat.isDirectory())
+      throw new RepoRegistrationFailed("dir_not_directory");
+    if (canonical(dir) !== dir)
+      throw new RepoRegistrationFailed("dir_not_canonical");
+    if (repos.has(repo_id)) throw new RepoRegistrationFailed("repo_id_taken");
+    for (const existing of repos.values())
+      if (contains(existing.dir, dir) || contains(dir, existing.dir))
+        throw new RepoRegistrationFailed("dir_overlaps_registered");
+
+    const [isBare, gitDir] = await probe(dir, [
+      "rev-parse",
+      "--is-bare-repository",
+      "--absolute-git-dir",
+    ]);
+    if (gitDir === undefined || (isBare !== "true" && isBare !== "false"))
+      throw new RepoRegistrationFailed("dir_not_git");
+    if (canonical(gitDir) !== dir) {
+      if (isBare === "true") throw new RepoRegistrationFailed("dir_not_git");
+      const [toplevel] = await probe(dir, ["rev-parse", "--show-toplevel"]);
+      if (toplevel === undefined || toplevel === "")
+        throw new RepoRegistrationFailed("dir_not_git");
+      if (canonical(toplevel) !== dir)
+        throw new RepoRegistrationFailed("dir_not_git");
+    }
+
+    repos.set(repo_id, { repo_id, label, dir });
+    return { repo_id, label };
+  };
+
   return {
     git,
-    async register(input) {
-      const parsed = RepoRegistrationSchema.safeParse(input);
-      if (!parsed.success)
-        throw new RepoRegistrationFailed("invalid_registration");
-      const { repo_id, label } = parsed.data;
-      if (!isAbsolute(parsed.data.dir))
-        throw new RepoRegistrationFailed("dir_not_absolute");
-      const dir = stripTrailingSeparator(parsed.data.dir);
-      let stat: ReturnType<typeof lstatSync>;
-      try {
-        stat = lstatSync(dir);
-      } catch {
-        throw new RepoRegistrationFailed("dir_not_directory");
-      }
-      if (stat.isSymbolicLink())
-        throw new RepoRegistrationFailed("dir_is_symlink");
-      if (!stat.isDirectory())
-        throw new RepoRegistrationFailed("dir_not_directory");
-      if (canonical(dir) !== dir)
-        throw new RepoRegistrationFailed("dir_not_canonical");
-      if (repos.has(repo_id)) throw new RepoRegistrationFailed("repo_id_taken");
-      for (const existing of repos.values())
-        if (contains(existing.dir, dir) || contains(dir, existing.dir))
-          throw new RepoRegistrationFailed("dir_overlaps_registered");
-
-      const [isBare, gitDir] = await probe(dir, [
-        "rev-parse",
-        "--is-bare-repository",
-        "--absolute-git-dir",
-      ]);
-      if (gitDir === undefined || (isBare !== "true" && isBare !== "false"))
-        throw new RepoRegistrationFailed("dir_not_git");
-      if (canonical(gitDir) !== dir) {
-        if (isBare === "true") throw new RepoRegistrationFailed("dir_not_git");
-        const [toplevel] = await probe(dir, ["rev-parse", "--show-toplevel"]);
-        if (toplevel === undefined || toplevel === "")
-          throw new RepoRegistrationFailed("dir_not_git");
-        if (canonical(toplevel) !== dir)
-          throw new RepoRegistrationFailed("dir_not_git");
-      }
-
-      repos.set(repo_id, { repo_id, label, dir });
-      return { repo_id, label };
+    /** Serialised: the duplicate/overlap checks and the insert never interleave across awaits. */
+    register(input) {
+      const next = chain.then(() => registerUnlocked(input));
+      chain = next.catch(() => undefined);
+      return next;
     },
     has(repo_id) {
       return repos.has(repo_id);
