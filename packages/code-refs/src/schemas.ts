@@ -255,9 +255,9 @@ export type SearchPathsResult = z.infer<typeof SearchPathsResultSchema>;
 
 /**
  * Shape of a stored `git_range` reference (TEAM_CHAT_DISCOVERY.md section 4.1).
- * `packages/contracts/src/team.ts` does not exist yet; when the team
- * contracts PR adds `ReferenceSchema`, import its `git_range` member here and
- * delete this definition.
+ * TODO: replace with the `git_range` member of `ReferenceSchema` from
+ * `packages/contracts/src/team.ts` once Team Chat PR 2 lands, then delete
+ * this definition.
  */
 export const GitRangeReferenceSchema = z
   .object({

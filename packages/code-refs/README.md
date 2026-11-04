@@ -92,8 +92,11 @@ Every state except `invalid` carries `repo_id`, `commit_sha` and `path`;
 every state that reached git (all but `invalid` and `unknown_repo`) also
 carries `git_version` (the `git --version` string, probed once per runner). Lines are
 split on `\n` or `\r\n`; a missing final newline still counts as a line; an
-empty blob is `ok` with `total_lines: 0` and `text: ""`. Without a range the
-whole file is returned, cut at `max_range_lines` with `truncated: true`.
+empty blob is `ok` with `total_lines: 0` and `text: ""`. **Without a range**
+(a file-level reference) the result is `ok` with lines `1..max_range_lines`
+— a preview of the head of the file, never a failure — with `truncated: true`
+when the file is longer and `total_lines` always set to the file's full line
+count.
 
 Steps, in order: `rev-parse --verify <sha>^{commit}` → `ls-tree -z <sha> --
 <path>` → `cat-file -s <blob>` → `cat-file blob <blob>` → binary probe → fatal
@@ -151,6 +154,10 @@ hook that records the exact argv and env.
 | search `max_entries` | 50 000 |
 | query length | 256 |
 
+These defaults are documented guesses sized for source files; they are
+offline-verified against small fixture repositories only and untested on
+multi-GiB repositories or trees with hundreds of thousands of entries.
+
 ## Tests
 
 `bun test packages/code-refs` — offline; builds a temporary repository with
@@ -163,9 +170,9 @@ never silently passed.
 
 ## Follow-ups
 
-- `GitRangeReferenceSchema` is defined locally until
-  `packages/contracts/src/team.ts` adds `ReferenceSchema` (kind `git_range`);
-  then import it from `@mars/contracts` and delete the local copy.
+- TODO: replace the local `GitRangeReferenceSchema` with the `git_range`
+  member of `ReferenceSchema` from `packages/contracts/src/team.ts` once Team
+  Chat PR 2 lands; then delete the local copy.
 - The chat service (PR 2/3) owns the `reference_id → locator` store and the
   viewer authorization; the VS Code preview panel renders `ResolvedReference`
   through the extension host.
