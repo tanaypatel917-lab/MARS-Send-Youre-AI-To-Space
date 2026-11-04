@@ -62,8 +62,12 @@ button.secondary {
   background: var(--vscode-button-secondaryBackground);
   color: var(--vscode-button-secondaryForeground);
 }
-[hidden] {
-  display: none !important;
+.reply-bar[hidden],
+.chip-bar[hidden],
+.picker[hidden],
+.composer-error[hidden],
+.jump[hidden] {
+  display: none;
 }
 button:disabled {
   opacity: 0.55;
@@ -312,6 +316,10 @@ select {
 }
 .notice.error {
   border-color: var(--vscode-errorForeground);
+}
+.composer-error {
+  margin: 6px 0 0;
+  color: var(--vscode-errorForeground);
 }
 
 /* chips and reactions */

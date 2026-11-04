@@ -4,8 +4,10 @@ import {
   type ComposerEnvironment,
   type ComposerState,
   chipLabel,
+  composerProblem,
   EMPTY_COMPOSER,
   keyIntent,
+  MAX_MESSAGE_CHARS,
   MAX_REFERENCES_PER_MESSAGE,
   type MessageView,
   ReactionEmojiSchema,
@@ -35,7 +37,9 @@ const REACTIONS = ReactionEmojiSchema.options;
 let state: TeamChatViewState | null = null;
 let composer: ComposerState = EMPTY_COMPOSER;
 let composerConversation: string | null = null;
-let restoredConversation = false;
+/** Saved conversation id to re-select on first render; cleared once applied. */
+let pendingRestore: string | null | undefined;
+let composerError: string | null = null;
 /** Focus key of the chip that opened the code panel; focus returns there on close. */
 let panelOrigin: string | null = null;
 let returnFocusTo: string | null = null;
@@ -65,6 +69,7 @@ textarea.placeholder =
   "Message… type @ to reference a file, symbol or line range";
 textarea.dataset.focusKey = "composer";
 textarea.addEventListener("input", () => {
+  composerError = null;
   updateComposer({
     type: "input",
     text: textarea.value,
@@ -135,6 +140,12 @@ function newClientMessageId(): string {
 function send(): void {
   const selected = state?.selected;
   if (!selected) return;
+  const problem = composerProblem(composer);
+  if (problem === "too_long") {
+    composerError = `Message is ${composer.text.trim().length} characters; the limit is ${MAX_MESSAGE_CHARS}. Shorten it or split it.`;
+    renderComposerParts();
+    return;
+  }
   const input = buildSend(
     composer,
     selected.conversation.conversation_id,
@@ -150,6 +161,7 @@ function send(): void {
     references: input.references,
   });
   composer = EMPTY_COMPOSER;
+  composerError = null;
   textarea.value = "";
   stickToBottom = true;
   renderComposerParts();
@@ -557,6 +569,10 @@ const picker = h("ul", {
 });
 picker.id = "mention-picker";
 const sendButton = button("Send", "send", () => send());
+const composerAlert = h("p", {
+  class: "notice error composer-error",
+  role: "alert",
+});
 const hint = h(
   "p",
   { class: "hint" },
@@ -566,6 +582,7 @@ composerRoot.append(
   replyBar,
   chipBar,
   h("div", { class: "composer-input" }, picker, textarea, sendButton),
+  composerAlert,
   hint,
 );
 
@@ -635,6 +652,7 @@ function renderComposerParts(): void {
         };
         updateComposer({ type: "pickerSelect" });
         textarea.value = composer.text;
+        textarea.setSelectionRange(composer.caret, composer.caret);
         textarea.focus();
       });
       picker.append(option);
@@ -647,9 +665,10 @@ function renderComposerParts(): void {
   }
   textarea.setAttribute("aria-controls", picker.id);
   picker.hidden = !composer.picker;
+  composerAlert.textContent = composerError ?? "";
+  composerAlert.hidden = composerError === null;
   sendButton.disabled =
-    !state?.selected ||
-    (composer.text.trim().length === 0 && composer.chips.length === 0);
+    !state?.selected || composerProblem(composer) === "empty";
 }
 
 // ---------------------------------------------------------------- code pane
@@ -782,20 +801,22 @@ function render(): void {
     ).find((element) => element.dataset.focusKey === wanted);
     target?.focus();
   }
-  if (s.selected) vscode.setState({ conversationId: selectedId });
-  if (!restoredConversation) {
-    restoredConversation = true;
+  if (pendingRestore === undefined) {
+    // First render: read the saved selection before anything overwrites it.
     const saved = vscode.getState() as { conversationId?: unknown } | undefined;
-    if (
+    pendingRestore =
       typeof saved?.conversationId === "string" &&
       saved.conversationId !== selectedId &&
       s.conversations.some((c) => c.conversation_id === saved.conversationId)
-    )
-      post({
-        type: "selectConversation",
-        conversationId: saved.conversationId,
-      });
+        ? saved.conversationId
+        : null;
+    if (pendingRestore)
+      post({ type: "selectConversation", conversationId: pendingRestore });
   }
+  if (pendingRestore !== null && pendingRestore === selectedId)
+    pendingRestore = null;
+  if (pendingRestore === null && s.selected)
+    vscode.setState({ conversationId: selectedId });
 }
 
 window.addEventListener(

@@ -1,5 +1,9 @@
 import { type MentionCandidate, mentionCandidates } from "./mentions";
-import type { ReferenceInput, SendMessageInput } from "./schemas";
+import {
+  MAX_MESSAGE_CHARS,
+  type ReferenceInput,
+  type SendMessageInput,
+} from "./schemas";
 import type { MentionIndex } from "./service";
 
 /** A reference the composer will attach on send, with its display label. */
@@ -161,14 +165,24 @@ export function keyIntent(
   return "none";
 }
 
-/** Null when there is nothing to send. */
+export type ComposerProblem = "empty" | "too_long";
+
+/** Why the draft cannot be sent as-is, or null. Checked before the draft is cleared. */
+export function composerProblem(state: ComposerState): ComposerProblem | null {
+  const body = state.text.trim();
+  if (body.length > MAX_MESSAGE_CHARS) return "too_long";
+  if (body.length === 0 && state.chips.length === 0) return "empty";
+  return null;
+}
+
+/** Null when the draft has a problem (see `composerProblem`). */
 export function buildSend(
   state: ComposerState,
   conversationId: string,
   clientMessageId: string,
 ): SendMessageInput | null {
+  if (composerProblem(state) !== null) return null;
   const body = state.text.trim();
-  if (body.length === 0 && state.chips.length === 0) return null;
   return {
     conversation_id: conversationId,
     client_message_id: clientMessageId,

@@ -3,6 +3,7 @@ import {
   buildSend,
   type ComposerEnvironment,
   type ComposerState,
+  composerProblem,
   EMPTY_COMPOSER,
   keyIntent,
   reduceComposer,
@@ -209,5 +210,16 @@ describe("composer reducer", () => {
       env,
     );
     expect(buildSend(chipsOnly, "conv", "cm")?.body).toBe("");
+  });
+});
+
+describe("composer problems", () => {
+  test("an overlength body is reported and never built into a send", () => {
+    const long = type(EMPTY_COMPOSER, "x".repeat(4001));
+    expect(composerProblem(long)).toBe("too_long");
+    expect(buildSend(long, "conv", "cm")).toBeNull();
+    expect(composerProblem(type(EMPTY_COMPOSER, "x".repeat(4000)))).toBeNull();
+    expect(composerProblem(EMPTY_COMPOSER)).toBe("empty");
+    expect(composerProblem(type(EMPTY_COMPOSER, "   "))).toBe("empty");
   });
 });
