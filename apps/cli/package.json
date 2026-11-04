@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@mars/codex-tools": "workspace:*",
     "@mars/contracts": "workspace:*",
     "@mars/execution": "workspace:*",
     "@mars/memory": "workspace:*",

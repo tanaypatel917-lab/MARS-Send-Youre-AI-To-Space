@@ -124,6 +124,7 @@ export const REQUIRED_COMPONENTS = [
   "vllm",
   "watch-skill",
   "graphify",
+  "codex-tooling",
   "omniroute",
 ] as const;
 
