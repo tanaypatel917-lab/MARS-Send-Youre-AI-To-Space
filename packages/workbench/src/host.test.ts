@@ -41,6 +41,7 @@ import type { Turn } from "@mars/review";
 import { CommandError } from "@mars/skills";
 import type { RoutingRequest } from "@mars/specialists";
 import { createTaskStore } from "@mars/tasks";
+import { WorkspaceModifiedError } from "@mars/workspaces";
 import {
   createRegistry as createSpecialistRegistry,
   evidenceVerifier,
@@ -53,6 +54,7 @@ import type {
   WorkbenchCollaboration,
 } from "./collaboration-context";
 import type { WorkbenchConventions } from "./conventions-context";
+import { diffDigest } from "./diff-digest";
 import type { WorkbenchKnowledgeGraph } from "./graph-context";
 import {
   createWorkbenchHost,
@@ -3421,6 +3423,210 @@ test("watch tools are host-bound per task and their verdicts become reviewable t
         event.producer === "@mars/watch",
     ),
   ).toHaveLength(2);
+  session.finish("completed");
+  await session.disposed;
+  await api.close();
+});
+
+test("tasks.evidence pins verify records to the workspace revision and diff digest, goes stale when either moves and never surfaces forged verification", async () => {
+  const f = await fixture();
+  const files: DiffResult["files"] = [
+    { path: "src/b.ts", status: "modified", patch: "-a\n+b\n" },
+    { path: "src/a.ts", status: "added", patch: "+x\n" },
+  ];
+  f.diffFiles = files;
+  const digest = diffDigest({ files });
+  const record = (
+    verdict: "pass" | "fail" | "inconclusive" | "error",
+    verified: boolean,
+  ) => ({
+    schema_version: 1 as const,
+    operation: "watch.evidence" as const,
+    kind: "verify" as const,
+    tool: "mars_verify",
+    verdict,
+    assurance: "isolated_local" as const,
+    verified,
+    advisory: false,
+    run_id: "vr_fixture",
+    contract_id: "c1",
+    contract_digest: "d1",
+    required_checks: verified
+      ? { passed: 1, failed: 0, inconclusive: 0 }
+      : { passed: 0, failed: 1, inconclusive: 0 },
+    limitations: [],
+    summary: "verify",
+    cli_version: "1.4.3",
+    recorded_at: "2026-01-01T00:00:00.000Z",
+  });
+  const watch: WorkbenchWatch = {
+    toolsFor(binding) {
+      const noop = async () => "";
+      return {
+        watch: noop,
+        ask: noop,
+        search: noop,
+        capture: noop,
+        extract: noop,
+        loop: noop,
+        async verify(input) {
+          await binding.evidence.append({
+            ...record(
+              input.action === "run" ? "pass" : "fail",
+              input.action === "run",
+            ),
+            // a tool-supplied stamp is never trusted; the host overwrites it
+            workspace_id: "forged",
+            workspace_revision: "forged",
+            diff_sha256: "0".repeat(64),
+          });
+          return "recorded";
+        },
+        async evidence() {
+          return "";
+        },
+      };
+    },
+  };
+  const api = await f.makeHost(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { watch },
+  );
+  const created = await api.create(context(), task(), {
+    launch_key: "chat-msg_1",
+  });
+  expect(
+    await api.create(context(), task(), { launch_key: "chat-msg_1" }),
+  ).toEqual(created);
+  expect(await api.list(context())).toHaveLength(1);
+  await expect(
+    api.create(
+      context(),
+      { ...task(), request: "something else" },
+      { launch_key: "chat-msg_1" },
+    ),
+  ).rejects.toMatchObject({ code: "conflict" });
+  expect((await api.diff(context(), "task")).digest).toBe(digest);
+  await api.start(context(), {
+    task_id: "task",
+    expected_revision: 0,
+    approvals: { read: false, write: false, execute: false },
+  });
+  const session = required(f.sessions[0]);
+  const tools = required(session.options.watch);
+  expect(await tools.verify({ action: "run" })).toBe("recorded");
+  expect(await tools.verify({ action: "show" })).toBe("recorded");
+  const forged = {
+    ...record("fail", true),
+    workspace_id: "workspace",
+    workspace_revision: "r1",
+    diff_sha256: digest,
+  };
+  await f.store.appendEvent(context(), "task", {
+    event_type: "tool.completed",
+    run_id: "forged",
+    producer: "@mars/watch",
+    versions: [{ component: "@mars/watch", revision: "0" }],
+    payload: forged,
+  });
+  const originalDiff = f.workspace.diff;
+  f.workspace.diff = async () => {
+    throw new WorkspaceModifiedError();
+  };
+  expect(await tools.verify({ action: "run" })).toBe("recorded");
+  f.workspace.diff = originalDiff;
+  // A delegated child's pass is stamped with the child's private workspace;
+  // it is never fresh evidence for the parent tree even at the same revision
+  // and digest.
+  await f.store.appendEvent(context(), "task", {
+    event_type: "tool.completed",
+    run_id: "child",
+    producer: "@mars/watch",
+    versions: [{ component: "@mars/watch", revision: "0" }],
+    payload: {
+      ...record("pass", true),
+      workspace_id: "child-workspace",
+      workspace_revision: "r1",
+      diff_sha256: digest,
+    },
+  });
+
+  const fresh = await api.evidence(context(), "task");
+  expect(fresh.task_revision).toBe(
+    (await api.inspect(context(), "task")).revision,
+  );
+  expect(fresh.workspace.revision).toBe("r1");
+  expect(fresh.diff_sha256).toBe(digest);
+  expect(
+    fresh.verify_records.map((item) => [
+      item.verdict,
+      item.verified,
+      item.stale,
+      item.workspace_id,
+      item.workspace_revision,
+      item.diff_sha256,
+    ]),
+  ).toEqual([
+    ["pass", true, false, "workspace", "r1", digest],
+    ["fail", false, false, "workspace", "r1", digest],
+    ["pass", true, true, null, null, null],
+    ["pass", true, true, "child-workspace", "r1", digest],
+  ]);
+  expect(new Set(fresh.verify_records.map((item) => item.event_id)).size).toBe(
+    4,
+  );
+  expect(fresh.verify_records.every((item) => item.contract_id === "c1")).toBe(
+    true,
+  );
+  expect(
+    fresh.verify_records.some(
+      (item) => item.verified && item.verdict !== "pass",
+    ),
+  ).toBe(false);
+
+  f.revision = "r2";
+  const moved = await api.evidence(context(), "task");
+  expect(moved.workspace.revision).toBe("r2");
+  expect(moved.verify_records.map((item) => item.stale)).toEqual([
+    true,
+    true,
+    true,
+    true,
+  ]);
+  expect(moved.verify_records[0]?.verified).toBe(true);
+  f.revision = "r1";
+  f.diffFiles = [{ ...files[0]!, patch: "-a\n+c\n" }, files[1]!];
+  const edited = await api.evidence(context(), "task");
+  expect(edited.workspace.revision).toBe("r1");
+  expect(edited.diff_sha256).not.toBe(digest);
+  expect(edited.verify_records.map((item) => item.stale)).toEqual([
+    true,
+    true,
+    true,
+    true,
+  ]);
+  f.diffFiles = files;
+  expect(
+    (await api.evidence(context(), "task")).verify_records.map(
+      (item) => item.stale,
+    ),
+  ).toEqual([false, false, true, true]);
+
+  f.workspace.diff = async () => {
+    throw new WorkspaceModifiedError();
+  };
+  await expect(api.evidence(context(), "task")).rejects.toMatchObject({
+    code: "workspace_modified",
+  });
+  await expect(api.diff(context(), "task")).rejects.toMatchObject({
+    code: "workspace_modified",
+  });
+  f.workspace.diff = originalDiff;
   session.finish("completed");
   await session.disposed;
   await api.close();

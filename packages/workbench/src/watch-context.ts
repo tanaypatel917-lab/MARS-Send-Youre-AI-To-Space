@@ -20,13 +20,31 @@ const MAX_LISTED_RECORDS = 50;
  * verification verdicts are durable, reviewable and bound to the task, and
  * reads them back for `mars_watch_evidence`.
  */
+/** Host-authoritative binding stamped onto every evidence record it writes. */
+export interface EvidenceBinding {
+  workspace_id: string;
+  workspace_revision: string;
+  diff_sha256: string;
+}
+
 export function watchEvidence(
   store: Pick<DurableTaskStore, "appendEvent" | "events" | "artifacts">,
   context: () => RequestContext,
   taskId: string,
+  binding?: () => Promise<EvidenceBinding>,
 ): WatchEvidenceSink {
   return {
     async append(record) {
+      const {
+        workspace_id: _workspace,
+        workspace_revision: _revision,
+        diff_sha256: _digest,
+        ...unbound
+      } = record;
+      const bound = binding ? await binding().catch(() => null) : null;
+      const payload: WatchEvidenceRecord = bound
+        ? { ...unbound, ...bound }
+        : unbound;
       await store.appendEvent(context(), taskId, {
         event_type: "tool.completed",
         run_id: crypto.randomUUID(),
@@ -38,7 +56,7 @@ export function watchEvidence(
           },
           { component: "watch-skill", revision: WATCH_SKILL_VERSION },
         ],
-        payload: record,
+        payload,
       });
     },
     async list() {

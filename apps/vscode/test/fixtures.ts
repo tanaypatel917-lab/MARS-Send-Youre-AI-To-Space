@@ -158,6 +158,12 @@ export class FakeServer implements RpcTransport {
       return { data_base64: data, media_type: ref.media_type };
     });
     this.on("tasks.diff", () => ({ files: [] }));
+    this.on("tasks.evidence", () => ({
+      task_revision: 0,
+      workspace: checkpoint.workspace,
+      diff_sha256: "a".repeat(64),
+      verify_records: [],
+    }));
     this.on("tasks.checkpoint", () => checkpoint);
     this.on("tasks.verification", () => ({
       candidate: workspace,
