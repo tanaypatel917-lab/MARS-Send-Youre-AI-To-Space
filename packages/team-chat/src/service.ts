@@ -167,6 +167,8 @@ export interface TeamService {
   readonly capabilities: TeamCapabilities;
   /** Server-derived identity when known (real service); absent for the fixture, whose viewer is a parameter. */
   currentUser?(): string | undefined;
+  /** A delivery event said this message changed (edit/delete): drop any cached copy so the next read refetches it. */
+  forgetMessage?(conversationId: string, sequence: number): void;
   users(): UserView[];
   listConversations(
     viewer: string,

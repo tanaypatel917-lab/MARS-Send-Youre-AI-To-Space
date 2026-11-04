@@ -390,7 +390,11 @@ class TeamChatViewProvider
       streamSupported: () => service.streamSupported,
       getToken,
       onEvent: (event) =>
-        controller?.notifyDelivery(event.conversation_id, event.kind),
+        controller?.notifyDelivery(
+          event.conversation_id,
+          event.kind,
+          event.message_seq,
+        ),
       onStatus: (state) => controller?.notifyConnection(state),
       onResync: () =>
         controller?.handleMessage({ type: "ready" }).then(() => undefined),

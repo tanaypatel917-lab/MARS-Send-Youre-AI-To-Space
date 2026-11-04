@@ -54,7 +54,11 @@ function setup(
         streamSupported: () => service.streamSupported,
         getToken: () => Promise.resolve(token ?? undefined),
         onEvent: (event) =>
-          controller?.notifyDelivery(event.conversation_id, event.kind),
+          controller?.notifyDelivery(
+            event.conversation_id,
+            event.kind,
+            event.message_seq,
+          ),
         onStatus: (state) => {
           statuses.push(state);
           return controller?.notifyConnection(state);
@@ -1064,13 +1068,100 @@ describe("older servers: page limits", () => {
     });
     const last = states[states.length - 1];
     expect(last?.conversations.map((c) => c.conversation_id)).toEqual([dm]);
-    expect(last?.selected?.messages.map((m) => m.sequence)).toEqual([4, 5, 6]);
-    expect(last?.selected?.older_cursor).toBe("seq:4");
+    // The adapter pages backwards until the requested 50 are collected.
+    expect(last?.selected?.messages.map((m) => m.sequence)).toEqual([
+      1, 2, 3, 4, 5, 6,
+    ]);
+    expect(last?.selected?.older_cursor).toBeNull();
     for (const call of server.calls)
       if (call.method === "messages.history")
         expect(Number(call.params.limit)).toBeLessThanOrEqual(3);
     // Partial span: the count stays conservative-but-bounded and the
     // boundary at the read cursor.
     expect(last?.selected?.conversation.first_unread_sequence).toBe(1);
+  });
+});
+
+describe("review fixes, round 5", () => {
+  test("an edit event refreshes the inbox preview of an unselected conversation", async () => {
+    const { controller, last, server, dm, group } = setup();
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: group,
+    });
+    const latest = server.messages
+      .filter((m) => m.conversation_id === dm)
+      .at(-1);
+    if (!latest) throw new Error("no dm message");
+    latest.body = "edited body";
+    latest.edited_at = "2026-01-02T00:00:00.000Z";
+    await controller.notifyDelivery(dm, "edit", latest.seq);
+    const preview = last().conversations.find((c) => c.conversation_id === dm)
+      ?.last_message?.excerpt;
+    expect(preview).toBe("edited body");
+  });
+
+  test("a reload keeps history already paged in on a small-page server", async () => {
+    const server = new FakeTeamServer({ pageLimit: 2 });
+    const dm = server.seedDm(ADA, GRACE, ["a", "b", "c", "d", "e"]);
+    const client = new TeamClient(server.transport(ADA));
+    const service = new RpcTeamService(client);
+    const states: TeamChatViewState[] = [];
+    const controller = new TeamChatController({
+      post: (state) => states.push(state),
+      service,
+      viewer: "service",
+      pageSize: 2,
+    });
+    const last = () => states[states.length - 1];
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    expect(last()?.selected?.messages.map((m) => m.sequence)).toEqual([4, 5]);
+    await controller.handleMessage({
+      type: "loadOlder",
+      conversationId: dm,
+      cursor: "seq:4",
+    });
+    expect(last()?.selected?.messages.map((m) => m.sequence)).toEqual([
+      2, 3, 4, 5,
+    ]);
+    server.post(GRACE, dm, "f");
+    await controller.notifyDelivery(dm, "message", 6);
+    expect(last()?.selected?.messages.map((m) => m.sequence)).toEqual([
+      2, 3, 4, 5, 6,
+    ]);
+  });
+
+  test("without a server counter a long unread span still yields the latest preview", async () => {
+    const server = new FakeTeamServer({ pageLimit: 3 });
+    const dm = server.seedDm(ADA, GRACE, ["a", "b", "c", "d", "e", "f", "g"]);
+    const inner = server.transport(ADA);
+    const client = new TeamClient({
+      send: async (request, signal) => {
+        const result = (await inner.send(request, signal)) as unknown;
+        if (request.method !== "conversations.list") return result;
+        return (result as Record<string, unknown>[]).map(
+          ({ unread_count: _u, last_message_at: _l, ...rest }) => rest,
+        );
+      },
+    });
+    const service = new RpcTeamService(client);
+    const states: TeamChatViewState[] = [];
+    const controller = new TeamChatController({
+      post: (state) => states.push(state),
+      service,
+      viewer: "service",
+      pageSize: 3,
+    });
+    await controller.handleMessage({ type: "ready" });
+    const summary = states[states.length - 1]?.conversations.find(
+      (c) => c.conversation_id === dm,
+    );
+    expect(summary?.last_message?.excerpt).toBe("g");
+    expect(summary?.last_sequence).toBe(7);
   });
 });

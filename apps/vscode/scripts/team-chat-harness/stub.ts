@@ -42,7 +42,11 @@ function serviceController(): TeamChatController {
     streamSupported: () => false,
     getToken: () => Promise.resolve("harness-token-not-a-secret"),
     onEvent: (event) =>
-      controller?.notifyDelivery(event.conversation_id, event.kind),
+      controller?.notifyDelivery(
+        event.conversation_id,
+        event.kind,
+        event.message_seq,
+      ),
     onStatus: (state) => controller?.notifyConnection(state),
     onResync: () =>
       controller?.handleMessage({ type: "ready" }).then(() => undefined),

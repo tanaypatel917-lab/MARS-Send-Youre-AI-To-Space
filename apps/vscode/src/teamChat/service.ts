@@ -133,6 +133,14 @@ export class RpcTeamService implements TeamService {
     this.client.forget();
   }
 
+  forgetMessage(conversationId: string, sequence: number): void {
+    const cached = this.messages.get(conversationId);
+    const message = cached?.get(sequence);
+    if (!cached || !message) return;
+    cached.delete(sequence);
+    this.reactions.delete(message.message_id);
+  }
+
   /** Drops one conversation's cache after the server denied access to it. */
   forgetConversation(conversationId: string): void {
     this.views.delete(conversationId);
@@ -393,6 +401,13 @@ export class RpcTeamService implements TeamService {
                 })
               : await this.client.history(id, { limit: 1 });
           for (const m of page) this.remember(m);
+          // A span longer than one page: the preview still needs the latest.
+          if (
+            (this.cachedSorted(id).at(-1)?.seq ?? -1) <
+            view.conversation.last_seq
+          )
+            for (const m of await this.client.history(id, { limit: 1 }))
+              this.remember(m);
         }
       }
       const summaries = views.map((v) => this.summary(v, me));
@@ -440,15 +455,39 @@ export class RpcTeamService implements TeamService {
             }
           : opened;
       this.views.set(conversationId, view);
-      const window =
-        before === undefined ? { limit } : { before_seq: before, limit };
-      const page = await this.client.history(conversationId, window);
-      for (const m of page) this.remember(m);
+      // The server may page smaller than asked: keep paging backwards until
+      // `wanted` messages are collected (a reload must not drop history the
+      // viewer already scrolled through) or the thread is exhausted.
       const floor = view.participant.joined_seq;
+      const page: ServiceMessage[] = [];
+      let cursor = before;
+      let exhausted = false;
+      while (page.length < wanted && !exhausted) {
+        const chunk = await this.client.history(
+          conversationId,
+          cursor === undefined
+            ? { limit: Math.min(limit, wanted - page.length) }
+            : {
+                before_seq: cursor,
+                limit: Math.min(limit, wanted - page.length),
+              },
+        );
+        for (const m of chunk) this.remember(m);
+        page.unshift(...chunk);
+        const first = chunk[0];
+        if (
+          !first ||
+          chunk.length <
+            Math.min(limit, wanted - (page.length - chunk.length)) ||
+          first.seq <= floor + 1
+        )
+          exhausted = true;
+        else cursor = first.seq;
+      }
       const visible = page.filter((m) => m.seq > floor);
       const first = visible[0];
       const olderExists =
-        first !== undefined && first.seq > floor + 1 && page.length >= limit;
+        first !== undefined && first.seq > floor + 1 && !exhausted;
       return {
         conversation: this.summary(view, me),
         messages: visible.map((m) => this.messageView(m)),

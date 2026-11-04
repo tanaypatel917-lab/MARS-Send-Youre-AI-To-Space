@@ -171,8 +171,11 @@ export class TeamChatController {
   notifyDelivery(
     conversationId: string,
     kind: TeamDeliveryEvent["kind"],
+    messageSeq?: number,
   ): Promise<void> {
     return this.run(async () => {
+      if (kind === "edit" && messageSeq !== undefined)
+        this.service.forgetMessage?.(conversationId, messageSeq);
       const known = this.conversations.some(
         (c) => c.conversation_id === conversationId,
       );
