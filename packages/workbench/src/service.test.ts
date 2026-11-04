@@ -408,6 +408,56 @@ test("HTTP oversized startup returns too_large without a runtime or revision cha
   expect(normal.status).toBe("pending");
 });
 
+/** The exact shape qwen3-coder:30b returned through Ollama (documentation/evidence/local-model-run.txt), re-targeted at repair.txt. */
+const TEXTUAL_TOOL_CALL =
+  'I\'ll create a file named repair.txt with the content "repaired".\n\n<function=mars_write>\n<parameter=path>\nrepair.txt\n</parameter>\n<parameter=content>\nrepaired\n</parameter>\n<parameter=i>\nCreate repair.txt with repaired text\n</parameter>\n</function>\n</tool_call>';
+
+function repairTask(): Task {
+  return {
+    ...task(),
+    request: "Create repair.txt containing exactly: repaired",
+    acceptance_criteria: ["repair.txt exists and contains repaired"],
+  };
+}
+
+test("regression: a tool call returned as assistant text ends the run as completed while repair.txt is missing from the isolated workspace", async () => {
+  const f = await fixture();
+  let requests = 0;
+  const { client } = await f.start(async () => {
+    requests++;
+    return sse({ content: TEXTUAL_TOOL_CALL });
+  });
+  const created = await client.create(repairTask());
+  await client.start(created.task_id, {
+    expectedRevision: 0,
+    approvals: { read: true, write: true, execute: false },
+  });
+  const finished = await eventually(
+    () => client.inspect(created.task_id),
+    (value) => value.status !== "running",
+  );
+  const launch = f.launches[0];
+  if (!launch) throw new Error("Missing launch");
+  const repairExists = await Bun.file(join(launch.cwd, "repair.txt")).exists();
+  const finalText = new TextDecoder().decode(
+    (
+      await client.artifact(
+        created.task_id,
+        finished.artifacts.find((ref) => ref.media_type === "text/plain") ??
+          finished.artifacts[0]!,
+      )
+    ).bytes,
+  );
+  console.log(
+    `[regression] status=${finished.status} model_requests=${requests} repair.txt_present=${repairExists} final_text_has_textual_tool_call=${finalText.includes("<function=mars_write>")}`,
+  );
+  expect(requests).toBe(1);
+  expect(finished.status).toBe("completed");
+  expect(finalText).toContain("<function=mars_write>");
+  expect(repairExists).toBe(false);
+  await expect(stat(join(f.source, "repair.txt"))).rejects.toThrow();
+}, 30_000);
+
 test("HTTP + actual Oh My Pi + real private workspace writes, progress, artifacts, checkpoint and restore (injected model)", async () => {
   const f = await fixture();
   const entered = deferred();
