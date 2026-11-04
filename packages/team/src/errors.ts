@@ -7,7 +7,6 @@ export const TEAM_ERROR_CODES = [
   "too_large",
   "rate_limited",
   "unavailable",
-  "rate_limited",
   "unknown_cursor",
   "unsafe_path",
   "corrupt_record",

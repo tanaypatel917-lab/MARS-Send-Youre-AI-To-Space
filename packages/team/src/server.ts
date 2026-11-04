@@ -112,8 +112,6 @@ function errorCode(error: unknown): RpcErrorCode {
         return "conflict";
       case "too_large":
         return "too_large";
-      case "rate_limited":
-        return "unavailable";
       case "unavailable":
       case "rate_limited":
         return "unavailable";
