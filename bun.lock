@@ -244,6 +244,7 @@
       "name": "@mars/team",
       "version": "0.0.1",
       "dependencies": {
+        "@mars/code-refs": "workspace:*",
         "@mars/contracts": "workspace:*",
         "zod": "3.25.76",
       },

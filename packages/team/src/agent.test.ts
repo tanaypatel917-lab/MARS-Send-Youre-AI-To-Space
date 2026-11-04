@@ -49,7 +49,7 @@ function agentOptions(
 }
 
 function start(agent?: TeamAgentOptions) {
-  const f = fixture({}, agent);
+  const f = fixture(agent ? { agent } : {});
   fixtures.push(f);
   return f;
 }

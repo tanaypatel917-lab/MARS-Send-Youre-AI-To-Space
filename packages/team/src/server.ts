@@ -1,31 +1,44 @@
+import type { RepoRegistry } from "@mars/code-refs";
 import {
   AgentPreviewSchema,
   AgentRequestSchema,
   MARS_AGENT_USER_ID,
   MessageSchema,
+  MessageViewSchema,
   ParticipantSchema,
   SharePreviewSchema,
   TaskLinkSchema,
   TaskLinkViewSchema,
 } from "@mars/contracts";
 import type { Authenticator } from "./auth";
-import { TeamError } from "./errors";
+import { TeamError, unavailable } from "./errors";
 import {
   ConversationListSchema,
   ConversationViewSchema,
   EventListSchema,
   MessageListSchema,
+  PathSearchResultSchema,
+  ReferencePreviewResultSchema,
+  ReferenceResultSchema,
+  RepoListSchema,
   TaskLinkDraftResultSchema,
   TeamDescribeResultSchema,
   type TeamRpcRequest,
   TeamRpcRequestSchema,
 } from "./protocol";
+import { createReferenceService, type ReferenceService } from "./references";
 import type { TeamActor, TeamStore } from "./store";
 
 export interface TeamServerOptions {
   store: TeamStore;
   authenticator: Authenticator;
   port?: number;
+  /**
+   * Host-trusted `@mars/code-refs` registry. Without it `references.*`
+   * answer `unavailable`; `repos.list` and message chips still work from the
+   * store's `repos`/`repo_access` tables.
+   */
+  repos?: RepoRegistry;
 }
 
 /** Same vocabulary and fixed messages as the workbench RPC. */
@@ -91,6 +104,7 @@ function errorCode(error: unknown): RpcErrorCode {
       case "too_large":
         return "too_large";
       case "unavailable":
+      case "rate_limited":
         return "unavailable";
       case "corrupt_record":
         return "internal_error";
@@ -99,15 +113,28 @@ function errorCode(error: unknown): RpcErrorCode {
   return "internal_error";
 }
 
-function dispatch(
+async function dispatch(
   store: TeamStore,
+  references: ReferenceService | null,
   actor: TeamActor,
   request: TeamRpcRequest,
-): unknown {
+): Promise<unknown> {
   const requestId = request.context.request_id;
+  const refs = () => {
+    if (!references) throw unavailable("Repository is unavailable");
+    return references;
+  };
   switch (request.method) {
-    case "team.describe":
-      return TeamDescribeResultSchema.parse(store.describe(actor));
+    case "team.describe": {
+      const described = store.describe(actor);
+      return TeamDescribeResultSchema.parse({
+        ...described,
+        capabilities: {
+          ...described.capabilities,
+          references: references !== null,
+        },
+      });
+    }
     case "conversations.create_dm":
       return ConversationViewSchema.parse(
         store.createDm(actor, requestId, request.params),
@@ -135,15 +162,33 @@ function dispatch(
     case "conversations.pin":
       return ParticipantSchema.parse(store.pin(actor, request.params));
     case "messages.send":
-      return MessageSchema.parse(store.send(actor, requestId, request.params));
+      return MessageViewSchema.parse(
+        store.send(actor, requestId, request.params),
+      );
     case "messages.history":
       return MessageListSchema.parse(store.history(actor, request.params));
     case "messages.edit":
-      return MessageSchema.parse(store.editMessage(actor, request.params));
+      return MessageViewSchema.parse(store.editMessage(actor, request.params));
     case "messages.delete":
-      return MessageSchema.parse(store.deleteMessage(actor, request.params));
+      return MessageViewSchema.parse(
+        store.deleteMessage(actor, request.params),
+      );
     case "events.poll":
       return EventListSchema.parse(store.poll(actor, request.params));
+    case "repos.list":
+      return RepoListSchema.parse(store.listRepos(actor));
+    case "references.create":
+      return ReferenceResultSchema.parse(
+        await refs().create(actor, request.params),
+      );
+    case "references.resolve":
+      return ReferencePreviewResultSchema.parse(
+        await refs().resolve(actor, request.params.reference_id),
+      );
+    case "references.search_paths":
+      return PathSearchResultSchema.parse(
+        await refs().searchPaths(actor, request.params),
+      );
     case "tasks.link_draft":
       return TaskLinkDraftResultSchema.parse(
         store.linkDraft(actor, requestId, request.params),
@@ -165,7 +210,7 @@ function dispatch(
         store.sharePreview(actor, request.params),
       );
     case "shares.create":
-      return MessageSchema.parse(
+      return MessageViewSchema.parse(
         store.shareCreate(actor, requestId, request.params),
       );
     case "agent.preview":
@@ -185,14 +230,45 @@ function dispatch(
   }
 }
 
-/** Re-checks that nothing outside the actor's team or participation is returned. */
+const RESTRICTED_KEYS = ["reference_id", "restricted"];
+/** Repo-relative only: no absolute, drive or parent-relative path leaves the host. */
+const isRelativePath = (path: string) =>
+  !path.startsWith("/") &&
+  !path.startsWith("\\") &&
+  !/^[A-Za-z]:/.test(path) &&
+  !path.split("/").some((segment) => segment === "" || segment === "..");
+
+/**
+ * Re-checks that nothing outside the actor's team, participation or repo
+ * access is returned. Reference chips and previews are re-authorized against
+ * the store here, after the handler ran, so a bug upstream still fails closed.
+ */
 function validateResult(
+  store: TeamStore,
   request: TeamRpcRequest,
   result: unknown,
   actor: TeamActor,
 ) {
   const invalid = () => {
     throw new TeamServerError("internal_error");
+  };
+  const checkMessage = (value: unknown) => {
+    const message = MessageViewSchema.parse(value);
+    if (message.references.length !== message.reference_ids.length) invalid();
+    message.references.forEach((chip, index) => {
+      if (chip.reference_id !== message.reference_ids[index]) invalid();
+      if (chip.restricted) {
+        const keys = Object.keys(chip).sort();
+        if (keys.join(",") !== RESTRICTED_KEYS.join(",")) invalid();
+        return;
+      }
+      if (
+        !isRelativePath(chip.path) ||
+        !store.hasRepoAccess(actor, chip.repo_id)
+      )
+        invalid();
+    });
+    return message;
   };
   const checkView = (value: unknown, expectedState = "active") => {
     const view = ConversationViewSchema.parse(value);
@@ -256,7 +332,7 @@ function validateResult(
       break;
     }
     case "messages.send": {
-      const message = MessageSchema.parse(result);
+      const message = checkMessage(result);
       if (
         message.conversation_id !== request.params.conversation_id ||
         message.author_id !== actor.user_id ||
@@ -267,7 +343,7 @@ function validateResult(
     }
     case "messages.edit":
     case "messages.delete": {
-      const message = MessageSchema.parse(result);
+      const message = MessageViewSchema.parse(result);
       if (
         message.message_id !== request.params.message_id ||
         message.author_id !== actor.user_id ||
@@ -302,7 +378,8 @@ function validateResult(
     }
     case "messages.history": {
       let previous = 0;
-      for (const message of MessageListSchema.parse(result)) {
+      for (const value of MessageListSchema.parse(result)) {
+        const message = checkMessage(value);
         if (
           message.conversation_id !== request.params.conversation_id ||
           message.seq <= previous ||
@@ -334,6 +411,56 @@ function validateResult(
         )
           invalid();
         previous.set(event.conversation_id, event.event_seq);
+      }
+      break;
+    }
+    case "repos.list": {
+      const seen = new Set<string>();
+      for (const repo of RepoListSchema.parse(result)) {
+        if (
+          repo.team_id !== actor.team_id ||
+          seen.has(repo.repo_id) ||
+          !store.hasRepoAccess(actor, repo.repo_id)
+        )
+          invalid();
+        seen.add(repo.repo_id);
+      }
+      break;
+    }
+    case "references.create": {
+      const reference = ReferenceResultSchema.parse(result);
+      if (
+        reference.team_id !== actor.team_id ||
+        reference.repo_id !== request.params.repo_id ||
+        reference.commit_sha !== request.params.commit_sha ||
+        !isRelativePath(reference.path) ||
+        !store.hasRepoAccess(actor, reference.repo_id)
+      )
+        invalid();
+      break;
+    }
+    case "references.resolve": {
+      const preview = ReferencePreviewResultSchema.parse(result);
+      if (preview.state === "restricted") {
+        if (Object.keys(preview).join(",") !== "state") invalid();
+        break;
+      }
+      if (
+        preview.reference_id !== request.params.reference_id ||
+        !isRelativePath(preview.path) ||
+        !store.hasRepoAccess(actor, preview.repo_id)
+      )
+        invalid();
+      break;
+    }
+    case "references.search_paths": {
+      const search = PathSearchResultSchema.parse(result);
+      if (!store.hasRepoAccess(actor, request.params.repo_id)) invalid();
+      if (search.state === "ok") {
+        const limit = request.params.limit ?? store.limits.max_search_hits;
+        if (search.matches.length > limit) invalid();
+        for (const match of search.matches)
+          if (!isRelativePath(match.path)) invalid();
       }
       break;
     }
@@ -391,7 +518,7 @@ function validateResult(
       break;
     }
     case "shares.create": {
-      const message = MessageSchema.parse(result);
+      const message = checkMessage(result);
       if (
         message.author_id !== actor.user_id ||
         message.kind !== "result_card" ||
@@ -412,6 +539,9 @@ export function serveTeam(options: TeamServerOptions) {
   if (!Number.isInteger(port) || port < 0 || port > 65_535)
     throw new Error("Invalid team service port.");
   const { store, authenticator } = options;
+  const references = options.repos
+    ? createReferenceService({ store, repos: options.repos })
+    : null;
   return Bun.serve({
     hostname: "127.0.0.1",
     port,
@@ -463,8 +593,8 @@ export function serveTeam(options: TeamServerOptions) {
         const teamId = parsed.data.context.team_id;
         if (!user.team_ids.includes(teamId)) return responseError("forbidden");
         const actor: TeamActor = { team_id: teamId, user_id: user.user_id };
-        const result = dispatch(store, actor, parsed.data);
-        validateResult(parsed.data, result, actor);
+        const result = await dispatch(store, references, actor, parsed.data);
+        validateResult(store, parsed.data, result, actor);
         const body = JSON.stringify({ result });
         if (Buffer.byteLength(body) > MAX_RESPONSE_BYTES)
           return responseError("too_large");
