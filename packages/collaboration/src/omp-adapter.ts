@@ -270,57 +270,42 @@ export function createOhMyPiChildAdapter(
   const runtimeFactory = options.runtimeFactory ?? openRuntimeSession;
   return {
     async start(launch, hooks) {
-      if (hooks.signal.aborted)
-        return cancelledBeforeRuntime(launch, options.stateRoot, null);
+      const cancelledAt = (baseRevision: string | null) =>
+        hooks.signal.aborted
+          ? cancelledBeforeRuntime(launch, options.stateRoot, baseRevision)
+          : null;
+      let cancelled = cancelledAt(null);
+      if (cancelled) return cancelled;
       const workspace = await options.workspaceFor(launch);
-      if (hooks.signal.aborted)
-        return cancelledBeforeRuntime(
-          launch,
-          options.stateRoot,
-          workspace.base_revision,
-        );
+      const checkpoint = () => cancelledAt(workspace.base_revision);
+      cancelled = checkpoint();
+      if (cancelled) return cancelled;
       const state = await childStateDirectory(
         options.stateRoot,
         workspace.cwd,
         launch,
       );
-      if (hooks.signal.aborted)
-        return cancelledBeforeRuntime(
-          launch,
-          options.stateRoot,
-          workspace.base_revision,
-        );
+      cancelled = checkpoint();
+      if (cancelled) return cancelled;
       const bindingPath = join(state.directory, "binding.json");
       const existing = await loadBinding(bindingPath);
-      if (hooks.signal.aborted)
-        return cancelledBeforeRuntime(
-          launch,
-          options.stateRoot,
-          workspace.base_revision,
-        );
+      cancelled = checkpoint();
+      if (cancelled) return cancelled;
       let sessionFile: string | undefined;
       if (launch.session_ref) {
         try {
           sessionFile = await realpath(launch.session_ref);
         } catch {
-          if (hooks.signal.aborted)
-            return cancelledBeforeRuntime(
-              launch,
-              options.stateRoot,
-              workspace.base_revision,
-            );
+          cancelled = checkpoint();
+          if (cancelled) return cancelled;
           throw new CollaborationError(
             "forbidden",
             "Session journal is unavailable",
           );
         }
       }
-      if (hooks.signal.aborted)
-        return cancelledBeforeRuntime(
-          launch,
-          options.stateRoot,
-          workspace.base_revision,
-        );
+      cancelled = checkpoint();
+      if (cancelled) return cancelled;
       if (sessionFile && !inside(state.directory, sessionFile))
         throw new CollaborationError(
           "forbidden",
@@ -348,19 +333,9 @@ export function createOhMyPiChildAdapter(
         );
       if (!existing) {
         await saveBinding(bindingPath, desired);
-        if (hooks.signal.aborted)
-          return cancelledBeforeRuntime(
-            launch,
-            options.stateRoot,
-            workspace.base_revision,
-          );
       }
-      if (hooks.signal.aborted)
-        return cancelledBeforeRuntime(
-          launch,
-          options.stateRoot,
-          workspace.base_revision,
-        );
+      cancelled = checkpoint();
+      if (cancelled) return cancelled;
       const task: Task = {
         schema_version: 1,
         task_id: launch.child_task_id,
