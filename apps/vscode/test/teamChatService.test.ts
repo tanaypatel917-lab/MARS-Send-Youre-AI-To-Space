@@ -27,6 +27,7 @@ function setup(
     streamUrl?: string | null;
     fetch?: StreamFetchLike;
     pageSize?: number;
+    maxLoaded?: number;
   } = {},
 ) {
   const server = new FakeTeamServer(options);
@@ -86,6 +87,9 @@ function setup(
     ...(realtime ? { realtime } : {}),
     viewer: "service",
     pageSize: options.pageSize ?? 50,
+    ...(options.maxLoaded !== undefined
+      ? { maxLoaded: options.maxLoaded }
+      : {}),
   });
   const last = () => {
     const state = states[states.length - 1];
@@ -684,6 +688,152 @@ describe("TeamRealtime", () => {
     realtime?.stop();
     controller.dispose();
     await realtime?.settled();
+  });
+
+  test("a capped backfill from exhausted history marks older messages as blocked", async () => {
+    const { controller, last, server, dm } = setup({
+      pageSize: 3,
+      maxLoaded: 4,
+    });
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    expect(last().selected?.older_cursor).toBeNull();
+    expect(last().selected?.older_blocked).toBe(false);
+
+    server.post(GRACE, dm, "after the exhausted page 4");
+    server.post(GRACE, dm, "after the exhausted page 5");
+    await controller.notifyConnection("live");
+
+    expect(
+      last().selected?.messages.map((message) => message.sequence),
+    ).toEqual([2, 3, 4, 5]);
+    expect(last().selected?.older_cursor).toBeNull();
+    expect(last().selected?.older_blocked).toBe(true);
+  });
+
+  test("a capped backfill replaces a non-exhausted page with the newest page", async () => {
+    const { controller, last, server, dm } = setup({
+      pageSize: 2,
+      maxLoaded: 4,
+    });
+    server.post(GRACE, dm, "initial 4");
+    server.post(GRACE, dm, "initial 5");
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    expect(
+      last().selected?.messages.map((message) => message.sequence),
+    ).toEqual([4, 5]);
+    expect(last().selected?.older_cursor).not.toBeNull();
+    expect(last().selected?.older_blocked).toBe(false);
+
+    server.post(GRACE, dm, "new 6");
+    server.post(GRACE, dm, "new 7");
+    server.post(GRACE, dm, "new 8");
+    await controller.notifyConnection("live");
+
+    expect(
+      last().selected?.messages.map((message) => message.sequence),
+    ).toEqual([5, 6, 7, 8]);
+    expect(last().selected?.older_cursor).toBeNull();
+    expect(last().selected?.older_blocked).toBe(true);
+  });
+
+  test("a successful reconnect backfill advances the focused bottom read cursor", async () => {
+    const { controller, last, server, dm } = setup({
+      pageSize: 3,
+      maxLoaded: 10,
+    });
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    await controller.handleMessage({
+      type: "viewport",
+      focused: true,
+      atBottom: true,
+    });
+    server.post(GRACE, dm, "committed while disconnected");
+
+    await controller.notifyConnection("live");
+
+    expect(
+      last().selected?.messages.map((message) => message.sequence),
+    ).toEqual([1, 2, 3, 4]);
+    expect(last().selected?.conversation.read_cursor).toBe(4);
+    expect(
+      server.calls.some(
+        (call) =>
+          call.method === "conversations.mark_read" &&
+          call.params.read_seq === 4,
+      ),
+    ).toBe(true);
+  });
+
+  test("failed reconnect backfills retry from the highest loaded sequence", async () => {
+    const { controller, last, server, dm } = setup({
+      pageSize: 3,
+      maxLoaded: 10,
+    });
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    server.post(GRACE, dm, "committed while disconnected");
+    server.historyFailuresRemaining = 2;
+
+    await controller.notifyConnection("live");
+    expect(last().selected?.conversation.last_sequence).toBe(3);
+    await controller.notifyConnection("polling");
+    expect(last().selected?.conversation.last_sequence).toBe(3);
+    await controller.notifyConnection("live");
+
+    const retries = server.calls.filter(
+      (call) =>
+        call.method === "messages.history" && call.params.after_seq === 3,
+    );
+    expect(retries).toHaveLength(3);
+    expect(last().selected?.conversation.last_sequence).toBe(4);
+    expect(
+      last().selected?.messages.map((message) => message.sequence),
+    ).toEqual([1, 2, 3, 4]);
+  });
+
+  test("an oversized reconnect gap fetches about one page past the cap then reloads newest messages", async () => {
+    const { controller, last, server, dm } = setup({
+      pageLimit: 2,
+      pageSize: 2,
+      maxLoaded: 4,
+    });
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    for (let i = 0; i < 10; i++) server.post(GRACE, dm, `large gap ${i}`);
+    const start = server.calls.length;
+
+    await controller.notifyConnection("live");
+
+    const backfillPages = server.calls
+      .slice(start)
+      .filter(
+        (call) =>
+          call.method === "messages.history" &&
+          typeof call.params.after_seq === "number",
+      );
+    expect(backfillPages).toHaveLength(2);
+    expect(backfillPages.every((call) => call.params.limit === 2)).toBe(true);
+    expect(
+      last().selected?.messages.map((message) => message.sequence),
+    ).toEqual([10, 11, 12, 13]);
   });
 
   test("parses only data lines and drops malformed events", () => {

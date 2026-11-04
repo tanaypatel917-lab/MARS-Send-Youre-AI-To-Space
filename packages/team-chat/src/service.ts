@@ -185,6 +185,7 @@ export interface TeamService {
     viewer: string,
     conversationId: string,
     afterSequence: number,
+    maxMessages?: number,
   ): MaybePromise<TeamResult<MessageView[]>>;
   sendMessage(
     viewer: string,

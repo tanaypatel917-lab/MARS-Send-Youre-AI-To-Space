@@ -81,6 +81,7 @@ export class FakeTeamServer {
   disabled = false;
   /** When true, the next history page is cut to one row (the server's byte budget). */
   shortPageOnce = false;
+  historyFailuresRemaining = 0;
   private counter = 0;
   private clock = 0;
 
@@ -285,6 +286,14 @@ export class FakeTeamServer {
           request.context?.team_id !== TEAM_ID
         )
           throw rpc("server", "invalid_request", 400);
+        if (
+          request.method === "messages.history" &&
+          typeof request.params.after_seq === "number" &&
+          this.historyFailuresRemaining > 0
+        ) {
+          this.historyFailuresRemaining -= 1;
+          throw rpc("disconnected", undefined, undefined);
+        }
         return structuredClone(this.dispatch(userId, request));
       },
     };

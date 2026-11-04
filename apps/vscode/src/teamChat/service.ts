@@ -444,10 +444,15 @@ export class RpcTeamService implements TeamService {
     _viewer: string,
     conversationId: string,
     afterSequence: number,
+    maxMessages = MAX_CACHED_PER_CONVERSATION,
   ): Promise<TeamResult<MessageView[]>> {
     return this.guard(conversationId, async () => {
       await this.identity();
       const limit = this.client.pageLimit();
+      const maxRead = Math.min(
+        MAX_CACHED_PER_CONVERSATION,
+        Math.max(0, Math.floor(maxMessages)),
+      );
       const messages: ServiceMessage[] = [];
       let after = afterSequence;
       for (;;) {
@@ -458,8 +463,7 @@ export class RpcTeamService implements TeamService {
         if (page.length === 0) break;
         for (const message of page) this.remember(message);
         messages.push(...page);
-        if (messages.length > MAX_CACHED_PER_CONVERSATION)
-          messages.splice(0, messages.length - MAX_CACHED_PER_CONVERSATION);
+        if (messages.length > maxRead) break;
         const last = page[page.length - 1];
         if (!last || last.seq <= after) break;
         after = last.seq;
