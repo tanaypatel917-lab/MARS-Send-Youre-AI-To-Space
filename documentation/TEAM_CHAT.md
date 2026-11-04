@@ -229,7 +229,7 @@ record other than the frozen input and the posted answer.
 - **Team administration is host-side** (`store.setTeamMember` /
   `removeTeamMember`); no RPC can change team membership in PR 2. Removing a
   team member removes them from every conversation of that team.
-- **Migration `0002_agent_requests`** adds `messages.kind` /
+- **Migration `0003_agent_requests`** adds `messages.kind` /
   `messages.agent_request_id` and the `agent_requests` table. Message digests
   written before it (without `kind`) stay valid for `kind = 'user'` rows.
 - **References reach @MARS through the host, not the chat store.** Until the
