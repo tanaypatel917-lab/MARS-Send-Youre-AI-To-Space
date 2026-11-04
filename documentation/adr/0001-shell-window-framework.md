@@ -31,7 +31,7 @@ Version choice: Electron supports the latest three majors (43, 44, 45 on 2026-11
 
 **Electron**, pinned to `44.10.2`, in `apps/shell`.
 
-The deciding criterion is the bridge: the only privileged code the Shell has is "read a connection file, forward eight read methods, validate strictly, verify SHA-256". In Electron that code is TypeScript that imports the same `@mars/contracts` schemas the server validates with, and it runs under `bun test` against the real loopback transport on headless CI. Tauri would move it to Rust (a second copy of a frozen protocol) or add a sidecar, and its native build cannot run on the current CI.
+The deciding criterion is the bridge: the only privileged code the Shell has is "read a connection file, forward nine read methods, validate strictly, verify SHA-256". In Electron that code is TypeScript that imports the same `@mars/contracts` schemas the server validates with, and it runs under `bun test` against the real loopback transport on headless CI. Tauri would move it to Rust (a second copy of a frozen protocol) or add a sidecar, and its native build cannot run on the current CI.
 
 ## Rejected: Tauri
 

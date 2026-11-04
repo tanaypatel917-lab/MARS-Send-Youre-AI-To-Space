@@ -4,7 +4,7 @@ Status: **PR 3a scaffold, fixture-verified only.** `apps/shell` is an Electron w
 
 ## No second agent loop
 
-MARS Shell owns no model, no tools, no shell, no history store, no MCP/LSP and no permission logic. Oh My Pi inside the workbench (`mars serve`) is the only agent runtime. The Shell observes tasks through eight read methods and stores nothing except its window size in `~/.mars/shell/layout.json`. It never calls a model, starts, steers, cancels, resumes, checkpoints or restores a task, runs a command, or reads the file system on behalf of the renderer.
+MARS Shell owns no model, no tools, no shell, no history store, no MCP/LSP and no permission logic. Oh My Pi inside the workbench (`mars serve`) is the only agent runtime. The Shell observes tasks through nine read methods and stores nothing except its window size in `~/.mars/shell/layout.json`. It never calls a model, starts, steers, cancels, resumes, checkpoints or restores a task, runs a command, or reads the file system on behalf of the renderer.
 
 ## Process model
 
