@@ -8,13 +8,24 @@ import {
   realpathSync,
 } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { type Locator, referenceDigest } from "@mars/code-refs";
 import {
   type Conversation,
   ConversationSchema,
+  type GitRangeReference,
+  GitRangeReferenceSchema,
   type Message,
   MessageSchema,
+  type MessageView,
+  MessageViewSchema,
   type Participant,
   ParticipantSchema,
+  type ReferenceChip,
+  type ReferencePreviewState,
+  type Repo,
+  type RepoAccess,
+  RepoAccessSchema,
+  RepoSchema,
   type ResultCard,
   ResultCardSchema,
   type ResultShare,
@@ -43,6 +54,7 @@ import {
   conflict,
   invalidInput,
   notFound,
+  referenceNotFound,
   TeamError,
   unavailable,
 } from "./errors";
@@ -150,6 +162,45 @@ export const TEAM_MIGRATIONS: ReadonlyArray<{ id: string; sql: string }> = [
       CREATE INDEX result_shares_link ON result_shares(link_id, message_seq);
     `,
   },
+  {
+    // Repo access + committed code references (Team Chat PR 4; after PR 6's 0002_task_links). `repo_id` is
+    // the opaque id the host registered in the @mars/code-refs registry; no
+    // filesystem path is stored. `references` is an SQL keyword, hence
+    // `code_references`. Postgres-portable types only.
+    id: "0003_references",
+    sql: `
+      CREATE TABLE repos (
+        team_id TEXT NOT NULL, repo_id TEXT NOT NULL, label TEXT NOT NULL,
+        revision INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        PRIMARY KEY (team_id, repo_id)
+      );
+      CREATE TABLE repo_access (
+        team_id TEXT NOT NULL, repo_id TEXT NOT NULL, user_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('active', 'removed')),
+        revision INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        PRIMARY KEY (team_id, repo_id, user_id),
+        FOREIGN KEY (team_id, repo_id) REFERENCES repos(team_id, repo_id)
+      );
+      CREATE INDEX repo_access_user ON repo_access(team_id, user_id, state);
+      CREATE TABLE code_references (
+        team_id TEXT NOT NULL, reference_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('git_range')),
+        repo_id TEXT NOT NULL, commit_sha TEXT NOT NULL, path TEXT NOT NULL,
+        line_start INTEGER, line_end INTEGER, blob_sha256 TEXT,
+        resolved_state TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+        record_sha256 TEXT NOT NULL,
+        PRIMARY KEY (team_id, reference_id)
+      );
+      CREATE INDEX code_references_repo ON code_references(team_id, repo_id);
+      CREATE TABLE message_references (
+        message_id TEXT NOT NULL REFERENCES messages(message_id),
+        team_id TEXT NOT NULL, reference_id TEXT NOT NULL, position INTEGER NOT NULL,
+        PRIMARY KEY (message_id, reference_id),
+        FOREIGN KEY (team_id, reference_id) REFERENCES code_references(team_id, reference_id)
+      );
+      CREATE INDEX message_references_reference ON message_references(team_id, reference_id);
+    `,
+  },
 ];
 
 export interface TeamStoreOptions {
@@ -194,7 +245,36 @@ export interface TeamDescription {
   user_id: string;
   role: TeamRole;
   limits: TeamLimits;
-  capabilities: { stream: boolean; reactions: boolean; search: boolean };
+  capabilities: {
+    stream: boolean;
+    reactions: boolean;
+    search: boolean;
+    /** Set by the server when a `@mars/code-refs` registry is wired in. */
+    references: boolean;
+  };
+}
+
+export interface SendInput {
+  conversation_id: string;
+  client_message_id: string;
+  body: string;
+  reply_to?: string | undefined;
+  /** Must exist in the team and be accessible to the sender at send time. */
+  reference_ids?: string[] | undefined;
+}
+
+export interface PutReferenceInput {
+  locator: Locator;
+  /** The `@mars/code-refs` state observed once at creation (`unavailable` is never stored). */
+  resolved_state: ReferencePreviewState;
+  /** `text_sha256` of the `ok` excerpt at creation; null for other states. */
+  blob_sha256: string | null;
+}
+
+export interface ReferenceVisibility {
+  reference: GitRangeReference;
+  /** False → render exactly `{state: "restricted"}` / `{reference_id, restricted: true}`. */
+  accessible: boolean;
 }
 
 export interface TeamStore {
@@ -246,18 +326,36 @@ export interface TeamStore {
     actor: TeamActor,
     input: { conversation_id: string; pinned: boolean },
   ): Participant;
-  send(
-    actor: TeamActor,
-    requestId: string,
-    input: {
-      conversation_id: string;
-      client_message_id: string;
-      body: string;
-      reply_to?: string | undefined;
-    },
-  ): Message;
-  /** Page cut by count and serialized bytes; never skips a message. */
-  history(actor: TeamActor, query: HistoryQuery): Message[];
+  send(actor: TeamActor, requestId: string, input: SendInput): MessageView;
+  /** Page cut by count and serialized bytes; never skips a message. Chips are per viewer. */
+  history(actor: TeamActor, query: HistoryQuery): MessageView[];
+  /** Host-side repo administration (no RPC grants repo access in the pilot). */
+  setRepo(input: { team_id: string; repo_id: string; label: string }): Repo;
+  setRepoAccess(input: {
+    team_id: string;
+    repo_id: string;
+    user_id: string;
+  }): RepoAccess;
+  /** Takes effect on the next read: nothing is cached. */
+  revokeRepoAccess(input: {
+    team_id: string;
+    repo_id: string;
+    user_id: string;
+  }): RepoAccess;
+  /** Repos in the actor's team the actor currently has access to. */
+  listRepos(actor: TeamActor): Repo[];
+  /** Active team member, repo registered for the team, access `active`; re-read every call. */
+  hasRepoAccess(actor: TeamActor, repoId: string): boolean;
+  /** `not_found` for an absent repo and for one the actor cannot access alike. */
+  requireRepoAccess(actor: TeamActor, repoId: string): void;
+  /** Stores (or returns the existing) reference; `reference_id = referenceDigest(locator)`. */
+  putReference(actor: TeamActor, input: PutReferenceInput): GitRangeReference;
+  /**
+   * The reference as seen by the actor: `not_found` unless it is attached to a
+   * message in a conversation the actor is an active participant of (and
+   * after the actor joined); `accessible` reflects current repo access.
+   */
+  viewReference(actor: TeamActor, referenceId: string): ReferenceVisibility;
   poll(
     actor: TeamActor,
     input: { cursors: PollCursor[]; limit?: number | undefined },
@@ -285,7 +383,7 @@ export interface TeamStore {
     actor: TeamActor,
     requestId: string,
     input: ShareInput & { preview_sha256: string },
-  ): Message;
+  ): MessageView;
   close(): void;
 }
 
@@ -459,6 +557,34 @@ interface OutboxRow {
   message_seq: number;
   message_id: string | null;
   revision: number;
+}
+interface RepoRow {
+  team_id: string;
+  repo_id: string;
+  label: string;
+  revision: number;
+}
+interface RepoAccessRow {
+  team_id: string;
+  repo_id: string;
+  user_id: string;
+  state: string;
+  revision: number;
+}
+interface ReferenceRow {
+  team_id: string;
+  reference_id: string;
+  kind: string;
+  repo_id: string;
+  commit_sha: string;
+  path: string;
+  line_start: number | null;
+  line_end: number | null;
+  blob_sha256: string | null;
+  resolved_state: string;
+  created_by: string;
+  created_at: string;
+  record_sha256: string;
 }
 
 function prepareRoot(rootDir: string): string {
@@ -903,6 +1029,92 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     return { preview_sha256: sha256(canonicalJson(parsed)), card: parsed };
   };
 
+  const repoRow = (teamId: string, repoId: string): RepoRow | null =>
+    db
+      .query<RepoRow, [string, string]>(
+        "SELECT team_id, repo_id, label, revision FROM repos WHERE team_id = ? AND repo_id = ?",
+      )
+      .get(teamId, repoId);
+  const toRepo = (row: RepoRow): Repo =>
+    RepoSchema.parse({
+      team_id: row.team_id,
+      repo_id: row.repo_id,
+      label: row.label,
+      revision: row.revision,
+    });
+  const repoAccessRow = (
+    teamId: string,
+    repoId: string,
+    userId: string,
+  ): RepoAccessRow | null =>
+    db
+      .query<RepoAccessRow, [string, string, string]>(
+        "SELECT team_id, repo_id, user_id, state, revision FROM repo_access WHERE team_id = ? AND repo_id = ? AND user_id = ?",
+      )
+      .get(teamId, repoId, userId);
+  const toRepoAccess = (row: RepoAccessRow): RepoAccess =>
+    RepoAccessSchema.parse({
+      team_id: row.team_id,
+      repo_id: row.repo_id,
+      user_id: row.user_id,
+      state: row.state,
+      revision: row.revision,
+    });
+  /** Re-read on every call; the only place repo access is decided. */
+  const repoAccessible = (actor: TeamActor, repoId: string): boolean => {
+    if (!idSchema.safeParse(repoId).success) return false;
+    if (!activeTeamMember(actor.team_id, actor.user_id)) return false;
+    if (!repoRow(actor.team_id, repoId)) return false;
+    const access = repoAccessRow(actor.team_id, repoId, actor.user_id);
+    return access !== null && access.state === "active";
+  };
+  const referenceRow = (
+    teamId: string,
+    referenceId: string,
+  ): ReferenceRow | null =>
+    db
+      .query<ReferenceRow, [string, string]>(
+        "SELECT * FROM code_references WHERE team_id = ? AND reference_id = ?",
+      )
+      .get(teamId, referenceId);
+  const referenceRecord = (row: ReferenceRow): GitRangeReference => {
+    const record = {
+      kind: "git_range" as const,
+      reference_id: row.reference_id,
+      team_id: row.team_id,
+      repo_id: row.repo_id,
+      commit_sha: row.commit_sha,
+      path: row.path,
+      line_start: row.line_start,
+      line_end: row.line_end,
+      blob_sha256: row.blob_sha256,
+    };
+    if (sha256(canonicalJson(record)) !== row.record_sha256)
+      throw new TeamError("corrupt_record", "Stored reference is invalid");
+    return GitRangeReferenceSchema.parse(record);
+  };
+  /** Per-viewer chips: a reference the viewer may not see is `{reference_id, restricted: true}` and nothing else. */
+  const withChips = (actor: TeamActor, message: Message): MessageView => {
+    const references: ReferenceChip[] = message.reference_ids.map(
+      (referenceId) => {
+        const row = referenceRow(actor.team_id, referenceId);
+        if (!row || !repoAccessible(actor, row.repo_id))
+          return { reference_id: referenceId, restricted: true };
+        const reference = referenceRecord(row);
+        return {
+          reference_id: reference.reference_id,
+          restricted: false,
+          repo_id: reference.repo_id,
+          commit_sha: reference.commit_sha,
+          path: reference.path,
+          line_start: reference.line_start,
+          line_end: reference.line_end,
+        };
+      },
+    );
+    return MessageViewSchema.parse({ ...message, references });
+  };
+
   const emitEvent = (
     conversation: ConversationRow,
     kind: "message" | "membership",
@@ -1125,13 +1337,14 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     });
 
   const messagePage = (
+    actor: TeamActor,
     rows: MessageRow[],
     fromCursorSide: boolean,
-  ): Message[] => {
-    const page: Message[] = [];
+  ): MessageView[] => {
+    const page: MessageView[] = [];
     let bytes = ENVELOPE_BYTES;
     for (const row of rows) {
-      const message = messageRecord(row);
+      const message = withChips(actor, messageRecord(row));
       const size =
         Buffer.byteLength(JSON.stringify(message)) + (page.length ? 1 : 0);
       if (bytes + size > limits.max_page_bytes) {
@@ -1148,6 +1361,42 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     return fromCursorSide ? page.reverse() : page;
   };
 
+  const setAccess = (
+    input: { team_id: string; repo_id: string; user_id: string },
+    state: "active" | "removed",
+  ): RepoAccess => {
+    const parsed = z
+      .object({ team_id: idSchema, repo_id: idSchema, user_id: idSchema })
+      .strict()
+      .safeParse(input);
+    if (!parsed.success) throw invalidInput("Invalid repo access input");
+    if (!repoRow(parsed.data.team_id, parsed.data.repo_id))
+      throw referenceNotFound();
+    const existing = repoAccessRow(
+      parsed.data.team_id,
+      parsed.data.repo_id,
+      parsed.data.user_id,
+    );
+    const revision = (existing?.revision ?? 0) + 1;
+    db.query(
+      "INSERT INTO repo_access (team_id, repo_id, user_id, state, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (team_id, repo_id, user_id) DO UPDATE SET state = excluded.state, revision = excluded.revision, updated_at = excluded.updated_at",
+    ).run(
+      parsed.data.team_id,
+      parsed.data.repo_id,
+      parsed.data.user_id,
+      state,
+      revision,
+      timestamp(),
+      timestamp(),
+    );
+    const row = repoAccessRow(
+      parsed.data.team_id,
+      parsed.data.repo_id,
+      parsed.data.user_id,
+    );
+    if (!row) throw new TeamError("corrupt_record", "Repo access write failed");
+    return toRepoAccess(row);
+  };
   return {
     rootDir,
     limits,
@@ -1220,7 +1469,12 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
           user_id: member.user_id,
           role: member.role === "admin" ? "admin" : "member",
           limits,
-          capabilities: { stream: false, reactions: false, search: false },
+          capabilities: {
+            stream: false,
+            reactions: false,
+            search: false,
+            references: false,
+          },
         };
       });
     },
@@ -1463,7 +1717,10 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     send(actor, requestId, input) {
       return write(() => {
         requireTeamMember(actor);
-        return idempotent(
+        // Before any idempotent replay: a participant removed since the
+        // original send must not read the stored message back.
+        requireParticipant(actor, input.conversation_id);
+        const stored = idempotent(
           actor,
           requestId,
           "messages.send",
@@ -1483,10 +1740,24 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
                   .max(limits.max_client_message_id_chars),
                 body: z.string().min(1),
                 reply_to: idSchema.optional(),
+                reference_ids: z
+                  .array(idSchema)
+                  .max(limits.max_references_per_message)
+                  .optional(),
               })
               .strict()
               .safeParse(input);
             if (!parsed.success) throw invalidInput("Invalid message input");
+            const referenceIds = parsed.data.reference_ids ?? [];
+            if (new Set(referenceIds).size !== referenceIds.length)
+              throw invalidInput("Duplicate reference id");
+            // Each reference must exist in this team and the sender must have
+            // access to its repo now; absent and inaccessible look alike.
+            for (const referenceId of referenceIds) {
+              const row = referenceRow(actor.team_id, referenceId);
+              if (!row || !repoAccessible(actor, row.repo_id))
+                throw referenceNotFound();
+            }
             if (Buffer.byteLength(parsed.data.body) > limits.max_body_bytes)
               throw new TeamError(
                 "too_large",
@@ -1503,7 +1774,10 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
                 parsed.data.client_message_id,
               );
             if (previous) {
-              if (previous.body_sha256 !== bodyHash)
+              if (
+                previous.body_sha256 !== bodyHash ||
+                previous.reference_ids_json !== JSON.stringify(referenceIds)
+              )
                 throw conflict(
                   "client_message_id was reused with a different body",
                 );
@@ -1528,7 +1802,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
               body: parsed.data.body,
               body_sha256: bodyHash,
               reply_to: parsed.data.reply_to ?? null,
-              reference_ids: [],
+              reference_ids: referenceIds,
               created_at: timestamp(),
               edited_at: null,
               deleted: false,
@@ -1544,10 +1818,15 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
               record.body,
               record.body_sha256,
               record.reply_to,
-              "[]",
+              JSON.stringify(referenceIds),
               record.created_at,
               sha256(canonicalJson(record)),
             );
+            referenceIds.forEach((referenceId, position) => {
+              db.query(
+                "INSERT INTO message_references (message_id, team_id, reference_id, position) VALUES (?, ?, ?, ?)",
+              ).run(record.message_id, actor.team_id, referenceId, position);
+            });
             conversation.last_seq = seq;
             emitEvent(
               conversation,
@@ -1560,6 +1839,9 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
             return MessageSchema.parse(record);
           },
         );
+        // Chips are derived now, never stored: a replay after a revocation
+        // shows the sender's own reference as restricted.
+        return withChips(actor, stored);
       });
     },
     history(actor, query) {
@@ -1587,7 +1869,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
               "SELECT * FROM messages WHERE conversation_id = ? AND seq > ? AND seq > ? ORDER BY seq ASC LIMIT ?",
             )
             .all(conversation.conversation_id, query.after_seq, floor, limit);
-          return messagePage(rows, false);
+          return messagePage(actor, rows, false);
         }
         const before = query.before_seq ?? conversation.last_seq + 1;
         if (
@@ -1601,7 +1883,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
             "SELECT * FROM messages WHERE conversation_id = ? AND seq < ? AND seq > ? ORDER BY seq DESC LIMIT ?",
           )
           .all(conversation.conversation_id, before, floor, limit);
-        return messagePage(rows, true);
+        return messagePage(actor, rows, true);
       });
     },
     poll(actor, input) {
@@ -1660,6 +1942,121 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
             );
         }
         return events;
+      });
+    },
+    setRepo(input) {
+      return write(() => {
+        const parsed = z
+          .object({
+            team_id: idSchema,
+            repo_id: idSchema,
+            label: z.string().min(1).max(limits.max_title_chars),
+          })
+          .strict()
+          .safeParse(input);
+        if (!parsed.success) throw invalidInput("Invalid repo input");
+        const existing = repoRow(parsed.data.team_id, parsed.data.repo_id);
+        const revision = (existing?.revision ?? 0) + 1;
+        db.query(
+          "INSERT INTO repos (team_id, repo_id, label, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (team_id, repo_id) DO UPDATE SET label = excluded.label, revision = excluded.revision, updated_at = excluded.updated_at",
+        ).run(
+          parsed.data.team_id,
+          parsed.data.repo_id,
+          parsed.data.label,
+          revision,
+          timestamp(),
+          timestamp(),
+        );
+        const row = repoRow(parsed.data.team_id, parsed.data.repo_id);
+        if (!row) throw new TeamError("corrupt_record", "Repo write failed");
+        return toRepo(row);
+      });
+    },
+    setRepoAccess(input) {
+      return write(() => setAccess(input, "active"));
+    },
+    revokeRepoAccess(input) {
+      return write(() => setAccess(input, "removed"));
+    },
+    listRepos(actor) {
+      return read(() => {
+        requireTeamMember(actor);
+        return db
+          .query<RepoRow, [string, string]>(
+            "SELECT r.team_id, r.repo_id, r.label, r.revision FROM repos r JOIN repo_access a ON a.team_id = r.team_id AND a.repo_id = r.repo_id WHERE r.team_id = ? AND a.user_id = ? AND a.state = 'active' ORDER BY r.repo_id",
+          )
+          .all(actor.team_id, actor.user_id)
+          .map(toRepo);
+      });
+    },
+    hasRepoAccess(actor, repoId) {
+      return read(() => repoAccessible(actor, repoId));
+    },
+    requireRepoAccess(actor, repoId) {
+      read(() => {
+        requireTeamMember(actor);
+        if (!repoAccessible(actor, repoId)) throw referenceNotFound();
+      });
+    },
+    putReference(actor, input) {
+      return write(() => {
+        requireTeamMember(actor);
+        if (!repoAccessible(actor, input.locator.repo_id))
+          throw referenceNotFound();
+        if (input.resolved_state === "unavailable") throw referenceNotFound();
+        const record: GitRangeReference = GitRangeReferenceSchema.parse({
+          kind: "git_range",
+          reference_id: referenceDigest(input.locator),
+          team_id: actor.team_id,
+          repo_id: input.locator.repo_id,
+          commit_sha: input.locator.commit_sha,
+          path: input.locator.path,
+          line_start: input.locator.line_start,
+          line_end: input.locator.line_end,
+          blob_sha256: input.blob_sha256,
+        });
+        const existing = referenceRow(actor.team_id, record.reference_id);
+        if (existing) return referenceRecord(existing);
+        db.query(
+          "INSERT INTO code_references (team_id, reference_id, kind, repo_id, commit_sha, path, line_start, line_end, blob_sha256, resolved_state, created_by, created_at, record_sha256) VALUES (?, ?, 'git_range', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).run(
+          record.team_id,
+          record.reference_id,
+          record.repo_id,
+          record.commit_sha,
+          record.path,
+          record.line_start,
+          record.line_end,
+          record.blob_sha256,
+          input.resolved_state,
+          actor.user_id,
+          timestamp(),
+          sha256(canonicalJson(record)),
+        );
+        return record;
+      });
+    },
+    viewReference(actor, referenceId) {
+      return read(() => {
+        requireTeamMember(actor);
+        if (!idSchema.safeParse(referenceId).success) throw referenceNotFound();
+        const visible = db
+          .query<{ one: number }, [string, string, string]>(
+            `SELECT 1 AS one FROM message_references mr
+             JOIN messages m ON m.message_id = mr.message_id
+             JOIN conversations c ON c.conversation_id = m.conversation_id
+             JOIN participants p ON p.conversation_id = m.conversation_id AND p.user_id = ?
+             WHERE mr.team_id = ? AND mr.reference_id = ? AND c.team_id = mr.team_id
+               AND p.state = 'active' AND m.seq > p.joined_seq
+             LIMIT 1`,
+          )
+          .get(actor.user_id, actor.team_id, referenceId);
+        const row = referenceRow(actor.team_id, referenceId);
+        if (!visible || !row) throw referenceNotFound();
+        return {
+          reference: referenceRecord(row),
+          accessible: repoAccessible(actor, row.repo_id),
+        };
       });
     },
     linkDraft(actor, requestId, input) {
@@ -1971,7 +2368,10 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
             return message;
           },
         );
-        return messageRecord(storedMessageRow(posted.message_id));
+        return withChips(
+          actor,
+          messageRecord(storedMessageRow(posted.message_id)),
+        );
       });
     },
     close() {
