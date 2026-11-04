@@ -177,6 +177,8 @@ export class FakeTeamServer {
       message_id: this.nextId("msg"),
       conversation_id: conversationId,
       author_id: author,
+      kind: "user",
+      agent_request_id: null,
       seq: conversation.last_seq,
       client_message_id: options.client_message_id ?? this.nextId("cm"),
       body,

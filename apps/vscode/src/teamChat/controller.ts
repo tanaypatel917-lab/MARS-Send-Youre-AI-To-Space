@@ -1,4 +1,4 @@
-import type { TeamDeliveryEventKind } from "@mars/contracts";
+import type { TeamDeliveryEvent } from "@mars/contracts";
 import {
   type ConversationSummary,
   FIXTURE_USERS,
@@ -170,7 +170,7 @@ export class TeamChatController {
    */
   notifyDelivery(
     conversationId: string,
-    kind: TeamDeliveryEventKind,
+    kind: TeamDeliveryEvent["kind"],
   ): Promise<void> {
     return this.run(async () => {
       const known = this.conversations.some(
