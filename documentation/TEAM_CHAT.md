@@ -73,6 +73,10 @@ task links and result shares (PR 4–6; their schemas are reserved in
   immediate transaction; ids and positions are verified against the ledger, and
   a ledger from newer or diverged code is rejected (`corrupt_record`). The five
   older stores are untouched.
+- **Re-entry is self-initiated.** A participant marked `removed` by a team
+  departure re-enters a DM only through their own `conversations.create_dm`
+  (new `joined_seq`, nothing from the absence is visible); the peer's call never
+  restores someone else's access. Group re-entry is `add_member` by a member.
 - **Dev authenticator only.** Tokens are hashed at construction and compared as
   SHA-256 digests in constant time; plain tokens are never retained.
 - **Team administration is host-side** (`store.setTeamMember` /

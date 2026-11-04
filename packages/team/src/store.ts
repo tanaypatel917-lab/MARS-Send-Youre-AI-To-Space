@@ -861,22 +861,16 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
               )
               .get(actor.team_id, key);
             if (existing) {
-              // Both users are active team members again; a participant row
-              // left `removed` by a team departure is reactivated from here on.
-              let rejoined = false;
-              for (const userId of [actor.user_id, input.peer_user_id]) {
-                const row = participantRow(existing.conversation_id, userId);
-                if (!row)
-                  throw new TeamError(
-                    "corrupt_record",
-                    "DM participant missing",
-                  );
-                if (row.state !== "active") {
-                  reactivateParticipant(existing, userId);
-                  rejoined = true;
-                }
-              }
-              if (rejoined) {
+              // Only the caller re-enters a DM they were removed from (by a
+              // team departure); the peer cannot restore someone else's access.
+              const own = participantRow(
+                existing.conversation_id,
+                actor.user_id,
+              );
+              if (!own)
+                throw new TeamError("corrupt_record", "DM participant missing");
+              if (own.state !== "active") {
+                reactivateParticipant(existing, actor.user_id);
                 existing.revision += 1;
                 emitEvent(
                   existing,

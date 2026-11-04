@@ -835,6 +835,15 @@ test("a teammate who leaves the team and returns reopens the same DM from the cu
     body: "while alice was away",
   });
   f.store.setTeamMember({ team_id: TEAM, user_id: "alice", role: "member" });
+  // Bob cannot restore Alice's access for her; only her own call does.
+  const byBob = await f.ok<View>("bob", "conversations.create_dm", {
+    peer_user_id: "alice",
+  });
+  expect(byBob.conversation.conversation_id).toBe(id);
+  expect(byBob.members.find((m) => m.user_id === "alice")?.state).toBe(
+    "removed",
+  );
+  expect(byBob.conversation.revision).toBe(dm.conversation.revision + 1);
   const reopened = await f.ok<View>("alice", "conversations.create_dm", {
     peer_user_id: "bob",
   });
