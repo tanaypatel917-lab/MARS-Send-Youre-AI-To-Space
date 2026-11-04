@@ -4,6 +4,8 @@ import {
   type CheckpointRef,
   type EventEnvelope,
   EventEnvelopeSchema,
+  type JournalResult,
+  JournalResultSchema,
   type RequestContext,
   type Scope,
   ScopeSchema,
@@ -25,6 +27,8 @@ import {
   DiffResultSchema,
   type EvidenceResult,
   EvidenceResultSchema,
+  type InspectResult,
+  InspectResultSchema,
   type RpcRequest,
   RpcRequestSchema,
   type StartParams,
@@ -40,7 +44,12 @@ export interface WorkbenchOperations {
     options?: CreateOptions,
   ): Promise<Task>;
   list(context: RequestContext): Promise<Task[]>;
-  inspect(context: RequestContext, taskId: string): Promise<Task>;
+  inspect(context: RequestContext, taskId: string): Promise<InspectResult>;
+  journal?(
+    context: RequestContext,
+    taskId: string,
+    entryIds: string[],
+  ): Promise<JournalResult>;
   start(context: RequestContext, params: StartParams): Promise<Task>;
   resume(
     context: RequestContext,
@@ -220,8 +229,17 @@ async function dispatch(
     case "tasks.list":
       return taskList.parse(await api.list(context));
     case "tasks.inspect":
-      return TaskSchema.parse(
+      return InspectResultSchema.parse(
         await api.inspect(context, request.params.task_id),
+      );
+    case "tasks.journal":
+      if (!api.journal) throw new WorkbenchError("unavailable");
+      return JournalResultSchema.parse(
+        await api.journal(
+          context,
+          request.params.task_id,
+          request.params.entry_ids,
+        ),
       );
     case "tasks.start":
       return TaskSchema.parse(await api.start(context, request.params));
@@ -299,6 +317,14 @@ function validateResult(request: RpcRequest, result: unknown, scope: Scope) {
       if (!sameScope(task.scope, scope) || seen.has(task.task_id)) invalid();
       seen.add(task.task_id);
     }
+  } else if (request.method === "tasks.journal") {
+    const ids = new Set(request.params.entry_ids);
+    const found = new Set<string>();
+    for (const entry of JournalResultSchema.parse(result)) {
+      if (!ids.has(entry.entry_id)) invalid();
+      found.add(entry.entry_id);
+    }
+    if (found.size !== ids.size) invalid();
   } else if (request.method === "tasks.events") {
     const seen = new Set<string>();
     for (const event of eventList.parse(result)) {
@@ -317,7 +343,10 @@ function validateResult(request: RpcRequest, result: unknown, scope: Scope) {
     request.method === "tasks.start" ||
     request.method === "tasks.resume"
   ) {
-    const task = TaskSchema.parse(result);
+    const task =
+      request.method === "tasks.inspect"
+        ? InspectResultSchema.parse(result)
+        : TaskSchema.parse(result);
     const taskId =
       request.method === "tasks.create"
         ? request.params.task.task_id

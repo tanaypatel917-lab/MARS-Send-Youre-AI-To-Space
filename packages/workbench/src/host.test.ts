@@ -99,6 +99,157 @@ const task = (taskId = "task"): Task => ({
   artifacts: [],
 });
 const cleanup: (() => Promise<void>)[] = [];
+test("read-only describe and inspect expose offline metadata without launching a runtime", async () => {
+  const f = await fixture();
+  const api = await f.makeHost(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {
+      image: `fixture@sha256:${"a".repeat(64)}`,
+      providerStatus: { fixture: { health: "available", catalog_stale: true } },
+      conventions: { summary: { instructions: 2, hooks: 3, commands: 4 } },
+    },
+  );
+  cleanup.push(() => api.close());
+  expect(await api.describe()).toMatchObject({
+    connectors: [],
+    image: { digest: `sha256:${"a".repeat(64)}` },
+    conventions: { instructions: 2, hooks: 3, commands: 4 },
+    policy: { allow_paid: false, allow_screen_capture: false },
+    graph: null,
+    vault: null,
+  });
+  expect((await api.describe()).providers).toContainEqual({
+    id: "fixture",
+    kind: "direct",
+    health: "available",
+    catalog_stale: true,
+    policy_owner: "mars",
+  });
+  await api.create(context(), task());
+  expect(await api.inspect(context(), "task")).toMatchObject({
+    model_tier: null,
+    usage_totals: { input_tokens: 0, output_tokens: 0, cost_usd: 0 },
+    pinned: [],
+    context_rows: [expect.objectContaining({ tokens: 0, cost_usd: 0 })],
+  });
+  expect(f.sessions).toHaveLength(0);
+  await f.store.appendEvent(context(), "task", {
+    run_id: "fixture-run",
+    versions: [],
+    event_type: "tool.completed",
+    producer: "fixture",
+    payload: { operation: "fixture" },
+    usage: { input_tokens: 11, output_tokens: 7, cost_usd: null },
+  });
+  expect((await api.inspect(context(), "task")).usage_totals).toEqual({
+    input_tokens: 11,
+    output_tokens: 7,
+    cost_usd: null,
+  });
+});
+test("describe projects only scoped vault counts/timestamp and cached local/OmniRoute states", async () => {
+  const f = await fixture();
+  const counts = {
+    unchanged: 0,
+    modified: 0,
+    added: 0,
+    deleted: 0,
+    derived: 0,
+    invalid: 0,
+  };
+  const state = {
+    exported_revision: 0,
+    current_revision: 1,
+    stale_export: true,
+    notes: counts,
+    pending_vault_proposals: 2,
+  };
+  const registry = f.registry.extend({
+    providers: [
+      {
+        id: "local-fixture",
+        kind: "openai-compatible",
+        baseUrl: "http://127.0.0.1:11434/v1",
+      },
+      {
+        id: "omniroute",
+        kind: "openai-compatible",
+        baseUrl: "http://localhost:20128/v1",
+      },
+      {
+        id: "disabled-fixture",
+        kind: "anthropic",
+        baseUrl: "https://fixture.invalid",
+        enabled: false,
+      },
+    ],
+  });
+  const api = await f.makeHost(
+    registry,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {
+      vault: {
+        async status() {
+          return {
+            schema_version: 1,
+            scope,
+            vault_dir: "/private/not-exposed",
+            exported_at: "2026-11-01T00:00:00Z",
+            memory: state,
+            skills: state,
+            derived: counts,
+            untracked: 0,
+          };
+        },
+      },
+      providerStatus: {
+        omniroute: { health: "available", catalog_stale: true },
+      },
+    },
+  );
+  cleanup.push(() => api.close());
+  const described = await api.describe();
+  expect(described.vault).toEqual({
+    pending_proposals: 4,
+    last_export_at: "2026-11-01T00:00:00Z",
+  });
+  expect(described.image).toBeNull();
+  expect(described.providers).toEqual(
+    expect.arrayContaining([
+      {
+        id: "local-fixture",
+        kind: "local",
+        health: "unknown",
+        catalog_stale: false,
+        policy_owner: "mars",
+      },
+      {
+        id: "omniroute",
+        kind: "omniroute",
+        health: "available",
+        catalog_stale: true,
+        policy_owner: "mars",
+      },
+      {
+        id: "disabled-fixture",
+        kind: "direct",
+        health: "unavailable",
+        catalog_stale: false,
+        policy_owner: "mars",
+      },
+    ]),
+  );
+  expect(JSON.stringify(described)).not.toContain("/private");
+});
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
@@ -254,7 +405,14 @@ async function fixture() {
     research?: WorkbenchResearch,
     extras: Pick<
       WorkbenchHostOptions,
-      "skills" | "review" | "watch" | "knowledgeGraph" | "conventions"
+      | "skills"
+      | "review"
+      | "watch"
+      | "knowledgeGraph"
+      | "conventions"
+      | "image"
+      | "providerStatus"
+      | "vault"
     > & { canExecute?: boolean } = {},
   ) =>
     createWorkbenchHost({
@@ -424,6 +582,7 @@ async function fixture() {
   };
   return {
     root,
+    registry,
     store,
     artifact,
     workspace,
@@ -984,7 +1143,7 @@ test.each(["request", "criteria"])(
           approvals: { read: true, write: true, execute: false },
         }),
       ).rejects.toMatchObject({ code: "too_large" });
-      expect(await api.inspect(context(), "task")).toEqual(oversized);
+      expect(await api.inspect(context(), "task")).toMatchObject(oversized);
       expect(f.prepareCalls).toBe(0);
       expect(f.sessions).toHaveLength(0);
       expect(await f.store.upstreamSession(context(), "task")).toBeNull();
@@ -3736,15 +3895,25 @@ test("repository conventions expand slash commands and freeze instruction files 
       text: string;
       sha256: string;
       files: string[];
+      file_metadata: { path: string; bytes: number }[];
       omitted: number;
     };
     skills?: { skills: string[] };
   };
   expect(launch.instructions).toEqual({
+    file_metadata: [{ path: "AGENTS.md", bytes: 40 }],
     text: instructionsText,
     sha256: createHash("sha256").update(instructionsText).digest("hex"),
     files: ["AGENTS.md"],
     omitted: 1,
+  });
+  expect(await api.inspect(context(), "task")).toMatchObject({
+    model_tier: "free",
+    pinned: [{ path: "AGENTS.md", bytes: 40, trust: "untrusted" }],
+    context_rows: [
+      expect.any(Object),
+      expect.objectContaining({ tokens: null, cost_usd: null }),
+    ],
   });
   expect(launch.skills?.skills).toEqual(["release-notes"]);
   expect((await f.store.inspect(context(), "task")).request).toBe(

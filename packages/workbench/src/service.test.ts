@@ -334,6 +334,63 @@ test("actual SDK projects its own journal and recalls bounded scoped history aft
   );
   expect(JSON.stringify(requests[0])).toContain("ExistingVerifier");
   expect(JSON.stringify(requests[0])).toContain("mars_history");
+  const rpc = async (method: string, params: object, requestScope = scope) => {
+    const connection = JSON.parse(
+      await readFile(service.connectionFile, "utf8"),
+    );
+    const response = await globalThis.fetch(`${service.url}/v1/rpc`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${connection.token}`,
+      },
+      body: JSON.stringify({
+        method,
+        params,
+        context: { ...context, scope: requestScope },
+      }),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const journalLaunch = f.launches[0];
+  if (!journalLaunch) throw new Error("Expected offline runtime journal");
+  const journal = (await readFile(journalLaunch.journal, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const assistant = journal.find(
+    (entry) => entry.type === "message" && entry.message.role === "assistant",
+  );
+  expect(assistant).toBeDefined();
+  const before = await readFile(journalLaunch.journal, "utf8");
+  const resolved = await rpc("tasks.journal", {
+    task_id: first.task_id,
+    entry_ids: [assistant.id, "foreign-entry"],
+  });
+  expect(resolved.status).toBe(200);
+  expect(resolved.body.result).toContainEqual(
+    expect.objectContaining({
+      entry_id: assistant.id,
+      kind: "assistant",
+      text: "RecallMarker records the verifier outcome.",
+    }),
+  );
+  expect(resolved.body.result).toContainEqual({
+    entry_id: "foreign-entry",
+    kind: "not_found",
+    text: "",
+  });
+  expect(
+    (
+      await rpc(
+        "tasks.journal",
+        { task_id: first.task_id, entry_ids: [assistant.id] },
+        { ...scope, owner_id: "foreign" },
+      )
+    ).status,
+  ).toBe(403);
+  expect(await readFile(journalLaunch.journal, "utf8")).toBe(before);
+  expect(requests).toHaveLength(1);
   await service.close();
   memory = createMemoryStore({
     rootDir: join(f.root, "memory"),
@@ -358,6 +415,27 @@ test("actual SDK projects its own journal and recalls bounded scoped history aft
   await memory.close();
   ({ client, service } = await f.start(fetch));
   const second = await client.create(task());
+  expect(
+    (
+      await rpc("tasks.journal", {
+        task_id: second.task_id,
+        entry_ids: [assistant.id],
+      })
+    ).body.result,
+  ).toEqual([{ entry_id: assistant.id, kind: "not_found", text: "" }]);
+  expect(
+    (
+      await rpc("tasks.journal", {
+        task_id: first.task_id,
+        entry_ids: [assistant.id],
+      })
+    ).body.result,
+  ).toContainEqual(
+    expect.objectContaining({
+      kind: "assistant",
+      text: "RecallMarker records the verifier outcome.",
+    }),
+  );
   await client.start(second.task_id, {
     expectedRevision: 0,
     approvals: { read: true, write: false, execute: false },
@@ -367,6 +445,14 @@ test("actual SDK projects its own journal and recalls bounded scoped history aft
     (t) => t.status === "completed",
   );
   expect(requests).toHaveLength(3);
+  expect(
+    (
+      await rpc("tasks.journal", {
+        task_id: second.task_id,
+        entry_ids: [assistant.id],
+      })
+    ).body.result,
+  ).toEqual([{ entry_id: assistant.id, kind: "not_found", text: "" }]);
   expect(JSON.stringify(requests[2])).toContain("RecallMarker");
   expect(JSON.stringify(requests[2])).toContain("untrusted_evidence");
   expect(await readFile(join(f.source, "baseline.txt"), "utf8")).toBe(
