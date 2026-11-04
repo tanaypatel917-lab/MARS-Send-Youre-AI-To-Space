@@ -1,4 +1,18 @@
 export {
+  AGENT_PUBLISH_REASONS,
+  AGENT_REASON_CODE,
+  type AgentCompletion,
+  type AgentFrozenInput,
+  AgentFrozenInputSchema,
+  type AgentFrozenMessage,
+  type AgentFrozenReference,
+  type ClaimedAgentRequest,
+  type TeamAgentHostPort,
+  type TeamAgentOptions,
+  type TeamReferenceAccess,
+  type TeamReferencePort,
+} from "./agent";
+export {
   type AuthenticatedUser,
   type Authenticator,
   createDevAuthenticator,
@@ -26,6 +40,8 @@ export {
   type TeamServerOptions,
 } from "./server";
 export {
+  type AgentRequestInput,
+  type AgentSelection,
   type ConversationListItem,
   type ConversationMember,
   type ConversationView,

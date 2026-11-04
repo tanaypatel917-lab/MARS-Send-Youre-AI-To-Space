@@ -32,6 +32,10 @@ export const TEAM_MAX_REFERENCES = 16;
 export const TEAM_MAX_EMOJI_CHARS = 32;
 export const TEAM_MAX_SEARCH_QUERY_CHARS = 200;
 export const TEAM_MAX_EXCERPT_CHARS = 200;
+/** Reserved author id of @MARS answers; never a team member, never authenticable. */
+export const MARS_AGENT_USER_ID = "mars";
+export const AGENT_MAX_MESSAGES = 50;
+export const AGENT_MAX_IDEMPOTENCY_KEY_CHARS = 128;
 
 export const TeamContextSchema = z
   .object({
@@ -87,11 +91,19 @@ export const ParticipantSchema = z
   .strict();
 export type Participant = z.infer<typeof ParticipantSchema>;
 
+/** `user` text, an @MARS `agent` answer, or a `result_card` share (PR 6). */
+export const MessageKindSchema = z.enum(["user", "agent", "result_card"]);
+export type MessageKind = z.infer<typeof MessageKindSchema>;
+
 export const MessageSchema = z
   .object({
     message_id: id,
     conversation_id: id,
     author_id: id,
+    /** `agent` messages are @MARS answers authored by `MARS_AGENT_USER_ID`; clients render `agent` and `result_card` differently. */
+    kind: MessageKindSchema,
+    /** Provenance of an `agent` message: the `AgentRequest` it answers. */
+    agent_request_id: id.nullable(),
     seq: z.number().int().positive(),
     client_message_id: z.string().min(1).max(TEAM_MAX_CLIENT_MESSAGE_ID_CHARS),
     body: z.string().max(TEAM_MAX_BODY_CHARS),
@@ -102,11 +114,7 @@ export const MessageSchema = z
     created_at: timestamp,
     edited_at: timestamp.nullable(),
     deleted: z.boolean(),
-    /**
-     * Absent for ordinary text messages (their stored bytes are unchanged);
-     * `result_card` messages carry the `ResultShare` the requester published.
-     */
-    kind: z.literal("result_card").optional(),
+    /** Only `result_card` messages carry the `ResultShare` the requester published. */
     payload: z.lazy(() => ResultShareSchema).optional(),
   })
   .strict();
@@ -173,6 +181,8 @@ export const TeamDeliveryEventKindSchema = z.enum([
   "message",
   "membership",
   "reaction",
+  /** An existing message was edited or deleted; `message_seq`/`message_id` name it. */
+  "edit",
 ]);
 /** Outbox row: generic metadata only, never a body. */
 export const TeamDeliveryEventSchema = z
@@ -188,9 +198,10 @@ export const TeamDeliveryEventSchema = z
 export type TeamDeliveryEvent = z.infer<typeof TeamDeliveryEventSchema>;
 
 // ---------------------------------------------------------------------------
-// Code references (Team Chat PR 4, implemented in `@mars/team` + `@mars/code-refs`)
-// and schemas reserved for later Team Chat PRs (@MARS requests, task links,
-// result shares). Exported so field names are fixed now.
+// Code references (Team Chat PR 4, implemented in `@mars/team` + `@mars/code-refs`),
+// @MARS request/preview schemas (PR 5, live in `@mars/team` agent.*) and schemas
+// reserved for later Team Chat PRs (task links, result shares). Exported so field
+// names are fixed now.
 // ---------------------------------------------------------------------------
 
 export const WorkspaceRefSchema = z
@@ -319,21 +330,109 @@ const provenanceEntry = z
   })
   .strict();
 
+export const AgentRequestStatusSchema = z.enum([
+  "pending",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  /** Finished, but the audience check at publish time failed: stored, never posted. */
+  "restricted",
+]);
+export type AgentRequestStatus = z.infer<typeof AgentRequestStatusSchema>;
+
+/** A context item that `scanThreat` rejected; its content was replaced by "[omitted: flagged]". */
+export const AgentFlaggedItemSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("message"), message_id: id, threat: id }).strict(),
+  z
+    .object({ kind: z.literal("reference"), reference_id: id, threat: id })
+    .strict(),
+]);
+export type AgentFlaggedItem = z.infer<typeof AgentFlaggedItemSchema>;
+
+/** Citations resolve only to a frozen `{message_id, seq}` or a supplied reference id. */
+export const AgentCitationSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("message"),
+      message_id: id,
+      seq: z.number().int().positive(),
+    })
+    .strict(),
+  z.object({ kind: z.literal("reference"), reference_id: id }).strict(),
+]);
+export type AgentCitation = z.infer<typeof AgentCitationSchema>;
+
+/** One row of the context list a client shows before `agent.request`. */
+export const AgentPreviewItemSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("message"),
+      message_id: id,
+      seq: z.number().int().positive(),
+      body_sha256: sha256,
+      bytes: z.number().int().nonnegative(),
+      flagged: id.nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("reference"),
+      reference_id: id,
+      bytes: z.number().int().nonnegative(),
+      flagged: id.nullable(),
+    })
+    .strict(),
+]);
+export type AgentPreviewItem = z.infer<typeof AgentPreviewItemSchema>;
+
+export const AgentModelChoiceSchema = z
+  .object({ model_id: id, tier: z.literal("free") })
+  .strict();
+
+export const AgentPreviewSchema = z
+  .object({
+    conversation_id: id,
+    audience: z.literal("conversation"),
+    items: z
+      .array(AgentPreviewItemSchema)
+      .max(AGENT_MAX_MESSAGES + TEAM_MAX_REFERENCES),
+    /** Active participants at preview time; every one of them must be able to read every reference. */
+    participant_count: z.number().int().positive(),
+    /** References at least one participant may not read; `agent.request` refuses while non-empty. */
+    restricted_reference_ids: z.array(id).max(TEAM_MAX_REFERENCES),
+    model: AgentModelChoiceSchema,
+    /** sha256 of the canonical JSON of this record without `preview_sha256`; `agent.request` must echo it. */
+    preview_sha256: sha256,
+  })
+  .strict();
+export type AgentPreview = z.infer<typeof AgentPreviewSchema>;
+
 export const AgentRequestSchema = z
   .object({
     request_id: id,
     team_id: id,
     conversation_id: id,
     requester_id: id,
-    idempotency_key: z.string().min(1).max(128),
-    messages: z.array(provenanceEntry).max(50),
+    idempotency_key: z.string().min(1).max(AGENT_MAX_IDEMPOTENCY_KEY_CHARS),
+    audience: z.literal("conversation"),
+    /** Exact message versions at request time; a later edit or delete never changes them. */
+    messages: z.array(provenanceEntry).max(AGENT_MAX_MESSAGES),
     reference_ids: z.array(id).max(TEAM_MAX_REFERENCES),
+    preview_sha256: sha256,
     model_id: id,
-    status: z.enum(["pending", "running", "completed", "failed", "cancelled"]),
+    status: AgentRequestStatusSchema,
+    flagged: z.array(AgentFlaggedItemSchema),
+    citations: z.array(AgentCitationSchema),
+    dropped_citations: z.number().int().nonnegative(),
+    /** Fixed reason code for `failed`/`restricted`; never free text. */
+    reason_code: id.nullable(),
     answer: z
       .object({ message_id: id, evidence: artifactRef.nullable() })
       .strict()
       .nullable(),
+    created_at: timestamp,
+    updated_at: timestamp,
   })
   .strict();
 export type AgentRequest = z.infer<typeof AgentRequestSchema>;

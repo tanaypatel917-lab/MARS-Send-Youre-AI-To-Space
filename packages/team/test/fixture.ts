@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RepoRegistry } from "@mars/code-refs";
 import type { TeamDeliveryEvent } from "@mars/contracts";
+import type { TeamAgentOptions } from "../src/agent";
 import { createDevAuthenticator } from "../src/auth";
 import type { StreamClose } from "../src/protocol";
 import type { TeamLimits } from "../src/schemas";
@@ -50,16 +51,23 @@ export interface FixtureOptions {
   limits?: Partial<TeamLimits>;
   /** Host registry; when given, `references.*` are served. */
   repos?: RepoRegistry;
+  /** Host agent options; when given, `agent.*` are served. */
+  agent?: TeamAgentOptions;
 }
 
 export function fixture(options: Partial<TeamLimits> | FixtureOptions = {}) {
   const resolved: FixtureOptions =
-    "limits" in options || "repos" in options
+    "limits" in options || "repos" in options || "agent" in options
       ? (options as FixtureOptions)
       : { limits: options as Partial<TeamLimits> };
   const limits = resolved.limits ?? {};
+  const agent = resolved.agent;
   const rootDir = mkdtempSync(join(tmpdir(), "mars-team-"));
-  const store = createTeamStore({ rootDir, limits });
+  const store = createTeamStore({
+    rootDir,
+    limits,
+    ...(agent ? { agent } : {}),
+  });
   for (const user of ["alice", "bob", "carol"])
     store.setTeamMember({ team_id: TEAM, user_id: user, role: "member" });
   store.setTeamMember({ team_id: OTHER_TEAM, user_id: "dave", role: "admin" });
