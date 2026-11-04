@@ -9,20 +9,18 @@ import { fakeBridge, loadFixtureData, type RecordedCall } from "./test-utils";
 
 function pagedBridge(
   data: Awaited<ReturnType<typeof loadFixtureData>>,
-  events: EventEnvelope[],
+  pages: EventEnvelope[][],
   cursors: (string | undefined)[],
 ): ShellBridge {
   const delegate = fakeBridge(data);
+  let pageIndex = 0;
   return {
     ...delegate,
     "tasks.events": async ({ after_event_id }) => {
       cursors.push(after_event_id);
-      const offset = after_event_id
-        ? Number(after_event_id.slice("page-".length))
-        : 0;
       return {
         ok: true,
-        result: events.slice(offset, offset + 100),
+        result: pages[pageIndex++] ?? [],
       };
     },
   };
@@ -177,38 +175,85 @@ test("task events page with cursors and stop at 1,000 entries", async () => {
   const data = await loadFixtureData();
   const baseEvent = data.details["fixture-running"]?.events[0];
   if (!baseEvent) throw new Error("Fixture event missing.");
+  const events = Array.from({ length: 150 }, (_, index) => ({
+    ...baseEvent,
+    event_id: `page-${index + 1}`,
+  }));
+  const pages = [
+    events.slice(0, 1),
+    events.slice(1, 101),
+    events.slice(101),
+    [],
+  ];
+  const cursors: (string | undefined)[] = [];
+  const document = new MiniDocument();
+  const controller = createController(
+    pagedBridge(data, pages, cursors),
+    document,
+    document.root,
+  );
+  await controller.load();
 
-  for (const [count, expectedCalls, expectedCount] of [
-    [250, 3, "250 task events"],
-    [1500, 10, "1000+ task events"],
-  ] as const) {
-    const events = Array.from({ length: count }, (_, index) => ({
-      ...baseEvent,
-      event_id: `page-${index + 1}`,
-    }));
-    const cursors: (string | undefined)[] = [];
-    const document = new MiniDocument();
-    const controller = createController(
-      pagedBridge(data, events, cursors),
-      document,
-      document.root,
-    );
-    await controller.load();
+  expect(cursors).toEqual([undefined, "page-1", "page-101", "page-150"]);
+  expect(
+    findAll(document.root, (element) => element.tagName === "P")
+      .map((element) => element.textContent)
+      .join(" "),
+  ).toContain("150 task events");
+});
 
-    expect(cursors).toHaveLength(expectedCalls);
-    expect(cursors[0]).toBeUndefined();
-    expect(cursors.slice(1)).toEqual(
-      Array.from(
-        { length: expectedCalls - 1 },
-        (_, index) => `page-${(index + 1) * 100}`,
-      ),
-    );
-    expect(
-      findAll(document.root, (element) => element.tagName === "P")
-        .map((element) => element.textContent)
-        .join(" "),
-    ).toContain(expectedCount);
-  }
+test("task event paging stops when the cursor does not advance", async () => {
+  const data = await loadFixtureData();
+  const baseEvent = data.details["fixture-running"]?.events[0];
+  if (!baseEvent) throw new Error("Fixture event missing.");
+  const repeated = { ...baseEvent, event_id: "repeated-cursor" };
+  const cursors: (string | undefined)[] = [];
+  const document = new MiniDocument();
+  const controller = createController(
+    pagedBridge(data, [[repeated], [repeated], [repeated]], cursors),
+    document,
+    document.root,
+  );
+  await controller.load();
+
+  expect(cursors).toEqual([undefined, "repeated-cursor"]);
+  expect(
+    findAll(document.root, (element) => element.tagName === "P")
+      .map((element) => element.textContent)
+      .join(" "),
+  ).toContain("1 task event available");
+});
+
+test("task event paging stops at 1,000 entries", async () => {
+  const data = await loadFixtureData();
+  const baseEvent = data.details["fixture-running"]?.events[0];
+  if (!baseEvent) throw new Error("Fixture event missing.");
+  const events = Array.from({ length: 1500 }, (_, index) => ({
+    ...baseEvent,
+    event_id: `page-${index + 1}`,
+  }));
+  const pages = Array.from({ length: 15 }, (_, index) =>
+    events.slice(index * 100, (index + 1) * 100),
+  );
+  const cursors: (string | undefined)[] = [];
+  const document = new MiniDocument();
+  const controller = createController(
+    pagedBridge(data, pages, cursors),
+    document,
+    document.root,
+  );
+  await controller.load();
+
+  expect(cursors).toHaveLength(10);
+  expect(cursors).toEqual([
+    undefined,
+    ...Array.from({ length: 9 }, (_, index) => `page-${(index + 1) * 100}`),
+  ]);
+  expect(
+    findAll(document.root, (element) => element.tagName === "P")
+      .map((element) => element.textContent)
+      .join(" "),
+  ).toContain("1000+ task events");
 });
 
 test("session switching reloads the selected task and tampered artifact text is omitted", async () => {

@@ -6,7 +6,6 @@ import { type ArtifactView, renderShell, type ShellState } from "./view";
 
 const TEXT_MEDIA_TYPES = new Set(["application/json", "application/x-ndjson"]);
 const MAX_RENDERED_ARTIFACT_BYTES = 256 * 1024;
-const EVENT_PAGE_SIZE = 100;
 const MAX_TASK_EVENTS = 1000;
 
 type OptionalValue<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -56,16 +55,27 @@ export function createController(
   };
   const loadEvents = async (taskId: string): Promise<EventEnvelope[]> => {
     const events: EventEnvelope[] = [];
+    const seenEventIds = new Set<string>();
     let afterEventId: string | undefined;
     while (events.length < MAX_TASK_EVENTS) {
       const params = afterEventId
         ? { task_id: taskId, after_event_id: afterEventId }
         : { task_id: taskId };
       const page = await value(bridge["tasks.events"](params));
-      events.push(...page.slice(0, MAX_TASK_EVENTS - events.length));
-      if (page.length < EVENT_PAGE_SIZE) break;
-      afterEventId = page.at(-1)?.event_id;
-      if (!afterEventId) break;
+      if (page.length === 0) break;
+      const nextCursor = page.at(-1)?.event_id;
+      const advances =
+        nextCursor !== undefined &&
+        nextCursor !== afterEventId &&
+        !seenEventIds.has(nextCursor);
+      for (const event of page) {
+        if (events.length >= MAX_TASK_EVENTS) break;
+        if (seenEventIds.has(event.event_id)) continue;
+        seenEventIds.add(event.event_id);
+        events.push(event);
+      }
+      if (!advances) break;
+      afterEventId = nextCursor;
     }
     return events;
   };
