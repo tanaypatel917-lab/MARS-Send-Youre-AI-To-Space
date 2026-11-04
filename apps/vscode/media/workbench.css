@@ -127,8 +127,26 @@ input[type="checkbox"] {
   background: var(--vscode-badge-background);
   color: var(--vscode-badge-foreground);
 }
-.status-connected {
+.status-connected,
+.v-verified {
   background: var(--vscode-testing-iconPassed, var(--vscode-badge-background));
+}
+.v-failed {
+  background: var(--vscode-testing-iconFailed, var(--vscode-badge-background));
+}
+.v-inconclusive,
+.v-stale {
+  background: var(--vscode-testing-iconQueued, var(--vscode-badge-background));
+  color: var(--vscode-foreground);
+}
+.v-unverified,
+.v-pending {
+  opacity: 0.8;
+}
+.verification {
+  margin: 4px 0;
+  padding: 4px 6px;
+  border-left: 3px solid var(--vscode-focusBorder);
 }
 .status-disconnected,
 .status-unauthorized,
