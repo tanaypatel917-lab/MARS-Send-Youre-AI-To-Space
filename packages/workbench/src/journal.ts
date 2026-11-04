@@ -10,7 +10,7 @@ import {
 import { z } from "zod";
 import { WorkbenchError } from "./server";
 
-const MAX_JOURNAL_BYTES = 32 * 1024 * 1024;
+const MAX_RECORD_BYTES = 32 * 1024 * 1024;
 const entrySchema = z
   .object({ id: z.string(), type: z.string() })
   .passthrough();
@@ -46,7 +46,9 @@ export async function readJournalFile(
   root: string,
   path: string,
   sessionId: string,
+  requested: string[],
 ): Promise<unknown[]> {
+  const wanted = new Set(JournalEntryIdsSchema.parse(requested));
   const canonicalRoot = await realpath(root);
   if (canonicalRoot !== root || ((await stat(root)).mode & 0o077) !== 0)
     throw new WorkbenchError("not_found");
@@ -64,42 +66,85 @@ export async function readJournalFile(
   try {
     const info = await file.stat();
     if (!info.isFile()) throw new WorkbenchError("not_found");
-    if (info.size > MAX_JOURNAL_BYTES) throw new WorkbenchError("too_large");
-    const buffer = Buffer.alloc(info.size);
-    let bytesRead = 0;
-    while (bytesRead < buffer.length) {
-      const part = await file.read(
-        buffer,
-        bytesRead,
-        buffer.length - bytesRead,
-        bytesRead,
-      );
-      if (!part.bytesRead) break;
-      bytesRead += part.bytesRead;
-    }
     const entries: unknown[] = [];
-    const lines = buffer.subarray(0, bytesRead).toString("utf8").split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (!line?.trim()) continue;
+    let headerSeen = false;
+    let titleSeen = false;
+    let retainedBytes = 0;
+    let lineBytes = 0;
+    let parts: Buffer[] = [];
+    const consume = (complete: boolean) => {
+      const bytes = lineBytes;
+      const line = Buffer.concat(parts, bytes).toString("utf8");
+      parts = [];
+      lineBytes = 0;
+      if (!line.trim()) return;
+      let entry: unknown;
       try {
-        entries.push(JSON.parse(line));
+        entry = JSON.parse(line);
       } catch {
-        if (i !== lines.length - 1) throw new WorkbenchError("unavailable");
+        if (complete) throw new WorkbenchError("unavailable");
+        return;
+      }
+      if (!headerSeen) {
+        if (
+          !titleSeen &&
+          z
+            .object({ type: z.literal("title") })
+            .passthrough()
+            .safeParse(entry).success
+        ) {
+          titleSeen = true;
+          return;
+        }
+        if (
+          !z
+            .object({ type: z.literal("session"), id: z.literal(sessionId) })
+            .passthrough()
+            .safeParse(entry).success
+        )
+          throw new WorkbenchError("not_found");
+        headerSeen = true;
+        return;
+      }
+      if (
+        typeof entry === "object" &&
+        entry !== null &&
+        "id" in entry &&
+        typeof entry.id === "string" &&
+        wanted.has(entry.id)
+      ) {
+        retainedBytes += bytes;
+        if (retainedBytes > MAX_RECORD_BYTES)
+          throw new WorkbenchError("too_large");
+        entries.push(entry);
+      }
+    };
+    const buffer = Buffer.alloc(64 * 1024);
+    let position = 0;
+    // Scan only the initial snapshot, so a running session cannot extend the read forever.
+    while (position < info.size) {
+      const { bytesRead } = await file.read(
+        buffer,
+        0,
+        Math.min(buffer.length, info.size - position),
+        position,
+      );
+      if (!bytesRead) break;
+      position += bytesRead;
+      let start = 0;
+      while (start < bytesRead) {
+        const newline = buffer.indexOf(10, start);
+        const end =
+          newline >= start && newline < bytesRead ? newline : bytesRead;
+        lineBytes += end - start;
+        if (lineBytes > MAX_RECORD_BYTES) throw new WorkbenchError("too_large");
+        parts.push(Buffer.from(buffer.subarray(start, end)));
+        if (end < bytesRead) consume(true);
+        start = end + 1;
       }
     }
-    const header = z
-      .object({ type: z.literal("session"), id: z.literal(sessionId) })
-      .passthrough()
-      .safeParse(
-        z
-          .object({ type: z.literal("title") })
-          .passthrough()
-          .safeParse(entries[0]).success
-          ? entries[1]
-          : entries[0],
-      );
-    if (!header.success) throw new WorkbenchError("not_found");
+    if (lineBytes) consume(false);
+    if (!headerSeen) throw new WorkbenchError("not_found");
     return entries;
   } finally {
     await file.close();

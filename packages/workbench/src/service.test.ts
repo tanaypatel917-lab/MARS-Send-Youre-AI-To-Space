@@ -459,6 +459,45 @@ test("actual SDK projects its own journal and recalls bounded scoped history aft
     "untouched\n",
   );
   await service.close();
+  await writeFile(
+    f.registry.userFilePath,
+    JSON.stringify({ version: 1, providers: [], models: [] }),
+  );
+  const reconfigured = await loadModelRegistry({
+    cwd: f.source,
+    home: join(f.base, "home"),
+  });
+  expect(reconfigured.getModel("fixture/free")).toBeUndefined();
+  ({ client, service } = await f.start(fetch, undefined, reconfigured));
+  expect(
+    (await rpc("tasks.inspect", { task_id: first.task_id })).body.result
+      .model_tier,
+  ).toBe("free");
+  expect(
+    (
+      await rpc("tasks.journal", {
+        task_id: first.task_id,
+        entry_ids: [assistant.id],
+      })
+    ).body.result,
+  ).toContainEqual(
+    expect.objectContaining({
+      usage: { input_tokens: 50, output_tokens: 12, cost_usd: 0 },
+    }),
+  );
+  expect(requests).toHaveLength(3);
+  await service.close();
+  const launchPath = join(journalLaunch.stateDir, "launch.json");
+  const legacyLaunch = JSON.parse(await readFile(launchPath, "utf8"));
+  delete legacyLaunch.model_classification;
+  await writeFile(launchPath, JSON.stringify(legacyLaunch));
+  ({ client, service } = await f.start(fetch));
+  expect(
+    (await rpc("tasks.inspect", { task_id: first.task_id })).body.result
+      .model_tier,
+  ).toBe("free");
+  expect(requests).toHaveLength(3);
+  await service.close();
 });
 
 test("HTTP oversized startup returns too_large without a runtime or revision change, including after restart", async () => {

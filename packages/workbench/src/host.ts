@@ -159,6 +159,10 @@ const launchSchema = z
     task_id: z.string().min(1),
     scope: ScopeSchema,
     model_id: z.string().min(1),
+    model_classification: z
+      .object({ tier: z.enum(["free", "paid", "local"]), free: z.boolean() })
+      .strict()
+      .optional(),
     deadline: z.number().int().positive().optional(),
     approvals: ApprovalsSchema,
     workspace: WorkspaceRefSchema,
@@ -572,6 +576,20 @@ export async function createWorkbenchHost(
   };
   const taskState = (task: Task) =>
     join(root, scopeKey(options.scope, task.task_id));
+  const classifyModel = (modelId: string) => {
+    const model = options.registry.getModel(modelId);
+    if (!model) return null;
+    const provider = options.registry.getProvider(model.providerId);
+    const tier =
+      provider &&
+      provider.id !== OMNIROUTE_PROVIDER_ID &&
+      isLoopbackUrl(provider.baseUrl)
+        ? ("local" as const)
+        : model.pricing.free
+          ? ("free" as const)
+          : ("paid" as const);
+    return { tier, free: model.pricing.free };
+  };
   const readLaunch = async (task: Task): Promise<Launch> => {
     const dir = taskState(task);
     if (!inside(root, dir) || (await realpath(dir)) !== dir)
@@ -2175,12 +2193,9 @@ export async function createWorkbenchHost(
       checkContext(context);
       const task = await options.store.inspect(context, taskId);
       const launch = await readLaunch(task).catch(() => null);
-      const model = launch
-        ? options.registry.getModel(launch.model_id)
-        : undefined;
-      const provider = model
-        ? options.registry.getProvider(model.providerId)
-        : undefined;
+      const classification = launch
+        ? (launch.model_classification ?? classifyModel(launch.model_id))
+        : null;
       const usage = {
         input_tokens: 0,
         output_tokens: 0,
@@ -2197,15 +2212,7 @@ export async function createWorkbenchHost(
       }
       return {
         ...task,
-        model_tier: !model
-          ? null
-          : provider &&
-              provider.id !== OMNIROUTE_PROVIDER_ID &&
-              isLoopbackUrl(provider.baseUrl)
-            ? "local"
-            : model.pricing.free
-              ? "free"
-              : "paid",
+        model_tier: classification?.tier ?? null,
         usage_totals: usage,
         pinned: (launch?.instructions?.file_metadata ?? []).map((file) => ({
           ...file,
@@ -2242,13 +2249,15 @@ export async function createWorkbenchHost(
         return projectJournal([], entryIds, false);
       const launch = await readLaunch(task).catch(() => null);
       const free = launch
-        ? options.registry.getModel(launch.model_id)?.pricing.free === true
+        ? (launch.model_classification ?? classifyModel(launch.model_id))
+            ?.free === true
         : false;
       try {
         const entries = await readJournalFile(
           taskState(task),
           binding.session_file,
           binding.session_id,
+          entryIds,
         );
         const rows = projectJournal(entries, entryIds, free);
         const patterns = await privatePatterns(context, taskId);
@@ -2590,6 +2599,7 @@ export async function createWorkbenchHost(
           scope: task.scope,
           cwd,
           model_id: runtime.modelId,
+          model_classification: classifyModel(model.id) ?? undefined,
           deadline: launchDeadline,
           approvals: params.approvals,
           workspace: WorkspaceRefSchema.parse(workspace),
