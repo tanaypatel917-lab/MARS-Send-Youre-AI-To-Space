@@ -240,11 +240,15 @@ export class TeamChatController {
       this.panel = null;
       return;
     }
+    const blocked =
+      page.value.older_cursor !== null &&
+      page.value.messages.length >= this.maxLoaded;
     this.selected = {
       ...this.selected,
       conversation: page.value.conversation,
       messages: page.value.messages,
-      older_cursor: page.value.older_cursor,
+      older_cursor: blocked ? null : page.value.older_cursor,
+      older_blocked: blocked,
     };
   }
 

@@ -494,6 +494,53 @@ describe("review fixes", () => {
     expect(last().selected?.divider_sequence).toBe(2);
   });
 
+  test("a reload after sending recomputes the blocked flag for the current page", async () => {
+    const states: TeamChatViewState[] = [];
+    const controller = new TeamChatController({
+      post: (state) => states.push(state),
+      pageSize: 1,
+      maxLoaded: 2,
+    });
+    const last = () => states[states.length - 1] as TeamChatViewState;
+    await controller.handleMessage({ type: "ready" });
+    const cursor = last().selected?.older_cursor ?? "";
+    await controller.handleMessage({
+      type: "loadOlder",
+      conversationId: C.dmAdaGrace,
+      cursor,
+    });
+    expect(last().selected?.older_blocked).toBe(true);
+    await controller.handleMessage({
+      type: "send",
+      conversationId: C.dmAdaGrace,
+      clientMessageId: "cm_after_cap",
+      body: "after the cap",
+      replyTo: null,
+      references: [],
+    });
+    const selected = last().selected;
+    expect(selected?.messages.map((m) => m.sequence)).toEqual([4, 5]);
+    // Still capped with history behind it: cursor withheld and flagged, consistently.
+    expect(selected?.older_blocked).toBe(true);
+    expect(selected?.older_cursor).toBeNull();
+    const roomy = new TeamChatController({
+      post: (state) => states.push(state),
+      pageSize: 1,
+      maxLoaded: 10,
+    });
+    await roomy.handleMessage({ type: "ready" });
+    await roomy.handleMessage({
+      type: "send",
+      conversationId: C.dmAdaGrace,
+      clientMessageId: "cm_after_cap_2",
+      body: "plenty of room",
+      replyTo: null,
+      references: [],
+    });
+    expect(last().selected?.older_blocked).toBe(false);
+    expect(last().selected?.older_cursor).not.toBeNull();
+  });
+
   test("reaching the in-memory cap withholds the older cursor instead of dropping a page", async () => {
     const states: TeamChatViewState[] = [];
     const controller = new TeamChatController({
