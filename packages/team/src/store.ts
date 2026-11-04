@@ -1334,6 +1334,9 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     send(actor, requestId, input) {
       return write(() => {
         requireTeamMember(actor);
+        // Before any idempotent replay: a participant removed since the
+        // original send must not read the stored message back.
+        requireParticipant(actor, input.conversation_id);
         const stored = idempotent(
           actor,
           requestId,

@@ -689,6 +689,74 @@ describe.skipIf(!GIT)("@mars/team committed code references", () => {
     }
   });
 
+  test("a participant removed from the conversation cannot replay their earlier send to read the message or its chips back", async () => {
+    const g = fixture({ repos: registry });
+    try {
+      g.store.setRepo({ team_id: TEAM, repo_id: "repo-a", label: LABEL_A });
+      g.store.setRepoAccess({
+        team_id: TEAM,
+        repo_id: "repo-a",
+        user_id: "alice",
+      });
+      g.store.setRepoAccess({
+        team_id: TEAM,
+        repo_id: "repo-a",
+        user_id: "bob",
+      });
+      const view = await g.ok<ConversationViewResult>(
+        "alice",
+        "conversations.create_group",
+        {
+          member_ids: ["alice", "bob"],
+          title: "replay",
+        },
+      );
+      const reference = await g.ok<GitRangeReference>(
+        "bob",
+        "references.create",
+        {
+          repo_id: "repo-a",
+          commit_sha: shaA,
+          path: A_PATH,
+        },
+      );
+      const params = {
+        conversation_id: view.conversation.conversation_id,
+        client_message_id: "bob-1",
+        body: "from bob",
+        reference_ids: [reference.reference_id],
+      };
+      const sent = await g.ok<MessageView>("bob", "messages.send", params, {
+        request_id: "bob-send",
+      });
+      expect(sent.references[0]).toMatchObject({
+        restricted: false,
+        path: A_PATH,
+      });
+      await g.ok("alice", "conversations.remove_member", {
+        conversation_id: view.conversation.conversation_id,
+        user_id: "bob",
+        expected_revision: view.conversation.revision,
+      });
+      const replay = await g.rpc("bob", "messages.send", params, {
+        request_id: "bob-send",
+      });
+      expect([replay.status, replay.body.error?.code]).toEqual([
+        404,
+        "not_found",
+      ]);
+      expect(JSON.stringify(replay.body)).not.toContain("from bob");
+      expect(JSON.stringify(replay.body)).not.toContain(A_PATH);
+      // Still readable by a member who stayed.
+      const history = await g.ok<MessageView[]>("alice", "messages.history", {
+        conversation_id: view.conversation.conversation_id,
+      });
+      expect(history.map((m) => m.message_id)).toEqual([sent.message_id]);
+    } finally {
+      await g.close();
+    }
+  });
+
   test("without a host registry, references.* answer unavailable and describe says so", async () => {
     const g = fixture();
     try {
