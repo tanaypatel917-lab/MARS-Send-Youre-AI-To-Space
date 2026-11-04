@@ -661,15 +661,13 @@ describe("@mars/tasks durable store", () => {
     }
     const size = lstatSync(dbPath).size;
     truncateSync(dbPath, Math.floor(size / 2));
-    let truncationRejected = false;
-    try {
-      const truncated = await openStore(truncatedRoot);
-      await truncated.inspect(context(), task.task_id);
-      await truncated.close();
-    } catch {
-      truncationRejected = true;
-    }
-    expect(truncationRejected).toBe(true);
+    await expect(
+      (async () => {
+        const truncated = await openStore(truncatedRoot);
+        await truncated.inspect(context(), task.task_id);
+        await truncated.close();
+      })(),
+    ).rejects.toMatchObject({ name: "SQLiteError", code: "SQLITE_CORRUPT" });
 
     const artifactRoot = makeRoot();
     const artifactStore = await openStore(artifactRoot);
