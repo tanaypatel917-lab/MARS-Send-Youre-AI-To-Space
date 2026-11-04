@@ -54,7 +54,7 @@ Envelope, limits, auth handling and error vocabulary are the workbench's
 | `messages.send` | `{conversation_id, client_message_id ≤ 128, body ≤ 16 KiB, reply_to?, reference_ids? ≤ 16}` | `UNIQUE(conversation_id, author_id, client_message_id)`; same key + same `body_sha256` + same `reference_ids` → the original message; different body or references → `conflict`. Message, `message_references` rows and outbox row commit together. `reply_to` must be a message the author may see in the same conversation. Every `reference_id` must exist in the team and the sender must have `active` access to its repo at send time, else `not_found`. Returns a `MessageView` (the message plus per-viewer `references` chips). |
 | `messages.history` | `{conversation_id, after_seq? \| before_seq?, limit ≤ 200}` | Membership re-checked inside the read transaction; page cut by count and serialized bytes, never skipping (a single oversized message → `too_large`); a participant sees only `seq > joined_seq`. Each message carries `references` chips rendered for the caller (see "Code references"). Each item is the stored record plus `reactions: [{emoji, count, reacted}]` (sorted by key; no user lists) and, for replies, `reply_excerpt` (first 200 UTF-16 units of the target, never splitting a surrogate pair) or `null` with `reply_restricted: true` when the target is before the caller's `joined_seq`. |
 | `messages.edit` / `messages.delete` | `{message_id, body}` / `{message_id}` | Author only (`not_found` otherwise); `seq` never changes, `edited_at`/`deleted` are set and an `edit` outbox event is emitted. `agent` messages cannot be edited. A selection frozen by `agent.request` is unaffected. |
-| `events.poll` | `{cursors: [{conversation_id, after_event_seq}] ≤ 50, limit ≤ 1000}` | Membership-filtered outbox; events carry `{conversation_id, event_seq, kind, message_seq, message_id, revision}` only — never a body. `kind` is `message`, `membership` or `reaction`. Cursors are per conversation. |
+| `events.poll` | `{cursors: [{conversation_id, after_event_seq}] ≤ 50, limit ≤ 1000}` | Membership-filtered outbox; events carry `{conversation_id, event_seq, kind, message_seq, message_id, revision}` only — never a body. `kind` is `message`, `membership`, `reaction` or `edit` (`messages.edit`/`messages.delete`). Cursors are per conversation. |
 | `reactions.set` | `{message_id, emoji ≤ 32, on}` | Idempotent set/remove of the caller's reaction on a message they may see (`seq > joined_seq`; otherwise `not_found`). The key is validated with the invisible-code-point denylist from `packages/memory/src/threats.ts` (so no zero-width or variation-selector smuggling; `❤` is valid, `❤\ufe0f` is not) and must contain no whitespace. A change emits one outbox row `kind: "reaction"` with the message's `seq`/`message_id`; a no-op emits nothing. Returns `{message_id, emoji, count, reacted}`. Distinct keys per message are bounded (`max_reactions_per_message` → `too_large`). |
 | `messages.search` | `{query 2..200, conversation_id?, limit ≤ 50, cursor?}` | Membership is applied in SQL before any body is read: `JOIN participants … state='active' AND m.seq > p.joined_seq` on the caller's team, optional conversation filter (a conversation the caller is not in → `not_found`). Case-insensitive (ASCII, SQLite `LIKE` semantics; `%`, `_`, `\` are literal) substring match, newest first (`created_at DESC, message_id DESC`), ≤ 200-UTF-16-unit excerpt around the first hit (whole code points only) with `cut_before`/`cut_after`, opaque `next_cursor` bound to (caller, query, filter) — a reused or altered cursor is `invalid_request`. Rate-limited per (team, user) in a sliding minute (`max_search_per_minute` → `unavailable`). |
 | `repos.list` | `{}` | Repos of the caller's team the caller has `active` access to: `{team_id, repo_id, label, revision}`. Never a path. |
@@ -72,10 +72,10 @@ There is no `agent.publish` RPC. Answers are stored through the host-only
 `fail(request_id, reason_code)`), driven by `createTeamAgentWorker` in the
 workbench process. A client can never publish an answer.
 
-Not implemented (TODO markers in `packages/team/src/protocol.ts`): `events.stream`
-(SSE), `reactions.set`, `messages.search` (PR 3); artifact shares (artifact
-access gate); any VS Code wiring (the reference picker, preview panel and the
-@MARS composer action are later UI tasks).
+Not implemented: artifact shares (artifact access gate); the chat-side backing
+of the agent `TeamReferencePort` by `code_references`/`repo_access`; any VS Code
+wiring (the inbox stream client, reference picker, preview panel and the @MARS
+composer action are later UI tasks).
 
 ## Code references (PR 4, service half)
 
@@ -119,7 +119,7 @@ outside the conversation; stranger: valid token, not a team member):
 | `messages.history` chip for B | resolved chip | `{reference_id, restricted: true}` — nothing else | `not_found` | `forbidden` |
 | `references.resolve` on B | preview from the pinned commit | `{state: "restricted"}` — nothing else | `not_found` | `forbidden` |
 | `references.search_paths` on B | matches | `not_found` | `not_found` | `forbidden` |
-| `events.poll` | `{cursors: [{conversation_id, after_event_seq}] ≤ 50, limit ≤ 1000}` | Membership-filtered outbox; events carry `{conversation_id, event_seq, kind, message_seq, message_id, revision}` only — never a body. `kind` is `message`, `membership` or `reaction`. Cursors are per conversation. |
+| `events.poll` | `{cursors: [{conversation_id, after_event_seq}] ≤ 50, limit ≤ 1000}` | Membership-filtered outbox; events carry `{conversation_id, event_seq, kind, message_seq, message_id, revision}` only — never a body. `kind` is `message`, `membership`, `reaction` or `edit` (`messages.edit`/`messages.delete`). Cursors are per conversation. |
 | `reactions.set` | `{message_id, emoji ≤ 32, on}` | Idempotent set/remove of the caller's reaction on a message they may see (`seq > joined_seq`; otherwise `not_found`). The key is validated with the invisible-code-point denylist from `packages/memory/src/threats.ts` (so no zero-width or variation-selector smuggling; `❤` is valid, `❤\ufe0f` is not) and must contain no whitespace. A change emits one outbox row `kind: "reaction"` with the message's `seq`/`message_id`; a no-op emits nothing. Returns `{message_id, emoji, count, reacted}`. Distinct keys per message are bounded (`max_reactions_per_message` → `too_large`). |
 | `messages.search` | `{query 2..200, conversation_id?, limit ≤ 50, cursor?}` | Membership is applied in SQL before any body is read: `JOIN participants … state='active' AND m.seq > p.joined_seq` on the caller's team, optional conversation filter (a conversation the caller is not in → `not_found`). Case-insensitive (ASCII, SQLite `LIKE` semantics; `%`, `_`, `\` are literal) substring match, newest first (`created_at DESC, message_id DESC`), ≤ 200-UTF-16-unit excerpt around the first hit (whole code points only) with `cut_before`/`cut_after`, opaque `next_cursor` bound to (caller, query, filter) — a reused or altered cursor is `invalid_request`. Rate-limited per (team, user) in a sliding minute (`max_search_per_minute` → `unavailable`). |
 
@@ -163,11 +163,6 @@ registry; without it `references.*` answer `unavailable` and
 | `shares.preview` | `{link_id, evidence: <caller's tasks.evidence result>, run_status, selection: {summary ≤ 2000, include_diff_digest, verify_event_ids ≤ 8, artifacts?}}` | Requester only; link must be `created`/`shared`. Returns `{preview_sha256, card}` — exactly what `shares.create` would post. `artifacts` non-empty → `unavailable` (artifact access gate is a later PR). |
 | `shares.create` | `{link_id, preview_sha256, ...same}` | Recomputes the card; `preview_sha256` must match byte-for-byte (`conflict` otherwise). Posts a message `kind: "result_card"` whose `body` is the summary and whose `payload` is the `ResultShare` (returned as a `MessageView`, like `messages.send`); link becomes `shared`. A card that would not fit one `messages.history` page (with its stale overlay) is refused with `too_large`. Idempotent on `request_id`; the replay re-reads the stale overlay so it agrees with history. |
 
-Not implemented (TODO markers in `packages/team/src/protocol.ts`): `events.stream`
-(SSE), `reactions.set`, `messages.search` (PR 3); the chat-side reference
-store (PR 4 chat half; today references reach `agent.*` only through the host's
-`TeamReferencePort`); artifact shares (artifact access gate); any VS Code
-wiring (the @MARS composer action is a later UI task).
 
 ## Task handoff (PR 6, chat half)
 
@@ -239,9 +234,6 @@ does not return the task's execution status, so the client passes
 `run_status` from `tasks.inspect` alongside the evidence (the card therefore
 attests two reads, not one); an artifact access gate before `ArtifactRef`
 shares; the client wiring in `apps/vscode` (PR 1's webview is fixture-only).
-
-Not implemented: any VS Code wiring (the inbox client of the stream lives in the extension host and
-is a separate task after the PR 1 prototype).
 
 ## Streaming (`POST /v1/stream`, Server-Sent Events)
 
