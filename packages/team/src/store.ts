@@ -2065,6 +2065,10 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
         const viewed = stored;
         const viewer = participantRow(viewed.conversation_id, actor.user_id);
         if (!viewer) throw notFound();
+        // A replay (same request_id or client_message_id) of a message sent
+        // before the caller's current join window would reveal that body.
+        if (viewed.seq <= viewer.joined_seq)
+          throw conflict("client_message_id predates the current membership");
         return messageView(actor, storedMessageRow(viewed.message_id), viewer);
       });
     },

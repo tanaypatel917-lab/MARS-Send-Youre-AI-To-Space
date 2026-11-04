@@ -941,3 +941,41 @@ test("a consumer that stops reading is disconnected at max_stream_buffer_bytes i
   await live.waitFor(() => live.events.length === sent + 1);
   expect(live.closes).toEqual([]);
 });
+
+test("a rejoined member cannot replay a send from a previous membership window (review fix)", async () => {
+  const f = start();
+  const group = await f.ok<View>("alice", "conversations.create_group", {
+    member_ids: ["bob"],
+    title: "g",
+  });
+  const id = group.conversation.conversation_id;
+  const params = {
+    conversation_id: id,
+    client_message_id: "old",
+    body: "secret from the first window",
+  };
+  await f.ok<Message>("bob", "messages.send", params, {
+    request_id: "send-old",
+  });
+  await f.ok<View>("bob", "conversations.leave", { conversation_id: id });
+  await f.ok<View>("alice", "conversations.add_member", {
+    conversation_id: id,
+    user_id: "bob",
+    expected_revision: 1,
+  });
+  for (const options of [{ request_id: "send-old" }, {}]) {
+    const replay = await f.rpc("bob", "messages.send", params, options);
+    expect(replay.status).toBe(409);
+    expect(JSON.stringify(replay.body)).not.toContain("secret");
+  }
+  const history = await f.ok<MessageView[]>("bob", "messages.history", {
+    conversation_id: id,
+  });
+  expect(history).toEqual([]);
+  const fresh = await f.ok<MessageView>("bob", "messages.send", {
+    conversation_id: id,
+    client_message_id: "new",
+    body: "after rejoining",
+  });
+  expect(fresh.seq).toBe(2);
+});
