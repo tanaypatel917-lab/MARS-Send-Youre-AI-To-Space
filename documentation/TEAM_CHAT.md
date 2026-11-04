@@ -73,6 +73,8 @@ team_id, repo_id, commit_sha, path, line_start | null, line_end | null,
 blob_sha256 | null}`. `reference_id` is `referenceDigest` over the locator, so
 the same locator is one row per team (`code_references`, keyed
 `(team_id, reference_id)`, canonical JSON + `record_sha256` like messages).
+Ledger order is `0001_initial` → `0002_task_links` (PR 6) → `0003_references`
+(this PR); the tables land in `0003_references`.
 `blob_sha256` is the SHA-256 of the excerpt resolved at creation (`text_sha256`
 of the `ok` resolution) and null for `binary`/`oversized`; `resolved_state` and
 `created_by` are stored beside the record. A message lists its references in
