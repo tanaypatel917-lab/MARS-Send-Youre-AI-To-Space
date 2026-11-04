@@ -9,8 +9,10 @@ import {
   TaskLinkSchema,
   TaskLinkViewSchema,
 } from "@mars/contracts";
+import type { AgentReferencePort } from "./agent-references";
 import type { Authenticator } from "./auth";
 import { TeamError, unavailable } from "./errors";
+import { TeamMetricsSchema } from "./metrics";
 import {
   ConversationListSchema,
   ConversationViewSchema,
@@ -35,10 +37,33 @@ import {
 import { createReferenceService, type ReferenceService } from "./references";
 import type { StoreNotice, TeamActor, TeamStore } from "./store";
 
+/**
+ * One structured log line. Operation ids are server-minted counters; the
+ * client's `request_id`, bodies, paths, tokens and user ids never appear.
+ */
+export interface TeamServerLogEntry {
+  op: "rpc" | "stream" | "stream_closed";
+  /** Server-side operation counter, not the client's `request_id`. */
+  id: number;
+  method: string | null;
+  /** `ok` or the RPC error code answered. */
+  code: RpcErrorCode | "ok";
+  status: number;
+  ms: number;
+}
+
 export interface TeamServerOptions {
   store: TeamStore;
   authenticator: Authenticator;
   port?: number;
+  /** Receives one entry per request; omitted → silent. */
+  log?: (entry: TeamServerLogEntry) => void;
+  /**
+   * Host port that lets `agent.preview`/`agent.request` describe references:
+   * the server pre-resolves the selection through it (async `git`) before
+   * the store's synchronous `TeamReferencePort.describe` runs.
+   */
+  agentReferences?: AgentReferencePort;
   /**
    * Host-trusted `@mars/code-refs` registry. Without it `references.*`
    * answer `unavailable`; `repos.list` and message chips still work from the
@@ -89,13 +114,46 @@ const streamHeaders = {
 };
 const encoder = new TextEncoder();
 
-function responseError(code: RpcErrorCode): Response {
+function responseError(
+  code: RpcErrorCode,
+  extraHeaders: Record<string, string> = {},
+): Response {
   const detail = errors[code];
   return Response.json(
     { error: { code, message: detail.message } },
-    { status: detail.status, headers },
+    { status: detail.status, headers: { ...headers, ...extraHeaders } },
   );
 }
+
+/** Whole seconds for `Retry-After` when a `rate_limited` store error is answered. */
+function retryAfter(error: unknown): Record<string, string> {
+  return error instanceof TeamError &&
+    error.code === "rate_limited" &&
+    error.retryAfterSeconds !== null
+    ? { "Retry-After": String(error.retryAfterSeconds) }
+    : {};
+}
+
+/** Methods whose denial is a "denied read" for the metrics (`denied_reads.<code>`). */
+const READ_METHODS: ReadonlySet<string> = new Set([
+  "conversations.list",
+  "conversations.open",
+  "messages.history",
+  "events.poll",
+  "events.stream",
+  "messages.search",
+  "repos.list",
+  "references.resolve",
+  "references.search_paths",
+  "tasks.link_inspect",
+  "agent.inspect",
+  "team.metrics",
+]);
+const DENIAL_CODES: ReadonlySet<string> = new Set([
+  "unauthorized",
+  "forbidden",
+  "not_found",
+]);
 
 function errorCode(error: unknown): RpcErrorCode {
   if (error instanceof TeamServerError) return error.code;
@@ -128,6 +186,7 @@ function errorCode(error: unknown): RpcErrorCode {
 async function dispatch(
   store: TeamStore,
   references: ReferenceService | null,
+  agentReferences: AgentReferencePort | null,
   actor: TeamActor,
   request: TeamRpcRequest,
 ): Promise<unknown> {
@@ -147,6 +206,8 @@ async function dispatch(
         },
       });
     }
+    case "team.metrics":
+      return TeamMetricsSchema.parse(store.metricsSnapshot(actor));
     case "conversations.create_dm":
       return ConversationViewSchema.parse(
         store.createDm(actor, requestId, request.params),
@@ -236,10 +297,18 @@ async function dispatch(
         store.shareCreate(actor, requestId, request.params),
       );
     case "agent.preview":
+      await agentReferences?.prepare(
+        actor.team_id,
+        request.params.reference_ids,
+      );
       return AgentPreviewSchema.parse(
         store.agentPreview(actor, request.params),
       );
     case "agent.request":
+      await agentReferences?.prepare(
+        actor.team_id,
+        request.params.reference_ids,
+      );
       return AgentRequestSchema.parse(
         store.agentRequest(actor, request.params),
       );
@@ -628,6 +697,8 @@ export class EventStream {
   private scheduled = false;
   private readonly batchLimit: number;
   closed = false;
+  /** Set once the first page was served; only accepted streams count as connects. */
+  accepted = false;
 
   constructor(
     private readonly store: TeamStore,
@@ -691,7 +762,12 @@ export class EventStream {
   }
 
   notice(notice: StoreNotice) {
-    if (this.closed || !this.cursors.has(notice.conversation_id)) return;
+    if (this.closed) return;
+    if (notice.type === "disabled") {
+      this.close("unavailable");
+      return;
+    }
+    if (!this.cursors.has(notice.conversation_id)) return;
     if (notice.type === "removed") {
       if (notice.user_id === this.actor.user_id) this.close("membership");
       return;
@@ -712,6 +788,12 @@ export class EventStream {
 
   private pump() {
     while (!this.closed && this.controller && this.dirty.size > 0) {
+      // Another process may have flipped the kill switch; the heartbeat
+      // re-poll sees it here and ends the stream.
+      if (!this.store.isEnabled()) {
+        this.close("unavailable");
+        return;
+      }
       const ids = [...this.dirty];
       this.dirty.clear();
       let events: ReturnType<EventStream["initialPage"]>;
@@ -736,6 +818,7 @@ export class EventStream {
         return;
       }
       for (const event of events) this.writeEvent(event);
+      if (events.length > 0) this.store.metrics.increment("backfill_pages");
       // A full page means more may be waiting behind it.
       if (events.length >= this.batchLimit)
         for (const id of ids) this.dirty.add(id);
@@ -818,6 +901,8 @@ export function serveTeam(options: TeamServerOptions) {
   if (!Number.isInteger(port) || port < 0 || port > 65_535)
     throw new Error("Invalid team service port.");
   const { store, authenticator } = options;
+  const log = options.log ?? (() => {});
+  let operationCounter = 0;
   const streams = new Set<EventStream>();
   const openStreams = new Map<string, number>();
   const streamKey = (actor: TeamActor) =>
@@ -825,6 +910,13 @@ export function serveTeam(options: TeamServerOptions) {
   store.subscribe((notice) => {
     for (const stream of [...streams]) stream.notice(notice);
   });
+  const count = (name: Parameters<TeamStore["metrics"]["increment"]>[0]) => {
+    try {
+      store.metrics.increment(name);
+    } catch {
+      // Counting never fails a request (e.g. the store is already closed).
+    }
+  };
 
   const openStream = (actor: TeamActor, request: TeamStreamRequest) => {
     const key = streamKey(actor);
@@ -837,11 +929,24 @@ export function serveTeam(options: TeamServerOptions) {
         throw new TeamServerError("invalid_request");
       cursors.set(cursor.conversation_id, cursor.after_event_seq);
     }
+    const streamId = ++operationCounter;
+    const openedAt = Date.now();
     const stream: EventStream = new EventStream(store, actor, cursors, () => {
       if (!streams.delete(stream)) return;
       const remaining = (openStreams.get(key) ?? 1) - 1;
       if (remaining <= 0) openStreams.delete(key);
       else openStreams.set(key, remaining);
+      if (stream.accepted) {
+        count("stream_disconnects");
+        log({
+          op: "stream_closed",
+          id: streamId,
+          method: "events.stream",
+          code: "ok",
+          status: 200,
+          ms: Date.now() - openedAt,
+        });
+      }
     });
     // Registered before the first poll so no commit falls between them.
     streams.add(stream);
@@ -853,24 +958,70 @@ export function serveTeam(options: TeamServerOptions) {
       stream.close(null);
       throw error;
     }
+    stream.accepted = true;
+    count("stream_connects");
+    if (firstPage.length > 0) count("backfill_pages");
     return stream.response(firstPage);
   };
 
   const references = options.repos
     ? createReferenceService({ store, repos: options.repos })
     : null;
+  const agentReferences = options.agentReferences ?? null;
+  const finish = (
+    id: number,
+    method: string | null,
+    startedAt: number,
+    response: Response,
+    op: TeamServerLogEntry["op"] = "rpc",
+  ): Response => {
+    let code: TeamServerLogEntry["code"] = "ok";
+    if (response.status !== 200) {
+      const status = response.status;
+      code =
+        (Object.keys(errors) as RpcErrorCode[]).find(
+          (key) => errors[key].status === status,
+        ) ?? "internal_error";
+      count(`rpc_errors.${code}`);
+      if (method !== null && READ_METHODS.has(method) && DENIAL_CODES.has(code))
+        count(`denied_reads.${code}` as "denied_reads.not_found");
+      if (code === "conflict") count("conflicts");
+    } else if (method === "messages.send") count("sends");
+    else if (method === "tasks.link_confirm") count("links");
+    else if (method === "shares.create") count("shares");
+    log({
+      op,
+      id,
+      method,
+      code,
+      status: response.status,
+      ms: Date.now() - startedAt,
+    });
+    return response;
+  };
+  const refuse = (error: unknown): Response => {
+    if (error instanceof TeamError && error.code === "rate_limited")
+      count("rate_limit_hits");
+    return responseError(errorCode(error), retryAfter(error));
+  };
   return Bun.serve({
     hostname: "127.0.0.1",
     port,
     maxRequestBodySize: MAX_REQUEST_BYTES,
     async fetch(request, server) {
+      const id = ++operationCounter;
+      const startedAt = Date.now();
+      let method: string | null = null;
+      let op: TeamServerLogEntry["op"] = "rpc";
+      const done = (response: Response) =>
+        finish(id, method, startedAt, response, op);
       const url = new URL(request.url);
       if (
         !["127.0.0.1", "localhost"].includes(url.hostname) ||
         Number(url.port || 80) !== server.port ||
         request.headers.has("origin")
       )
-        return responseError("forbidden");
+        return done(responseError("forbidden"));
       const route =
         url.pathname === "/v1/rpc"
           ? "rpc"
@@ -878,19 +1029,23 @@ export function serveTeam(options: TeamServerOptions) {
             ? "stream"
             : null;
       if (request.method !== "POST" || route === null || url.search)
-        return responseError("not_found");
+        return done(responseError("not_found"));
+      if (route === "stream") {
+        op = "stream";
+        method = "events.stream";
+      }
       const auth = request.headers.get("authorization") ?? "";
       if (auth.length > MAX_AUTHORIZATION_CHARS || !auth.startsWith("Bearer "))
-        return responseError("unauthorized");
+        return done(responseError("unauthorized"));
       let user: Awaited<ReturnType<Authenticator["authenticate"]>>;
       try {
         user = await authenticator.authenticate(auth.slice("Bearer ".length));
       } catch {
-        return responseError("unavailable");
+        return done(responseError("unavailable"));
       }
       // The agent author id is reserved; no provider may mint it.
       if (!user || user.user_id === MARS_AGENT_USER_ID)
-        return responseError("unauthorized");
+        return done(responseError("unauthorized"));
       if (
         request.headers
           .get("content-type")
@@ -898,42 +1053,60 @@ export function serveTeam(options: TeamServerOptions) {
           ?.trim()
           .toLowerCase() !== "application/json"
       )
-        return responseError("invalid_request");
+        return done(responseError("invalid_request"));
       try {
         const bytes = await request.arrayBuffer();
         if (bytes.byteLength > MAX_REQUEST_BYTES)
-          return responseError("too_large");
+          return done(responseError("too_large"));
         let raw: unknown;
         try {
           raw = JSON.parse(
             new TextDecoder("utf-8", { fatal: true }).decode(bytes),
           );
         } catch {
-          return responseError("invalid_request");
+          return done(responseError("invalid_request"));
         }
         if (route === "stream") {
           const parsed = TeamStreamRequestSchema.safeParse(raw);
-          if (!parsed.success) return responseError("invalid_request");
+          if (!parsed.success) return done(responseError("invalid_request"));
           const teamId = parsed.data.context.team_id;
           if (!user.team_ids.includes(teamId))
-            return responseError("forbidden");
+            return done(responseError("forbidden"));
+          if (!store.isEnabled()) {
+            count("disabled_refusals");
+            return done(responseError("unavailable"));
+          }
           const actor: TeamActor = { team_id: teamId, user_id: user.user_id };
           // A client abort reaches the stream through `cancel`.
-          return openStream(actor, parsed.data);
+          return done(openStream(actor, parsed.data));
         }
         const parsed = TeamRpcRequestSchema.safeParse(raw);
-        if (!parsed.success) return responseError("invalid_request");
+        if (!parsed.success) return done(responseError("invalid_request"));
+        method = parsed.data.method;
         const teamId = parsed.data.context.team_id;
-        if (!user.team_ids.includes(teamId)) return responseError("forbidden");
+        if (!user.team_ids.includes(teamId))
+          return done(responseError("forbidden"));
+        // Kill switch: only `team.describe` (which reports `enabled: false`)
+        // answers while the host has Team Chat off. Durable data is untouched.
+        if (parsed.data.method !== "team.describe" && !store.isEnabled()) {
+          count("disabled_refusals");
+          return done(responseError("unavailable"));
+        }
         const actor: TeamActor = { team_id: teamId, user_id: user.user_id };
-        const result = await dispatch(store, references, actor, parsed.data);
+        const result = await dispatch(
+          store,
+          references,
+          agentReferences,
+          actor,
+          parsed.data,
+        );
         validateResult(store, parsed.data, result, actor);
         const body = JSON.stringify({ result });
         if (Buffer.byteLength(body) > MAX_RESPONSE_BYTES)
-          return responseError("too_large");
-        return new Response(body, { headers });
+          return done(responseError("too_large"));
+        return done(new Response(body, { headers }));
       } catch (error) {
-        return responseError(errorCode(error));
+        return done(refuse(error));
       }
     },
     error() {

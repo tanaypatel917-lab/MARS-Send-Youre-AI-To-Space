@@ -93,7 +93,7 @@ function downgrade(rootDir: string) {
       );
     }
     db.exec(
-      "ALTER TABLE messages DROP COLUMN agent_request_id; ALTER TABLE messages DROP COLUMN kind; DROP TABLE agent_requests; DELETE FROM migrations WHERE id = '0004_agent_requests';",
+      "ALTER TABLE messages DROP COLUMN agent_request_id; ALTER TABLE messages DROP COLUMN kind; DROP TABLE agent_requests; DELETE FROM migrations WHERE id = '0004_agent_requests'; DROP TABLE metrics; DELETE FROM migrations WHERE id = '0005_metrics';",
     );
   })();
   db.close();

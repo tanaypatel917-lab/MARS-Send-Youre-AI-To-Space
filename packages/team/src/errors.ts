@@ -19,10 +19,20 @@ export type TeamErrorCode = (typeof TEAM_ERROR_CODES)[number];
  */
 export class TeamError extends Error {
   readonly code: TeamErrorCode;
-  constructor(code: TeamErrorCode, message: string) {
+  /** Whole seconds until a `rate_limited` caller may retry; becomes the HTTP `Retry-After` header. */
+  readonly retryAfterSeconds: number | null;
+  constructor(
+    code: TeamErrorCode,
+    message: string,
+    options: { retryAfterSeconds?: number } = {},
+  ) {
     super(message);
     this.name = "TeamError";
     this.code = code;
+    this.retryAfterSeconds =
+      options.retryAfterSeconds === undefined
+        ? null
+        : Math.max(1, Math.ceil(options.retryAfterSeconds));
   }
 }
 
@@ -37,3 +47,9 @@ export const referenceNotFound = () =>
 export const conflict = (message: string) => new TeamError("conflict", message);
 export const unavailable = (message: string) =>
   new TeamError("unavailable", message);
+/** Per-user sliding-window budget exhausted; the message names the window, never the caller. */
+export const rateLimited = (message: string, retryAfterSeconds: number) =>
+  new TeamError("rate_limited", message, { retryAfterSeconds });
+/** The host switched `team.enabled` off: durable data is kept, every operation but `team.describe` is refused. */
+export const teamDisabled = () =>
+  new TeamError("unavailable", "Team Chat is disabled by the host");

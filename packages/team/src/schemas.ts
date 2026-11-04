@@ -84,6 +84,12 @@ export const TeamLimitsSchema = z
       .int()
       .positive()
       .max(256 * 1024),
+    /** `messages.send` (and `messages.edit`/`delete`, `shares.create`) per (team, user) in a sliding minute. */
+    max_sends_per_minute: z.number().int().positive().max(10_000),
+    /** `reactions.set` calls per (team, user) in a sliding minute. */
+    max_reactions_per_minute: z.number().int().positive().max(10_000),
+    /** `agent.preview` + `agent.request` calls per (team, user) in a sliding minute. */
+    max_agent_requests_per_minute: z.number().int().positive().max(10_000),
   })
   .strict();
 export type TeamLimits = z.infer<typeof TeamLimitsSchema>;
@@ -111,4 +117,7 @@ export const DEFAULT_TEAM_LIMITS: TeamLimits = {
   max_search_hits: TEAM_MAX_SEARCH_HITS,
   max_agent_context_bytes: 64 * 1024,
   max_reference_excerpt_bytes: 16 * 1024,
+  max_sends_per_minute: 120,
+  max_reactions_per_minute: 240,
+  max_agent_requests_per_minute: 10,
 };

@@ -227,6 +227,8 @@ const requestId = z.object({ request_id: id }).strict();
 
 export const TeamRpcRequestSchema = z.discriminatedUnion("method", [
   method("team.describe", empty),
+  /** Redacted counters; team admins only. */
+  method("team.metrics", empty),
   method("conversations.create_dm", z.object({ peer_user_id: id }).strict()),
   method(
     "conversations.create_group",
@@ -311,6 +313,8 @@ export const TeamDescribeResultSchema = z
     team_id: id,
     user_id: id,
     role: TeamRoleSchema,
+    /** Host kill switch (`mars team enable|disable`); when false every other method answers `unavailable`. */
+    enabled: z.boolean(),
     limits: TeamLimitsSchema,
     capabilities: z
       .object({

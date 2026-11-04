@@ -75,10 +75,17 @@ import {
   conflict,
   invalidInput,
   notFound,
+  rateLimited,
   referenceNotFound,
   TeamError,
   unavailable,
 } from "./errors";
+import {
+  isTeamMetricCounter,
+  metricsSnapshot,
+  type TeamMetrics,
+  type TeamMetricsSnapshot,
+} from "./metrics";
 import {
   TASK_LINK_EXCERPT_CHARS,
   type TaskLinkDraftResult,
@@ -251,7 +258,58 @@ export const TEAM_MIGRATIONS: ReadonlyArray<{ id: string; sql: string }> = [
       CREATE INDEX agent_requests_conversation ON agent_requests(conversation_id, created_seq);
     `,
   },
+  {
+    // Team Chat PR 7: durable redacted counters (`TEAM_METRIC_COUNTERS` names
+    // only, integer values) so `mars team stats` in another process reads
+    // what the serving process counted. The `team.enabled` kill switch lives
+    // in `meta` and needs no table.
+    id: "0005_metrics",
+    sql: `
+      CREATE TABLE metrics (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
+    `,
+  },
 ];
+
+/** Tables `exportSnapshot` dumps, in foreign-key order so `importSnapshot` can replay them. */
+export const TEAM_SNAPSHOT_TABLES = [
+  "members",
+  "conversations",
+  "participants",
+  "messages",
+  "reactions",
+  "outbox",
+  "idempotency",
+  "task_links",
+  "result_shares",
+  "repos",
+  "repo_access",
+  "code_references",
+  "message_references",
+  "agent_requests",
+  "metrics",
+] as const;
+export const TEAM_SNAPSHOT_SCHEMA_VERSION = 1;
+const sqlValue = z.union([z.string(), z.number(), z.null()]);
+/**
+ * `mars team export` output: every durable row of the store plus the ledger it
+ * was written under. It never contains a credential because the store holds
+ * none (dev tokens live in the CLI's token file, hashed in memory only).
+ */
+export const TeamStoreSnapshotSchema = z
+  .object({
+    schema_version: z.literal(TEAM_SNAPSHOT_SCHEMA_VERSION),
+    format_version: z.literal(TEAM_STORE_FORMAT_VERSION),
+    ledger: z.array(z.string().min(1).max(128)).max(1000),
+    /** The kill-switch state at export time; `importSnapshot` records it but leaves the restored store disabled. */
+    enabled: z.boolean(),
+    exported_at: z.string().datetime({ offset: true }),
+    tables: z.record(
+      z.enum(TEAM_SNAPSHOT_TABLES),
+      z.array(z.record(z.string().regex(/^[a-z_][a-z0-9_]*$/), sqlValue)),
+    ),
+  })
+  .strict();
+export type TeamStoreSnapshot = z.infer<typeof TeamStoreSnapshotSchema>;
 
 export interface TeamStoreOptions {
   rootDir: string;
@@ -353,12 +411,16 @@ export interface SearchPage {
  */
 export type StoreNotice =
   | { type: "event"; conversation_id: string }
-  | { type: "removed"; conversation_id: string; user_id: string };
+  | { type: "removed"; conversation_id: string; user_id: string }
+  /** The host switched `team.enabled` off; the server closes every stream. */
+  | { type: "disabled" };
 
 export interface TeamDescription {
   team_id: string;
   user_id: string;
   role: TeamRole;
+  /** The host kill switch (`meta.team.enabled`); when false only this call answers. */
+  enabled: boolean;
   limits: TeamLimits;
   capabilities: {
     stream: boolean;
@@ -530,6 +592,26 @@ export interface TeamStore {
   agentInspect(actor: TeamActor, input: { request_id: string }): AgentRequest;
   /** Host-only driver; never exposed over RPC. */
   readonly agentHost: TeamAgentHostPort;
+  /** Migration ids this `createTeamStore` call applied (empty when the ledger was already current). */
+  readonly migrationsApplied: readonly string[];
+  /** Last ledger id in the store after opening. */
+  readonly ledgerHead: string;
+  /** Kill switch, re-read from `meta` on every call; default off. Host-only writer. */
+  isEnabled(): boolean;
+  setEnabled(enabled: boolean): { enabled: boolean; changed: boolean };
+  /** Durable redacted counters; fixed names, integer values. */
+  readonly metrics: TeamMetrics;
+  /** `team.metrics`: team admins only (`forbidden` otherwise). */
+  metricsSnapshot(actor: TeamActor): TeamMetricsSnapshot;
+  /** Host-only read of stored reference locators (no viewer check; callers authorize per viewer). Unknown ids are omitted. */
+  getReferences(
+    teamId: string,
+    referenceIds: readonly string[],
+  ): GitRangeReference[];
+  /** Host-only: every durable row for `mars team export`. */
+  exportSnapshot(): TeamStoreSnapshot;
+  /** Host-only: replays a snapshot into an empty store at the same ledger; `conflict` otherwise. */
+  importSnapshot(snapshot: unknown): { tables: number; rows: number };
   close(): void;
 }
 
@@ -808,8 +890,12 @@ function prepareRoot(rootDir: string): string {
   return realpathSync(requested);
 }
 
-function openDatabase(rootDir: string): Database {
+function openDatabase(rootDir: string): {
+  db: Database;
+  applied: string[];
+} {
   const dbPath = join(rootDir, "team.sqlite");
+  const appliedNow: string[] = [];
   if (existsSync(dbPath)) {
     const dbStat = lstatSync(dbPath);
     if (dbStat.isSymbolicLink() || !dbStat.isFile())
@@ -863,13 +949,14 @@ function openDatabase(rootDir: string): Database {
         db.query(
           "INSERT INTO migrations (id, applied_at, position) VALUES (?, ?, ?)",
         ).run(migration.id, new Date().toISOString(), index);
+        appliedNow.push(migration.id);
       }
     }).immediate();
   } catch (error) {
     db.close();
     throw error;
   }
-  return db;
+  return { db, applied: appliedNow };
 }
 
 export function createTeamStore(options: TeamStoreOptions): TeamStore {
@@ -880,8 +967,32 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
   const now = options.now ?? (() => new Date());
   const randomId = options.randomId ?? (() => Bun.randomUUIDv7());
   const rootDir = prepareRoot(options.rootDir);
-  const db = openDatabase(rootDir);
+  const { db, applied: migrationsApplied } = openDatabase(rootDir);
   const timestamp = () => now().toISOString();
+  const metrics: TeamMetrics = {
+    increment(name, by = 1) {
+      if (!isTeamMetricCounter(name) || !Number.isInteger(by) || by < 0)
+        throw invalidInput("Unknown metric counter");
+      db.query(
+        "INSERT INTO metrics (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = value + excluded.value",
+      ).run(name, by);
+    },
+    snapshot() {
+      return metricsSnapshot(
+        db
+          .query<{ name: string; value: number }, []>(
+            "SELECT name, value FROM metrics",
+          )
+          .all(),
+      );
+    },
+  };
+  const readEnabled = (): boolean =>
+    db
+      .query<{ value: string }, []>(
+        "SELECT value FROM meta WHERE key = 'team.enabled'",
+      )
+      .get()?.value === "1";
 
   const memberRow = (teamId: string, userId: string): MemberRow | null =>
     db
@@ -1491,6 +1602,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
       .all(actor.team_id, actor.user_id, requestId, operation);
     const match = previous.find((row) => row.input_sha256 === inputHash);
     if (match) {
+      if (operation === "messages.send") metrics.increment("send_replays");
       try {
         return schema.parse(
           upgradeLegacyResult(operation, JSON.parse(match.result_json)),
@@ -1580,20 +1692,43 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
   };
   const read = <T>(fn: () => T): T => db.transaction(fn)();
 
-  const searchWindow = new Map<string, number[]>();
-  const takeSearchSlot = (actor: TeamActor) => {
-    const key = `${actor.team_id}\u0000${actor.user_id}`;
+  /**
+   * Per-(window, team, user) sliding-minute budgets. In-memory and therefore
+   * per serving process (the pilot runs one); the store itself stays
+   * multi-process safe. A refused call carries the seconds until the oldest
+   * stamp leaves the window, which the server turns into `Retry-After`.
+   */
+  const RATE_WINDOW_MS = 60_000;
+  const windows = new Map<string, number[]>();
+  const takeSlot = (
+    actor: TeamActor,
+    window: "send" | "reaction" | "search" | "agent",
+    limit: number,
+  ) => {
+    const key = `${window}\u0000${actor.team_id}\u0000${actor.user_id}`;
     const at = now().getTime();
-    const recent = (searchWindow.get(key) ?? []).filter(
-      (stamp) => at - stamp < 60_000,
+    const recent = (windows.get(key) ?? []).filter(
+      (stamp) => at - stamp < RATE_WINDOW_MS,
     );
-    if (recent.length >= limits.max_search_per_minute) {
-      searchWindow.set(key, recent);
-      throw new TeamError("rate_limited", "Search rate limit reached");
+    if (recent.length >= limit) {
+      windows.set(key, recent);
+      const oldest = recent[0] ?? at;
+      throw rateLimited(
+        `${window} rate limit reached`,
+        (oldest + RATE_WINDOW_MS - at) / 1000,
+      );
     }
     recent.push(at);
-    searchWindow.set(key, recent);
+    windows.set(key, recent);
   };
+  const takeSearchSlot = (actor: TeamActor) =>
+    takeSlot(actor, "search", limits.max_search_per_minute);
+  const takeSendSlot = (actor: TeamActor) =>
+    takeSlot(actor, "send", limits.max_sends_per_minute);
+  const takeReactionSlot = (actor: TeamActor) =>
+    takeSlot(actor, "reaction", limits.max_reactions_per_minute);
+  const takeAgentSlot = (actor: TeamActor) =>
+    takeSlot(actor, "agent", limits.max_agent_requests_per_minute);
 
   const changeMembership = (
     actor: TeamActor,
@@ -2055,6 +2190,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
   const agentHost: TeamAgentHostPort = {
     claimNext() {
       return write((): ClaimedAgentRequest | null => {
+        if (!readEnabled()) return null;
         const row = db
           .query<AgentRequestRow, []>(
             "SELECT * FROM agent_requests WHERE status = 'pending' ORDER BY created_seq LIMIT 1",
@@ -2203,10 +2339,120 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     },
   };
 
+  const snapshotColumns = (table: string): string[] =>
+    db
+      .query<{ name: string }, []>(`PRAGMA table_info("${table}")`)
+      .all()
+      .map((column) => column.name);
+
   return {
     rootDir,
     limits,
     agentHost,
+    migrationsApplied: Object.freeze([...migrationsApplied]),
+    ledgerHead: TEAM_MIGRATIONS[TEAM_MIGRATIONS.length - 1]?.id ?? "",
+    metrics,
+    isEnabled() {
+      return readEnabled();
+    },
+    setEnabled(enabled) {
+      if (typeof enabled !== "boolean")
+        throw invalidInput("enabled must be boolean");
+      return write(() => {
+        const before = readEnabled();
+        db.query(
+          "INSERT INTO meta (key, value) VALUES ('team.enabled', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        ).run(enabled ? "1" : "0");
+        if (!enabled) notify({ type: "disabled" });
+        return { enabled, changed: before !== enabled };
+      });
+    },
+    metricsSnapshot(actor) {
+      return read(() => {
+        const member = requireTeamMember(actor);
+        if (member.role !== "admin")
+          throw new TeamError("forbidden", "Team admin role required");
+        return metrics.snapshot();
+      });
+    },
+    getReferences(teamId, referenceIds) {
+      if (!idSchema.safeParse(teamId).success) return [];
+      return read(() =>
+        [...new Set(referenceIds)].flatMap((referenceId) => {
+          if (!idSchema.safeParse(referenceId).success) return [];
+          const row = referenceRow(teamId, referenceId);
+          return row ? [referenceRecord(row)] : [];
+        }),
+      );
+    },
+    exportSnapshot() {
+      return read(() => {
+        const tables: Record<string, Record<string, string | number | null>[]> =
+          {};
+        for (const table of TEAM_SNAPSHOT_TABLES)
+          tables[table] = db
+            .query<Record<string, string | number | null>, []>(
+              `SELECT * FROM "${table}" ORDER BY rowid`,
+            )
+            .all();
+        return TeamStoreSnapshotSchema.parse({
+          schema_version: TEAM_SNAPSHOT_SCHEMA_VERSION,
+          format_version: TEAM_STORE_FORMAT_VERSION,
+          ledger: TEAM_MIGRATIONS.map((migration) => migration.id),
+          enabled: readEnabled(),
+          exported_at: timestamp(),
+          tables,
+        });
+      });
+    },
+    importSnapshot(raw) {
+      const parsed = TeamStoreSnapshotSchema.safeParse(raw);
+      if (!parsed.success) throw invalidInput("Invalid team store snapshot");
+      const snapshot = parsed.data;
+      const ledger = TEAM_MIGRATIONS.map((migration) => migration.id);
+      if (
+        snapshot.ledger.length !== ledger.length ||
+        snapshot.ledger.some((id, index) => id !== ledger[index])
+      )
+        throw conflict(
+          "Snapshot was exported under a different migration ledger",
+        );
+      return write(() => {
+        for (const table of TEAM_SNAPSHOT_TABLES) {
+          const count =
+            db
+              .query<{ count: number }, []>(
+                `SELECT COUNT(*) AS count FROM "${table}"`,
+              )
+              .get()?.count ?? 0;
+          if (count > 0)
+            throw conflict("Refusing to import into a non-empty team store");
+        }
+        let rows = 0;
+        let tables = 0;
+        for (const table of TEAM_SNAPSHOT_TABLES) {
+          const incoming = snapshot.tables[table];
+          if (!incoming) continue;
+          tables += 1;
+          const columns = snapshotColumns(table);
+          const columnSet = new Set(columns);
+          const insert = db.query(
+            `INSERT INTO "${table}" (${columns.map((c) => `"${c}"`).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+          );
+          for (const row of incoming) {
+            const keys = Object.keys(row);
+            if (
+              keys.length !== columns.length ||
+              keys.some((key) => !columnSet.has(key))
+            )
+              throw invalidInput("Snapshot row does not match the table");
+            insert.run(...columns.map((column) => row[column] ?? null));
+            rows += 1;
+          }
+        }
+        return { tables, rows };
+      });
+    },
     setTeamMember(input) {
       const parsed = z
         .object({
@@ -2275,6 +2521,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
           team_id: member.team_id,
           user_id: member.user_id,
           role: member.role === "admin" ? "admin" : "member",
+          enabled: readEnabled(),
           limits,
           capabilities: {
             stream: true,
@@ -2576,6 +2823,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     send(actor, requestId, input) {
       return write(() => {
         requireTeamMember(actor);
+        takeSendSlot(actor);
         // Before any idempotent replay: a participant removed since the
         // original send must not read the stored message back.
         requireParticipant(actor, input.conversation_id);
@@ -2640,6 +2888,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
                 throw conflict(
                   "client_message_id was reused with a different body",
                 );
+              metrics.increment("send_replays");
               return messageRecord(previous);
             }
             if (parsed.data.reply_to !== undefined) {
@@ -2684,6 +2933,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     editMessage(actor, input) {
       return write(() => {
         requireTeamMember(actor);
+        takeSendSlot(actor);
         const parsed = z
           .object({ message_id: idSchema, body: z.string().min(1) })
           .strict()
@@ -2719,6 +2969,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     deleteMessage(actor, input) {
       return write(() => {
         requireTeamMember(actor);
+        takeSendSlot(actor);
         const parsed = z
           .object({ message_id: idSchema })
           .strict()
@@ -2753,6 +3004,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     agentPreview(actor, input) {
       return read(() => {
         requireTeamMember(actor);
+        takeAgentSlot(actor);
         return buildPreview(actor, input).preview;
       });
     },
@@ -2760,6 +3012,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
       return write(() => {
         requireTeamMember(actor);
         requireAgent();
+        takeAgentSlot(actor);
         const parsed = z
           .object({
             idempotency_key: z
@@ -3021,6 +3274,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     setReaction(actor, input) {
       return write(() => {
         requireTeamMember(actor);
+        takeReactionSlot(actor);
         if (typeof input.on !== "boolean")
           throw invalidInput("on must be boolean");
         if (!isValidEmoji(input.emoji, TEAM_MAX_EMOJI_CHARS))
@@ -3524,6 +3778,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     shareCreate(actor, requestId, input) {
       return write(() => {
         requireTeamMember(actor);
+        takeSendSlot(actor);
         // The idempotent replay carries the bytes as first posted; the
         // stale/superseded overlay is re-read so a retry agrees with history.
         const posted = idempotent(

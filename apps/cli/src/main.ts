@@ -10,6 +10,7 @@ import { runCommands } from "./commands";
 import { omnirouteDoctorReport } from "./omniroute";
 import { runRender } from "./render";
 import { RESEARCH_SEARCH_PROVIDERS, runServer, ServeUsageError } from "./serve";
+import { runTeam, TeamUsageError, teamDoctorReport } from "./team";
 import { runVault, VaultUsageError } from "./vault";
 
 function requiredString(value: unknown, name: string): string {
@@ -223,6 +224,11 @@ async function runModels(args: string[]): Promise<void> {
 const command = process.argv[2];
 try {
   if (command === "doctor") {
+    const doctorArgs = parseArgs({
+      args: process.argv.slice(3),
+      strict: true,
+      options: { "team-state": { type: "string" } },
+    }).values;
     const report = {
       product: "MARS - Send You're AI To Space",
       milestone: "0: source and integration baseline",
@@ -252,12 +258,14 @@ try {
         live_verified: false,
       },
       omniroute: await omnirouteDoctorReport(),
+      team: teamDoctorReport(doctorArgs["team-state"]),
       limitations: [
         "Initialization probe only; no agent task or model request was run.",
         "Live-provider and real IDE workbench acceptance remain unverified; memory and learning (skills plus proposal-only background review) are implemented with offline evidence only; training is not implemented.",
         "Background research runs only when mars serve is started with --research-search; no live search provider or model run has been verified.",
         "OmniRoute is an optional provider target enabled by mars serve --omniroute; the doctor probe is one GET /v1/models and no model request. No live OmniRoute or upstream provider call has been verified; catalog quotas are upstream approximations.",
         "Python services must use separate versioned environments.",
+        "Team Chat runs only under mars team serve with the dev authenticator and the team.enabled flag (default off); no live window, second machine or identity provider has been verified.",
       ],
     };
     console.log(JSON.stringify(report, null, 2));
@@ -282,9 +290,20 @@ try {
     }
   } else if (command === "vault") {
     await runVault(process.argv.slice(3));
+  } else if (command === "team") {
+    try {
+      await runTeam(process.argv.slice(3));
+    } catch (error) {
+      console.error(
+        error instanceof TeamUsageError
+          ? error.message
+          : "MARS team service could not complete the command safely. Check the state directory, port, identity option and repo mappings.",
+      );
+      process.exitCode = 1;
+    }
   } else {
     console.error(
-      "Usage: bun apps/cli/src/main.ts <doctor|smoke|models|serve|render|commands|vault>",
+      "Usage: bun apps/cli/src/main.ts <doctor|smoke|models|serve|render|commands|vault|team>",
     );
     process.exitCode = 2;
   }
