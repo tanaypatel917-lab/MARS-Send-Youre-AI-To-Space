@@ -1,4 +1,5 @@
-import { lstat, realpath } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 const SAFE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -112,6 +113,38 @@ export function resolveInside(vaultDir: string, notePath: string): string {
   if (!contains(vaultDir, absolute) || absolute === vaultDir)
     throw new VaultPathError("path_escape", notePath);
   return absolute;
+}
+
+/**
+ * Reads a regular file without following a symlink in its final component,
+ * even one swapped in after an earlier check: the file is opened with
+ * O_NOFOLLOW and read through the handle. Throws VaultPathError for a link
+ * (or anything that is not a regular file) and ENOENT for a missing file.
+ */
+export async function readFileNoFollow(
+  absolute: string,
+  label: string,
+): Promise<string> {
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(
+      absolute,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "EMLINK")
+      throw new VaultPathError("path_escape", `${label} is a symlink`);
+    throw error;
+  }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile())
+      throw new VaultPathError("path_escape", `${label} is not a regular file`);
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 /**

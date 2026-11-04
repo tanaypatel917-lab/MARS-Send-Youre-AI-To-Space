@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile, realpath } from "node:fs/promises";
+import { readdir, realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { RequestContext } from "@mars/contracts";
 import { canonicalJson, RequestContextSchema } from "@mars/memory";
@@ -8,6 +8,7 @@ import { type ParsedNote, parseNote, sha256 } from "./notes";
 import {
   assertVaultDirectory,
   contains,
+  readFileNoFollow,
   resolveInside,
   VaultPathError,
 } from "./paths";
@@ -76,8 +77,6 @@ async function readNoteInside(
   absolute: string,
   path: string,
 ): Promise<string> {
-  if ((await lstat(absolute)).isSymbolicLink())
-    throw new VaultPathError("path_escape", `${path} is a symlink`);
   const [realVault, realParent] = await Promise.all([
     realpath(vaultDir),
     realpath(dirname(absolute)),
@@ -87,7 +86,7 @@ async function readNoteInside(
       "path_escape",
       `${path} resolves outside the vault`,
     );
-  return readFile(absolute, "utf8");
+  return readFileNoFollow(absolute, path);
 }
 
 function kindOf(note: ParsedNote): NoteKind | null {
