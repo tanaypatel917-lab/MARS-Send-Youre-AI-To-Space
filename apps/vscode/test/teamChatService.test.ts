@@ -1165,3 +1165,40 @@ describe("review fixes, round 5", () => {
     expect(summary?.last_sequence).toBe(7);
   });
 });
+
+describe("review fixes, round 6", () => {
+  test("a byte-cut (short) history page is not treated as exhaustion", async () => {
+    const server = new FakeTeamServer();
+    const dm = server.seedDm(ADA, GRACE, ["a", "b", "c", "d", "e"]);
+    const client = new TeamClient(server.transport(ADA));
+    const service = new RpcTeamService(client);
+    const states: TeamChatViewState[] = [];
+    const controller = new TeamChatController({
+      post: (state) => states.push(state),
+      service,
+      viewer: "service",
+      pageSize: 3,
+    });
+    const last = () => states[states.length - 1];
+    await controller.handleMessage({ type: "ready" });
+    server.shortPageOnce = true;
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    // The adapter kept paging after the one-row page until 3 were collected.
+    expect(last()?.selected?.messages.map((m) => m.sequence)).toEqual([
+      3, 4, 5,
+    ]);
+    expect(last()?.selected?.older_cursor).toBe("seq:3");
+    await controller.handleMessage({
+      type: "loadOlder",
+      conversationId: dm,
+      cursor: "seq:3",
+    });
+    expect(last()?.selected?.messages.map((m) => m.sequence)).toEqual([
+      1, 2, 3, 4, 5,
+    ]);
+    expect(last()?.selected?.older_cursor).toBeNull();
+  });
+});

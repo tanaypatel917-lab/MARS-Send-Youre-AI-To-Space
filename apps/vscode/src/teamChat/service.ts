@@ -475,13 +475,9 @@ export class RpcTeamService implements TeamService {
         for (const m of chunk) this.remember(m);
         page.unshift(...chunk);
         const first = chunk[0];
-        if (
-          !first ||
-          chunk.length <
-            Math.min(limit, wanted - (page.length - chunk.length)) ||
-          first.seq <= floor + 1
-        )
-          exhausted = true;
+        // A short page is not exhaustion: the server also cuts pages by bytes.
+        // Only an empty page or one that reaches the join point ends the walk.
+        if (!first || first.seq <= floor + 1) exhausted = true;
         else cursor = first.seq;
       }
       const visible = page.filter((m) => m.seq > floor);

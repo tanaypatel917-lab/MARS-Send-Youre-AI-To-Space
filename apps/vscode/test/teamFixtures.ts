@@ -77,6 +77,8 @@ export class FakeTeamServer {
   dropNextAck = false;
   /** When true, every call fails as unavailable (server down). */
   offline = false;
+  /** When true, the next history page is cut to one row (the server's byte budget). */
+  shortPageOnce = false;
   private counter = 0;
   private clock = 0;
 
@@ -383,6 +385,10 @@ export class FakeTeamServer {
               : Number.POSITIVE_INFINITY;
           rows = rows.filter((m) => m.seq < before);
           rows = rows.slice(Math.max(0, rows.length - limit));
+        }
+        if (this.shortPageOnce) {
+          this.shortPageOnce = false;
+          rows = rows.slice(Math.max(0, rows.length - 1));
         }
         return rows.map((m) => this.decorate(m, userId, floor));
       }
