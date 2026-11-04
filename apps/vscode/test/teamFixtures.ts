@@ -52,6 +52,19 @@ export class FakeTeamServer {
   readonly reactions: { message_id: string; user_id: string; emoji: string }[] =
     [];
   readonly members = new Set<string>();
+  /** Per-viewer chips the PR 4 server would return for a reference id (default: restricted). */
+  readonly chips = new Map<
+    string,
+    {
+      reference_id: string;
+      restricted: false;
+      repo_id: string;
+      commit_sha: string;
+      path: string;
+      line_start: number | null;
+      line_end: number | null;
+    }
+  >();
   readonly capabilities: {
     stream: boolean;
     reactions: boolean;
@@ -277,7 +290,8 @@ export class FakeTeamServer {
           user_id: userId,
           role: "member",
           limits: { page_limit: 200, max_body_bytes: 16384 },
-          capabilities: this.capabilities,
+          // `references` is what `main` ships since PR 4 (always present).
+          capabilities: { ...this.capabilities, references: false },
         };
       case "conversations.list":
         return [...this.conversations.keys()]
@@ -339,7 +353,7 @@ export class FakeTeamServer {
           this.dropNextAck = false;
           throw rpc("timeout", undefined, undefined);
         }
-        return message;
+        return this.decorate(message, userId, view.participant.joined_seq);
       }
       case "messages.history": {
         const view = this.view(String(p.conversation_id), userId);
@@ -461,7 +475,14 @@ export class FakeTeamServer {
 
   /** PR 3 history item shape (reaction summaries + reply excerpt) when the server advertises reactions. */
   private decorate(message: Message, userId: string, floor: number): unknown {
-    if (!this.capabilities.reactions) return message;
+    // `main` (PR 4) always adds per-viewer chips to history/send results.
+    const withChips = {
+      ...message,
+      references: message.reference_ids.map(
+        (id) => this.chips.get(id) ?? { reference_id: id, restricted: true },
+      ),
+    };
+    if (!this.capabilities.reactions) return withChips;
     const summaries = new Map<
       string,
       { emoji: string; count: number; reacted: boolean }
@@ -482,7 +503,7 @@ export class FakeTeamServer {
       : undefined;
     const restricted = target !== undefined && target.seq <= floor;
     return {
-      ...message,
+      ...withChips,
       reactions: [...summaries.values()].sort((a, b) =>
         a.emoji < b.emoji ? -1 : 1,
       ),

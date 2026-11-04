@@ -419,8 +419,21 @@ transport interface):
   `not_found`/`forbidden` on a poll re-list the inbox.
 - Removal: a `not_found`/`forbidden` for a listed conversation drops it and
   purges cached messages, pending drafts and search hits.
-- References: `reference_ids` render as `Restricted reference` chips with no
-  path, SHA or excerpt (fail closed) until PR 4's resolution is wired.
+- References: the PR 4 server's per-viewer `references` chips drive the view
+  (`restricted: true` → `Restricted reference`, an allowed chip shows its
+  locator); a record without chips falls back to one restricted chip per
+  `reference_id`. No picker or preview panel yet.
+- Additive server fields never break the client: `capabilities` accepts any
+  further boolean flag (`references` since PR 4), history/send items accept
+  `references`, `reactions`, `reply_excerpt`, `reply_restricted`, list items
+  `unread_count`/`last_message_at` (preferred over the sequence distance, so
+  the viewer's own posts are never counted unread).
+- A reply excerpt is shown only when the target belongs to the same
+  conversation; a mismatched `reply_to` from the server reveals nothing.
+- Search hits open their conversation, page back until the hit's sequence is
+  loaded (bounded by the in-memory cap) and highlight it; polling rotates the
+  cursor order after a full page so one busy conversation cannot starve the
+  others; the SSE reader bounds only the incomplete frame tail.
 - Fixed strings only: transport failures map to `unavailable`/`unauthorized`
   notices; server text never reaches the view.
 

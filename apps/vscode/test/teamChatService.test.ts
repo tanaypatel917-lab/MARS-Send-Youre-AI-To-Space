@@ -26,6 +26,7 @@ function setup(
     realtime?: boolean;
     streamUrl?: string | null;
     fetch?: StreamFetchLike;
+    pageSize?: number;
   } = {},
 ) {
   const server = new FakeTeamServer(options);
@@ -80,7 +81,7 @@ function setup(
     service,
     ...(realtime ? { realtime } : {}),
     viewer: "service",
-    pageSize: 50,
+    pageSize: options.pageSize ?? 50,
   });
   const last = () => {
     const state = states[states.length - 1];
@@ -193,8 +194,9 @@ describe("RpcTeamService through the controller", () => {
     });
     const selected = last().selected;
     expect(selected?.messages.map((m) => m.sequence)).toEqual([1, 2, 3]);
-    // Nothing is read yet (read_seq 0) and the viewport has not reported in.
-    expect(selected?.conversation.unread_count).toBe(3);
+    // Nothing is read yet (read_seq 0) and the viewport has not reported in;
+    // without a server counter the cache-based count skips the viewer's own post.
+    expect(selected?.conversation.unread_count).toBe(2);
     expect(selected?.conversation.first_unread_sequence).toBe(1);
     expect(selected?.divider_sequence).toBe(1);
     expect(state.mention_index).toEqual({ repos: [] });
@@ -596,5 +598,259 @@ describe("TeamRealtime", () => {
       parseSseBlock('event: close\ndata: {"reason":"membership"}'),
     ).toEqual({ type: "close", close: { reason: "membership" } });
     expect(parseSseBlock('event: close\ndata: {"reason":"bogus"}')).toBeNull();
+  });
+});
+
+describe("review fixes", () => {
+  test("accepts the PR 4 server description (extra boolean capabilities) and chip-bearing history items", async () => {
+    const server = new FakeTeamServer();
+    server.seedDm(ADA, GRACE, ["hello"]);
+    const client = new TeamClient({
+      send: async (request, signal) => {
+        const result = (await server
+          .transport(ADA)
+          .send(request, signal)) as Record<string, unknown>;
+        if (request.method === "team.describe")
+          return {
+            ...result,
+            capabilities: {
+              ...(result.capabilities as object),
+              references: true,
+              future_flag: false,
+            },
+          };
+        return result;
+      },
+    });
+    const me = await client.describe();
+    expect(me.capabilities.references).toBe(true);
+    const [view] = await client.listConversations();
+    if (!view) throw new Error("no view");
+    const history = await client.history(view.conversation.conversation_id, {
+      limit: 10,
+    });
+    expect(history[0]?.references).toEqual([]);
+  });
+
+  test("server chips drive the reference view: restricted stays restricted, an allowed chip shows its locator", async () => {
+    const { controller, last, server, dm } = setup();
+    const message = server.post(GRACE, dm, "two refs");
+    message.reference_ids = ["ref_locked", "ref_open"];
+    server.chips.set("ref_open", {
+      reference_id: "ref_open",
+      restricted: false,
+      repo_id: "repo_site",
+      commit_sha: "a".repeat(40),
+      path: "site/banner.css",
+      line_start: 3,
+      line_end: 9,
+    });
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    const view = last().selected?.messages.find(
+      (m) => m.message_id === message.message_id,
+    );
+    expect(view?.references[0]).toEqual({
+      reference_id: "ref_locked",
+      state: "restricted",
+    });
+    expect(view?.references[1]).toMatchObject({
+      reference_id: "ref_open",
+      state: "ok",
+      kind: "range",
+      path: "site/banner.css",
+      short_sha: "aaaaaaa",
+      line_start: 3,
+      line_end: 9,
+    });
+  });
+
+  test("a reply target from another conversation is never shown as the excerpt", async () => {
+    const { controller, last, server, dm, group } = setup();
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: group,
+    });
+    const foreign = server.messages.find((m) => m.conversation_id === group);
+    if (!foreign) throw new Error("no group message");
+    server.post(GRACE, dm, "replying across threads", {
+      reply_to: foreign.message_id,
+    });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    const reply = last().selected?.messages.at(-1)?.reply_to;
+    expect(reply).toEqual({
+      message_id: foreign.message_id,
+      author_name: "Unknown member",
+      excerpt: "",
+    });
+    expect(JSON.stringify(last().selected)).not.toContain(foreign.body);
+  });
+
+  test("the server's unread_count wins over the sequence distance (own posts are not unread)", async () => {
+    const { controller, last, server, dm } = setup({
+      capabilities: { stream: true, reactions: false, search: false },
+    });
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    await controller.handleMessage({
+      type: "viewport",
+      focused: true,
+      atBottom: true,
+    });
+    expect(last().selected?.conversation.unread_count).toBe(0);
+    await controller.handleMessage({
+      type: "viewport",
+      focused: false,
+      atBottom: true,
+    });
+    await controller.handleMessage({
+      type: "send",
+      conversationId: dm,
+      clientMessageId: "cm_own",
+      body: "my own post while unfocused",
+      replyTo: null,
+      references: [],
+    });
+    const summary = last().conversations.find((c) => c.conversation_id === dm);
+    expect(summary?.unread_count).toBe(0);
+    expect(summary?.first_unread_sequence).toBeNull();
+    server.post(GRACE, dm, "a real unread");
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    expect(last().selected?.conversation.unread_count).toBe(1);
+    expect(last().selected?.conversation.first_unread_sequence).toBe(5);
+  });
+
+  test("a full poll page rotates the cursor order so a quiet conversation still advances", async () => {
+    const { controller, last, server, dm, group, realtime, statuses } = setup({
+      realtime: true,
+    });
+    await controller.handleMessage({ type: "ready" });
+    await until(() => statuses.includes("polling"));
+    for (let i = 0; i < 1000; i++) server.post(GRACE, dm, `burst ${i}`);
+    server.post(LINUS, group, "quiet thread message");
+    await until(() => {
+      const summary = last().conversations.find(
+        (c) => c.conversation_id === group,
+      );
+      return summary?.last_message?.excerpt === "quiet thread message";
+    }, 2000);
+    const polls = server.calls.filter((c) => c.method === "events.poll");
+    const firstIds = polls.map(
+      (c) =>
+        (c.params.cursors as { conversation_id: string }[])[0]?.conversation_id,
+    );
+    expect(new Set(firstIds).size).toBe(2);
+    realtime?.stop();
+    controller.dispose();
+    await realtime?.settled();
+  });
+
+  test("one SSE chunk holding many small frames is parsed, not rejected as overflow", async () => {
+    const server = new FakeTeamServer();
+    const dm = server.seedDm(ADA, GRACE, ["seed"]);
+    const client = new TeamClient(server.transport(ADA));
+    await client.describe();
+    let delivered = 0;
+    const errors: unknown[] = [];
+    const encoder = new TextEncoder();
+    let requests = 0;
+    const fetch: StreamFetchLike = async () => {
+      requests += 1;
+      let body = "";
+      if (requests === 1)
+        for (let i = 1; i <= 3000; i++)
+          body += `id: ${i}\nevent: message\ndata: ${JSON.stringify({
+            conversation_id: dm,
+            event_seq: i + 1,
+            kind: "message",
+            message_seq: 1,
+            message_id: "msg_0002",
+            revision: 1,
+          })}\n\n`;
+      expect(body.length === 0 || body.length > 64 * 1024).toBe(true);
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(body));
+          if (requests > 1) return; // hold the second connection open
+          controller.close();
+        },
+      });
+      return {
+        status: 200,
+        headers: {
+          get: (n) => (n === "content-type" ? "text/event-stream" : null),
+        },
+        body: stream,
+      };
+    };
+    const realtime = new TeamRealtime({
+      client,
+      streamUrl: "http://127.0.0.1:7332/v1/stream",
+      streamSupported: () => true,
+      getToken: () => Promise.resolve(FAKE_TEAM_TOKEN),
+      onEvent: () => {
+        delivered += 1;
+      },
+      onStatus: () => undefined,
+      onResync: () => undefined,
+      onError: (e) => errors.push(e),
+      fetch,
+      sleep: (ms, signal) =>
+        new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, Math.min(ms, 2));
+          signal.addEventListener("abort", () => {
+            clearTimeout(t);
+            resolve();
+          });
+        }),
+      minDelayMs: 1,
+      maxDelayMs: 2,
+    });
+    realtime.subscribe([dm]);
+    await until(() => delivered === 3000, 1000);
+    expect(errors).toEqual([]);
+    realtime.stop();
+    await realtime.settled();
+  });
+
+  test("opening a search hit pages back to the message and highlights it", async () => {
+    const { controller, last, server, dm } = setup({
+      capabilities: { stream: false, reactions: false, search: true },
+      pageSize: 2,
+    });
+    for (let i = 0; i < 6; i++) server.post(GRACE, dm, `filler ${i}`);
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({ type: "search", query: "launch key" });
+    const hit = last().search?.hits[0];
+    if (!hit) throw new Error("no hit");
+    expect(hit.sequence).toBe(1);
+    await controller.handleMessage({
+      type: "openSearchHit",
+      conversationId: hit.conversation_id,
+      messageId: hit.message_id,
+      sequence: hit.sequence,
+    });
+    const selected = last().selected;
+    expect(selected?.conversation.conversation_id).toBe(dm);
+    expect(selected?.messages[0]?.sequence).toBe(1);
+    expect(selected?.highlight_message_id).toBe(hit.message_id);
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    expect(last().selected?.highlight_message_id).toBeNull();
   });
 });

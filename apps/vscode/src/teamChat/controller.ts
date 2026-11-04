@@ -299,6 +299,13 @@ export class TeamChatController {
       case "clearSearch":
         this.search = null;
         return this.emit();
+      case "openSearchHit":
+        await this.openHit(
+          message.conversationId,
+          message.messageId,
+          message.sequence,
+        );
+        return this.emit();
       case "fixtureSwitchViewer":
         await this.switchViewer(message.userId);
         return this.emit();
@@ -396,9 +403,44 @@ export class TeamChatController {
       // The first visible unread sequence (after the member's join point),
       // whether or not that page is loaded yet.
       divider_sequence: page.value.conversation.first_unread_sequence,
+      highlight_message_id: null,
     };
     this.reconcilePending();
     await this.markReadIfBoundaryLoaded();
+  }
+
+  /**
+   * Selects the hit's conversation, pages back until its sequence is loaded
+   * (bounded by the in-memory cap) and marks it for highlighting.
+   */
+  private async openHit(
+    conversationId: string,
+    messageId: string,
+    sequence: number,
+  ): Promise<void> {
+    if (this.selected?.conversation.conversation_id !== conversationId)
+      await this.select(conversationId);
+    for (let i = 0; i < 64; i++) {
+      const selected = this.selected;
+      if (selected?.conversation.conversation_id !== conversationId) return;
+      const earliest = selected.messages[0]?.sequence;
+      if (
+        earliest === undefined ||
+        earliest <= sequence ||
+        selected.older_cursor === null
+      )
+        break;
+      await this.loadOlder(conversationId, selected.older_cursor);
+    }
+    const selected = this.selected;
+    if (selected?.conversation.conversation_id !== conversationId) return;
+    if (selected.messages.some((m) => m.message_id === messageId))
+      this.selected = { ...selected, highlight_message_id: messageId };
+    else
+      this.notice = {
+        kind: "info",
+        text: "That message is not loaded (in-memory limit reached).",
+      };
   }
 
   /**

@@ -85,6 +85,15 @@ export const TeamChatWebviewMessageSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("clearSearch") }).strict(),
+  /** Open a search hit: select its conversation, load history down to it and highlight it. */
+  z
+    .object({
+      type: z.literal("openSearchHit"),
+      conversationId: id,
+      messageId: id,
+      sequence,
+    })
+    .strict(),
   /** FIXTURE only: switch the fixture viewer to demonstrate membership filtering; ignored by the service. */
   z
     .object({ type: z.literal("fixtureSwitchViewer"), userId: id })
@@ -127,6 +136,8 @@ export interface SelectedConversation {
   older_blocked: boolean;
   /** First visible unread sequence when the conversation was opened; the divider stays put while reading. */
   divider_sequence: number | null;
+  /** Message to scroll to and highlight (a search hit); cleared on the next selection. */
+  highlight_message_id: string | null;
 }
 
 export interface TeamChatNotice {

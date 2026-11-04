@@ -200,7 +200,23 @@ export class RpcTeamService implements TeamService {
   private summary(view: ConversationView, me: string): ConversationSummary {
     const { conversation, participant, members } = view;
     const floor = Math.max(participant.read_seq, participant.joined_seq);
-    const unread = Math.max(0, conversation.last_seq - floor);
+    const cached = this.cachedSorted(conversation.conversation_id);
+    const after = cached.filter((m) => m.seq > floor);
+    // Prefer the server's counter (excludes the viewer's own posts); without
+    // it, count cached messages by others when the cache covers the unread
+    // span, else fall back to the sequence distance.
+    const covered =
+      after.length === conversation.last_seq - floor &&
+      conversation.last_seq >= floor;
+    const unread =
+      view.unread_count ??
+      (covered
+        ? after.filter((m) => m.author_id !== me).length
+        : Math.max(0, conversation.last_seq - floor));
+    const firstUnread =
+      unread > 0
+        ? (after.find((m) => m.author_id !== me)?.seq ?? floor + 1)
+        : null;
     const others = members
       .filter((m) => m.state === "active" && m.user_id !== me)
       .map((m) => m.user_id);
@@ -208,7 +224,7 @@ export class RpcTeamService implements TeamService {
       conversation.kind === "group"
         ? (conversation.title ?? "Group")
         : (others[0] ?? "Direct message");
-    const last = this.cachedSorted(conversation.conversation_id).at(-1);
+    const last = cached.at(-1);
     return {
       conversation_id: conversation.conversation_id,
       kind: conversation.kind,
@@ -220,7 +236,7 @@ export class RpcTeamService implements TeamService {
       read_cursor: participant.read_seq,
       last_sequence: conversation.last_seq,
       unread_count: unread,
-      first_unread_sequence: unread > 0 ? floor + 1 : null,
+      first_unread_sequence: firstUnread,
       last_message:
         last && last.seq > participant.joined_seq
           ? {
@@ -243,13 +259,39 @@ export class RpcTeamService implements TeamService {
   }
 
   private messageView(message: ServiceMessage): MessageView {
-    const replyTarget = message.reply_to
+    // A reply target is only ever shown from the same conversation; a
+    // mismatched id from the server never reveals another thread's text.
+    const candidate = message.reply_to
       ? this.findMessage(message.reply_to)
       : undefined;
-    const references: ReferenceView[] = message.reference_ids.map((id) => ({
-      reference_id: id,
-      state: "restricted",
-    }));
+    const replyTarget =
+      candidate && candidate.conversation_id === message.conversation_id
+        ? candidate
+        : undefined;
+    // PR 4 servers send per-viewer chips; without them every id fails
+    // closed to a restricted chip (no path, sha or excerpt).
+    const references: ReferenceView[] = message.references
+      ? message.references.map((chip) =>
+          chip.restricted
+            ? { reference_id: chip.reference_id, state: "restricted" }
+            : {
+                reference_id: chip.reference_id,
+                state: "ok",
+                kind: chip.line_start === null ? "file" : "range",
+                repo_id: chip.repo_id,
+                repo_name: chip.repo_id,
+                path: chip.path,
+                commit_sha: chip.commit_sha,
+                short_sha: chip.commit_sha.slice(0, 7),
+                line_start: chip.line_start,
+                line_end: chip.line_end,
+                symbol: null,
+              },
+        )
+      : message.reference_ids.map((id) => ({
+          reference_id: id,
+          state: "restricted",
+        }));
     return {
       message_id: message.message_id,
       conversation_id: message.conversation_id,

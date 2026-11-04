@@ -76,6 +76,8 @@ export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 export class TeamRealtime implements TeamRealtimeSource {
   private readonly cursors = new Map<string, number>();
   private readonly primed = new Set<string>();
+  /** Rotates the cursor order after a full page so one busy conversation cannot starve the others. */
+  private rotation = 0;
   private readonly sleepImpl: (
     ms: number,
     signal: AbortSignal,
@@ -148,10 +150,15 @@ export class TeamRealtime implements TeamRealtimeSource {
   }
 
   private cursorList(): PollCursor[] {
-    return [...this.cursors.entries()].map(([conversation_id, after]) => ({
-      conversation_id,
-      after_event_seq: after,
-    }));
+    const list = [...this.cursors.entries()].map(
+      ([conversation_id, after]) => ({
+        conversation_id,
+        after_event_seq: after,
+      }),
+    );
+    if (list.length < 2) return list;
+    const start = this.rotation % list.length;
+    return [...list.slice(start), ...list.slice(0, start)];
   }
 
   private async deliver(event: TeamEvent): Promise<boolean> {
@@ -231,6 +238,7 @@ export class TeamRealtime implements TeamRealtimeSource {
       );
       for (const event of events) await this.deliver(event);
       if (events.length < MAX_POLL_LIMIT) break;
+      this.rotation += 1;
       pending = this.cursorList().filter((c) =>
         pending.some((p) => p.conversation_id === c.conversation_id),
       );
@@ -249,6 +257,7 @@ export class TeamRealtime implements TeamRealtimeSource {
       for (const event of events) await this.deliver(event);
       if (events.length < MAX_POLL_LIMIT)
         await this.sleepImpl(this.pollInterval, signal);
+      else this.rotation += 1;
     }
   }
 
@@ -289,7 +298,6 @@ export class TeamRealtime implements TeamRealtimeSource {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        if (buffer.length > MAX_SSE_BUFFER) throw new Error("stream overflow");
         let boundary = buffer.indexOf("\n\n");
         while (boundary !== -1 && !closed) {
           const block = buffer.slice(0, boundary);
@@ -299,6 +307,9 @@ export class TeamRealtime implements TeamRealtimeSource {
           else if (frame?.type === "close") closed = frame.close;
           boundary = buffer.indexOf("\n\n");
         }
+        // Only the incomplete tail is bounded; a chunk full of small complete
+        // frames has already been parsed above.
+        if (buffer.length > MAX_SSE_BUFFER) throw new Error("stream overflow");
         if (closed) break;
       }
     } finally {

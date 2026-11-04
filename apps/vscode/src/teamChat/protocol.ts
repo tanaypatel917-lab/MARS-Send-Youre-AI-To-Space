@@ -2,6 +2,8 @@ import {
   ConversationSchema,
   MessageSchema,
   ParticipantSchema,
+  ReferenceChipSchema,
+  TEAM_MAX_REFERENCES,
   TeamMemberStateSchema,
   TeamRoleSchema,
 } from "@mars/contracts";
@@ -66,9 +68,19 @@ export const TeamContextSchema = z
   .strict();
 export type TeamContext = z.infer<typeof TeamContextSchema>;
 
+/**
+ * Known capabilities plus any further boolean flag a newer server adds
+ * (`references` since PR 4): an additive capability must never make the
+ * inbox unusable.
+ */
 export const TeamCapabilitiesSchema = z
-  .object({ stream: z.boolean(), reactions: z.boolean(), search: z.boolean() })
-  .strict();
+  .object({
+    stream: z.boolean(),
+    reactions: z.boolean(),
+    search: z.boolean(),
+    references: z.boolean().optional(),
+  })
+  .catchall(z.boolean());
 
 export const TeamDescribeResultSchema = z
   .object({
@@ -118,6 +130,8 @@ export type ReactionSummary = z.infer<typeof ReactionSummarySchema>;
 
 /** `messages.history` item: the record on `main`, plus the PR 3 additive fields when present. */
 export const MessageViewSchema = MessageSchema.extend({
+  /** Per-viewer chips from the PR 4 server; absent on the PR 2 record. */
+  references: z.array(ReferenceChipSchema).max(TEAM_MAX_REFERENCES).optional(),
   reactions: z
     .array(ReactionSummarySchema)
     .max(MAX_REACTION_SUMMARIES)
