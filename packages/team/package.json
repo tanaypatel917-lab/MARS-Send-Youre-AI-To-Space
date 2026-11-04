@@ -1,0 +1,15 @@
+{
+  "name": "@mars/team",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "test": "bun test src test",
+    "typecheck": "tsc --noEmit -p ../../tsconfig.json"
+  },
+  "dependencies": {
+    "@mars/contracts": "workspace:*",
+    "zod": "3.25.76"
+  }
+}
