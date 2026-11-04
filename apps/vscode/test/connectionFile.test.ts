@@ -282,7 +282,58 @@ describe("importConnection", () => {
         throw new Error("boom");
       },
     });
-    await importConnection(fresh.host);
+    expect(await importConnection(fresh.host)).toEqual({
+      status: "failed",
+      reason: "Could not save the server URL; the new token was removed.",
+    });
     expect(fresh.state.token).toBeUndefined();
+  });
+
+  test("a failed URL save reports whether the token rollback worked", async () => {
+    const restored = fakeHost({
+      token: "old-token-value",
+      storeGlobalServerUrl: async () => {
+        throw new Error("boom");
+      },
+    });
+    expect(await importConnection(restored.host)).toEqual({
+      status: "failed",
+      reason: "Could not save the server URL; the previous token was restored.",
+    });
+
+    let writes = 0;
+    const stuck = fakeHost({
+      token: "old-token-value",
+      storeToken: async (token) => {
+        if (++writes > 1) throw new Error(`rollback ${token}`);
+        stuck.state.token = token;
+      },
+      storeGlobalServerUrl: async () => {
+        throw new Error("boom");
+      },
+    });
+    const stuckOutcome = await importConnection(stuck.host);
+    expect(stuckOutcome).toEqual({
+      status: "failed",
+      reason:
+        "Could not save the server URL; the stored token could not be rolled back, re-import the connection file.",
+    });
+    expect(JSON.stringify(stuckOutcome)).not.toContain(TOKEN);
+    expect(JSON.stringify(stuckOutcome)).not.toContain("old-token-value");
+    expect(stuck.state.suspended).toBe(0);
+
+    const undeletable = fakeHost({
+      deleteToken: async () => {
+        throw new Error("nope");
+      },
+      storeGlobalServerUrl: async () => {
+        throw new Error("boom");
+      },
+    });
+    expect(await importConnection(undeletable.host)).toEqual({
+      status: "failed",
+      reason:
+        "Could not save the server URL; the stored token could not be rolled back, re-import the connection file.",
+    });
   });
 });
