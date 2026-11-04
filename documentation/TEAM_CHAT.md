@@ -254,6 +254,78 @@ Pure UI logic in `src/composer.ts` and `src/mentions.ts`: `reduceComposer` (text
 
 Three panes at ≥ 900 px (conversations | messages + composer | code panel, opened only by a chip click), code panel as a bottom drawer below 900 px. Enter sends, Shift+Enter newline; `@` opens the mention picker with keyboard selection (↑/↓, Enter/Tab, Escape) over files, symbols and `path:start-end` ranges from both repos; explicit reply context with a clear button; reaction toggles (`aria-pressed`); unread divider at the first unread sequence when the conversation was opened (stays while reading; the read cursor advances to the latest message only once the first unread message is actually loaded, so unread history on older pages is never marked read unseen) plus "Jump to latest"; an overlength draft (> 4000 characters) is kept with an inline error instead of being sent or discarded; pending ("Sending…") and failed sends with Retry (idempotent) and Discard; scroll position preserved across "Load older messages"; focus returns to the originating chip when the code panel closes; chips show repo · path:range @ short SHA and open the fixture blob at that revision with the stored range highlighted and scrolled into view; the inbox remembers the last conversation via `vscode.setState`.
 
-## 8. Smallest next change (PR 3 wiring; the PR 2 service already landed)
+## 8. Smallest next change (PR 3 wiring; the PR 2 service already landed) — done in §9
 
 `@mars/team` (`packages/team`: SQLite store, loopback RPC server, `createDevAuthenticator`, `conversations.*` / `messages.*` methods documented at the top of this file) merged in #60, so the service no longer needs to be built. The smallest next change is the adapter: implement `TeamService` (this PR's client-facing interface in `@mars/team-chat`) over `@mars/team`'s RPC — `listConversations` → `conversations.list`, `openConversation` → `conversations.open` + `messages.history {before_seq, limit}` (map `older_cursor` to `before_seq`), `sendMessage` → `messages.send` (replay → `duplicate: true`, `conflict` → `client_message_id_reused`), `markRead` → `conversations.mark_read`, `setPinned` → `conversations.pin` — using `HttpRpcTransport` with a separate team endpoint and `SecretStorage` key in the extension host, and let `TeamChatController` choose it instead of `FixtureTeamService` behind the same `mars.teamChat.enabled` flag (fixture stays the default until identity is decided). Reactions, references and the viewer switcher stay fixture-only until `reactions.set` (PR 3) and `@mars/code-refs`-backed resolution (PR 4) are wired; port `service.test.ts` as the adapter's acceptance tests against a loopback `@mars/team` server.
+
+## 9. PR 3, client half: the VS Code inbox over `@mars/team`
+
+Where it lives: `apps/vscode/src/teamChat/{protocol,client,service,realtime}.ts`
+plus the async `TeamChatController`; `packages/team-chat` keeps the shared
+operation shapes (`TeamService` is now `MaybePromise`-returning, carries a
+`label` of `FIXTURE` | `SERVICE`, `capabilities {reactions, search, realtime}`
+and `searchMessages`). `mars.teamChat.source` selects fixture (default) or
+service; the fixture path is unchanged and still labelled.
+
+Extension host only. `TeamClient` sits on `HttpRpcTransport<TeamRpcMethod,
+TeamContext>` (the transport gained two type parameters, nothing else) with
+its own `rpcUrl` (`mars.teamServerUrl`, default `http://127.0.0.1:7332`,
+validated by `checkServerUrl` with the team-specific
+`mars.teamChat.allowNonLoopbackServer`) and `getToken` reading the
+`mars.teamToken` SecretStorage key. Every result is validated against the
+contracts schemas (`ConversationSchema`, `ParticipantSchema`, `MessageSchema`)
+and cross-checked against the authenticated `team_id`/`user_id` from
+`team.describe`; a record for another tenant or participant is a `protocol`
+error. The webview CSP is untouched (`connect-src 'none'`); the view state it
+receives contains no token, transport error text or service handle.
+
+Methods used from `main` today: `team.describe`, `conversations.list/open/
+mark_read/pin`, `messages.send/history`, `events.poll`. Methods expected from
+the PR 3 service half (#64, not merged at the time of writing), already wired
+behind `team.describe().capabilities` and validated against the shapes that
+PR defines, falling back to host-side behaviour when absent:
+
+| Expected method | Request | Result the client validates | Fallback when `capabilities.*` is false |
+| --- | --- | --- | --- |
+| `events.stream` on `POST /v1/stream` | RPC envelope `{method, context, params: {cursors: [{conversation_id, after_event_seq}]}}` | `text/event-stream` frames `id:` / `event: message\|membership\|reaction` / `data: <TeamDeliveryEvent>`; `event: close` with `{reason}` | `events.poll` every 2 s with the same cursors |
+| `reactions.set` | `{message_id, emoji, on}` | `{message_id, emoji, count, reacted}` | reaction controls hidden |
+| `messages.search` | `{query (2..200), conversation_id?, limit ≤ 50}` | `{hits: [{conversation_id, message_id, seq, author_id, created_at, excerpt, cut_before, cut_after}], next_cursor}` | substring search over the host cache of messages the server already returned to this viewer |
+
+`messages.history` items may carry the PR 3 additive fields (`reactions`
+summaries, `reply_excerpt`, `reply_restricted`) and `conversations.list`
+items `unread_count`/`last_message_at`; the client accepts both shapes.
+
+Client behaviour (all tested offline in `apps/vscode/test/teamChatService.test.ts`
+with `FakeTeamServer`, an in-memory stand-in for `@mars/team` behind the
+transport interface):
+
+- Identity: `team.describe` first; no `user_id` in any request; the fixture's
+  viewer switcher is not offered for the service.
+- Sends: one `client_message_id` per draft, kept until acknowledged; a lost
+  acknowledgement retries the **same** id and the replay yields one message in
+  order; `conflict` → status `conflict`, retry refused, "Edit and resend" puts
+  the draft back under a new id.
+- Read cursor: advanced only when the first unread message is loaded **and**
+  the webview reported `focused && atBottom`; the unread divider is computed
+  from `read_seq`/`joined_seq` once per open.
+- Realtime: per-conversation resume cursors, priming from cursor 0 without
+  announcing history, exponential backoff 500 ms → 10 s, `unauthenticated`
+  state on an auth failure, `event: close` for `membership`/`not_found` and
+  `not_found`/`forbidden` on a poll re-list the inbox.
+- Removal: a `not_found`/`forbidden` for a listed conversation drops it and
+  purges cached messages, pending drafts and search hits.
+- References: `reference_ids` render as `Restricted reference` chips with no
+  path, SHA or excerpt (fail closed) until PR 4's resolution is wired.
+- Fixed strings only: transport failures map to `unavailable`/`unauthorized`
+  notices; server text never reaches the view.
+
+Plan vs. discovery report: the plan's SSE "Last-Event-ID" resume is replaced by
+the cursor list in the request body (the stream is a `POST`), and the plan's
+"workspace" is `team_id`, both per the discovery report and the service.
+
+Verified offline only: `cd apps/vscode && bun run typecheck && bun run test &&
+bun run smoke`, `bun run check`, the headless harness `service` scenario (real
+adapter + realtime poll against an in-page stub). Not verified: a VS Code
+window against a running `@mars/team`, the real `/v1/stream` once #64 merges
+(the frame layout and request envelope were taken from that PR's protocol and
+documentation).

@@ -169,7 +169,7 @@ export class TeamChatController {
    */
   notifyDelivery(
     conversationId: string,
-    kind: "message" | "membership",
+    kind: "message" | "membership" | "reaction",
   ): Promise<void> {
     return this.run(async () => {
       const known = this.conversations.some(

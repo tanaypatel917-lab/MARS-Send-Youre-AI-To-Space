@@ -1,10 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type {
-  Message,
-  Participant,
-  Reaction,
-  TeamDeliveryEvent,
-} from "@mars/contracts";
+import type { Participant } from "@mars/contracts";
 import { TEAM_MAX_CLIENT_MESSAGE_ID_CHARS } from "@mars/contracts";
 import type { z } from "zod";
 import { RpcError, type RpcTransport } from "../rpc";
@@ -18,15 +13,20 @@ import {
   MAX_POLL_LIMIT,
   MAX_SEARCH_LIMIT,
   MessageListSchema,
+  type MessageView,
+  MIN_SEARCH_QUERY_CHARS,
   ParticipantResultSchema,
   type PollCursor,
-  ReactionListSchema,
-  SearchListSchema,
+  type ReactionState,
+  ReactionStateSchema,
+  type SearchResponse,
+  SearchResultSchema,
   TEAM_RPC_METHODS,
   TEAM_SCHEMA_VERSION,
   type TeamContext,
   type TeamDescribeResult,
   TeamDescribeResultSchema,
+  type TeamEvent,
   type TeamRpcMethod,
 } from "./protocol";
 
@@ -130,7 +130,10 @@ export class TeamClient {
     return participant;
   }
 
-  private checkMessages(value: unknown, conversationId?: string): Message[] {
+  private checkMessages(
+    value: unknown,
+    conversationId?: string,
+  ): MessageView[] {
     const messages = validate(MessageListSchema, value, "message list");
     for (const message of messages)
       if (
@@ -166,7 +169,7 @@ export class TeamClient {
     conversationId: string,
     window: { after_seq?: number; before_seq?: number; limit?: number },
     signal?: AbortSignal,
-  ): Promise<Message[]> {
+  ): Promise<MessageView[]> {
     const params: Record<string, unknown> = { conversation_id: conversationId };
     if (window.after_seq !== undefined) params.after_seq = window.after_seq;
     if (window.before_seq !== undefined) params.before_seq = window.before_seq;
@@ -186,7 +189,7 @@ export class TeamClient {
       reply_to?: string;
     },
     signal?: AbortSignal,
-  ): Promise<Message> {
+  ): Promise<MessageView> {
     if (
       input.client_message_id.length === 0 ||
       input.client_message_id.length > TEAM_MAX_CLIENT_MESSAGE_ID_CHARS
@@ -235,7 +238,7 @@ export class TeamClient {
     cursors: PollCursor[],
     limit = MAX_POLL_LIMIT,
     signal?: AbortSignal,
-  ): Promise<TeamDeliveryEvent[]> {
+  ): Promise<TeamEvent[]> {
     if (cursors.length > MAX_POLL_CURSORS)
       throw new RpcError("protocol", "Too many poll cursors.");
     const result = await this.call(
@@ -257,16 +260,16 @@ export class TeamClient {
     emoji: string,
     on: boolean,
     signal?: AbortSignal,
-  ): Promise<Reaction[]> {
+  ): Promise<ReactionState> {
     const result = await this.call(
       TEAM_RPC_METHODS.reactionsSet,
       { message_id: messageId, emoji, on },
       signal,
     );
-    const reactions = validate(ReactionListSchema, result, "reaction list");
-    for (const reaction of reactions)
-      if (reaction.message_id !== messageId) throw invalid("reaction message");
-    return reactions;
+    const state = validate(ReactionStateSchema, result, "reaction state");
+    if (state.message_id !== messageId || state.emoji !== emoji)
+      throw invalid("reaction identity");
+    return state;
   }
 
   /** Expected PR 3 service method; callers check `identity.capabilities.search` first. */
@@ -275,18 +278,31 @@ export class TeamClient {
     conversationId?: string | null,
     limit = MAX_SEARCH_LIMIT,
     signal?: AbortSignal,
-  ): Promise<Message[]> {
+  ): Promise<SearchResponse> {
+    if (query.length < MIN_SEARCH_QUERY_CHARS)
+      throw new RpcError("protocol", "Search query too short.");
     const params: Record<string, unknown> = {
       query,
       limit: Math.min(MAX_SEARCH_LIMIT, Math.max(1, limit)),
     };
     if (conversationId) params.conversation_id = conversationId;
     const result = await this.call(TEAM_RPC_METHODS.search, params, signal);
-    const messages = validate(SearchListSchema, result, "search results");
+    const response = validate(SearchResultSchema, result, "search results");
     if (conversationId)
-      for (const m of messages)
-        if (m.conversation_id !== conversationId)
+      for (const hit of response.hits)
+        if (hit.conversation_id !== conversationId)
           throw invalid("search conversation");
-    return messages;
+    return response;
+  }
+
+  /** Body of `POST /v1/stream`: the RPC envelope with `events.stream`; the transport is the SSE reader. */
+  streamRequest(cursors: PollCursor[]): string {
+    if (cursors.length === 0 || cursors.length > MAX_POLL_CURSORS)
+      throw new RpcError("protocol", "Invalid stream cursors.");
+    return JSON.stringify({
+      method: TEAM_RPC_METHODS.stream,
+      context: this.context(),
+      params: { cursors },
+    });
   }
 }

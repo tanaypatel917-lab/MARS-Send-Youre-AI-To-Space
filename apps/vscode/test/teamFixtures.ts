@@ -1,8 +1,11 @@
-import { createHash } from "node:crypto";
-import type { Message, TeamDeliveryEvent } from "@mars/contracts";
+import type { Message } from "@mars/contracts";
 import { RpcError, type RpcRequest } from "../src/rpc";
 import type { TeamTransport } from "../src/teamChat/client";
-import type { TeamContext, TeamRpcMethod } from "../src/teamChat/protocol";
+import type {
+  TeamContext,
+  TeamEvent,
+  TeamRpcMethod,
+} from "../src/teamChat/protocol";
 
 /**
  * In-memory stand-in for `@mars/team` behind the client's transport
@@ -45,7 +48,7 @@ export class FakeTeamServer {
   readonly conversations = new Map<string, Conversation>();
   readonly participants: Participant[] = [];
   readonly messages: Message[] = [];
-  readonly outbox: TeamDeliveryEvent[] = [];
+  readonly outbox: TeamEvent[] = [];
   readonly reactions: { message_id: string; user_id: string; emoji: string }[] =
     [];
   readonly members = new Set<string>();
@@ -90,9 +93,7 @@ export class FakeTeamServer {
       team_id: TEAM_ID,
       kind: "dm",
       title: null,
-      dm_key: createHash("sha256")
-        .update([a, b].sort().join("\n"))
-        .digest("hex"),
+      dm_key: fakeSha256([a, b].sort().join("\n")),
       revision: 1,
       last_seq: 0,
       last_event_seq: 0,
@@ -176,7 +177,7 @@ export class FakeTeamServer {
 
   private event(
     conversation: Conversation,
-    kind: "message" | "membership",
+    kind: "message" | "membership" | "reaction",
     message_seq: number | null,
     message_id: string | null,
   ): void {
@@ -281,7 +282,23 @@ export class FakeTeamServer {
       case "conversations.list":
         return [...this.conversations.keys()]
           .filter((id) => this.participant(id, userId)?.state === "active")
-          .map((id) => this.conversationView(id, userId));
+          .map((id) => {
+            const view = this.conversationView(id, userId);
+            if (!this.capabilities.stream) return view;
+            // PR 3 service shape: per-participant counters on list items.
+            const rows = this.messages.filter(
+              (m) =>
+                m.conversation_id === id && m.seq > view.participant.joined_seq,
+            );
+            return {
+              ...view,
+              unread_count: rows.filter(
+                (m) =>
+                  m.seq > view.participant.read_seq && m.author_id !== userId,
+              ).length,
+              last_message_at: rows.at(-1)?.created_at ?? null,
+            };
+          });
       case "conversations.open":
         return this.conversationView(String(p.conversation_id), userId);
       case "conversations.mark_read": {
@@ -346,14 +363,14 @@ export class FakeTeamServer {
           rows = rows.filter((m) => m.seq < before);
           rows = rows.slice(Math.max(0, rows.length - limit));
         }
-        return rows;
+        return rows.map((m) => this.decorate(m, userId, floor));
       }
       case "events.poll": {
         const cursors = p.cursors as {
           conversation_id: string;
           after_event_seq: number;
         }[];
-        const events: TeamDeliveryEvent[] = [];
+        const events: TeamEvent[] = [];
         for (const cursor of cursors) {
           const view = this.view(cursor.conversation_id, userId);
           const conversation = this.must(cursor.conversation_id);
@@ -376,13 +393,14 @@ export class FakeTeamServer {
           (m) => m.message_id === p.message_id,
         );
         if (!message) throw rpc("not-found", "not_found", 404);
-        this.view(message.conversation_id, userId);
+        const view = this.view(message.conversation_id, userId);
         const index = this.reactions.findIndex(
           (r) =>
             r.message_id === message.message_id &&
             r.user_id === userId &&
             r.emoji === p.emoji,
         );
+        const changed = (p.on && index === -1) || (!p.on && index !== -1);
         if (p.on && index === -1)
           this.reactions.push({
             message_id: message.message_id,
@@ -390,15 +408,29 @@ export class FakeTeamServer {
             emoji: String(p.emoji),
           });
         if (!p.on && index !== -1) this.reactions.splice(index, 1);
-        return this.reactions.filter(
-          (r) => r.message_id === message.message_id,
+        if (changed)
+          this.event(
+            this.must(view.participant.conversation_id),
+            "reaction",
+            message.seq,
+            message.message_id,
+          );
+        const same = this.reactions.filter(
+          (r) => r.message_id === message.message_id && r.emoji === p.emoji,
         );
+        return {
+          message_id: message.message_id,
+          emoji: String(p.emoji),
+          count: same.length,
+          reacted: same.some((r) => r.user_id === userId),
+        };
       }
       case "messages.search": {
         if (!this.capabilities.search)
           throw rpc("server", "invalid_request", 400);
         const needle = String(p.query).toLowerCase();
-        return this.messages
+        if (needle.length < 2) throw rpc("server", "invalid_request", 400);
+        const hits = this.messages
           .filter((m) => {
             const participant = this.participant(m.conversation_id, userId);
             return (
@@ -408,27 +440,86 @@ export class FakeTeamServer {
               m.body.toLowerCase().includes(needle)
             );
           })
-          .slice(0, Number(p.limit ?? 50));
+          .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+          .slice(0, Number(p.limit ?? 50))
+          .map((m) => ({
+            conversation_id: m.conversation_id,
+            message_id: m.message_id,
+            seq: m.seq,
+            author_id: m.author_id,
+            created_at: m.created_at,
+            excerpt: m.body.slice(0, 200),
+            cut_before: false,
+            cut_after: m.body.length > 200,
+          }));
+        return { hits, next_cursor: null };
       }
       default:
         throw rpc("server", "invalid_request", 400);
     }
   }
 
-  /** Builds an SSE body for the events after the given cursors (stream tests). */
+  /** PR 3 history item shape (reaction summaries + reply excerpt) when the server advertises reactions. */
+  private decorate(message: Message, userId: string, floor: number): unknown {
+    if (!this.capabilities.reactions) return message;
+    const summaries = new Map<
+      string,
+      { emoji: string; count: number; reacted: boolean }
+    >();
+    for (const r of this.reactions)
+      if (r.message_id === message.message_id) {
+        const entry = summaries.get(r.emoji) ?? {
+          emoji: r.emoji,
+          count: 0,
+          reacted: false,
+        };
+        entry.count += 1;
+        if (r.user_id === userId) entry.reacted = true;
+        summaries.set(r.emoji, entry);
+      }
+    const target = message.reply_to
+      ? this.messages.find((m) => m.message_id === message.reply_to)
+      : undefined;
+    const restricted = target !== undefined && target.seq <= floor;
+    return {
+      ...message,
+      reactions: [...summaries.values()].sort((a, b) =>
+        a.emoji < b.emoji ? -1 : 1,
+      ),
+      reply_excerpt: target && !restricted ? target.body.slice(0, 200) : null,
+      reply_restricted: restricted,
+    };
+  }
+
+  /** Builds an SSE body (PR 3 frame layout) for the events after the given cursors; `close` ends it on purpose. */
   sseBody(
     cursors: { conversation_id: string; after_event_seq: number }[],
+    close?: "membership" | "not_found" | "unavailable" | "internal_error",
   ): string {
-    const lines: string[] = [];
+    const frames: string[] = [": connected\n\n"];
     for (const cursor of cursors)
       for (const event of this.outbox)
         if (
           event.conversation_id === cursor.conversation_id &&
           event.event_seq > cursor.after_event_seq
         )
-          lines.push(`data: ${JSON.stringify(event)}\n\n`);
-    return lines.join("");
+          frames.push(
+            `id: ${event.event_seq}\nevent: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`,
+          );
+    if (close)
+      frames.push(
+        `event: close\ndata: ${JSON.stringify({ reason: close })}\n\n`,
+      );
+    return frames.join("");
   }
+}
+
+/** Browser-safe stand-in for the sha256 dm key (64 hex chars, deterministic); the harness bundles this file. */
+function fakeSha256(input: string): string {
+  let hex = "";
+  for (let i = 0; i < input.length; i++)
+    hex += input.charCodeAt(i).toString(16).padStart(2, "0");
+  return (hex + "0".repeat(64)).slice(0, 64);
 }
 
 function rpc(

@@ -393,6 +393,29 @@ describe("RpcTeamService through the controller", () => {
       { emoji: "👍", count: 1, mine: true },
     ]);
     expect(server.calls.some((c) => c.method === "reactions.set")).toBe(true);
+    await controller.handleMessage({
+      type: "toggleReaction",
+      messageId: target.message_id,
+      emoji: "👍",
+    });
+    expect(last().selected?.messages[0]?.reactions).toEqual([]);
+    // A reload shows the summaries the PR 3 history items carry.
+    server.reactions.push({
+      message_id: target.message_id,
+      user_id: GRACE,
+      emoji: "✅",
+    });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: target.conversation_id,
+    });
+    expect(last().selected?.messages[0]?.reactions).toEqual([
+      { emoji: "✅", count: 1, mine: false },
+    ]);
     await controller.handleMessage({ type: "search", query: "checklist" });
     expect(last().search?.hits.map((h) => h.conversation_id)).not.toContain(dm);
     expect(last().search?.hits).toHaveLength(1);
@@ -483,16 +506,26 @@ describe("TeamRealtime", () => {
     const streamRequests: {
       cursors: { conversation_id: string; after_event_seq: number }[];
     }[] = [];
+    let closeOnce: "membership" | undefined;
     let server: FakeTeamServer | undefined;
     const encoder = new TextEncoder();
     const fetch: StreamFetchLike = async (_url, init) => {
       expect(init.headers.authorization).toBe(`Bearer ${FAKE_TEAM_TOKEN}`);
-      const body = JSON.parse(init.body) as (typeof streamRequests)[number];
+      const envelope = JSON.parse(init.body) as {
+        method: string;
+        context: { team_id: string };
+        params: (typeof streamRequests)[number];
+      };
+      expect(envelope.method).toBe("events.stream");
+      expect(envelope.context.team_id).toBe("team_fixture");
+      const body = envelope.params;
       streamRequests.push(body);
+      const close = closeOnce;
+      closeOnce = undefined;
       const payload =
         streamRequests.length === 1
           ? ": keep-alive\n\n"
-          : (server?.sseBody(body.cursors) ?? "");
+          : (server?.sseBody(body.cursors, close) ?? "");
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(encoder.encode(payload));
@@ -533,6 +566,15 @@ describe("TeamRealtime", () => {
     );
     expect(statuses).toContain("live");
     expect(statuses).toContain("retrying");
+    // A purposeful close for membership makes the client re-list; the
+    // revoked conversation disappears without a poll error.
+    const { group } = fixture;
+    fixture.server.remove(group, ADA);
+    closeOnce = "membership";
+    await until(() =>
+      last().conversations.every((c) => c.conversation_id !== group),
+    );
+    expect(last().conversations.map((c) => c.conversation_id)).toEqual([dm]);
     realtime?.stop();
     controller.dispose();
     await realtime?.settled();
@@ -544,8 +586,15 @@ describe("TeamRealtime", () => {
     expect(parseSseBlock("data: not json")).toBeNull();
     expect(
       parseSseBlock(
-        'id: 7\ndata: {"conversation_id":"c","event_seq":7,"kind":"message","message_seq":3,"message_id":"m","revision":1}',
+        'id: 7\nevent: message\ndata: {"conversation_id":"c","event_seq":7,"kind":"message","message_seq":3,"message_id":"m","revision":1}',
       ),
-    ).toMatchObject({ event_seq: 7, kind: "message" });
+    ).toMatchObject({
+      type: "event",
+      event: { event_seq: 7, kind: "message" },
+    });
+    expect(
+      parseSseBlock('event: close\ndata: {"reason":"membership"}'),
+    ).toEqual({ type: "close", close: { reason: "membership" } });
+    expect(parseSseBlock('event: close\ndata: {"reason":"bogus"}')).toBeNull();
   });
 });

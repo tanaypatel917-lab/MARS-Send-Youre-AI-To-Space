@@ -1,4 +1,3 @@
-import type { Message, Reaction } from "@mars/contracts";
 import {
   type ConversationPage,
   type ConversationSummary,
@@ -23,7 +22,13 @@ import {
 } from "@mars/team-chat";
 import { isRpcError, type RpcError } from "../rpc";
 import type { TeamClient } from "./client";
-import type { ConversationView } from "./protocol";
+import {
+  type ConversationView,
+  MIN_SEARCH_QUERY_CHARS,
+  type ReactionSummary,
+  type SearchHit,
+  type MessageView as ServiceMessage,
+} from "./protocol";
 
 const CURSOR_PREFIX = "seq:";
 const EXCERPT_CHARS = 80;
@@ -89,8 +94,9 @@ export class RpcTeamService implements TeamService {
     realtime: false,
   };
   private readonly views = new Map<string, ConversationView>();
-  private readonly messages = new Map<string, Map<number, Message>>();
-  private readonly reactions = new Map<string, Reaction[]>();
+  private readonly messages = new Map<string, Map<number, ServiceMessage>>();
+  /** Reaction summaries by message id (from history items or `reactions.set`). */
+  private readonly reactions = new Map<string, ReactionSummary[]>();
 
   constructor(private readonly client: TeamClient) {}
 
@@ -158,13 +164,15 @@ export class RpcTeamService implements TeamService {
 
   // ---------------------------------------------------------------- cache
 
-  private remember(message: Message): void {
+  private remember(message: ServiceMessage): void {
     let cached = this.messages.get(message.conversation_id);
     if (!cached) {
       cached = new Map();
       this.messages.set(message.conversation_id, cached);
     }
     cached.set(message.seq, message);
+    if (message.reactions)
+      this.reactions.set(message.message_id, message.reactions);
     if (cached.size > MAX_CACHED_PER_CONVERSATION) {
       const seqs = [...cached.keys()].sort((a, b) => a - b);
       for (const seq of seqs.slice(
@@ -175,13 +183,13 @@ export class RpcTeamService implements TeamService {
     }
   }
 
-  private cachedSorted(conversationId: string): Message[] {
+  private cachedSorted(conversationId: string): ServiceMessage[] {
     const cached = this.messages.get(conversationId);
     if (!cached) return [];
     return [...cached.values()].sort((a, b) => a.seq - b.seq);
   }
 
-  private findMessage(messageId: string): Message | undefined {
+  private findMessage(messageId: string): ServiceMessage | undefined {
     for (const cached of this.messages.values())
       for (const m of cached.values()) if (m.message_id === messageId) return m;
     return undefined;
@@ -224,22 +232,17 @@ export class RpcTeamService implements TeamService {
     };
   }
 
-  private reactionViews(messageId: string, me: string): ReactionView[] {
-    const counts = new Map<string, ReactionView>();
-    for (const r of this.reactions.get(messageId) ?? []) {
-      const view = counts.get(r.emoji) ?? {
+  private reactionViews(messageId: string): ReactionView[] {
+    return (this.reactions.get(messageId) ?? [])
+      .filter((r) => r.count > 0)
+      .map((r) => ({
         emoji: r.emoji as ReactionEmoji,
-        count: 0,
-        mine: false,
-      };
-      view.count += 1;
-      if (r.user_id === me) view.mine = true;
-      counts.set(r.emoji, view);
-    }
-    return [...counts.values()];
+        count: r.count,
+        mine: r.reacted,
+      }));
   }
 
-  private messageView(message: Message, me: string): MessageView {
+  private messageView(message: ServiceMessage): MessageView {
     const replyTarget = message.reply_to
       ? this.findMessage(message.reply_to)
       : undefined;
@@ -260,11 +263,32 @@ export class RpcTeamService implements TeamService {
         ? {
             message_id: message.reply_to,
             author_name: replyTarget?.author_id ?? "Unknown member",
-            excerpt: replyTarget ? excerpt(replyTarget.body) : "",
+            excerpt: message.reply_restricted
+              ? ""
+              : (message.reply_excerpt ??
+                (replyTarget ? excerpt(replyTarget.body) : "")),
           }
         : null,
-      reactions: this.reactionViews(message.message_id, me),
+      reactions: this.reactionViews(message.message_id),
       references,
+    };
+  }
+
+  private hitView(hit: SearchHit): MessageView {
+    const cached = this.findMessage(hit.message_id);
+    if (cached) return this.messageView(cached);
+    return {
+      message_id: hit.message_id,
+      conversation_id: hit.conversation_id,
+      author_id: hit.author_id,
+      author_name: hit.author_id,
+      sequence: hit.seq,
+      client_message_id: hit.message_id,
+      body: `${hit.cut_before ? "…" : ""}${hit.excerpt}${hit.cut_after ? "…" : ""}`,
+      created_at: hit.created_at,
+      reply_to: null,
+      reactions: [],
+      references: [],
     };
   }
 
@@ -347,7 +371,7 @@ export class RpcTeamService implements TeamService {
         first !== undefined && first.seq > floor + 1 && page.length >= limit;
       return {
         conversation: this.summary(view, me),
-        messages: visible.map((m) => this.messageView(m, me)),
+        messages: visible.map((m) => this.messageView(m)),
         older_cursor:
           olderExists && first ? `${CURSOR_PREFIX}${first.seq}` : null,
       };
@@ -422,10 +446,19 @@ export class RpcTeamService implements TeamService {
     if (!this.serverCapabilities.reactions)
       return Promise.resolve(fail("invalid"));
     return this.guard(message.conversation_id, async () => {
-      const me = await this.identity();
-      const reactions = await this.client.setReaction(messageId, emoji, on);
-      this.reactions.set(messageId, reactions);
-      return { reactions: this.reactionViews(messageId, me) };
+      await this.identity();
+      const state = await this.client.setReaction(messageId, emoji, on);
+      const rest = (this.reactions.get(messageId) ?? []).filter(
+        (r) => r.emoji !== state.emoji,
+      );
+      if (state.count > 0)
+        rest.push({
+          emoji: state.emoji,
+          count: state.count,
+          reacted: state.reacted,
+        });
+      this.reactions.set(messageId, rest);
+      return { reactions: this.reactionViews(messageId) };
     });
   }
 
@@ -446,17 +479,24 @@ export class RpcTeamService implements TeamService {
     if (needle.length === 0 || needle.length > MAX_SEARCH_QUERY_CHARS)
       return Promise.resolve(fail("invalid"));
     return this.guard(conversationId ?? null, async () => {
-      const me = await this.identity();
-      let hits: Message[];
+      await this.identity();
+      let hits: ServiceMessage[];
       if (this.serverCapabilities.search) {
-        hits = await this.client.search(
+        if (needle.length < MIN_SEARCH_QUERY_CHARS)
+          return { query: needle, hits: [] };
+        const response = await this.client.search(
           needle,
           conversationId,
           MAX_SEARCH_HITS,
         );
-        for (const m of hits) this.remember(m);
-        hits = hits.filter((m) => this.views.has(m.conversation_id));
-      } else {
+        return {
+          query: needle,
+          hits: response.hits
+            .filter((h) => this.views.has(h.conversation_id))
+            .map((h) => this.hitView(h)),
+        };
+      }
+      {
         // Local fallback over the host cache: only conversations the server
         // already listed for this viewer are cached, so membership holds.
         const lower = needle.toLowerCase();
@@ -475,7 +515,7 @@ export class RpcTeamService implements TeamService {
         );
         hits = hits.slice(0, MAX_SEARCH_HITS);
       }
-      return { query: needle, hits: hits.map((m) => this.messageView(m, me)) };
+      return { query: needle, hits: hits.map((m) => this.messageView(m)) };
     });
   }
 

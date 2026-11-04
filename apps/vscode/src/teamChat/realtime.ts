@@ -1,10 +1,16 @@
-import type { TeamDeliveryEvent } from "@mars/contracts";
-import { TeamDeliveryEventSchema } from "@mars/contracts";
 import { isRpcError, RpcError } from "../rpc";
 import type { TeamClient } from "./client";
 import type { TeamRealtimeSource } from "./controller";
 import type { TeamConnectionState } from "./messages";
-import { MAX_POLL_CURSORS, MAX_POLL_LIMIT, type PollCursor } from "./protocol";
+import {
+  MAX_POLL_CURSORS,
+  MAX_POLL_LIMIT,
+  type PollCursor,
+  type StreamClose,
+  StreamCloseSchema,
+  type TeamEvent,
+  TeamEventSchema,
+} from "./protocol";
 
 /** Minimal streaming fetch shape so tests can stub the SSE endpoint offline. */
 export type StreamFetchLike = (
@@ -29,7 +35,7 @@ export interface TeamRealtimeOptions {
   /** Whether `team.describe` advertised the stream; re-read on every connect. */
   streamSupported: () => boolean;
   getToken: () => Promise<string | undefined>;
-  onEvent: (event: TeamDeliveryEvent) => Promise<void> | void;
+  onEvent: (event: TeamEvent) => Promise<void> | void;
   onStatus: (state: TeamConnectionState) => Promise<void> | void;
   /** The server denied a cursor (membership revoked): the owner should re-list the inbox. */
   onResync: () => Promise<void> | void;
@@ -148,7 +154,7 @@ export class TeamRealtime implements TeamRealtimeSource {
     }));
   }
 
-  private async deliver(event: TeamDeliveryEvent): Promise<boolean> {
+  private async deliver(event: TeamEvent): Promise<boolean> {
     const current = this.cursors.get(event.conversation_id);
     if (current === undefined || event.event_seq <= current) return false;
     this.cursors.set(event.conversation_id, event.event_seq);
@@ -258,7 +264,7 @@ export class TeamRealtime implements TeamRealtimeSource {
         "content-type": "application/json",
         accept: "text/event-stream",
       },
-      body: JSON.stringify({ cursors: this.cursorList() }),
+      body: this.options.client.streamRequest(this.cursorList()),
       signal,
       redirect: "error",
     });
@@ -277,6 +283,7 @@ export class TeamRealtime implements TeamRealtimeSource {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let closed: StreamClose | null = null;
     try {
       for (;;) {
         const { value, done } = await reader.read();
@@ -284,16 +291,26 @@ export class TeamRealtime implements TeamRealtimeSource {
         buffer += decoder.decode(value, { stream: true });
         if (buffer.length > MAX_SSE_BUFFER) throw new Error("stream overflow");
         let boundary = buffer.indexOf("\n\n");
-        while (boundary !== -1) {
+        while (boundary !== -1 && !closed) {
           const block = buffer.slice(0, boundary);
           buffer = buffer.slice(boundary + 2);
-          const event = parseSseBlock(block);
-          if (event) await this.deliver(event);
+          const frame = parseSseBlock(block);
+          if (frame?.type === "event") await this.deliver(frame.event);
+          else if (frame?.type === "close") closed = frame.close;
           boundary = buffer.indexOf("\n\n");
         }
+        if (closed) break;
       }
     } finally {
       reader.cancel().catch(() => undefined);
+    }
+    if (
+      closed &&
+      (closed.reason === "membership" || closed.reason === "not_found")
+    ) {
+      // The server revoked one of our cursors; the owner re-lists and
+      // resubscribes, which drops that conversation before we reconnect.
+      await this.options.onResync();
     }
     // A clean close means the server rotated the connection: reconnect after
     // the minimum delay so a server that closes immediately cannot spin us.
@@ -302,22 +319,36 @@ export class TeamRealtime implements TeamRealtimeSource {
   }
 }
 
-/** Parses one SSE block; only `data:` lines are read, anything invalid is dropped. */
-export function parseSseBlock(block: string): TeamDeliveryEvent | null {
+export type SseFrame =
+  | { type: "event"; event: TeamEvent }
+  | { type: "close"; close: StreamClose };
+
+/**
+ * Parses one SSE block. `event: close` carries a fixed reason; every other
+ * block is an outbox event. Comments (`: heartbeat`), `id:` and anything
+ * that fails validation are dropped.
+ */
+export function parseSseBlock(block: string): SseFrame | null {
   const data: string[] = [];
+  let eventName = "";
   for (const rawLine of block.split("\n")) {
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
     if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+    else if (line.startsWith("event:")) eventName = line.slice(6).trim();
   }
   if (data.length === 0) return null;
+  let json: unknown;
   try {
-    const parsed = TeamDeliveryEventSchema.safeParse(
-      JSON.parse(data.join("\n")),
-    );
-    return parsed.success ? parsed.data : null;
+    json = JSON.parse(data.join("\n"));
   } catch {
     return null;
   }
+  if (eventName === "close") {
+    const parsed = StreamCloseSchema.safeParse(json);
+    return parsed.success ? { type: "close", close: parsed.data } : null;
+  }
+  const parsed = TeamEventSchema.safeParse(json);
+  return parsed.success ? { type: "event", event: parsed.data } : null;
 }
 
 function fatalNoToken(): RpcError {
