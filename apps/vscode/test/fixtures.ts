@@ -159,6 +159,13 @@ export class FakeServer implements RpcTransport {
     });
     this.on("tasks.diff", () => ({ files: [] }));
     this.on("tasks.checkpoint", () => checkpoint);
+    this.on("tasks.verification", () => ({
+      candidate: workspace,
+      state: "unverified",
+      record: null,
+      reasons: [],
+      records: [],
+    }));
     this.on("tasks.restore", () => ({ ...workspace, revision: "rev-1" }));
   }
 

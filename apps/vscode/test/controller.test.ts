@@ -11,6 +11,7 @@ import {
   harness,
   makeEvent,
   makeTask,
+  workspace,
 } from "./fixtures";
 
 const fastPoll = {
@@ -666,6 +667,181 @@ describe("selection across reconnects and task switches", () => {
     await ctx.controller.handleMessage({ type: "refresh" });
     expect(ctx.last().selected).toBeNull();
     expect(ctx.controller.activePoller).toBeUndefined();
+    ctx.controller.dispose();
+  });
+});
+
+describe("verification badge", () => {
+  const digest = "b".repeat(64);
+  const verdict = (revision: string) => ({
+    schema_version: 1,
+    operation: "verification.verdict",
+    run_id: "run-1",
+    task_id: "task-1",
+    task_revision: 1,
+    candidate: { ...workspace, revision },
+    verdict: "passed",
+    verified: true,
+    checks: [
+      {
+        kind: "file_content",
+        path: "repair.txt",
+        expected_sha256: digest,
+        observed_sha256: digest,
+        status: "passed",
+        reason: null,
+        duration_ms: 1,
+      },
+    ],
+    reasons: [],
+    diagnostics: [],
+    duration_ms: 1,
+    recorded_at: "2026-11-03T00:00:00Z",
+  });
+
+  test("a finished run without evidence is Unverified, never Verified", async () => {
+    const ctx = setup();
+    ctx.server.tasks.set("task-1", makeTask({ status: "completed" }));
+    await ctx.controller.handleMessage({ type: "ready" });
+    await ctx.controller.handleMessage({
+      type: "selectTask",
+      taskId: "task-1",
+    });
+    expect(ctx.server.methods()).toContain("tasks.verification");
+    expect(ctx.last().selected?.verification).toMatchObject({
+      state: "unverified",
+      label: "Unverified",
+      verdict: null,
+    });
+    ctx.controller.dispose();
+  });
+
+  test("Verified only for the exact candidate; a moved candidate shows stale with the bound revision", async () => {
+    const ctx = setup();
+    ctx.server.tasks.set("task-1", makeTask({ status: "completed" }));
+    let candidate = "rev-2";
+    ctx.server.on("tasks.verification", () => ({
+      candidate: { ...workspace, revision: candidate },
+      state: "verified",
+      record: verdict("rev-2"),
+      reasons: [],
+      records: [verdict("rev-2")],
+    }));
+    await ctx.controller.handleMessage({ type: "ready" });
+    await ctx.controller.handleMessage({
+      type: "selectTask",
+      taskId: "task-1",
+    });
+    expect(ctx.last().selected?.verification).toMatchObject({
+      state: "verified",
+      label: "Verified",
+      candidate: "rev-2",
+      bound: "rev-2",
+    });
+    candidate = "rev-3";
+    await ctx.controller.handleMessage({
+      type: "selectTask",
+      taskId: "task-2",
+    });
+    ctx.server.tasks.set("task-2", makeTask({ task_id: "task-2" }));
+    await ctx.controller.handleMessage({
+      type: "selectTask",
+      taskId: "task-1",
+    });
+    // The client recomputes the state from the records; a server that still
+    // says "verified" for a different candidate is not believed.
+    expect(ctx.last().selected?.verification).toMatchObject({
+      state: "stale",
+      label: "Verification stale",
+      candidate: "rev-3",
+      bound: "rev-2",
+    });
+    ctx.controller.dispose();
+  });
+
+  test("restoring a checkpoint drops the Verified badge and re-asks the host, which reports stale", async () => {
+    const ctx = setup();
+    ctx.server.tasks.set("task-1", makeTask({ status: "completed" }));
+    let candidate = "rev-2";
+    ctx.server.on("tasks.verification", () => ({
+      candidate: { ...workspace, revision: candidate },
+      state: candidate === "rev-2" ? "verified" : "stale",
+      record: verdict("rev-2"),
+      reasons: [],
+      records: [verdict("rev-2")],
+    }));
+    ctx.server.on("tasks.restore", () => {
+      candidate = "rev-1";
+      return { ...workspace, revision: "rev-1" };
+    });
+    await ctx.controller.handleMessage({ type: "ready" });
+    await ctx.controller.handleMessage({
+      type: "selectTask",
+      taskId: "task-1",
+    });
+    await ctx.controller.handleMessage({
+      type: "createCheckpoint",
+      taskId: "task-1",
+    });
+    expect(ctx.last().selected?.verification?.state).toBe("verified");
+    await ctx.controller.handleMessage({
+      type: "restoreCheckpoint",
+      taskId: "task-1",
+      checkpointId: "cp-1",
+    });
+    expect(
+      ctx.server.methods().filter((m) => m === "tasks.verification"),
+    ).toHaveLength(2);
+    expect(ctx.last().selected?.verification).toMatchObject({
+      state: "stale",
+      candidate: "rev-1",
+      bound: "rev-2",
+    });
+    ctx.controller.dispose();
+  });
+
+  test("a running task shows no badge and asks for the verdict once it completes", async () => {
+    const ctx = await connectedWithTask("running");
+    expect(ctx.last().selected?.verification).toBeNull();
+    expect(ctx.server.methods()).not.toContain("tasks.verification");
+    const failed = {
+      ...verdict("rev-2"),
+      verdict: "failed",
+      verified: false,
+      checks: [
+        {
+          kind: "file_content",
+          path: "repair.txt",
+          expected_sha256: digest,
+          observed_sha256: null,
+          status: "failed",
+          reason: "Required file missing: repair.txt",
+          duration_ms: 1,
+        },
+      ],
+      reasons: ["Required file missing: repair.txt"],
+    };
+    ctx.server.on("tasks.verification", () => ({
+      candidate: workspace,
+      state: "failed",
+      record: failed,
+      reasons: ["Required file missing: repair.txt"],
+      records: [failed],
+    }));
+    ctx.server.tasks.set(
+      "task-1",
+      makeTask({ status: "completed", revision: 2 }),
+    );
+    ctx.server.events.push(makeEvent("e-1", { event_type: "task.updated" }));
+    ctx.controller.activePoller?.poke();
+    await new Promise((r) => setTimeout(r, 60));
+    await flush();
+    const badge = ctx.last().selected?.verification;
+    expect(badge).toMatchObject({
+      state: "failed",
+      label: "Verification failed",
+    });
+    expect(badge?.reasons).toEqual(["Required file missing: repair.txt"]);
     ctx.controller.dispose();
   });
 });

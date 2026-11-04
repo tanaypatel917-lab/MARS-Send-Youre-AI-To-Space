@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
@@ -407,6 +407,293 @@ test("HTTP oversized startup returns too_large without a runtime or revision cha
   const normal = await client.create(task());
   expect(normal.status).toBe("pending");
 });
+
+/** The exact shape qwen3-coder:30b returned through Ollama (documentation/evidence/local-model-run.txt), re-targeted at repair.txt. */
+const TEXTUAL_TOOL_CALL =
+  'I\'ll create a file named repair.txt with the content "repaired".\n\n<function=mars_write>\n<parameter=path>\nrepair.txt\n</parameter>\n<parameter=content>\nrepaired\n</parameter>\n<parameter=i>\nCreate repair.txt with repaired text\n</parameter>\n</function>\n</tool_call>';
+
+function repairTask(): Task {
+  return {
+    ...task(),
+    request: "Create repair.txt containing exactly: repaired",
+    acceptance_criteria: ["repair.txt exists and contains repaired"],
+  };
+}
+
+test("regression: a tool call returned as assistant text ends the run as completed while repair.txt is missing from the isolated workspace", async () => {
+  const f = await fixture();
+  let requests = 0;
+  const { client } = await f.start(async () => {
+    requests++;
+    return sse({ content: TEXTUAL_TOOL_CALL });
+  });
+  const created = await client.create(repairTask());
+  await client.start(created.task_id, {
+    expectedRevision: 0,
+    approvals: { read: true, write: true, execute: false },
+  });
+  const finished = await eventually(
+    () => client.inspect(created.task_id),
+    (value) => value.status !== "running",
+  );
+  const launch = f.launches[0];
+  if (!launch) throw new Error("Missing launch");
+  const repairExists = await Bun.file(join(launch.cwd, "repair.txt")).exists();
+  const finalRef = finished.artifacts.find(
+    (ref) => ref.media_type === "text/plain",
+  );
+  if (!finalRef) throw new Error("Missing final text artifact");
+  const finalText = new TextDecoder().decode(
+    (await client.artifact(created.task_id, finalRef)).bytes,
+  );
+  console.log(
+    `[regression] status=${finished.status} model_requests=${requests} repair.txt_present=${repairExists} final_text_has_textual_tool_call=${finalText.includes("<function=mars_write>")}`,
+  );
+  expect(requests).toBe(1);
+  expect(finished.status).toBe("completed");
+  expect(finalText).toContain("<function=mars_write>");
+  expect(repairExists).toBe(false);
+  await expect(stat(join(f.source, "repair.txt"))).rejects.toThrow();
+  // Without a required check declared at launch nothing was ever verified.
+  const unverified = await client.verification(created.task_id);
+  expect(unverified.state).toBe("unverified");
+  expect(unverified.records).toEqual([]);
+}, 30_000);
+
+const REPAIR_CHECK = {
+  kind: "file_content" as const,
+  path: "repair.txt",
+  content: "repaired",
+};
+
+test("acceptance: textual tool call + missing file -> run completed, verification failed, reason Required file missing", async () => {
+  const f = await fixture();
+  const { client } = await f.start(async () =>
+    sse({ content: TEXTUAL_TOOL_CALL }),
+  );
+  const created = await client.create(repairTask());
+  await client.start(created.task_id, {
+    expectedRevision: 0,
+    approvals: { read: true, write: true, execute: false },
+    requiredChecks: [REPAIR_CHECK],
+  });
+  const finished = await eventually(
+    () => client.inspect(created.task_id),
+    (value) => value.status !== "running",
+  );
+  const launch = f.launches[0];
+  if (!launch) throw new Error("Missing launch");
+  expect(finished.status).toBe("completed");
+  expect(await Bun.file(join(launch.cwd, "repair.txt")).exists()).toBe(false);
+  const view = await client.verification(created.task_id);
+  console.log(
+    `[acceptance:missing] status=${finished.status} verification=${view.state} verdict=${view.record?.verdict} reasons=${JSON.stringify(view.reasons)} diagnostics=${JSON.stringify(view.record?.diagnostics)}`,
+  );
+  expect(view.state).toBe("failed");
+  expect(view.record?.verdict).toBe("failed");
+  expect(view.record?.verified).toBe(false);
+  expect(view.reasons).toEqual(["Required file missing: repair.txt"]);
+  expect(view.record?.checks[0]).toMatchObject({
+    path: "repair.txt",
+    status: "failed",
+    observed_sha256: null,
+  });
+  expect(view.record?.diagnostics[0]).toContain("<function=mars_write>");
+  expect(view.candidate?.revision).toBe(view.record?.candidate?.revision);
+  // The launch metadata, not the model, carries the required check — in
+  // digest form only, so the expected bytes never sit in launch.json.
+  const metadata = JSON.parse(
+    await readFile(join(launch.stateDir, "launch.json"), "utf8"),
+  );
+  expect(metadata.required_checks).toEqual([
+    {
+      kind: "file_content",
+      path: "repair.txt",
+      sha256: createHash("sha256").update("repaired").digest("hex"),
+    },
+  ]);
+  // The evidence is an ordinary task event with no host-private path in it.
+  const events = await client.events(created.task_id, undefined);
+  const texts = await Promise.all(
+    events.map(async (event) =>
+      new TextDecoder().decode(
+        (await client.artifact(created.task_id, event.payload)).bytes,
+      ),
+    ),
+  );
+  const evidence = texts.filter((text) =>
+    text.includes('"operation":"verification.verdict"'),
+  );
+  expect(evidence).toHaveLength(1);
+  expect(evidence[0]).not.toContain(f.root);
+}, 30_000);
+
+function structuredWrite(content: string) {
+  let requests = 0;
+  return async () => {
+    requests++;
+    if (requests === 1)
+      return sse(
+        {
+          tool_calls: [
+            {
+              index: 0,
+              id: "write_repair",
+              type: "function",
+              function: {
+                name: "mars_write",
+                arguments: JSON.stringify({ path: "repair.txt", content }),
+              },
+            },
+          ],
+        },
+        "tool_calls",
+      );
+    return sse({ content: "Created repair.txt." });
+  };
+}
+
+test("acceptance: structured write with correct content -> completed and verified for that exact candidate; wrong content -> failed", async () => {
+  const f = await fixture();
+  const { client, service } = await f.start(structuredWrite("repaired"));
+  const created = await client.create(repairTask());
+  await client.start(created.task_id, {
+    expectedRevision: 0,
+    approvals: { read: true, write: true, execute: false },
+    requiredChecks: [REPAIR_CHECK],
+  });
+  const finished = await eventually(
+    () => client.inspect(created.task_id),
+    (value) => value.status !== "running",
+  );
+  expect(finished.status).toBe("completed");
+  const view = await client.verification(created.task_id);
+  console.log(
+    `[acceptance:passed] status=${finished.status} verification=${view.state} candidate=${view.candidate?.revision} bound=${view.record?.candidate?.revision}`,
+  );
+  expect(view.state).toBe("verified");
+  expect(view.record?.verified).toBe(true);
+  expect(view.record?.diagnostics).toEqual([]);
+  if (!view.candidate) throw new Error("Missing candidate");
+  expect(view.record?.candidate).toEqual(view.candidate);
+  const checkpoint = await client.checkpoint(created.task_id);
+  expect(checkpoint.workspace.revision).toBe(view.candidate?.revision ?? "");
+
+  const wrong = await client.create(repairTask());
+  await service.close();
+  const second = await f.start(structuredWrite("not repaired"));
+  await second.client.start(wrong.task_id, {
+    expectedRevision: 0,
+    approvals: { read: true, write: true, execute: false },
+    requiredChecks: [REPAIR_CHECK],
+  });
+  await eventually(
+    () => second.client.inspect(wrong.task_id),
+    (value) => value.status === "completed",
+  );
+  const mismatch = await second.client.verification(wrong.task_id);
+  console.log(
+    `[acceptance:mismatch] verification=${mismatch.state} reasons=${JSON.stringify(mismatch.reasons)}`,
+  );
+  expect(mismatch.state).toBe("failed");
+  expect(mismatch.reasons).toEqual([
+    "Required file content mismatch: repair.txt",
+  ]);
+  expect(mismatch.record?.checks[0]?.observed_sha256).not.toBeNull();
+}, 30_000);
+
+test("acceptance: candidate changes after a pass -> the pass stays bound to the old revision and the new candidate is stale; evidence reloads after restart", async () => {
+  const f = await fixture();
+  const entered = deferred();
+  const proceed = deferred();
+  let requests = 0;
+  const first = await f.start(async (_url, init) => {
+    requests++;
+    if (requests === 1) {
+      entered.resolve();
+      await waitGate(proceed.promise, init?.signal);
+      return sse(
+        {
+          tool_calls: [
+            {
+              index: 0,
+              id: "write_repair",
+              type: "function",
+              function: {
+                name: "mars_write",
+                arguments: JSON.stringify({
+                  path: "repair.txt",
+                  content: "repaired",
+                }),
+              },
+            },
+          ],
+        },
+        "tool_calls",
+      );
+    }
+    return sse({ content: "Created repair.txt." });
+  });
+  const created = await first.client.create(repairTask());
+  await first.client.start(created.task_id, {
+    expectedRevision: 0,
+    approvals: { read: true, write: true, execute: false },
+    requiredChecks: [REPAIR_CHECK],
+  });
+  await entered.promise;
+  const baseline = await first.client.checkpoint(created.task_id);
+  proceed.resolve();
+  await eventually(
+    () => first.client.inspect(created.task_id),
+    (value) => value.status === "completed",
+  );
+  const passed = await first.client.verification(created.task_id);
+  expect(passed.state).toBe("verified");
+  const passedRevision = passed.candidate?.revision ?? "";
+  expect(passedRevision).not.toBe(baseline.workspace.revision);
+  // Restore the pre-run checkpoint: the candidate changes, the pass does not.
+  const restored = await first.client.restore(
+    created.task_id,
+    baseline,
+    passedRevision,
+  );
+  expect(restored.revision).not.toBe(passedRevision);
+  const stale = await first.client.verification(created.task_id);
+  console.log(
+    `[acceptance:stale] verification=${stale.state} candidate=${stale.candidate?.revision} pass_bound_to=${stale.record?.candidate?.revision}`,
+  );
+  expect(stale.state).toBe("stale");
+  expect(stale.candidate?.revision).toBe(restored.revision);
+  expect(stale.record?.verified).toBe(true);
+  expect(stale.record?.candidate?.revision).toBe(passedRevision);
+  expect(stale.records).toHaveLength(1);
+  await first.service.close();
+
+  // Restart: persisted evidence reloads; a run without evidence is unverified.
+  const second = await f.start(async () => sse({ content: "Nothing to do." }));
+  const reloaded = await second.client.verification(created.task_id);
+  console.log(
+    `[acceptance:restart] verification=${reloaded.state} records=${reloaded.records.length}`,
+  );
+  expect(reloaded.state).toBe("stale");
+  expect(reloaded.records).toEqual(stale.records);
+  const plain = await second.client.create(task());
+  await second.client.start(plain.task_id, {
+    expectedRevision: 0,
+    approvals: { read: true, write: false, execute: false },
+  });
+  await eventually(
+    () => second.client.inspect(plain.task_id),
+    (value) => value.status === "completed",
+  );
+  const unverified = await second.client.verification(plain.task_id);
+  expect(unverified).toMatchObject({
+    state: "unverified",
+    record: null,
+    records: [],
+  });
+  expect(unverified.candidate).not.toBeNull();
+}, 30_000);
 
 test("HTTP + actual Oh My Pi + real private workspace writes, progress, artifacts, checkpoint and restore (injected model)", async () => {
   const f = await fixture();
