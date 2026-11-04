@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { DiscoveredInstructions } from "@mars/codex-tools";
-import { freezeInstructions } from "./conventions-context";
+import { freezeInstructions, hookResultRecord } from "./conventions-context";
 
 const found = (truncated: boolean): DiscoveredInstructions => ({
   files: [
@@ -24,4 +24,28 @@ test("instructions are frozen whole: a file cut by the discovery byte budget is 
     omitted: 0,
   });
   expect(freezeInstructions(found(true), "task", 1_000_000)).toBeUndefined();
+});
+
+test("hook evidence records output sizes, never the command output itself", () => {
+  const record = hookResultRecord({
+    event: "pre-tool",
+    tool: "mars_write",
+    argv: ["sh", "-c", "env"],
+    outcome: "ran",
+    exit_code: 0,
+    stdout: "AWS_SECRET_ACCESS_KEY=hunter2\n",
+    stderr: "wärn",
+    blocked: false,
+  });
+  expect(record).toEqual({
+    event: "pre-tool",
+    tool: "mars_write",
+    argv: ["sh", "-c", "env"],
+    outcome: "ran",
+    exit_code: 0,
+    stdout_bytes: 30,
+    stderr_bytes: 5,
+    blocked: false,
+  });
+  expect(JSON.stringify(record)).not.toContain("hunter2");
 });

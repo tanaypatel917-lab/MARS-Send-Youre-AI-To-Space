@@ -166,8 +166,6 @@ export function renderPatchResult(result: ApplyPatchResult): string {
     : `${header}\nHunks before it were applied:\n${applied.join("\n")}`;
 }
 
-const HOOK_OUTPUT_LENGTH = 4096;
-
 export const HookResultRecordSchema = z
   .object({
     event: z.enum(["session-start", "pre-tool", "post-tool"]),
@@ -175,29 +173,32 @@ export const HookResultRecordSchema = z
     argv: z.array(z.string().max(1024)).max(64),
     outcome: z.enum(["ran", "skipped", "timeout", "error"]),
     exit_code: z.number().int().optional(),
-    stdout: z.string().max(HOOK_OUTPUT_LENGTH),
-    stderr: z.string().max(HOOK_OUTPUT_LENGTH),
+    stdout_bytes: z.number().int().nonnegative(),
+    stderr_bytes: z.number().int().nonnegative(),
     blocked: z.boolean(),
     reason: z.string().max(1024).optional(),
   })
   .strict();
 
-/** Bounds a hook result before it is stored as task evidence. */
+/**
+ * Bounds a hook result before it is stored as task evidence. Command output
+ * stays out of the task's events, like `mars_execute` output: hooks run
+ * arbitrary repository commands whose stdout/stderr may carry credentials,
+ * and the public events API filters host-private paths, not secrets. Only the
+ * output sizes are recorded; a blocking hook's stderr still reaches the model
+ * through the tool error.
+ */
 export function hookResultRecord(
   result: HookResult,
 ): z.infer<typeof HookResultRecordSchema> {
-  const clip = (text: string) =>
-    text.length > HOOK_OUTPUT_LENGTH
-      ? `${text.slice(0, HOOK_OUTPUT_LENGTH - 12)}\n[truncated]`
-      : text;
   return HookResultRecordSchema.parse({
     event: result.event,
     ...(result.tool !== undefined ? { tool: result.tool } : {}),
     argv: result.argv.slice(0, 64).map((token) => token.slice(0, 1024)),
     outcome: result.outcome,
     ...(result.exit_code !== undefined ? { exit_code: result.exit_code } : {}),
-    stdout: clip(result.stdout),
-    stderr: clip(result.stderr),
+    stdout_bytes: Buffer.byteLength(result.stdout, "utf8"),
+    stderr_bytes: Buffer.byteLength(result.stderr, "utf8"),
     blocked: result.blocked,
     ...(result.reason !== undefined
       ? { reason: result.reason.slice(0, 1024) }
