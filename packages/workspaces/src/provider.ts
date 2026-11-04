@@ -928,7 +928,6 @@ export async function createLocalWorkspaceProvider(
           skipped: current.skipped,
         };
         let markerSaved = false;
-        let priorLinked = false;
         let targetRemoved = false;
         let committed = false;
         try {
@@ -936,7 +935,6 @@ export async function createLocalWorkspaceProvider(
           await saveMeta(rootDir, current);
           markerSaved = true;
           await link(absolute, priorPath);
-          priorLinked = true;
           await rm(absolute);
           targetRemoved = true;
           await options.testHooks?.removePhase?.("after-remove");
@@ -952,7 +950,6 @@ export async function createLocalWorkspaceProvider(
           if (targetRemoved) {
             try {
               await rename(priorPath, absolute);
-              priorLinked = false;
               targetRemoved = false;
             } catch {
               lostWorkspaces.add(current.workspace_id);
