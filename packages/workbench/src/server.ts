@@ -16,10 +16,13 @@ import {
   type ArtifactData,
   ArtifactDataSchema,
   CheckpointRefSchema,
+  type CreateOptions,
   type DescribeResult,
   DescribeResultSchema,
   type DiffResult,
   DiffResultSchema,
+  type EvidenceResult,
+  EvidenceResultSchema,
   type RpcRequest,
   RpcRequestSchema,
   type StartParams,
@@ -29,7 +32,11 @@ import {
 export interface WorkbenchOperations {
   readonly scope: Scope;
   describe(): Promise<DescribeResult>;
-  create(context: RequestContext, task: Task): Promise<Task>;
+  create(
+    context: RequestContext,
+    task: Task,
+    options?: CreateOptions,
+  ): Promise<Task>;
   list(context: RequestContext): Promise<Task[]>;
   inspect(context: RequestContext, taskId: string): Promise<Task>;
   start(context: RequestContext, params: StartParams): Promise<Task>;
@@ -56,6 +63,7 @@ export interface WorkbenchOperations {
     ref: ArtifactRef,
   ): Promise<ArtifactData>;
   diff(context: RequestContext, taskId: string): Promise<DiffResult>;
+  evidence(context: RequestContext, taskId: string): Promise<EvidenceResult>;
   checkpoint(context: RequestContext, taskId: string): Promise<CheckpointRef>;
   restore(
     context: RequestContext,
@@ -171,6 +179,8 @@ function errorCode(error: unknown): RpcErrorCode {
       case "conflict":
       case "invalid_transition":
         return "conflict";
+      case "workspace_modified":
+        return "conflict";
       case "not_found":
         return "not_found";
       case "unsafe_path":
@@ -193,7 +203,13 @@ async function dispatch(
   const context = request.context;
   switch (request.method) {
     case "tasks.create":
-      return TaskSchema.parse(await api.create(context, request.params.task));
+      return TaskSchema.parse(
+        request.params.launch_key === undefined
+          ? await api.create(context, request.params.task)
+          : await api.create(context, request.params.task, {
+              launch_key: request.params.launch_key,
+            }),
+      );
     case "tasks.list":
       return taskList.parse(await api.list(context));
     case "tasks.inspect":
@@ -239,6 +255,10 @@ async function dispatch(
     case "tasks.diff":
       return DiffResultSchema.parse(
         await api.diff(context, request.params.task_id),
+      );
+    case "tasks.evidence":
+      return EvidenceResultSchema.parse(
+        await api.evidence(context, request.params.task_id),
       );
     case "tasks.checkpoint":
       return CheckpointRefSchema.parse(

@@ -19,6 +19,9 @@ import {
   type DiffResult,
   DiffResultSchema,
   EventBatchSchema,
+  type EvidenceResult,
+  EvidenceResultSchema,
+  LAUNCH_KEY_PATTERN,
   makeContext,
   NullResultSchema,
   RPC_METHODS,
@@ -33,6 +36,16 @@ export interface StartOptions {
   expectedRevision: number;
   approvals: Approvals;
   modelId?: string;
+}
+
+/**
+ * `launchKey` pins `(scope, launch_key)` to one stored task on the server, so
+ * a retry after a lost acknowledgement replays the same task instead of
+ * creating a second one; the same key with a different task is a conflict.
+ */
+export interface CreateOptions {
+  launchKey?: string;
+  signal?: AbortSignal;
 }
 
 export interface VerifiedArtifact {
@@ -115,9 +128,20 @@ export class MarsClient {
     return workspace;
   }
 
-  async create(task: Task, signal?: AbortSignal): Promise<Task> {
+  async create(
+    task: Task,
+    options?: CreateOptions | AbortSignal,
+  ): Promise<Task> {
+    const { launchKey, signal } =
+      options instanceof AbortSignal ? { signal: options } : (options ?? {});
+    if (launchKey !== undefined && !LAUNCH_KEY_PATTERN.test(launchKey))
+      throw new RpcError("protocol", "Launch key is invalid.");
     const created = this.checkTask(
-      await this.call(RPC_METHODS.create, { task }, signal),
+      await this.call(
+        RPC_METHODS.create,
+        launchKey === undefined ? { task } : { task, launch_key: launchKey },
+        signal,
+      ),
       task.task_id,
     );
     if (created.session_id !== task.session_id) throw invalid("task session");
@@ -264,6 +288,24 @@ export class MarsClient {
     for (const file of result.files) {
       if (paths.has(file.path)) throw invalid("diff (duplicate path)");
       paths.add(file.path);
+    }
+    return result;
+  }
+
+  async evidence(
+    taskId: string,
+    signal?: AbortSignal,
+  ): Promise<EvidenceResult> {
+    const result = validate(
+      EvidenceResultSchema,
+      await this.call(RPC_METHODS.evidence, { task_id: taskId }, signal),
+      "evidence",
+    );
+    this.checkWorkspace(result.workspace);
+    const ids = new Set<string>();
+    for (const record of result.verify_records) {
+      if (ids.has(record.event_id)) throw invalid("evidence (duplicate event)");
+      ids.add(record.event_id);
     }
     return result;
   }

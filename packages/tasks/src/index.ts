@@ -105,8 +105,25 @@ export interface UpstreamSessionBinding {
   session_file: string;
 }
 
+/**
+ * Optional `tasks.create` behaviour. `launch_key` makes `(scope, launch_key)`
+ * identify one stored task regardless of the caller's `request_id`: a retry
+ * after a lost acknowledgement replays the stored task, a different canonical
+ * task under the same key is a `conflict`.
+ */
+export interface TaskCreateOptions {
+  launch_key?: string;
+}
+
+export const LAUNCH_KEY_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
 export interface DurableTaskStore extends TaskService {
   readonly artifacts: ArtifactStore;
+  create(
+    context: RequestContext,
+    task: Task,
+    options?: TaskCreateOptions,
+  ): Promise<Task>;
   list(context: RequestContext): Promise<Task[]>;
   update(
     context: RequestContext,
@@ -698,6 +715,13 @@ export async function createTaskStore(
         input_sha256 TEXT NOT NULL,
         result_json TEXT NOT NULL,
         PRIMARY KEY (scope_key, request_id, operation, task_id, input_sha256)
+      );
+      CREATE TABLE IF NOT EXISTS launch_keys (
+        scope_key TEXT NOT NULL,
+        launch_key TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        input_sha256 TEXT NOT NULL,
+        PRIMARY KEY (scope_key, launch_key)
       );
       CREATE TABLE IF NOT EXISTS instances (
         instance_id TEXT PRIMARY KEY,
@@ -1389,9 +1413,13 @@ export async function createTaskStore(
 
   const store: DurableTaskStore = {
     artifacts: artifactStore,
-    async create(context, taskInput) {
+    async create(context, taskInput, options) {
       const { context: parsedContext, scopeKey: key } = contextFor(context);
       const task = assertSchema(TaskSchema, taskInput, "Invalid task");
+      const launchKey = options?.launch_key;
+      if (launchKey !== undefined && !LAUNCH_KEY_PATTERN.test(launchKey)) {
+        throw invalidInput("Invalid launch key");
+      }
       if (
         task.status !== "pending" ||
         task.revision !== 0 ||
@@ -1404,6 +1432,25 @@ export async function createTaskStore(
       const inputHash = idemKeyInput(task);
       const prepared = preparePayloadArtifact(task.scope, { task });
       const transaction = db.transaction(() => {
+        if (launchKey !== undefined) {
+          const launched = db
+            .query(
+              "SELECT task_id, input_sha256 FROM launch_keys WHERE scope_key = ? AND launch_key = ?",
+            )
+            .get(key, launchKey) as {
+            task_id: string;
+            input_sha256: string;
+          } | null;
+          if (launched !== null) {
+            if (
+              launched.task_id !== task.task_id ||
+              launched.input_sha256 !== inputHash
+            ) {
+              fail("conflict", "Launch key is bound to a different task");
+            }
+            return readTask(key, task.task_id);
+          }
+        }
         const replay = getIdempotent(
           key,
           parsedContext.request_id,
@@ -1440,6 +1487,11 @@ export async function createTaskStore(
           inputHash,
           task,
         );
+        if (launchKey !== undefined) {
+          db.query(
+            "INSERT INTO launch_keys (scope_key, launch_key, task_id, input_sha256) VALUES (?, ?, ?, ?)",
+          ).run(key, launchKey, task.task_id, inputHash);
+        }
         return task;
       });
       return transaction.immediate();

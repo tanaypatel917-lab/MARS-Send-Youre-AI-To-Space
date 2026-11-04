@@ -254,9 +254,19 @@ and `versions: [{component:"@mars/watch",revision:"0.0.1"},{component:"watch-ski
   "limitations": string[],    // at most 32; a longer list keeps 31 and a "… N more omitted" entry
   "summary": string,          // untrusted, clipped to 2048 characters
   "cli_version": string | null,
-  "recorded_at": "ISO 8601"
+  "recorded_at": "ISO 8601",
+  "workspace_revision"?: string, // host-stamped: provider WorkspaceRef.revision when recorded
+  "diff_sha256"?: string         // host-stamped: canonical tasks.diff digest when recorded
 }
 ```
+
+`workspace_revision` and `diff_sha256` were added additively (Team Chat PR 6).
+The workbench host's evidence writer strips any value the tool supplied and
+stamps the provider revision and `diffDigest` of the task workspace at append
+time; when the provider refuses (for example a workspace modified outside the
+provider) the record is appended without stamps. `tasks.evidence` reads these
+stamps back and marks a record `stale` when either differs from the current
+workspace — see `documentation/WORKBENCH_RPC.md`.
 
 `mars_watch_ask`, `mars_watch_search`, `mars_watch_extract`, `mars_verify show`
 and `mars_verify checks` are not recorded as evidence. The schema itself refuses

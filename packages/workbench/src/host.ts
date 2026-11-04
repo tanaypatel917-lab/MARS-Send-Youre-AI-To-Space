@@ -49,6 +49,11 @@ import {
 import type { ModelProviderRegistry } from "@mars/providers";
 import type { Turn } from "@mars/review";
 import type { DurableTaskStore } from "@mars/tasks";
+import {
+  WATCH_EVIDENCE_PRODUCER,
+  type WatchEvidenceRecord,
+  WatchEvidenceRecordSchema,
+} from "@mars/watch";
 import { z } from "zod";
 import { chooseChildModel, isReviewerRole } from "./child-model";
 import {
@@ -68,6 +73,7 @@ import {
   type WorkbenchConventions,
   withFrozenInstructions,
 } from "./conventions-context";
+import { diffDigest } from "./diff-digest";
 import {
   FrozenGraphSummarySchema,
   freezeGraphSummary,
@@ -91,6 +97,7 @@ import {
   ApprovalsSchema,
   CheckpointRefSchema,
   type DiffResult,
+  type EvidenceRecord,
   WorkspaceRefSchema,
 } from "./protocol";
 import {
@@ -120,7 +127,11 @@ import {
   routeLaunch,
   type WorkbenchSpecialists,
 } from "./specialist-routing";
-import { type WorkbenchWatch, watchEvidence } from "./watch-context";
+import {
+  type EvidenceBinding,
+  type WorkbenchWatch,
+  watchEvidence,
+} from "./watch-context";
 
 const launchSchema = z
   .object({
@@ -248,6 +259,19 @@ function withinClaimedPaths(path: string, claimed: readonly string[]): boolean {
   });
 }
 
+const MAX_EVIDENCE_RECORDS = 1000;
+
+function parseEvidenceRecord(bytes: Uint8Array): WatchEvidenceRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+  const result = WatchEvidenceRecordSchema.safeParse(parsed);
+  return result.success ? result.data : null;
+}
+
 function internalContext(scope: Scope): RequestContext {
   return { schema_version: 1, scope, request_id: randomUUID() };
 }
@@ -335,6 +359,15 @@ export async function createWorkbenchHost(
         options.store,
         () => internalContext(options.scope),
         taskId,
+        async (): Promise<EvidenceBinding> => {
+          const context = internalContext(options.scope);
+          const workspace = await options.workspace.reopen(context, taskId);
+          const diff = await options.workspace.diff(context, workspace);
+          return {
+            workspace_revision: workspace.revision,
+            diff_sha256: diffDigest(diff),
+          };
+        },
       ),
     });
   };
@@ -1779,9 +1812,13 @@ export async function createWorkbenchHost(
         capabilities: { execute: options.canExecute, checkpoint: true },
       };
     },
-    async create(context, task) {
+    async create(context, task, createOptions) {
       checkContext(context);
-      return options.store.create(context, task);
+      return createOptions?.launch_key === undefined
+        ? options.store.create(context, task)
+        : options.store.create(context, task, {
+            launch_key: createOptions.launch_key,
+          });
     },
     async list(context) {
       checkContext(context);
@@ -2376,7 +2413,56 @@ export async function createWorkbenchHost(
         new TextEncoder().encode(JSON.stringify(diff)),
         await privatePatterns(context, taskId),
       );
-      return diff;
+      return { ...diff, digest: diffDigest(diff) };
+    },
+    async evidence(context, taskId) {
+      checkContext(context);
+      const task = await options.store.inspect(context, taskId);
+      const workspace = await options.workspace.reopen(context, taskId);
+      const diff = await options.workspace.diff(context, workspace);
+      const patterns = await privatePatterns(context, taskId);
+      assertPublicBytes(
+        new TextEncoder().encode(JSON.stringify(diff)),
+        patterns,
+      );
+      const digest = diffDigest(diff);
+      const records: EvidenceRecord[] = [];
+      for await (const event of options.store.events(context, taskId)) {
+        if (
+          event.event_type !== "tool.completed" ||
+          event.producer !== WATCH_EVIDENCE_PRODUCER
+        )
+          continue;
+        const bytes = await options.store.artifacts.get(context, event.payload);
+        assertPublicBytes(bytes, patterns);
+        const record = parseEvidenceRecord(bytes);
+        if (!record || record.kind !== "verify") continue;
+        records.push({
+          event_id: event.event_id,
+          verdict: record.verdict,
+          assurance: record.assurance,
+          verified: record.verified,
+          ...(record.contract_id === undefined
+            ? {}
+            : { contract_id: record.contract_id }),
+          ...(record.contract_digest === undefined
+            ? {}
+            : { contract_digest: record.contract_digest }),
+          recorded_at: record.recorded_at,
+          workspace_revision: record.workspace_revision ?? null,
+          diff_sha256: record.diff_sha256 ?? null,
+          stale:
+            record.workspace_revision !== workspace.revision ||
+            record.diff_sha256 !== digest,
+        });
+        if (records.length > MAX_EVIDENCE_RECORDS) records.shift();
+      }
+      return {
+        task_revision: task.revision,
+        workspace,
+        diff_sha256: digest,
+        verify_records: records,
+      };
     },
     async checkpoint(context, taskId) {
       checkContext(context);
@@ -2474,6 +2560,7 @@ export async function createWorkbenchHost(
     events: track(api.events),
     artifact: track(api.artifact),
     diff: track(api.diff),
+    evidence: track(api.evidence),
     checkpoint: track(api.checkpoint),
     restore: serialize((_, taskId) => taskId, api.restore),
     async close() {

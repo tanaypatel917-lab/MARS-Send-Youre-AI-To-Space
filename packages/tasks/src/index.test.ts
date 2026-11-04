@@ -1948,6 +1948,75 @@ describe("@mars/tasks durable store", () => {
     await store.close();
   }, 30_000);
 
+  test("launch_key replays the same task across fresh request ids", async () => {
+    const rootDir = makeRoot();
+    const store = await openStore(rootDir);
+    const task = makeTask();
+    const created = await store.create(context("launch-1"), task, {
+      launch_key: "chat-msg_42",
+    });
+    const replayed = await store.create(context("launch-2"), task, {
+      launch_key: "chat-msg_42",
+    });
+    expect(replayed).toEqual(created);
+    expect(await store.list(context("launch-list"))).toHaveLength(1);
+    const events = [];
+    for await (const event of store.events(
+      context("launch-events"),
+      task.task_id,
+    )) {
+      events.push(event);
+    }
+    expect(events.filter((e) => e.event_type === "task.created")).toHaveLength(
+      1,
+    );
+    await expect(
+      store.create(
+        context("launch-3"),
+        { ...task, task_id: "other-task", request: "different request" },
+        { launch_key: "chat-msg_42" },
+      ),
+    ).rejects.toMatchObject({ code: "conflict" });
+    await expect(
+      store.create(
+        context("launch-4"),
+        { ...task, request: "different request" },
+        { launch_key: "chat-msg_42" },
+      ),
+    ).rejects.toMatchObject({ code: "conflict" });
+    await expect(
+      store.create(context("launch-5"), task, { launch_key: "bad key" }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    await expect(
+      store.create(context("launch-6"), task, { launch_key: "second-key" }),
+    ).rejects.toMatchObject({ code: "conflict" });
+    expect(await store.list(context("launch-list-2"))).toHaveLength(1);
+    const unkeyed = await store.create(context("launch-7"), {
+      ...task,
+      task_id: "unkeyed-task",
+    });
+    expect(unkeyed.task_id).toBe("unkeyed-task");
+  });
+
+  test("stores and echoes opaque team-chat provenance", async () => {
+    const rootDir = makeRoot();
+    const store = await openStore(rootDir);
+    const task = {
+      ...makeTask(),
+      provenance: {
+        source: "team_chat" as const,
+        conversation_id: "conv-1",
+        message_ids: ["m1", "m2"],
+        reference_ids: ["ref-1"],
+      },
+    };
+    const created = await store.create(context("prov-create"), task);
+    expect(created.provenance).toEqual(task.provenance);
+    expect(
+      (await store.inspect(context("prov-inspect"), task.task_id)).provenance,
+    ).toEqual(task.provenance);
+  });
+
   test("replays idempotent operations without duplicate events", async () => {
     const rootDir = makeRoot();
     const store = await openStore(rootDir);
