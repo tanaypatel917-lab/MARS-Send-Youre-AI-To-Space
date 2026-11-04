@@ -231,6 +231,14 @@
         "zod": "3.25.76",
       },
     },
+    "packages/team": {
+      "name": "@mars/team",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
     "packages/watch": {
       "name": "@mars/watch",
       "version": "0.0.1",
@@ -403,6 +411,8 @@
     "@mars/specialists": ["@mars/specialists@workspace:packages/specialists"],
 
     "@mars/tasks": ["@mars/tasks@workspace:packages/tasks"],
+
+    "@mars/team": ["@mars/team@workspace:packages/team"],
 
     "@mars/vscode-client": ["@mars/vscode-client@workspace:apps/vscode"],
 
