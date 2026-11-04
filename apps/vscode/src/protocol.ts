@@ -86,6 +86,7 @@ export const RPC_METHODS = {
   diff: "tasks.diff",
   checkpoint: "tasks.checkpoint",
   restore: "tasks.restore",
+  verification: "tasks.verification",
 } as const;
 export type RpcMethod = (typeof RPC_METHODS)[keyof typeof RPC_METHODS];
 

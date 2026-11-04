@@ -4,6 +4,7 @@ import type {
   EventView,
   HostMessage,
   SelectedView,
+  VerificationBadge,
   ViewState,
   WebviewMessage,
 } from "../messages";
@@ -251,6 +252,63 @@ function meter(
     bar,
     h("span", { class: "muted small" }, text),
   );
+}
+
+/**
+ * The verification badge is the host's verdict, never the task status: a
+ * `completed` run shows "Unverified" until the server reports a verdict for
+ * the exact candidate revision being presented.
+ */
+function renderVerificationBadge(
+  task: SelectedView["task"],
+  verification: VerificationBadge | null,
+): HTMLElement[] {
+  const terminal =
+    task.status === "completed" ||
+    task.status === "failed" ||
+    task.status === "cancelled";
+  if (!terminal) return [];
+  if (!verification)
+    return [h("span", { class: "badge v-pending" }, "Verification…")];
+  const title =
+    verification.state === "verified" && verification.bound
+      ? `All required checks passed for candidate ${verification.bound}`
+      : verification.state === "stale"
+        ? `Verdict recorded for revision ${verification.bound ?? "unknown"}; current candidate is ${verification.candidate ?? "unknown"}`
+        : verification.state === "unverified"
+          ? "No required checks were declared for this run"
+          : verification.reasons.join("; ");
+  return [
+    h(
+      "span",
+      { class: `badge v-${verification.state}`, title },
+      verification.label,
+    ),
+  ];
+}
+
+function renderVerificationDetail(
+  verification: VerificationBadge | null,
+): HTMLElement[] {
+  if (!verification || verification.state === "unverified") return [];
+  const lines = [...verification.reasons, ...verification.diagnostics];
+  const bound =
+    verification.bound && verification.candidate
+      ? verification.state === "stale"
+        ? `Verdict bound to revision ${verification.bound}; current candidate ${verification.candidate}.`
+        : `Candidate ${verification.candidate}.`
+      : "";
+  if (lines.length === 0 && !bound) return [];
+  const list = h("ul", { class: "small" });
+  for (const line of lines) list.append(h("li", {}, line));
+  return [
+    h(
+      "div",
+      { class: "verification small" },
+      bound ? h("p", { class: "muted mono small" }, bound) : null,
+      lines.length ? list : null,
+    ),
+  ];
 }
 
 function renderEvents(sel: SelectedView): HTMLElement {
@@ -524,6 +582,7 @@ function renderSelected(s: ViewState, sel: SelectedView): HTMLElement {
         "div",
         { class: "row" },
         h("span", { class: `badge s-${task.status}` }, task.status),
+        ...renderVerificationBadge(task, sel.verification),
         h(
           "span",
           { class: "muted mono small" },
@@ -531,6 +590,7 @@ function renderSelected(s: ViewState, sel: SelectedView): HTMLElement {
         ),
       ),
       h("p", { class: "request" }, task.request),
+      ...renderVerificationDetail(sel.verification),
       h("h4", {}, "Acceptance criteria"),
       criteria,
       meter(

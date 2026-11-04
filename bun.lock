@@ -42,6 +42,14 @@
         "@types/vscode": "1.96.0",
       },
     },
+    "packages/code-refs": {
+      "name": "@mars/code-refs",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
     "packages/codex-tools": {
       "name": "@mars/codex-tools",
       "version": "0.0.1",
@@ -232,6 +240,14 @@
         "zod": "3.25.76",
       },
     },
+    "packages/team": {
+      "name": "@mars/team",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
     "packages/team-chat": {
       "name": "@mars/team-chat",
       "version": "0.0.1",
@@ -372,6 +388,8 @@
 
     "@mars/cli": ["@mars/cli@workspace:apps/cli"],
 
+    "@mars/code-refs": ["@mars/code-refs@workspace:packages/code-refs"],
+
     "@mars/codex-tools": ["@mars/codex-tools@workspace:packages/codex-tools"],
 
     "@mars/collaboration": ["@mars/collaboration@workspace:packages/collaboration"],
@@ -411,6 +429,8 @@
     "@mars/specialists": ["@mars/specialists@workspace:packages/specialists"],
 
     "@mars/tasks": ["@mars/tasks@workspace:packages/tasks"],
+
+    "@mars/team": ["@mars/team@workspace:packages/team"],
 
     "@mars/team-chat": ["@mars/team-chat@workspace:packages/team-chat"],
 

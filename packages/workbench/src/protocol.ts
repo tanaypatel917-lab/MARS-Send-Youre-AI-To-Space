@@ -1,5 +1,6 @@
 import {
   ArtifactRefSchema,
+  RequiredCheckSchema,
   SCHEMA_VERSION,
   ScopeSchema,
   TaskSchema,
@@ -70,6 +71,8 @@ export const StartParamsSchema = z
     expected_revision: revision,
     approvals: ApprovalsSchema,
     model_id: id.optional(),
+    /** Host-run checks fixed at launch, outside the model's control; absent means the run is never verified. */
+    required_checks: z.array(RequiredCheckSchema).max(32).optional(),
   })
   .strict();
 export type StartParams = z.infer<typeof StartParamsSchema>;
@@ -110,6 +113,7 @@ export const RpcRequestSchema = z.discriminatedUnion("method", [
   ),
   method("tasks.diff", taskId),
   method("tasks.checkpoint", taskId),
+  method("tasks.verification", taskId),
   method(
     "tasks.restore",
     z
