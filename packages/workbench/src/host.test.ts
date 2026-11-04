@@ -140,7 +140,7 @@ test("read-only describe and inspect expose offline metadata without launching a
   expect(f.sessions).toHaveLength(0);
   await f.store.appendEvent(context(), "task", {
     run_id: "fixture-run",
-    versions: [],
+    versions: [{ component: "fixture", revision: "1" }],
     event_type: "tool.completed",
     producer: "fixture",
     payload: { operation: "fixture" },
