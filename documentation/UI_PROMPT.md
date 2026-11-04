@@ -87,8 +87,8 @@ Projection of `tasks.events` + Oh My Pi journal entries for the selected task, o
 | Entry | Source | Default render | Expanded (`Ctrl+O` on focused entry) |
 | --- | --- | --- | --- |
 | User request / steer | `tasks.inspect.request`, `tasks.steer` | Oh My Pi `user-message` frame (`userMessageBg`), full text. | — |
-| Assistant text (streaming) | `execution.observed` text deltas | Markdown via pi-tui `markdown` component; final turn re-rendered through `processOutput` (section 2.9). | — |
-| Thinking | `execution.observed` reasoning | One dim line `thinking · 12s` coloured by effort token; collapsed. | Full text, `thinkingText` colour. |
+| Assistant text (streaming) | `execution.observed` events whose `payload` is an `ArtifactRef` (`packages/contracts` `EventEnvelope`), fetched with `tasks.artifact` (SHA-256 checked) and decoded as Oh My Pi journal text; there are no token-level deltas today, so "streaming" means one appended artifact per observed event and the fixtures are sequences of such events | Markdown via pi-tui `markdown` component; final turn re-rendered through `processOutput` (section 2.9). | — |
+| Thinking | `execution.observed` artifacts whose journal entry kind is reasoning (same `tasks.artifact` path; if the runtime does not journal reasoning the row is simply absent) | One dim line `thinking · 12s` coloured by effort token; collapsed. | Full text, `thinkingText` colour. |
 | Tool call | `tool.completed` (`mars_*`) | Oh My Pi `tool-card`: glyph + tool name + primary argument (path, command, question) + status band; 5-line middle-truncated preview (pi-tui `ToolCard` with `collapsedMaxLines=5`, default 10); `… +N lines (Ctrl+O to expand)` footer. Consecutive read-only calls (`mars_read`, listings, `mars_history`, `mars_research_findings`) fold into one `Explored › read 4 · search 2` group card (Codex pattern, A.2). | Full output in `output-pane` with its own scroll; `y` copies. |
 | Hook run | `tool.completed`, `operation: hook.completed` | Same card, label `hook pre-tool ./scripts/lint` and exit code; exit 2 shows the block reason. | stdout/stderr (4 KiB cap from the host). |
 | Diff | `tasks.diff`, `mars_write`/`mars_apply_patch` results | Summary first: `Edited 2 files (+14 −3)` then `└ src/x.ts (+12 −3)` per file (`old → new` for moves), line-numbered unified hunks via pi-tui `chrome/diff.ts` in `toolDiffAdded/Removed` only, max 40 lines per file by default (Codex `apply_patch` rendering, A.2). | Full file diff; `Enter` opens the diff viewer (2.5). |
@@ -317,7 +317,7 @@ Global (transcript focused or composer empty):
 | `Alt+T` | Cycle thinking level (`/thinking`); shows the pi-tui `thinking*` colour for the level |
 | `Alt+M` | Model picker (`/model`): free and local models first, paid ones labelled and gated by the consent card |
 | `Ctrl+Enter` | Approve the pending card outright (Oh My Pi `app.approval.approve`); the card arms 500 ms after it appears so a stray `Enter` cannot approve |
-| remap | `~/.mars/ui/keybindings.yml`, same schema as Oh My Pi `KeybindingsManager` (`action-id: "Ctrl+P"`, `[]` disables); every hint renders from the live map (`appKeyHint`) so hints never drift from bindings. MARS never reads `~/.omp` |
+| remap | `~/.mars/keybindings.json` (one file, one format), same schema as Oh My Pi `KeybindingsManager` (`action-id: "Ctrl+P"`, `[]` disables); every hint renders from the live map (`appKeyHint`) so hints never drift from bindings. MARS never reads `~/.omp` |
 | `Tab` | In a non-empty composer while running: queue the message for the next turn; otherwise move focus between composer, pending card, follow-up buttons |
 | `Up`/`Down` | History when composer cursor is at the first/last line; otherwise move the cursor |
 | `PgUp`/`PgDn`, `Ctrl+U`/`Ctrl+D` in transcript | Scroll; `g`/`G` top/bottom when transcript focused |
@@ -358,7 +358,7 @@ Every error is one line in the form `what happened · why · what to do` (Aider'
 | Workbench unreachable | header `disconnected · retrying 3s`; composer disabled | `/status` shows the connection file path and `mars serve` hint |
 | Auth failure (401) | error-block "token rejected" | re-read connection file (`/status reconnect`) |
 | `model_unavailable` | notice + task `paused` | `/model` to pick another free model, then `r` |
-| Budget exhausted | notice with the cap | `/resume` with a new budget (card shows the field) |
+| Budget exhausted | notice with the cap | `/new` seeded from the request with a larger budget; `/resume` cannot change the budget (frozen launch settings) |
 | 409 conflict (`task_not_running`, `revision_mismatch`…) | notice with the code | refresh projection; no retry loop |
 | OmniRoute gateway unreachable (`describe.providers[]` health `down`) | model rows for `omniroute/*` dimmed `gateway down` · task `paused` if it was using one | `mars doctor` hint; `/model` to pick a local/free row, then `r` |
 | Paid route without consent (host refuses `X-MARS-Paid-Consent` missing) | notice `paid consent required · this model is not free · press p on the start card` | `/approve` reopens the card |
@@ -376,7 +376,7 @@ Tool output > 6 lines collapses to head 4 + `… +N lines (Ctrl+O)` + last line.
 
 - `Esc` → `tasks.cancel`; the running card gets `cancelled` band immediately, the host's final `task.updated` confirms. Steers typed during `cancelling…` queue.
 - Quitting the client never cancels tasks; on next launch the client lists running/paused tasks first.
-- `/resume` → card 2.4 pre-filled with prior approvals and model; the projection replays from `tasks.events` without re-running anything; a `resumed` divider marks the point.
+- `/resume` → card 2.4 showing the prior approvals, model and budget **read-only** (`tasks.resume` takes only `task_id` and `expected_revision`, so the launch settings are frozen); changing any of them means `/new` seeded with the task's request text. The projection replays from `tasks.events` without re-running anything; a `resumed` divider marks the point.
 - Restores are forks: entries after the checkpoint stay visible, dimmed, with a `superseded` label.
 - "Start over from the plan" (Cursor `[docs]`, A.5) is a named recovery path, not a feature: `Esc` → `/rewind` to the checkpoint before the drift → edit the request in the composer → `r`. The client adds no plan store; the plan is the request text and the acceptance criteria the host already holds.
 
@@ -426,8 +426,8 @@ All checks run under `bun run check` with `model_requests: 0`, on fixtures in `p
 
 ### 8.2 Staged plan
 
-- **PR 1 — `@mars/ui-core` and `mars session` read-only.** New package `packages/ui-core` (projection, keymap, strings, theme files, fixtures), `apps/cli` gains `mars session [task]`: connect, task list, transcript projection with all card types collapsed/expanded, status line, `/help`, `/tasks`, `/resume` (view only), `/export`, `Esc` cancel. No start/steer yet. Criteria 1, 2, 3, 4, 8, 9, 10 and the read-only parts of 11 (`/graph`, `/proposals`, `/model`, `/context` views over fixtures).
-- **PR 2 — write path.** Start card with approvals and paid consent, `/model`, `/mode`, steer, queued steers, diff viewer, review-link drafts, follow-up reveal, `/rewind`, `/undo`, `/review` depth, review-comment batch, questions card, pinned-context strip and queue reorder, error states, accessible mode. Criteria 5, 6, 7, 12. VS Code: adopt the shared keymap/strings and the paid-consent line (no new features).
+- **PR 1 — `@mars/ui-core` and `mars session` read-only.** New package `packages/ui-core` (projection, keymap, strings, theme files, fixtures), `apps/cli` gains `mars session [task]`: connect, task list, transcript projection with all card types collapsed/expanded, status line, `/help`, `/tasks`, `/resume` (view only), `/export`. No mutation at all: no start, steer or cancel (`Esc` only closes overlays in PR 1), so criterion 5's RPC test asserts the read-only client sends nothing but `workbench.describe`, `tasks.list`, `tasks.inspect`, `tasks.events`, `tasks.artifact`, `tasks.diff`. Criteria 1, 2, 3, 4, 8, 9, 10 and the read-only parts of 11 (`/graph`, `/proposals`, `/model`, `/context` views over fixtures).
+- **PR 2 — write path.** Start card with approvals and paid consent, `/model`, `/mode`, `Esc` cancel (`tasks.cancel`), steer, queued steers, diff viewer, review-link drafts, follow-up reveal, `/rewind`, `/undo`, `/review` depth, review-comment batch, questions card, pinned-context strip and queue reorder, error states, accessible mode. Criteria 5, 6, 7, 12. VS Code: adopt the shared keymap/strings and the paid-consent line (no new features).
 - **PR 3 — MARS Shell MVP.** `apps/shell` with the ADR, sidebar/main/inspector, session switcher, transcript, composer, changes (side-by-side), evidence viewer with inline images, settings; reuses `@mars/ui-core` and `@mars/output-format`. Criterion 13 plus 1–7, 11, 12 through the DOM serialiser, and the notification mailbox.
 - Later (not in this spec's PRs): `/research` and `/proposals` actions once the proposal RPC exists; `/evidence capture on` once the policy call exists; compaction UI when the runtime enables it.
 
@@ -509,4 +509,4 @@ Self-review of this specification against the repository state on `main` (PRs #5
 6. **Queue persistence location.** Queued text is user input, not workbench state; it persists under `~/.mars/shell/`, consistent with §7 "one owner per store". If the host later gains a queue, the client-side file is dropped.
 7. **Team Chat scope creep.** PR #58 is a fixture-backed VS Code view over a separate team endpoint; the Shell reserves a pane and shares contracts, nothing more; the terminal never gets it. Recorded in §3.1 and §7 to stop a later PR multiplexing chat over the workbench RPC.
 8. **Research honesty.** Warp/Zed/Cursor findings are docs-only and Aider was run offline; A.5 and the reports say so, and §9 forbids live-model, live-OmniRoute and real-window claims from fixture runs. No parity claims were added; the list of products in the no-parity rule was extended.
-9. **Open, not resolved here:** whether `agent.question` events exist in the runtime (2.4 renders them only if emitted); the Shell window framework ADR; the notification policy (owner decision in `HANDOFF.md`); whether `describe.providers` should expose OmniRoute health or defer to `mars doctor` only.
+9. **Open, not resolved here:** whether `tasks.resume` should gain optional `approvals`/`model`/`budget` fields (today they are frozen and the UI says so; a change is a write-method change outside §8.3); whether `agent.question` events exist in the runtime (2.4 renders them only if emitted); the Shell window framework ADR; the notification policy (owner decision in `HANDOFF.md`); whether `describe.providers` should expose OmniRoute health or defer to `mars doctor` only.
