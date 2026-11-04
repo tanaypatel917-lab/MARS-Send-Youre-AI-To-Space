@@ -11,6 +11,7 @@ import {
 import {
   ContextCancelledError,
   ContextClosedError,
+  type ContextError,
   ContextIoError,
   ContextLimitError,
   ContextPolicyError,
@@ -122,57 +123,40 @@ export function createRepositoryMapProvider(
         if (now() - started > limits.timeoutMs) throw new ContextLimitError();
       };
       check();
-      let authorized: AuthorizedWorkspaceRoot;
-      try {
-        authorized = await options.resolveRoot(context, request.workspace);
-      } catch {
-        throw new ContextPolicyError("Workspace is not authorized");
-      }
-      if (
-        !authorized ||
-        typeof authorized.root !== "string" ||
-        typeof authorized.revision !== "string"
-      ) {
-        throw new ContextPolicyError("Workspace is not authorized");
-      }
-      if (authorized.revision !== request.workspace.revision) {
-        throw new ContextRevisionError();
-      }
-      let root: string;
-      try {
-        root = await realpath(authorized.root);
-        if (!(await stat(root)).isDirectory()) {
-          throw new Error("not a directory");
-        }
-      } catch {
-        throw new ContextIoError();
-      }
-      const revalidateRoot = async () => {
-        let latest: AuthorizedWorkspaceRoot;
+      const authorizeRoot = async (
+        onPathFailure: () => ContextError,
+      ): Promise<string> => {
+        let authorized: AuthorizedWorkspaceRoot;
         try {
-          latest = await options.resolveRoot(context, request.workspace);
+          authorized = await options.resolveRoot(context, request.workspace);
         } catch {
           throw new ContextPolicyError("Workspace is not authorized");
         }
         if (
-          !latest ||
-          typeof latest.root !== "string" ||
-          typeof latest.revision !== "string"
+          !authorized ||
+          typeof authorized.root !== "string" ||
+          typeof authorized.revision !== "string"
         ) {
           throw new ContextPolicyError("Workspace is not authorized");
         }
-        if (latest.revision !== request.workspace.revision) {
+        if (authorized.revision !== request.workspace.revision) {
           throw new ContextRevisionError();
         }
-        let latestRoot: string;
         try {
-          latestRoot = await realpath(latest.root);
-          if (!(await stat(latestRoot)).isDirectory()) {
-            throw new Error();
+          const canonicalRoot = await realpath(authorized.root);
+          if (!(await stat(canonicalRoot)).isDirectory()) {
+            throw new Error("not a directory");
           }
+          return canonicalRoot;
         } catch {
-          throw new ContextRevisionError();
+          throw onPathFailure();
         }
+      };
+      const root = await authorizeRoot(() => new ContextIoError());
+      const revalidateRoot = async () => {
+        const latestRoot = await authorizeRoot(
+          () => new ContextRevisionError(),
+        );
         if (latestRoot !== root) throw new ContextRevisionError();
       };
       check();
