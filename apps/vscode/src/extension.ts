@@ -15,9 +15,13 @@ import { buildWebviewHtml } from "./html";
 import type { HostMessage } from "./messages";
 import { openReviewTarget, type ReviewOpenerHost } from "./reviewOpener";
 import { HttpRpcTransport } from "./rpc";
+import { TeamChatController } from "./teamChat/controller";
+import type { TeamChatHostMessage } from "./teamChat/messages";
 
 const TOKEN_KEY = "mars.serverToken";
 const VIEW_ID = "mars.workbench";
+const TEAM_CHAT_VIEW_ID = "mars.teamChat";
+const TEAM_CHAT_FLAG = "teamChat.enabled";
 const VIEW_SCHEME = "mars-view";
 const MAX_VIEW_DOCS = 50;
 
@@ -42,6 +46,14 @@ class ReadonlyDocuments implements vscode.TextDocumentContentProvider {
       label.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80) || "content";
     return vscode.Uri.from({ scheme: VIEW_SCHEME, path: `/${key}/${name}` });
   }
+}
+
+function teamChatEnabled(): boolean {
+  return (
+    vscode.workspace
+      .getConfiguration("mars")
+      .get<boolean>(TEAM_CHAT_FLAG, false) === true
+  );
 }
 
 function settings() {
@@ -289,6 +301,69 @@ class WorkbenchViewProvider
   }
 }
 
+/**
+ * Feature-flagged Team Chat prototype (`mars.teamChat.enabled`, default off).
+ * Same webview safety model as the workbench view; all data comes from the
+ * deterministic fixture inside `@mars/team-chat`, never from a network.
+ */
+class TeamChatViewProvider
+  implements vscode.WebviewViewProvider, vscode.Disposable
+{
+  private controller: TeamChatController | undefined;
+  private view: vscode.WebviewView | undefined;
+
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
+  dispose(): void {
+    this.controller?.dispose();
+    this.controller = undefined;
+  }
+
+  post(message: TeamChatHostMessage): void {
+    void this.view?.webview.postMessage(message);
+  }
+
+  resolveWebviewView(view: vscode.WebviewView): void {
+    this.controller?.dispose();
+    this.view = view;
+    const extensionUri = this.context.extensionUri;
+    const dist = vscode.Uri.joinPath(extensionUri, "dist");
+    const media = vscode.Uri.joinPath(extensionUri, "media");
+    view.webview.options = {
+      enableScripts: true,
+      enableCommandUris: false,
+      enableForms: false,
+      localResourceRoots: [dist, media],
+    };
+    view.webview.html = buildWebviewHtml({
+      cspSource: view.webview.cspSource,
+      nonce: randomBytes(18).toString("base64"),
+      scriptUri: view.webview
+        .asWebviewUri(vscode.Uri.joinPath(dist, "team-chat.js"))
+        .toString(),
+      styleUri: view.webview
+        .asWebviewUri(vscode.Uri.joinPath(media, "team-chat.css"))
+        .toString(),
+      title: "MARS Team Chat (FIXTURE)",
+    });
+    const controller = new TeamChatController({
+      post: (state) => this.post({ type: "state", state }),
+    });
+    this.controller = controller;
+    const subscription = view.webview.onDidReceiveMessage(
+      (message: unknown) => {
+        void controller.handleMessage(message);
+      },
+    );
+    view.onDidDispose(() => {
+      controller.dispose();
+      subscription.dispose();
+      if (this.controller === controller) this.controller = undefined;
+      if (this.view === view) this.view = undefined;
+    });
+  }
+}
+
 async function importLocalConnection(
   context: vscode.ExtensionContext,
   provider: WorkbenchViewProvider,
@@ -355,6 +430,15 @@ export function activate(context: vscode.ExtensionContext): void {
   const documents = new ReadonlyDocuments();
   const provider = new WorkbenchViewProvider(context, documents);
   const reconnect = () => void provider.active?.connect();
+  let teamChat: TeamChatViewProvider | undefined;
+  const registerTeamChat = () => {
+    if (teamChat || !teamChatEnabled()) return;
+    teamChat = new TeamChatViewProvider(context);
+    context.subscriptions.push(
+      teamChat,
+      vscode.window.registerWebviewViewProvider(TEAM_CHAT_VIEW_ID, teamChat),
+    );
+  };
   context.subscriptions.push(
     provider,
     vscode.workspace.registerTextDocumentContentProvider(
@@ -387,13 +471,27 @@ export function activate(context: vscode.ExtensionContext): void {
       else
         void vscode.window.showInformationMessage("Select a MARS task first.");
     }),
+    vscode.commands.registerCommand("mars.teamChat.open", async () => {
+      if (!teamChatEnabled()) {
+        void vscode.window.showInformationMessage(
+          "Team Chat is a fixture prototype. Enable the mars.teamChat.enabled setting to show it.",
+        );
+        return;
+      }
+      registerTeamChat();
+      await vscode.commands.executeCommand(`${TEAM_CHAT_VIEW_ID}.focus`);
+      teamChat?.post({ type: "focusComposer" });
+    }),
     context.secrets.onDidChange((event) => {
       if (event.key === TOKEN_KEY) reconnect();
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration(`mars.${TEAM_CHAT_FLAG}`))
+        registerTeamChat();
       if (event.affectsConfiguration("mars")) reconnect();
     }),
   );
+  registerTeamChat();
 }
 
 export function deactivate(): void {}

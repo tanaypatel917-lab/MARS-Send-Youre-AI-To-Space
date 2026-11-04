@@ -1,0 +1,14 @@
+{
+  "name": "@mars/team-chat",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "test": "bun test src",
+    "typecheck": "tsc --noEmit -p ../../tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "3.25.76"
+  }
+}
