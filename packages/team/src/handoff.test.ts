@@ -727,7 +727,8 @@ test("(h) a replayed shares.create reports the same staleness as messages.histor
   });
   const cards = history.filter((m) => m.kind === "result_card");
   expect(cards).toHaveLength(2);
-  expect(cards[0]).toEqual(replay);
+  // History items add the PR 3 view fields (reactions, reply excerpt).
+  expect(cards[0]).toMatchObject(replay);
 });
 
 test("(i) a member who joined or rejoined after the quoted messages cannot inspect the link", async () => {
@@ -793,7 +794,8 @@ test("(i) a member who joined or rejoined after the quoted messages cannot inspe
 });
 
 test("(j) a card that would not fit a history page is refused instead of posted", async () => {
-  const f = start({ max_page_bytes: 2500 });
+  // The guard reserves room for every reaction key the store allows.
+  const f = start({ max_page_bytes: 2500, max_reactions_per_message: 1 });
   const { id, link } = await createdLink(f);
   const params = shareParams(link.link_id, DIFF_A, "s".repeat(1500));
   const preview = await f.ok<SharePreview>("alice", "shares.preview", params);
@@ -808,4 +810,48 @@ test("(j) a card that would not fit a history page is refused instead of posted"
   expect(history.some((m) => m.kind === "result_card")).toBe(false);
   const small = await post(f, shareParams(link.link_id, DIFF_A, "ok"));
   expect(small.kind).toBe("result_card");
+});
+
+test("an accepted result card stays readable through messages.history at the reaction ceiling (review fix)", async () => {
+  const f = start({ max_page_bytes: 3000, max_reactions_per_message: 2 });
+  const { id, link } = await createdLink(f);
+  // Grow the summary until the guard refuses; the last accepted card is the
+  // largest one the store lets through.
+  let largest: Message | null = null;
+  let refused = false;
+  for (let length = 50; length <= 3000 && !refused; length += 50) {
+    const params = shareParams(
+      link.link_id,
+      largest && largest.seq % 2 === 0 ? DIFF_B : DIFF_A,
+      "s".repeat(length),
+    );
+    const preview = await f.ok<SharePreview>("alice", "shares.preview", params);
+    const response = await f.rpc("alice", "shares.create", {
+      ...params,
+      preview_sha256: preview.preview_sha256,
+    });
+    if (response.status === 200) largest = response.body.result as Message;
+    else {
+      expect(response.body.error?.code).toBe("too_large");
+      refused = true;
+    }
+  }
+  if (!largest) throw new Error("no card fit the page");
+  expect(refused).toBe(true);
+  const keys = ["\u{1F600}".repeat(16), "\uffff".repeat(32)];
+  for (const user of ["alice", "bob"] as const)
+    for (const emoji of keys)
+      await f.ok(user, "reactions.set", {
+        message_id: largest.message_id,
+        emoji,
+        on: true,
+      });
+  const history = await f.ok<Array<Message & { reactions: unknown[] }>>(
+    "bob",
+    "messages.history",
+    { conversation_id: id, after_seq: largest.seq - 1, limit: 1 },
+  );
+  expect(history).toHaveLength(1);
+  expect(history[0]?.message_id).toBe(largest.message_id);
+  expect(history[0]?.reactions).toHaveLength(2);
 });
