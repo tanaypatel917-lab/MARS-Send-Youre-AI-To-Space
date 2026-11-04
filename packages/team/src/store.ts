@@ -561,6 +561,22 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     );
   };
 
+  /** A returning participant starts at the current seq: nothing before it is visible. */
+  const reactivateParticipant = (
+    conversation: ConversationRow,
+    userId: string,
+  ) => {
+    db.query(
+      "UPDATE participants SET state = 'active', joined_seq = ?, joined_event_seq = ?, pinned = 0, read_seq = ? WHERE conversation_id = ? AND user_id = ?",
+    ).run(
+      conversation.last_seq,
+      conversation.last_event_seq,
+      conversation.last_seq,
+      conversation.conversation_id,
+      userId,
+    );
+  };
+
   // Idempotency: (team, user, request, operation, input digest) → stored result.
   // Equal digest replays; a reused request id with another input is a conflict.
   const idempotent = <T>(
@@ -691,16 +707,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
                 .get(conversation.conversation_id)?.count ?? 0;
             if (active + 1 > limits.max_group_size)
               throw invalidInput("Group size limit reached");
-            if (target)
-              db.query(
-                "UPDATE participants SET state = 'active', joined_seq = ?, joined_event_seq = ?, pinned = 0, read_seq = ? WHERE conversation_id = ? AND user_id = ?",
-              ).run(
-                conversation.last_seq,
-                conversation.last_event_seq,
-                conversation.last_seq,
-                conversation.conversation_id,
-                input.user_id,
-              );
+            if (target) reactivateParticipant(conversation, input.user_id);
             else insertParticipant(conversation, input.user_id);
           } else {
             if (!target || target.state !== "active") throw notFound();
@@ -717,6 +724,8 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
             conversation.revision,
           );
           saveConversation(conversation);
+          // After leaving, the caller's own row is `removed`; the server
+          // accepts that only for self-removal.
           const self = participantRow(
             conversation.conversation_id,
             actor.user_id,
@@ -852,6 +861,32 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
               )
               .get(actor.team_id, key);
             if (existing) {
+              // Both users are active team members again; a participant row
+              // left `removed` by a team departure is reactivated from here on.
+              let rejoined = false;
+              for (const userId of [actor.user_id, input.peer_user_id]) {
+                const row = participantRow(existing.conversation_id, userId);
+                if (!row)
+                  throw new TeamError(
+                    "corrupt_record",
+                    "DM participant missing",
+                  );
+                if (row.state !== "active") {
+                  reactivateParticipant(existing, userId);
+                  rejoined = true;
+                }
+              }
+              if (rejoined) {
+                existing.revision += 1;
+                emitEvent(
+                  existing,
+                  "membership",
+                  existing.last_seq,
+                  null,
+                  existing.revision,
+                );
+                saveConversation(existing);
+              }
               const self = participantRow(
                 existing.conversation_id,
                 actor.user_id,

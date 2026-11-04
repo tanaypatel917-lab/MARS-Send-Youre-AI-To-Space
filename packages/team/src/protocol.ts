@@ -10,7 +10,7 @@ import {
   TeamRoleSchema,
 } from "@mars/contracts";
 import { z } from "zod";
-import { TeamLimitsSchema } from "./schemas";
+import { TEAM_MAX_GROUP_SIZE, TeamLimitsSchema } from "./schemas";
 
 /**
  * Team service RPC: the exact envelope of the workbench RPC
@@ -25,7 +25,7 @@ const seq = z.number().int().nonnegative();
 const empty = z.object({}).strict();
 const conversationId = z.object({ conversation_id: id }).strict();
 
-export const MAX_GROUP_MEMBER_IDS = 32;
+export const MAX_GROUP_MEMBER_IDS = TEAM_MAX_GROUP_SIZE;
 export const MAX_POLL_CURSORS = 50;
 export const MAX_HISTORY_LIMIT = 200;
 export const MAX_POLL_LIMIT = 1000;

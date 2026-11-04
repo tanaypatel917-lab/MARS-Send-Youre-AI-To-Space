@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import type { Message, Participant, TeamDeliveryEvent } from "@mars/contracts";
 import { fixture, TEAM, TOKENS } from "../test/fixture";
-import type { ConversationViewResult } from "./protocol";
+import { type ConversationViewResult, MAX_GROUP_MEMBER_IDS } from "./protocol";
+import { DEFAULT_TEAM_LIMITS, TeamLimitsSchema } from "./schemas";
 import { serveTeam } from "./server";
 
 type View = ConversationViewResult;
@@ -764,4 +765,109 @@ test("messages carry bodies to members only; outbox events carry metadata only; 
       })
     ).status,
   ).toBe(400);
+});
+
+test("a member who leaves a group gets a confirmed removal, replays it, and is then locked out", async () => {
+  const f = start();
+  const group = await f.ok<View>("alice", "conversations.create_group", {
+    member_ids: ["bob", "carol"],
+    title: "leavers",
+  });
+  const id = group.conversation.conversation_id;
+  const params = {
+    conversation_id: id,
+    user_id: "carol",
+    expected_revision: 0,
+  };
+  const first = await f.rpc("carol", "conversations.remove_member", params, {
+    request_id: "leave-1",
+  });
+  expect(first.status).toBe(200);
+  const left = first.body.result as View;
+  expect(left.participant.user_id).toBe("carol");
+  expect(left.participant.state).toBe("removed");
+  expect(left.conversation.revision).toBe(1);
+  const replay = await f.rpc("carol", "conversations.remove_member", params, {
+    request_id: "leave-1",
+  });
+  expect(replay.status).toBe(200);
+  expect(replay.body.result).toEqual(left);
+  const open = await f.rpc("carol", "conversations.open", {
+    conversation_id: id,
+  });
+  expect(open.body.error?.code).toBe("not_found");
+  const again = await f.rpc("carol", "conversations.remove_member", {
+    ...params,
+    expected_revision: 1,
+  });
+  expect(again.body.error?.code).toBe("not_found");
+  const members = (
+    await f.ok<View>("alice", "conversations.open", {
+      conversation_id: id,
+    })
+  ).members;
+  expect(members.find((m) => m.user_id === "carol")?.state).toBe("removed");
+  // Removing someone else still answers with the caller's active row.
+  const removedBob = await f.ok<View>("alice", "conversations.remove_member", {
+    conversation_id: id,
+    user_id: "bob",
+    expected_revision: 1,
+  });
+  expect(removedBob.participant.user_id).toBe("alice");
+  expect(removedBob.participant.state).toBe("active");
+});
+
+test("a teammate who leaves the team and returns reopens the same DM from the current seq", async () => {
+  const f = start();
+  const dm = await f.ok<View>("alice", "conversations.create_dm", {
+    peer_user_id: "bob",
+  });
+  const id = dm.conversation.conversation_id;
+  await f.ok<Message>("alice", "messages.send", {
+    conversation_id: id,
+    client_message_id: "before",
+    body: "before alice left",
+  });
+  f.store.removeTeamMember({ team_id: TEAM, user_id: "alice" });
+  await f.ok<Message>("bob", "messages.send", {
+    conversation_id: id,
+    client_message_id: "while-away",
+    body: "while alice was away",
+  });
+  f.store.setTeamMember({ team_id: TEAM, user_id: "alice", role: "member" });
+  const reopened = await f.ok<View>("alice", "conversations.create_dm", {
+    peer_user_id: "bob",
+  });
+  expect(reopened.conversation.conversation_id).toBe(id);
+  // One revision for the departure, one for the return.
+  expect(reopened.conversation.revision).toBe(dm.conversation.revision + 2);
+  expect(reopened.participant.state).toBe("active");
+  expect(reopened.participant.joined_seq).toBe(2);
+  expect(
+    await f.ok<Message[]>("alice", "messages.history", { conversation_id: id }),
+  ).toEqual([]);
+  await f.ok<Message>("bob", "messages.send", {
+    conversation_id: id,
+    client_message_id: "welcome-back",
+    body: "welcome back",
+  });
+  const after = await f.ok<Message[]>("alice", "messages.history", {
+    conversation_id: id,
+  });
+  expect(after.map((m) => m.client_message_id)).toEqual(["welcome-back"]);
+  // Bob's side is unchanged, and the pair still has exactly one DM.
+  const bobView = await f.ok<View>("bob", "conversations.create_dm", {
+    peer_user_id: "alice",
+  });
+  expect(bobView.conversation.conversation_id).toBe(id);
+  expect(bobView.conversation.revision).toBe(reopened.conversation.revision);
+  expect(await f.ok<View[]>("bob", "conversations.list", {})).toHaveLength(1);
+});
+
+test("a configured group size can never exceed what create_group accepts", () => {
+  expect(
+    TeamLimitsSchema.safeParse({ ...DEFAULT_TEAM_LIMITS, max_group_size: 33 })
+      .success,
+  ).toBe(false);
+  expect(MAX_GROUP_MEMBER_IDS).toBe(DEFAULT_TEAM_LIMITS.max_group_size);
 });

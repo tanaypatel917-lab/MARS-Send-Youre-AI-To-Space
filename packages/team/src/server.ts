@@ -140,13 +140,13 @@ function validateResult(
   const invalid = () => {
     throw new TeamServerError("internal_error");
   };
-  const checkView = (value: unknown) => {
+  const checkView = (value: unknown, expectedState = "active") => {
     const view = ConversationViewSchema.parse(value);
     if (
       view.conversation.team_id !== actor.team_id ||
       view.participant.user_id !== actor.user_id ||
       view.participant.conversation_id !== view.conversation.conversation_id ||
-      view.participant.state !== "active"
+      view.participant.state !== expectedState
     )
       invalid();
     return view;
@@ -166,9 +166,18 @@ function validateResult(
       checkView(result);
       break;
     case "conversations.open":
-    case "conversations.add_member":
-    case "conversations.remove_member": {
+    case "conversations.add_member": {
       const view = checkView(result);
+      if (view.conversation.conversation_id !== request.params.conversation_id)
+        invalid();
+      break;
+    }
+    case "conversations.remove_member": {
+      // Leaving a group is the one call whose answer shows the caller removed.
+      const view = checkView(
+        result,
+        request.params.user_id === actor.user_id ? "removed" : "active",
+      );
       if (view.conversation.conversation_id !== request.params.conversation_id)
         invalid();
       break;
