@@ -221,9 +221,37 @@ export class TeamChatController {
 
   /** Called by the realtime source when its connection state changes. */
   notifyConnection(state: TeamConnectionState): Promise<void> {
-    return this.run(() => {
+    return this.run(async () => {
       if (this.connection === state) return;
       this.connection = state;
+      if (state === "live" || state === "polling") {
+        const selected = this.selected;
+        const conversationId = selected?.conversation.conversation_id;
+        const afterSequence = selected?.conversation.last_sequence;
+        await this.refreshInbox();
+        if (
+          conversationId &&
+          afterSequence !== undefined &&
+          this.selected?.conversation.conversation_id === conversationId
+        ) {
+          const summary = this.conversations.find(
+            (conversation) => conversation.conversation_id === conversationId,
+          );
+          if (summary) {
+            if (summary.last_sequence > afterSequence)
+              await this.reloadSelectedAfter(
+                conversationId,
+                afterSequence,
+                summary,
+              );
+            else
+              this.selected = {
+                ...this.selected,
+                conversation: summary,
+              };
+          }
+        }
+      }
       this.emit();
     });
   }
@@ -559,6 +587,56 @@ export class TeamChatController {
       older_blocked: blocked,
     };
     this.reconcilePending();
+  }
+
+  private async reloadSelectedAfter(
+    conversationId: string,
+    afterSequence: number,
+    summary: ConversationSummary,
+  ): Promise<void> {
+    const selected = this.selected;
+    if (selected?.conversation.conversation_id !== conversationId) return;
+    const maxMessages = Math.max(0, this.maxLoaded - selected.messages.length);
+    const result = await this.service.historyAfter?.(
+      this.viewer,
+      conversationId,
+      afterSequence,
+      maxMessages,
+    );
+    if (result && !result.ok) {
+      this.failed(result.code, conversationId);
+      return;
+    }
+    const reloadNewest = async () => {
+      await this.reloadSelected(
+        Math.max(1, summary.last_sequence - afterSequence),
+      );
+      if (
+        this.selected?.conversation.conversation_id === conversationId &&
+        this.selected.conversation.last_sequence >= summary.last_sequence
+      )
+        await this.markReadIfBoundaryLoaded();
+    };
+    if (!result || result.value.length === 0) {
+      await reloadNewest();
+      return;
+    }
+    const messages = new Map(
+      selected.messages.map((message) => [message.message_id, message]),
+    );
+    for (const message of result.value)
+      messages.set(message.message_id, message);
+    if (messages.size > this.maxLoaded) {
+      await reloadNewest();
+      return;
+    }
+    this.selected = {
+      ...selected,
+      conversation: summary,
+      messages: [...messages.values()].sort((a, b) => a.sequence - b.sequence),
+    };
+    this.reconcilePending();
+    await this.markReadIfBoundaryLoaded();
   }
 
   /** A pending send whose `client_message_id` is now in the loaded history was acknowledged out of band. */
