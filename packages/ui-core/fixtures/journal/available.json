@@ -1,0 +1,30 @@
+{
+  "request": {
+    "task_id": "task-fixture",
+    "entry_ids": ["entry-1", "entry-2", "entry-3", "entry-4"]
+  },
+  "status": 200,
+  "reply": {
+    "result": [
+      {
+        "entry_id": "entry-1",
+        "kind": "thinking",
+        "text": "The flag belongs in parseArgs; the renderer already has a JSON path.",
+        "usage": {
+          "input_tokens": 400,
+          "output_tokens": 120
+        }
+      },
+      {
+        "entry_id": "entry-2",
+        "kind": "assistant",
+        "text": "I'll add `--json` to `mars render`.\n\n- parse the flag\n- print `processOutput` as JSON\n\nRun: `bun test apps/cli`"
+      },
+      {
+        "entry_id": "entry-4",
+        "kind": "assistant",
+        "text": "Done. `mars render --json` prints the processed document. Nothing is executed."
+      }
+    ]
+  }
+}

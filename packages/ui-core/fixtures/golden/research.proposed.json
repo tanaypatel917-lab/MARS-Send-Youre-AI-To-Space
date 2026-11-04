@@ -1,0 +1,55 @@
+{
+  "entries": [
+    {
+      "kind": "user",
+      "id": "request:task-fixture",
+      "text": "Add a --json flag to mars render and document it",
+      "source": "request",
+      "provenance": {
+        "source": "tasks.inspect.request",
+        "event_id": null
+      }
+    },
+    {
+      "kind": "research",
+      "id": "event:research-proposed-00000",
+      "findings": [
+        {
+          "finding_id": "finding-1",
+          "claim": "Bun's parseArgs supports boolean flags",
+          "source": "https://bun.sh/docs/api/utils",
+          "confidence": 0.82,
+          "used": true,
+          "stale": false,
+          "excerpt": "parseArgs({ options: { json: { type: 'boolean' } } })"
+        },
+        {
+          "finding_id": "finding-2",
+          "claim": "Node 18 lacks util.parseArgs",
+          "source": "https://nodejs.org/api/util.html",
+          "confidence": 0.4,
+          "used": false,
+          "stale": false,
+          "excerpt": "Added in: v18.3.0"
+        }
+      ],
+      "provenance": {
+        "source": "mars-research",
+        "event_id": "research-proposed-00000"
+      }
+    }
+  ],
+  "trimmed": 0,
+  "totals": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost_usd": null
+  },
+  "children": 0,
+  "verify": {
+    "pass": 0,
+    "fail": 0
+  },
+  "journal": "available",
+  "last_event_id": "research-proposed-00001"
+}

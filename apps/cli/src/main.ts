@@ -10,6 +10,7 @@ import { runCommands } from "./commands";
 import { omnirouteDoctorReport } from "./omniroute";
 import { runRender } from "./render";
 import { RESEARCH_SEARCH_PROVIDERS, runServer, ServeUsageError } from "./serve";
+import { runSession } from "./session/app";
 import { runTeam, TeamUsageError, teamDoctorReport } from "./team";
 import { runVault, VaultUsageError } from "./vault";
 
@@ -273,6 +274,8 @@ try {
     console.log(JSON.stringify(await probeExecution(), null, 2));
   } else if (command === "models") {
     await runModels(process.argv.slice(3));
+  } else if (command === "session") {
+    await runSession(process.argv.slice(3));
   } else if (command === "render") {
     await runRender(process.argv.slice(3));
   } else if (command === "commands") {
@@ -303,7 +306,7 @@ try {
     }
   } else {
     console.error(
-      "Usage: bun apps/cli/src/main.ts <doctor|smoke|models|serve|render|commands|vault|team>",
+      "Usage: bun apps/cli/src/main.ts <doctor|smoke|models|serve|session|render|commands|vault|team>",
     );
     process.exitCode = 2;
   }

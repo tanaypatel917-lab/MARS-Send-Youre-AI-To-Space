@@ -1,0 +1,7 @@
+{
+  "description": "Fixture: the 10,000-event task. 8.4 MB as JSONL, so it is generated deterministically by generateLargeTask(10000) from @mars/ui-core/testing instead of committed; the digest pins the exact bytes of serializeEvents(generateLargeTask(10000)).",
+  "generator": "generateLargeTask",
+  "events": 10000,
+  "jsonl_bytes": 8368599,
+  "jsonl_sha256": "97443f82632048e878dc33ffb30a0be7cb42925f0cd398b8f0e5dec73f8c1154"
+}

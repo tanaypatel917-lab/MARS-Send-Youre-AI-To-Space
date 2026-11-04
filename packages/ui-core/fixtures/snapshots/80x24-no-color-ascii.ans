@@ -1,0 +1,24 @@
+  - Answer briefly.                                                             
+  + Answer briefly; cite files.                                                 
+  decision pending · decided outside this read-only client                      
+     [untrusted] @mars/optimization                                             
+                                                                                
+[!] model omniroute/openrouter/free-x unavailable → paused                      
+                                                                                
+[!] budget exhausted · cap $0.50 → paused                                       
+                                                                                
+[~] Done. `mars render --json` prints the processed document. Nothing is execut…
+     [untrusted] tasks.journal entry-4                                          
+                                                                                
+sum completed  -  29s  -  2.1k in / 640 out  -  $0.00  -  5 tools               
+                                                                                
+[~] Added `--json` to `mars render`.                                            
+                                                                                
+  - `apps/cli/src/render.ts` parses the flag                                    
+  - `documentation/CLI.md` documents it                                         
+                                                                                
+  Verification is reported separately by the workbench.                         
+     [untrusted] final artifact (tasks.artifact)                                
+--------------------------------------------------------------------------------
+> read-only session · type / for commands · start, steer and cancel are not in …
+mode ask  omniroute/openrouter/free-x  -  free  context ===- 68%                

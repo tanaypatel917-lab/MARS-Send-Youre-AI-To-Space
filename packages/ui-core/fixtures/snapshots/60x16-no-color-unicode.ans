@@ -1,0 +1,16 @@
+                                                            
+⟳ Done. `mars render --json` prints the processed document.…
+     [untrusted] tasks.journal entry-4                      
+                                                            
+Σ completed  ·  29s  ·  2.1k in / 640 out  ·  $0.00  ·  5 t…
+                                                            
+⟳ Added `--json` to `mars render`.                          
+                                                            
+  - `apps/cli/src/render.ts` parses the flag                
+  - `documentation/CLI.md` documents it                     
+                                                            
+  Verification is reported separately by the workbench.     
+     [untrusted] final artifact (tasks.artifact)            
+────────────────────────────────────────────────────────────
+❯ read-only session · type / for commands · start, steer an…
+mode ask  omniroute/openrouter/free-x  ·  free              

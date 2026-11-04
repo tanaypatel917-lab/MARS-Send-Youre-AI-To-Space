@@ -1,0 +1,40 @@
+[1m[38;2;0;180;255mMARS[0m[39m[49m  ·  mars-fixture  ·  task-fixture  ·  completed  ·  [38;2;107;114;128mread-only session[39m
+[38;2;31;37;45m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;2;0;180;255m╭─ Help ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│[39m [1mCommands[0m[39m[49m                                                                                                             [38;2;0;180;255m│
+│[39m                                                                                                                      [38;2;0;180;255m│
+│[39m /help                    Keybindings and commands.                                                                   [38;2;0;180;255m│
+│[39m /permissions             The four modes (ask, plan, auto-edit, sandbox) and what each allows. Alias /mode.[38;2;107;114;128m (UI PR 2)[39m [38;2;0;180;255m│
+│[39m /context                 Context rows: tokens · $ · source · remedy, from tasks.inspect.                             [38;2;0;180;255m│
+│[39m /tasks                   Tasks in this workbench project.                                                            [38;2;0;180;255m│
+│[39m /new [request]           Draft a new task.[38;2;107;114;128m (UI PR 2)[39m                                                                 [38;2;0;180;255m│
+│[39m /resume [id]             Show a task's frozen launch settings (view only in this client).                            [38;2;0;180;255m│
+│[39m /cancel                  Cancel the running task.[38;2;107;114;128m (UI PR 2)[39m                                                          [38;2;0;180;255m│
+│[39m /model                   Model rows from workbench.describe: free · local · paid (view only).                        [38;2;0;180;255m│
+│[39m /approve                 Reopen the approvals card.[38;2;107;114;128m (UI PR 2)[39m                                                        [38;2;0;180;255m│
+│[39m /diff [path]             Open the diff viewer.[38;2;107;114;128m (UI PR 3)[39m                                                             [38;2;0;180;255m│
+│[39m /review <path>:<line>[-… Draft a review-link steer.[38;2;107;114;128m (UI PR 3)[39m                                                        [38;2;0;180;255m│
+│[39m /children                Child sessions of this task.[38;2;107;114;128m (UI PR 2)[39m                                                      [38;2;0;180;255m│
+│[39m /research                Research findings for this task.[38;2;107;114;128m (UI PR 2)[39m                                                  [38;2;0;180;255m│
+│[39m /evidence                Watch evidence and verification records.[38;2;107;114;128m (UI PR 2)[39m                                          [38;2;0;180;255m│
+│[39m /proposals               Memory, skill and vault proposals with the operator command (view only).                    [38;2;0;180;255m│
+│[39m /graph                   Knowledge-graph state and records from workbench.describe (view only).                      [38;2;0;180;255m│
+│[39m /queue <text>            Queue text for the next turn.[38;2;107;114;128m (UI PR 2)[39m                                                     [38;2;0;180;255m│
+│[39m /drop <path>             Ask the runtime to unpin a file.[38;2;107;114;128m (UI PR 2)[39m                                                  [38;2;0;180;255m│
+│[39m /undo                    Restore the checkpoint before the last MARS edit turn.[38;2;107;114;128m (UI PR 3)[39m                            [38;2;0;180;255m│
+│[39m /cost                    Token and cost totals for the task.[38;2;107;114;128m (UI PR 2)[39m                                               [38;2;0;180;255m│
+│[39m /status                  workbench.describe summary and connection file.[38;2;107;114;128m (UI PR 2)[39m                                   [38;2;0;180;255m│
+│[39m /theme                   Switch between mars-dark and mars-light.[38;2;107;114;128m (UI PR 2)[39m                                          [38;2;0;180;255m│
+│[39m /symbols                 Switch glyphs: unicode, nerd, ascii.[38;2;107;114;128m (UI PR 2)[39m                                              [38;2;0;180;255m│
+│[39m /settings                Local client settings.[38;2;107;114;128m (UI PR 2)[39m                                                            [38;2;0;180;255m│
+│[39m /commands                Repository commands with their expansion preview.[38;2;107;114;128m (UI PR 2)[39m                                 [38;2;0;180;255m│
+│[39m /export [file]           Write the projection as Markdown; nothing is executed.                                      [38;2;0;180;255m│
+│[39m /compact                 Compaction is disabled by the host.                                                         [38;2;0;180;255m│
+│[39m /quit                    Quit the client; tasks keep running.                                                        [38;2;0;180;255m│
+│[39m                                                                                                                      [38;2;0;180;255m│
+│[39m [1mKeys[0m[39m[49m                                                                                                                 [38;2;0;180;255m│
+╰───────────────────────────────────────────────────────────────────────────────────────────── Esc close  ·  +28 more ─╯
+[39m
+[38;2;31;37;45m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;2;0;180;255m❯[39m [38;2;107;114;128mread-only session · type / for commands · start, steer and cancel are not in this client yet[39m
+[38;2;0;180;255mmode ask[39m  [38;2;0;180;255momniroute/openrouter/free-x[39m  ·  [38;2;0;255;136mfree[39m  [38;2;156;163;176mcontext ━━━─ 68%[39m  [38;2;212;192;144mcost $0.00 / $0.50[39m  approvals r w  ·   [38;2;0;180;255mchildren 1[39m

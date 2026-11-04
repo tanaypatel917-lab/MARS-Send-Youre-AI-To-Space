@@ -1,0 +1,13 @@
+{
+  "request": {
+    "task_id": "task-fixture",
+    "entry_ids": ["entry-1", "entry-2", "entry-3", "entry-4"]
+  },
+  "status": 400,
+  "reply": {
+    "error": {
+      "code": "invalid_request",
+      "message": "Invalid workbench request."
+    }
+  }
+}

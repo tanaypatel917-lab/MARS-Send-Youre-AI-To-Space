@@ -1,0 +1,10 @@
+{
+  "request": {
+    "task_id": "task-fixture",
+    "entry_ids": ["entry-unknown"]
+  },
+  "status": 200,
+  "reply": {
+    "result": []
+  }
+}

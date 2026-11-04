@@ -1,0 +1,16 @@
+                                                            
+⟳ Done. `mars render --json` prints the processed document.…
+     [38;2;212;192;144m[untrusted][39m [38;2;107;114;128mtasks.journal entry-4[39m                      
+                                                            
+[38;2;107;114;128mΣ completed  ·  29s  ·  2.1k in / 640 out  ·  $0.00  ·  5 t[0m…
+                                                            
+⟳ Added `--json` to `mars render`.                          
+                                                            
+  - `apps/cli/src/render.ts` parses the flag                
+  - `documentation/CLI.md` documents it                     
+                                                            
+  Verification is reported separately by the workbench.     
+     [38;2;212;192;144m[untrusted][39m [38;2;107;114;128mfinal artifact (tasks.artifact)[39m            
+[38;2;31;37;45m────────────────────────────────────────────────────────────[39m
+[38;2;0;180;255m❯[39m [38;2;107;114;128mread-only session · type / for commands · start, steer an[0m…
+[38;2;0;180;255mmode ask[39m  [38;2;0;180;255momniroute/openrouter/free-x[39m  ·  [38;2;0;255;136mfree[39m              

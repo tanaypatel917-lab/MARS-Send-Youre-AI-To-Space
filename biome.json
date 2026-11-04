@@ -1,6 +1,10 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.3.3/schema.json",
-  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
   "files": {
     "includes": [
       "**",
@@ -9,7 +13,52 @@
       "!packages/evaluation/fixtures/harbor"
     ]
   },
-  "formatter": { "enabled": true, "indentStyle": "space" },
-  "linter": { "enabled": true, "rules": { "recommended": true } },
-  "assist": { "actions": { "source": { "organizeImports": "on" } } }
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true
+    }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["apps/cli/src/session/**", "packages/ui-core/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@oh-my-pi/pi-coding-agent": "Clients render workbench state; Oh My Pi in the workbench is the only agent runtime (documentation/UI_PROMPT.md \u00a79).",
+                  "@oh-my-pi/pi-agent-core": "Clients render workbench state; Oh My Pi in the workbench is the only agent runtime (documentation/UI_PROMPT.md \u00a79).",
+                  "@oh-my-pi/pi-ai": "Clients render workbench state; Oh My Pi in the workbench is the only agent runtime (documentation/UI_PROMPT.md \u00a79)."
+                },
+                "patterns": [
+                  {
+                    "group": [
+                      "@oh-my-pi/pi-coding-agent/**",
+                      "@oh-my-pi/pi-agent-core/**",
+                      "@oh-my-pi/pi-ai/**"
+                    ],
+                    "message": "Clients render workbench state; Oh My Pi in the workbench is the only agent runtime (documentation/UI_PROMPT.md \u00a79)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

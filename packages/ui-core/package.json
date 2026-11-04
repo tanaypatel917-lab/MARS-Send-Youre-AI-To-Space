@@ -1,0 +1,18 @@
+{
+  "name": "@mars/ui-core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts",
+    "./keymap.json": "./keymap.json",
+    "./themes/mars-dark.json": "./themes/mars-dark.json",
+    "./themes/mars-light.json": "./themes/mars-light.json"
+  },
+  "dependencies": {
+    "@mars/contracts": "workspace:*",
+    "@oh-my-pi/pi-tui": "18.14.0",
+    "zod": "3.25.76"
+  }
+}

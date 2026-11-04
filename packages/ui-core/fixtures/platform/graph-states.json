@@ -1,0 +1,37 @@
+[
+  {
+    "state": "not_built",
+    "revision": null,
+    "built_at": null,
+    "isolation": null,
+    "workspace_revision": "r12"
+  },
+  {
+    "state": "ready",
+    "revision": "r12",
+    "built_at": "2026-11-04T11:58:00.000Z",
+    "isolation": "process_env",
+    "workspace_revision": "r12"
+  },
+  {
+    "state": "stale",
+    "revision": "r9",
+    "built_at": "2026-11-03T09:00:00.000Z",
+    "isolation": "process_env",
+    "workspace_revision": "r12"
+  },
+  {
+    "state": "unavailable",
+    "revision": null,
+    "built_at": null,
+    "isolation": null,
+    "workspace_revision": "r12"
+  },
+  {
+    "state": "failed",
+    "revision": null,
+    "built_at": "2026-11-04T11:50:00.000Z",
+    "isolation": "process_env",
+    "workspace_revision": "r12"
+  }
+]

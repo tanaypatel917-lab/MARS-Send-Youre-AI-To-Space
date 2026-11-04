@@ -1,0 +1,40 @@
+[1m[38;2;0;180;255mMARS[0m[39m[49m  ·  mars-fixture  ·  task-fixture  ·  completed  ·  [38;2;107;114;128mread-only session[39m
+[38;2;31;37;45m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m     [38;2;212;192;144m[untrusted][39m [38;2;107;114;128m@mars/workbench[39m
+
+[38;2;0;255;136m⟳[39m [1mEdited[0m[39m[49m 2 files [38;2;0;255;136m+31[39m [38;2;255;71;87m-15[39m
+  [38;2;107;114;128m⎿[39m apps/cli/src/render.ts [38;2;156;163;176mmodified[39m [38;2;0;255;136m+29[39m [38;2;255;71;87m-15[39m
+  [38;2;107;114;128m⎿[39m documentation/CLI.md [38;2;156;163;176madded[39m [38;2;0;255;136m+2[39m [38;2;255;71;87m-0[39m
+
+[38;2;0;180;255m⟳[39m [1mworker-2[0m[39m[49m  ·  running  ·  3 tool calls  ·  omniroute/openrouter/free-x  ·  [38;2;0;255;136mfree[39m
+
+[38;2;0;180;255m❯[39m [38;2;156;163;176m[steer][39m [1mAlso update the README example.[0m[39m[49m
+
+[38;2;0;180;255m⟳[39m [1mResearch[0m[39m[49m  ·  2 findings
+  [38;2;107;114;128m⎿[39m [0.82] Bun's parseArgs supports boolean flags — https://bun.sh/docs/api/utils (used)
+  [38;2;107;114;128m⎿[39m [9m[38;2;107;114;128m[0.40] Node 18 lacks util.parseArgs — https://nodejs.org/api/util.html (not used)[0m[39m[49m [38;2;107;114;128m(stale)[39m
+     [38;2;212;192;144m[untrusted][39m [38;2;107;114;128mmars-research[39m
+
+[7m>[0m[38;2;107;114;128m[49mⓘ[39m [38;2;156;163;176m1 research finding stale[39m
+
+[38;2;0;255;136m✔[39m [1mVerify[0m[39m[49m mars_verify [38;2;0;255;136mpass[39m
+  [38;2;107;114;128m⎿[39m bun test apps/cli passed (12 tests)
+     [38;2;107;114;128mevidence/render-json.txt, evidence/screenshot-1.png[39m
+     [38;2;212;192;144m[untrusted][39m [38;2;107;114;128m@mars/watch[39m
+
+[38;2;255;71;87m✘[39m [1mVerify[0m[39m[49m mars_verify [38;2;255;71;87mfail[39m
+  [38;2;107;114;128m⎿[39m biome reported 1 error
+     [38;2;107;114;128mevidence/lint.txt[39m
+     [38;2;212;192;144m[untrusted][39m [38;2;107;114;128m@mars/watch[39m
+
+[38;2;0;255;136m⟳[39m [1mGraph build[0m[39m[49m  ·  ready  ·  r12  ·  process_env
+  [38;2;107;114;128m⎿[39m graph built: 412 nodes, 1,280 edges
+
+[38;2;0;255;136m⟳[39m [1mGraph query[0m[39m[49m  ·  ready  ·  r12
+  [38;2;107;114;128m⎿[39m render.ts is imported by main.ts and serve.ts
+
+[38;2;107;114;128mⓘ[39m [38;2;156;163;176mconventions.applied · ok[39m
+
+[38;2;31;37;45m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;2;255;179;71munknown command /steer · type /help for the list[39m
+[38;2;0;180;255mmode ask[39m  [38;2;0;180;255momniroute/openrouter/free-x[39m  ·  [38;2;0;255;136mfree[39m  [38;2;156;163;176mcontext ━━━─ 68%[39m  [38;2;212;192;144mcost $0.00 / $0.50[39m  approvals r w  ·   [38;2;0;180;255mchildren 1[39m
