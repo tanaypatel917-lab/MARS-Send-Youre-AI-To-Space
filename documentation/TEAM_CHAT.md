@@ -1,7 +1,7 @@
 # Team Chat
 
-Human-to-human messaging for a MARS team, with @MARS answers, task links and
-result shares arriving in later PRs. This document records the architecture
+Human-to-human messaging for a MARS team, with task links and result shares
+(PR 6, chat half) and @MARS answers arriving in a later PR. This document records the architecture
 split, who owns what, and what exists today. Contract discovery that led here:
 the Team Chat discovery report (sections 4–6); where the owner's implementation
 plan and the report disagreed, the report's repo-specific adaptation was
@@ -51,10 +51,89 @@ Envelope, limits, auth handling and error vocabulary are the workbench's
 | `messages.history` | `{conversation_id, after_seq? \| before_seq?, limit ≤ 200}` | Membership re-checked inside the read transaction; page cut by count and serialized bytes, never skipping (a single oversized message → `too_large`); a participant sees only `seq > joined_seq`. |
 | `events.poll` | `{cursors: [{conversation_id, after_event_seq}] ≤ 50, limit ≤ 1000}` | Membership-filtered outbox; events carry `{conversation_id, event_seq, kind, message_seq, message_id, revision}` only — never a body. Cursors are per conversation. |
 
+| `tasks.link_draft` | `{conversation_id, message_ids 1–50, reference_ids ≤ 16}` | Requester must be a participant and every message visible to them (`seq > joined_seq`). Creates a `TaskLink` (`status: draft`, server-generated `launch_key`, provenance `{message_id, seq, body_sha256}` frozen now) and returns bounded excerpts (≤ 280 chars each) for the confirmation step. Idempotent on `request_id`. |
+| `tasks.link_confirm` | `{link_id, workbench: {scope, task_id, request_id}, target: {repo_id?, base_revision?}}` | Requester only (`forbidden` for other members, `not_found` for non-participants). `draft → confirmed`. A retry with the same binding returns the same link (same `launch_key`); a different binding → `conflict`. |
+| `tasks.link_created` | `{link_id, task_revision}` | Requester only. `confirmed → created`; the revision may only move forward. |
+| `tasks.link_inspect` | `{link_id}` | Participants only. The requester gets `{view: "requester", link}`; everyone else `{view: "member", link}` with `launch_key`, `target` and `workbench` **omitted** (never another user's scope ids). |
+| `shares.preview` | `{link_id, evidence: <caller's tasks.evidence result>, run_status, selection: {summary ≤ 2000, include_diff_digest, verify_event_ids ≤ 8, artifacts?}}` | Requester only; link must be `created`/`shared`. Returns `{preview_sha256, card}` — exactly what `shares.create` would post. `artifacts` non-empty → `unavailable` (artifact access gate is a later PR). |
+| `shares.create` | `{link_id, preview_sha256, ...same}` | Recomputes the card; `preview_sha256` must match byte-for-byte (`conflict` otherwise). Posts a message `kind: "result_card"` whose `body` is the summary and whose `payload` is the `ResultShare`; link becomes `shared`. Idempotent on `request_id`. |
+
 Not implemented (TODO markers in `packages/team/src/protocol.ts`): `events.stream`
-(SSE), `reactions.set`, `messages.search` (PR 3); references, @MARS requests,
-task links and result shares (PR 4–6; their schemas are reserved in
-`packages/contracts/src/team.ts`); any VS Code wiring.
+(SSE), `reactions.set`, `messages.search` (PR 3); references and @MARS
+requests (PR 4–5; their schemas are reserved in
+`packages/contracts/src/team.ts`); artifact shares (artifact access gate);
+any VS Code wiring.
+
+## Task handoff (PR 6, chat half)
+
+The team service never opens a workbench connection. The desktop client (today
+the VS Code extension host) talks to both with the user's own credentials and
+carries only ids between them:
+
+```
+   client (user's desktop)                 team service (@mars/team)          workbench (user's own)
+   ───────────────────────                 ─────────────────────────          ──────────────────────
+1. select messages ─────── tasks.link_draft ─────────────▶ TaskLink{draft, launch_key,
+                                                             provenance frozen} + excerpts
+2. user confirms ───────── tasks.link_confirm ───────────▶ TaskLink{confirmed, workbench ids,
+      {scope, task_id, request_id, target}                   target}
+3. ─────────────────────────────────────────────────────────────── tasks.create ────────────▶ task
+      {launch_key, provenance:{source:"team_chat", ...}}     (same key + same task → replay)
+4. ─────────────────────── tasks.link_created ───────────▶ TaskLink{created, task_revision}
+   ... the task runs in the workbench; chat sees nothing until the user shares ...
+5. ──────────────────────────────────────────────────────────────── tasks.evidence ─────────▶ {task_revision,
+                                                                                               workspace, diff_sha256,
+                                                                                               verify_records}
+6. ─────────────────────── shares.preview {evidence, run_status, selection} ─▶ {preview_sha256, card}
+7. user reviews card ───── shares.create {preview_sha256, ...} ──────────────▶ message kind:"result_card"
+```
+
+| Owns | Team service | Workbench |
+| --- | --- | --- |
+| Conversation provenance (`message_id`, `seq`, `body_sha256`), `launch_key`, link status, who requested | ✔ | reads `provenance` as opaque input |
+| Task state, workspace, diff, verification evidence | stores the ids/digests the requester submitted | ✔ |
+| Result card content and its `preview_sha256`, `attested_by`, stale overlay | ✔ | — |
+
+Rules the implementation keeps:
+
+- **Frozen provenance.** `provenance` is written once at draft time from the
+  stored `seq` and `body_sha256`; a later edit or deletion (no RPC exists yet;
+  the test mutates the row directly) never changes it. A new draft after an
+  edit gets a new link and the new hash.
+- **One launch per link.** The `launch_key` is minted by the service
+  (`tc-<sha256(team_id, link_id)[0:48]>`, unique per team) and returned on
+  every replay, so an interrupted confirm — same `request_id` or a fresh one
+  with the same workbench binding — never creates a second link, and the
+  workbench's launch-key rule makes `tasks.create` retries land on one task.
+- **Verification is copied, never judged.** `verified: true` only when a
+  selected `verify_records` entry has `verified: true`, `stale: false`, and
+  the same `diff_sha256`/`workspace_revision` as the evidence head; anything
+  else yields `verified: false` with `verified_reason` ∈ `missing | stale |
+  failed | inconclusive | skipped` (first match in that order across the
+  selected records). The contract refuses `verified: true` on a non-`pass`
+  record. `run_status`, `verified`, `export_status` (`not_exported` until the
+  artifact gate) and `git_status` (`unknown`: the service cannot observe git)
+  are four separate fields and are never merged into one badge.
+- **Attested, not verified by the service.** The card records
+  `attested_by: requester_id` and `evidence_sha256` (canonical digest of the
+  submitted `tasks.evidence` result). `SharedEvidenceSchema` in
+  `packages/contracts/src/team.ts` mirrors the workbench's
+  `EvidenceResultSchema` (parity test in `packages/team/src/handoff.test.ts`).
+- **Stale on re-share.** Every share binds the candidate `diff_sha256` (even
+  when `include_diff_digest: false` hides it from the card). A later share of
+  the same link with a different digest makes earlier cards read back from
+  `messages.history` with `stale: true` and `superseded_by: <message_id>`;
+  the posted content is immutable (`card_json` + `record_sha256`).
+- **Nothing leaks across members.** Result cards carry no workbench `scope`,
+  `task_id` or `launch_key`; other members' `tasks.link_inspect` view omits
+  those keys; non-participants get `not_found` for links and cards alike;
+  outbox rows stay metadata-only.
+
+Follow-ups the workbench contract needs (not edited here): `tasks.evidence`
+does not return the task's execution status, so the client passes
+`run_status` from `tasks.inspect` alongside the evidence (the card therefore
+attests two reads, not one); an artifact access gate before `ArtifactRef`
+shares; the client wiring in `apps/vscode` (PR 1's webview is fixture-only).
 
 ## Decisions recorded
 
@@ -94,8 +173,11 @@ only, no paid.
 ## Verification
 
 Offline only: `bun test packages/team` runs through the real loopback server
-with the dev authenticator and a second Bun process for the DM race. No live
-identity provider, no remote host, no VS Code window.
+with the dev authenticator and a second Bun process for the DM race;
+`handoff.test.ts` covers link draft/confirm/created with interrupted confirms,
+frozen provenance, every unverified reason, stale-on-re-share, member/non-member
+visibility and `preview_sha256` mismatch with fixture evidence only. No live
+identity provider, no remote host, no workbench process, no VS Code window.
 
 
 ---
