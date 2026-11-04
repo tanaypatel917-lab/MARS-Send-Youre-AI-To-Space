@@ -213,6 +213,8 @@ export interface RunTeamAgentRequestOptions {
   fetch?: (input: string, init?: RequestInit) => Promise<Response>;
   /** Test seam only: observe the session (its tool allow-list) before it runs. */
   onSession?: (session: RuntimeSession) => void;
+  /** Operational notice for a caught failure, with the reason code it maps to: never a body, a prompt or a path. */
+  onError?(error: unknown, reason_code: string): void;
 }
 
 export interface TeamAgentRunResult {
@@ -326,7 +328,8 @@ export async function runTeamAgentRequest(
       fetch: countedFetch,
       ...(options.env ? { env: options.env } : {}),
     });
-  } catch {
+  } catch (error) {
+    options.onError?.(error, "session_unavailable");
     return { ...base, reason_code: "session_unavailable" };
   }
   const result: TeamAgentRunResult = {
@@ -360,11 +363,13 @@ export async function runTeamAgentRequest(
       citations: extracted.citations,
       dropped_citations: extracted.dropped,
     };
-  } catch {
+  } catch (error) {
     result.model_requests = modelRequests;
-    return options.signal?.aborted
-      ? { ...result, status: "cancelled", reason_code: "cancelled" }
-      : { ...result, reason_code: "model_failed" };
+    const reason_code = options.signal?.aborted ? "cancelled" : "model_failed";
+    options.onError?.(error, reason_code);
+    return reason_code === "cancelled"
+      ? { ...result, status: "cancelled", reason_code }
+      : { ...result, reason_code };
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
     await session.dispose().catch(() => undefined);
