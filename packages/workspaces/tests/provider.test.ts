@@ -2127,3 +2127,138 @@ test("remove deletes one regular file through the provider, advances the revisio
     await fixture.close();
   }
 });
+
+test("remove rolls back a failed transaction and keeps the staged copy when even the restore fails [stub runner — not isolation evidence]", async () => {
+  let behaviour: "ok" | "fail" | "fail-restore" = "ok";
+  let lockedDir = "";
+  const fixture = await makeFixture({
+    testHooks: {
+      async removePhase(phase) {
+        if (behaviour === "ok") return;
+        // A read-only parent directory makes the rollback rename fail too.
+        if (behaviour === "fail-restore") await chmod(lockedDir, 0o500);
+        throw new Error(`failed at ${phase}`);
+      },
+    },
+  });
+  try {
+    const initial = fixture.workspace;
+    const artifact = await putText(fixture, "doomed\n");
+    await fixture.provider.write(
+      context,
+      initial,
+      "nested/doomed.txt",
+      artifact,
+    );
+    const written = await fixture.provider.inspect(
+      context,
+      initial.workspace_id,
+    );
+    const tree = join(
+      fixture.rootDir,
+      "workspaces",
+      initial.workspace_id,
+      "tree",
+    );
+    lockedDir = join(tree, "nested");
+
+    behaviour = "fail";
+    await expect(
+      fixture.provider.remove(context, written, "nested/doomed.txt"),
+    ).rejects.toThrow("failed at after-remove");
+    const rolledBack = await fixture.provider.inspect(
+      context,
+      initial.workspace_id,
+    );
+    expect(rolledBack.revision).toBe(written.revision);
+    expect(await readFile(join(tree, "nested", "doomed.txt"), "utf8")).toBe(
+      "doomed\n",
+    );
+    expect(await readdir(join(fixture.rootDir, "staging"))).toEqual([]);
+
+    // Root ignores directory permissions, so the restore cannot be made to fail there.
+    if (process.getuid?.() === 0) return;
+    behaviour = "fail-restore";
+    try {
+      await expect(
+        fixture.provider.remove(context, rolledBack, "nested/doomed.txt"),
+      ).rejects.toThrow("failed at after-remove");
+    } finally {
+      await chmod(lockedDir, 0o755);
+    }
+    // The staged hard link is now the file's only copy and must survive.
+    await expect(lstat(join(tree, "nested", "doomed.txt"))).rejects.toThrow();
+    const staged = await readdir(join(fixture.rootDir, "staging"));
+    expect(staged).toHaveLength(1);
+    expect(staged[0]).toStartWith(`${initial.workspace_id}-prior-`);
+    expect(
+      await readFile(join(fixture.rootDir, "staging", staged[0] ?? ""), "utf8"),
+    ).toBe("doomed\n");
+    await expect(
+      fixture.provider.inspect(context, initial.workspace_id),
+    ).rejects.toBeInstanceOf(IntegrityError);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("close waits for an in-flight remove before releasing the provider [stub runner — not isolation evidence]", async () => {
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let signalStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    signalStarted = resolve;
+  });
+  const fixture = await makeFixture({
+    testHooks: {
+      async removePhase() {
+        signalStarted();
+        await blocked;
+      },
+    },
+  });
+  try {
+    const initial = fixture.workspace;
+    await fixture.provider.write(
+      context,
+      initial,
+      "doomed.txt",
+      await putText(fixture, "doomed\n"),
+    );
+    const written = await fixture.provider.inspect(
+      context,
+      initial.workspace_id,
+    );
+    const removing = fixture.provider.remove(context, written, "doomed.txt");
+    await started;
+    let closeResolved = false;
+    const closing = fixture.provider.close().then(() => {
+      closeResolved = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closeResolved).toBe(false);
+    release();
+    await Promise.all([removing, closing]);
+    expect(closeResolved).toBe(true);
+    const reopened = await createLocalWorkspaceProvider({
+      rootDir: fixture.rootDir,
+      sourceRoot: fixture.sourceRoot,
+      artifacts: fixture.artifacts,
+      sandbox: createStubRunner(),
+      approveCommand: () => true,
+    });
+    try {
+      const after = await reopened.inspect(context, initial.workspace_id);
+      expect(after.revision).not.toBe(written.revision);
+      expect(await readdir(join(fixture.rootDir, "staging"))).toEqual([]);
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    release();
+    await fixture.close();
+  }
+});

@@ -83,6 +83,8 @@ export interface LocalWorkspaceProviderOptions {
     recoveryPhase?(phase: "before-rollback-rename"): void | Promise<void>;
     /** Test-only hook for write transaction failure injection. */
     writePhase?(phase: "before-sync" | "after-rename"): void | Promise<void>;
+    /** Test-only hook for remove transaction failure injection. */
+    removePhase?(phase: "after-remove"): void | Promise<void>;
     restorePhase?(
       phase: "staged" | "backed-up" | "swapped" | "committed",
     ): void | Promise<void>;

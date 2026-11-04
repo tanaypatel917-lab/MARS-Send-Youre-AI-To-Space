@@ -939,6 +939,7 @@ export async function createLocalWorkspaceProvider(
           priorLinked = true;
           await rm(absolute);
           targetRemoved = true;
+          await options.testHooks?.removePhase?.("after-remove");
           const after = await treeSnapshot(current, true, false);
           updateUnsupportedSkipped(current, after);
           current.counter += 1;
@@ -975,7 +976,8 @@ export async function createLocalWorkspaceProvider(
           }
           throw error;
         } finally {
-          if (committed || !targetRemoved || priorLinked)
+          // A failed restore leaves the staged link as the file's only copy.
+          if (committed || !targetRemoved)
             await rm(priorPath, { force: true }).catch(() => undefined);
         }
       });
@@ -1408,6 +1410,7 @@ export async function createLocalWorkspaceProvider(
     prepare: (...args) => track(() => provider.prepare(...args)),
     read: (...args) => track(() => provider.read(...args)),
     write: (...args) => track(() => provider.write(...args)),
+    remove: (...args) => track(() => provider.remove(...args)),
     execute: (...args) => track(() => provider.execute(...args)),
     checkpoint: (...args) => track(() => provider.checkpoint(...args)),
     restore: (...args) => track(() => provider.restore(...args)),
