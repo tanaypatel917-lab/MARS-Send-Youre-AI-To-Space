@@ -20,8 +20,8 @@ const fixtures: ReturnType<typeof fixture>[] = [];
 afterEach(async () => {
   for (const f of fixtures.splice(0)) await f.close();
 });
-function start() {
-  const f = fixture();
+function start(limits?: Parameters<typeof fixture>[0]) {
+  const f = fixture(limits);
   fixtures.push(f);
   return f;
 }
@@ -647,4 +647,165 @@ test("the shared evidence mirror accepts exactly what the workbench tasks.eviden
     expect(SharedEvidenceSchema.safeParse(sample).success).toBe(
       EvidenceResultSchema.safeParse(sample).success,
     );
+});
+
+function shareParams(linkId: string, diff: string, summary: string) {
+  return {
+    link_id: linkId,
+    evidence: evidence([record({ diff_sha256: diff })], diff),
+    run_status: "completed",
+    selection: {
+      summary,
+      include_diff_digest: false,
+      verify_event_ids: ["evt-1"],
+    },
+  };
+}
+
+async function post(
+  f: ReturnType<typeof fixture>,
+  params: ReturnType<typeof shareParams>,
+  requestId?: string,
+) {
+  const preview = await f.ok<SharePreview>("alice", "shares.preview", params);
+  return f.ok<Message>(
+    "alice",
+    "shares.create",
+    { ...params, preview_sha256: preview.preview_sha256 },
+    requestId ? { request_id: requestId } : undefined,
+  );
+}
+
+test("(g) a shared link records newer task revisions without leaving the shared state", async () => {
+  const f = start();
+  const { link } = await createdLink(f);
+  await post(f, shareParams(link.link_id, DIFF_A, "shared at 3"));
+  const advanced = await f.ok<TaskLink>("alice", "tasks.link_created", {
+    link_id: link.link_id,
+    task_revision: 4,
+  });
+  expect([advanced.status, advanced.task_revision]).toEqual(["shared", 4]);
+  const same = await f.ok<TaskLink>("alice", "tasks.link_created", {
+    link_id: link.link_id,
+    task_revision: 4,
+  });
+  expect(same).toEqual(advanced);
+  const backwards = await f.rpc("alice", "tasks.link_created", {
+    link_id: link.link_id,
+    task_revision: 3,
+  });
+  expect(backwards.body.error?.code).toBe("conflict");
+  const view = await f.ok<TaskLinkView>("bob", "tasks.link_inspect", {
+    link_id: link.link_id,
+  });
+  expect([view.link.status, view.link.task_revision]).toEqual(["shared", 4]);
+});
+
+test("(h) a replayed shares.create reports the same staleness as messages.history", async () => {
+  const f = start();
+  const { id, link } = await createdLink(f);
+  const paramsA = shareParams(link.link_id, DIFF_A, "candidate A");
+  const first = await post(f, paramsA, "share-A");
+  const second = await post(
+    f,
+    shareParams(link.link_id, DIFF_B, "candidate B"),
+  );
+  const preview = await f.ok<SharePreview>("alice", "shares.preview", paramsA);
+  const replay = await f.ok<Message>(
+    "alice",
+    "shares.create",
+    { ...paramsA, preview_sha256: preview.preview_sha256 },
+    { request_id: "share-A" },
+  );
+  expect(replay.message_id).toBe(first.message_id);
+  expect([replay.payload?.stale, replay.payload?.superseded_by]).toEqual([
+    true,
+    second.message_id,
+  ]);
+  const history = await f.ok<Message[]>("alice", "messages.history", {
+    conversation_id: id,
+  });
+  const cards = history.filter((m) => m.kind === "result_card");
+  expect(cards).toHaveLength(2);
+  expect(cards[0]).toEqual(replay);
+});
+
+test("(i) a member who joined or rejoined after the quoted messages cannot inspect the link", async () => {
+  const f = start();
+  const group = await f.ok<ConversationViewResult>(
+    "alice",
+    "conversations.create_group",
+    { member_ids: ["bob"], title: "Launch" },
+  );
+  const id = group.conversation.conversation_id;
+  const quoted = await f.ok<Message>("alice", "messages.send", {
+    conversation_id: id,
+    client_message_id: "q1",
+    body: "quoted before carol joined",
+  });
+  const draft = await f.ok<TaskLinkDraftResult>("alice", "tasks.link_draft", {
+    conversation_id: id,
+    message_ids: [quoted.message_id],
+    reference_ids: [],
+  });
+  const revision = async () =>
+    (
+      await f.ok<ConversationViewResult>("alice", "conversations.open", {
+        conversation_id: id,
+      })
+    ).conversation.revision;
+  await f.ok("alice", "conversations.add_member", {
+    conversation_id: id,
+    user_id: "carol",
+    expected_revision: await revision(),
+  });
+  const bobBefore = await f.ok<TaskLinkView>("bob", "tasks.link_inspect", {
+    link_id: draft.link.link_id,
+  });
+  expect(bobBefore.view).toBe("member");
+  const carol = await f.rpc("carol", "tasks.link_inspect", {
+    link_id: draft.link.link_id,
+  });
+  expect(carol.body.error?.code).toBe("not_found");
+  const carolHistory = await f.ok<Message[]>("carol", "messages.history", {
+    conversation_id: id,
+  });
+  expect(carolHistory).toEqual([]);
+  await f.ok("alice", "conversations.remove_member", {
+    conversation_id: id,
+    user_id: "bob",
+    expected_revision: await revision(),
+  });
+  await f.ok("alice", "conversations.add_member", {
+    conversation_id: id,
+    user_id: "bob",
+    expected_revision: await revision(),
+  });
+  const bobAfter = await f.rpc("bob", "tasks.link_inspect", {
+    link_id: draft.link.link_id,
+  });
+  expect(bobAfter.body.error?.code).toBe("not_found");
+  // The requester keeps their own link regardless.
+  const alice = await f.ok<TaskLinkView>("alice", "tasks.link_inspect", {
+    link_id: draft.link.link_id,
+  });
+  expect(alice.view).toBe("requester");
+});
+
+test("(j) a card that would not fit a history page is refused instead of posted", async () => {
+  const f = start({ max_page_bytes: 2500 });
+  const { id, link } = await createdLink(f);
+  const params = shareParams(link.link_id, DIFF_A, "s".repeat(1500));
+  const preview = await f.ok<SharePreview>("alice", "shares.preview", params);
+  const refused = await f.rpc("alice", "shares.create", {
+    ...params,
+    preview_sha256: preview.preview_sha256,
+  });
+  expect(refused.body.error?.code).toBe("too_large");
+  const history = await f.ok<Message[]>("alice", "messages.history", {
+    conversation_id: id,
+  });
+  expect(history.some((m) => m.kind === "result_card")).toBe(false);
+  const small = await post(f, shareParams(link.link_id, DIFF_A, "ok"));
+  expect(small.kind).toBe("result_card");
 });

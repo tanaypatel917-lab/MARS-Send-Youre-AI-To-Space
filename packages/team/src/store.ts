@@ -693,6 +693,17 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     });
   };
 
+  const storedMessageRow = (messageId: string): MessageRow => {
+    const row = db
+      .query<MessageRow, [string]>(
+        "SELECT * FROM messages WHERE message_id = ?",
+      )
+      .get(messageId);
+    if (!row)
+      throw new TeamError("corrupt_record", "Stored message is missing");
+    return row;
+  };
+
   const shareRow = (messageId: string): ResultShareRow | null =>
     db
       .query<ResultShareRow, [string]>(
@@ -826,8 +837,17 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
       row.conversation_id,
     );
     const link = linkRecord(row);
-    if (requesterOnly && link.requester_id !== actor.user_id)
-      throw new TeamError("forbidden", "Only the requester may act on a link");
+    if (link.requester_id !== actor.user_id) {
+      // A member who joined (or rejoined) after the quoted messages cannot read
+      // them through history, so the link stays invisible to them as well.
+      if (link.provenance.some((entry) => entry.seq <= participant.joined_seq))
+        throw notFound();
+      if (requesterOnly)
+        throw new TeamError(
+          "forbidden",
+          "Only the requester may act on a link",
+        );
+    }
     return { link, conversation, participant };
   };
 
@@ -1781,27 +1801,26 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
             )
               throw invalidInput("Invalid task revision");
             const { link } = requireLink(actor, input.link_id, true);
-            if (link.status === "confirmed" || link.status === "created") {
-              if (
-                link.task_revision !== null &&
-                input.task_revision < link.task_revision
-              )
-                throw conflict("Task revision moved backwards");
-              const created = TaskLinkSchema.parse({
-                ...link,
-                task_revision: input.task_revision,
-                status: "created",
-                updated_at: timestamp(),
-              });
-              saveLink(created, false);
-              return created;
-            }
             if (
-              link.status === "shared" &&
-              link.task_revision === input.task_revision
+              link.status !== "confirmed" &&
+              link.status !== "created" &&
+              link.status !== "shared"
             )
-              return link;
-            throw conflict("Link is not awaiting workbench creation");
+              throw conflict("Link is not awaiting workbench creation");
+            if (
+              link.task_revision !== null &&
+              input.task_revision < link.task_revision
+            )
+              throw conflict("Task revision moved backwards");
+            if (link.task_revision === input.task_revision) return link;
+            const created = TaskLinkSchema.parse({
+              ...link,
+              task_revision: input.task_revision,
+              status: link.status === "shared" ? "shared" : "created",
+              updated_at: timestamp(),
+            });
+            saveLink(created, false);
+            return created;
           },
         );
       });
@@ -1834,7 +1853,9 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     shareCreate(actor, requestId, input) {
       return write(() => {
         requireTeamMember(actor);
-        return idempotent(
+        // The idempotent replay carries the bytes as first posted; the
+        // stale/superseded overlay is re-read so a retry agrees with history.
+        const posted = idempotent(
           actor,
           requestId,
           "shares.create",
@@ -1928,15 +1949,29 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
                 }),
                 false,
               );
-            const row = db
-              .query<MessageRow, [string]>(
-                "SELECT * FROM messages WHERE message_id = ?",
-              )
-              .get(record.message_id);
-            if (!row) throw new TeamError("corrupt_record", "Message vanished");
-            return messageRecord(row);
+            const message = messageRecord(storedMessageRow(record.message_id));
+            // A card must stay readable through messages.history even once the
+            // overlay marks it stale; the whole page budget is the ceiling.
+            const worstCase = {
+              ...message,
+              payload: message.payload && {
+                ...message.payload,
+                stale: true,
+                superseded_by: message.message_id,
+              },
+            };
+            if (
+              Buffer.byteLength(JSON.stringify(worstCase)) + ENVELOPE_BYTES >
+              limits.max_page_bytes
+            )
+              throw new TeamError(
+                "too_large",
+                "Result card exceeds the page size",
+              );
+            return message;
           },
         );
+        return messageRecord(storedMessageRow(posted.message_id));
       });
     },
     close() {
