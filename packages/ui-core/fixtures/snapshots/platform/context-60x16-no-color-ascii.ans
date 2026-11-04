@@ -1,0 +1,16 @@
++- Context · read only ------------------------------------+
+| cumulative usage 41,200 in · 6,100 out · $ —             |
+| the host records cumulative usage only; per-row tokens … |
+|                                                          |
+| source                               tokens    $       … |
+| system prompt                        3,200     $ —     … |
+| repository instructions AGENTS.md    1,800     $ —     … |
+| tools                                9,400     $ —     … |
+| pinned apps/cli/src/render.ts        1,100     $ —     … |
+| research finding-1                   —         $ —     … |
+| transcript                           —         $ —     … |
++---------------------------------- Esc close  -  +5 more -+
+                                                            
+------------------------------------------------------------
+> read-only session · type / for commands · start, steer an…
+read-only session  model free  tokens 41.2k in  -  6.1k out 

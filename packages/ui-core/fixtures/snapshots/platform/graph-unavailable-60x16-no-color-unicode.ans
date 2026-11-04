@@ -1,0 +1,16 @@
+╭─ Knowledge graph · read only ────────────────────────────╮
+│ state          unavailable                               │
+│ revision       —                                         │
+│ built at       —                                         │
+│ isolation      —                                         │
+│                                                          │
+│ the knowledge-graph CLI is not installed on the host     │
+│                                                          │
+│ Last graph.build in this task                            │
+│   ready · r12 · graph built: 412 nodes, 1,280 edges · m… │
+│                                                          │
+╰────────────────────────────────── Esc close  ·  +2 more ─╯
+                                                            
+────────────────────────────────────────────────────────────
+❯ read-only session · type / for commands · start, steer an…
+read-only session  model free  tokens 41.2k in  ·  6.1k out 

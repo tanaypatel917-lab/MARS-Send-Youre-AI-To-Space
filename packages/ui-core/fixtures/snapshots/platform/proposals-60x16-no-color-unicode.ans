@@ -1,0 +1,16 @@
+╭─ Proposals · read only ──────────────────────────────────╮
+│ 1 pending vault proposal(s)  ·  last export never        │
+│   operator command (not run): mars vault import --accept │
+│   it checks each proposal's revision fence and threat s… │
+│                                                          │
+│ memory proposal  ·  project  ·  revision mem-r3  ·  pen… │
+│   - Use npm for scripts.                                 │
+│   + Use bun for scripts; npm is not installed.           │
+│   operator command (not run): decided by the operator o… │
+│                                                          │
+│ skill proposal  ·  project  ·  revision skill-r2  ·  pe… │
+╰────────────────────────────────── Esc close  ·  +9 more ─╯
+                                                            
+────────────────────────────────────────────────────────────
+❯ read-only session · type / for commands · start, steer an…
+read-only session  model free  tokens 41.2k in  ·  6.1k out 

@@ -1,0 +1,53 @@
+{
+  "model_tier": "free",
+  "usage_totals": {
+    "input_tokens": 41200,
+    "output_tokens": 6100,
+    "cost_usd": null
+  },
+  "pinned": [
+    {
+      "path": "apps/cli/src/render.ts",
+      "bytes": 4210,
+      "trust": "untrusted"
+    }
+  ],
+  "context_rows": [
+    {
+      "source": "system prompt",
+      "tokens": 3200,
+      "cost_usd": null,
+      "remedy": "set by the workbench"
+    },
+    {
+      "source": "repository instructions AGENTS.md",
+      "tokens": 1800,
+      "cost_usd": null,
+      "remedy": "edit AGENTS.md"
+    },
+    {
+      "source": "tools",
+      "tokens": 9400,
+      "cost_usd": null,
+      "remedy": "set by the workbench"
+    },
+    {
+      "source": "pinned apps/cli/src/render.ts",
+      "tokens": 1100,
+      "cost_usd": null,
+      "remedy": "unpin the file in a new task"
+    },
+    {
+      "source": "research finding-1",
+      "tokens": null,
+      "cost_usd": null,
+      "remedy": "start a /new task without it"
+    },
+    {
+      "source": "transcript",
+      "tokens": null,
+      "cost_usd": null,
+      "remedy": "/new with a summary"
+    }
+  ]
+}

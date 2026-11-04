@@ -1,0 +1,24 @@
+[34m+- Proposals · read only ------------------------------------------------------+[39m
+[34m|[39m [37m1 pending vault proposal(s)  -  last export never[39m                            [34m|[39m
+[34m|[39m   [90moperator command (not run): mars vault import --accept[39m                     [34m|[39m
+[34m|[39m   [90mit checks each proposal's revision fence and threat scan before writing[39m    [34m|[39m
+[34m|[39m                                                                              [34m|[39m
+[34m|[39m [1mmemory proposal[22m  -  project  -  revision mem-r3  -  pending                  [34m|[39m
+[34m|[39m   [31m- Use npm for scripts.[39m                                                     [34m|[39m
+[34m|[39m   [32m+ Use bun for scripts; npm is not installed.[39m                               [34m|[39m
+[34m|[39m   [90moperator command (not run): decided by the operator outside this client[39m    [34m|[39m
+[34m|[39m                                                                              [34m|[39m
+[34m|[39m [1mskill proposal[22m  -  project  -  revision skill-r2  -  pending                 [34m|[39m
+[34m|[39m   [31m- Run tests with bun test.[39m                                                 [34m|[39m
+[34m|[39m   [32m+ Run tests with bun test apps packages scripts.[39m                           [34m|[39m
+[34m|[39m   [90moperator command (not run): mars skills …[39m                                  [34m|[39m
+[34m|[39m                                                                              [34m|[39m
+[34m|[39m [1mgepa proposal[22m  -  project  -  revision prompt-r4  -  pending                 [34m|[39m
+[34m|[39m   [31m- Answer briefly.[39m                                                          [34m|[39m
+[34m|[39m   [32m+ Answer briefly; cite files.[39m                                              [34m|[39m
+[34m|[39m   [90moperator command (not run): decided by the operator outside this client[39m    [34m|[39m
+[34m+------------------------------------------------------ Esc close  -  +1 more -+[39m
+                                                                                
+[30m--------------------------------------------------------------------------------[39m
+[34m>[39m [90mread-only session · type / for commands · start, steer and cancel are not in [0m…
+[34mread-only session[39m  model [32mfree[39m  [37mtokens 41.2k in  -  6.1k out[39m  [93mcost $0.00 / $0.50[39m 

@@ -27,7 +27,9 @@
         "@mars/research-worker": "workspace:*",
         "@mars/skills": "workspace:*",
         "@mars/team": "workspace:*",
+        "@mars/ui-core": "workspace:*",
         "@mars/workbench": "workspace:*",
+        "@oh-my-pi/pi-tui": "18.14.0",
         "zod": "3.25.76",
       },
     },
@@ -287,6 +289,15 @@
         "zod": "3.25.76",
       },
     },
+    "packages/ui-core": {
+      "name": "@mars/ui-core",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "@oh-my-pi/pi-tui": "18.14.0",
+        "zod": "3.25.76",
+      },
+    },
     "packages/watch": {
       "name": "@mars/watch",
       "version": "0.0.1",
@@ -474,6 +485,8 @@
     "@mars/team-agent": ["@mars/team-agent@workspace:packages/team-agent"],
 
     "@mars/team-chat": ["@mars/team-chat@workspace:packages/team-chat"],
+
+    "@mars/ui-core": ["@mars/ui-core@workspace:packages/ui-core"],
 
     "@mars/vscode-client": ["@mars/vscode-client@workspace:apps/vscode"],
 

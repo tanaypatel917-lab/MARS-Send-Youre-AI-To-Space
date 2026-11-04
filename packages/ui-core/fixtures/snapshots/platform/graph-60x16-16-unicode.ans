@@ -1,0 +1,16 @@
+[34m╭─ Knowledge graph · read only ────────────────────────────╮[39m
+[34m│[39m [90mstate[39m          [32mready[39m                                     [34m│[39m
+[34m│[39m [90mrevision[39m       r12                                       [34m│[39m
+[34m│[39m [90mbuilt at[39m       2026-11-04T11:58:00.000Z                  [34m│[39m
+[34m│[39m [90misolation[39m      process-level confinement, not a kernel [0m… [34m│[39m
+[34m│[39m                                                          [34m│[39m
+[34m│[39m [1mLast graph.build in this task[22m                            [34m│[39m
+[34m│[39m   ready · r12 · graph built: 412 nodes, 1,280 edges · m… [34m│[39m
+[34m│[39m                                                          [34m│[39m
+[34m│[39m [1mgraph.query in this task[22m                                 [34m│[39m
+[34m│[39m   ready · r12 · render.ts is imported by main.ts and se… [34m│[39m
+[34m╰────────────────────────────────────────────── Esc close ─╯[39m
+                                                            
+[30m────────────────────────────────────────────────────────────[39m
+[34m❯[39m [90mread-only session · type / for commands · start, steer an[0m…
+[34mread-only session[39m  model [32mfree[39m  [37mtokens 41.2k in  ·  6.1k out[39m 

@@ -1,0 +1,40 @@
+MARS  -  mars-fixture  -  task-fixture  -  completed  -  read-only session                                              
+------------------------------------------------------------------------------------------------------------------------
++- Knowledge graph · read only ----------------------------------------------------------------------------------------+
+| state          stale                                                                                                 |
+| revision       r9                                                                                                    |
+| built at       2026-11-03T09:00:00.000Z                                                                              |
+| isolation      process-level confinement, not a kernel sandbox                                                       |
+|                                                                                                                      |
+| the graph built at r9 is stale for this workspace                                                                    |
+| action (a steer draft, not in this read-only client): ask the coordinator to rebuild                                 |
+|                                                                                                                      |
+| Last graph.build in this task                                                                                        |
+|   ready · r12 · graph built: 412 nodes, 1,280 edges · model requests 0                                               |
+|                                                                                                                      |
+| graph.query in this task                                                                                             |
+|   ready · r12 · render.ts is imported by main.ts and serve.ts                                                        |
++---------------------------------------------------------------------------------------------------------- Esc close -+
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+------------------------------------------------------------------------------------------------------------------------
+> read-only session · type / for commands · start, steer and cancel are not in this client yet                          
+read-only session  model free  tokens 41.2k in  -  6.1k out  cost $0.00 / $0.50  children 1                             

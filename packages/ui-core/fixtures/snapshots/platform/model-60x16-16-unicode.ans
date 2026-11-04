@@ -1,0 +1,16 @@
+[34m╭─ Models · read only ─────────────────────────────────────╮[39m
+[34m│[39m this task  ·  [32m[1mfree[22m[39m [90m(pinned at launch)[39m                    [34m│[39m
+[34m│[39m                                                          [34m│[39m
+[34m│[39m [37mprovider                     kind         health       [0m… [34m│[39m
+[34m│[39m omniroute                    omniroute    [32mavailable[39m    [0m… [34m│[39m
+[34m│[39m local                        local        [32mavailable[39m    [0m… [34m│[39m
+[34m│[39m [90manthropic-direct             direct       [90munavailable[39m  [0m… [34m│[39m
+[34m│[39m                                                          [34m│[39m
+[34m│[39m [90mpolicy owner: mars[39m                                       [34m│[39m
+[34m│[39m                                                          [34m│[39m
+[34m│[39m [90mper-model capabilities and prices are not in workbench [0m… [34m│[39m
+[34m╰────────────────────────────────── Esc close  ·  +1 more ─╯[39m
+                                                            
+[30m────────────────────────────────────────────────────────────[39m
+[34m❯[39m [90mread-only session · type / for commands · start, steer an[0m…
+[34mread-only session[39m  model [32mfree[39m  [37mtokens 41.2k in  ·  6.1k out[39m 

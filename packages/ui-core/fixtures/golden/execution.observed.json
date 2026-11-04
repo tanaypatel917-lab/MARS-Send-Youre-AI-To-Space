@@ -1,0 +1,67 @@
+{
+  "entries": [
+    {
+      "kind": "user",
+      "id": "request:task-fixture",
+      "text": "Add a --json flag to mars render and document it",
+      "source": "request",
+      "provenance": {
+        "source": "tasks.inspect.request",
+        "event_id": null
+      }
+    },
+    {
+      "kind": "thinking",
+      "id": "journal:entry-1",
+      "text": "The flag belongs in parseArgs; the renderer already has a JSON path.",
+      "tokens": 120,
+      "provenance": {
+        "source": "tasks.journal entry-1",
+        "event_id": "execution-observed-00000"
+      }
+    },
+    {
+      "kind": "assistant",
+      "id": "journal:entry-2",
+      "text": "I'll add `--json` to `mars render`.\n\n- parse the flag\n- print `processOutput` as JSON\n\nRun: `bun test apps/cli`",
+      "provenance": {
+        "source": "tasks.journal entry-2",
+        "event_id": "execution-observed-00001"
+      }
+    },
+    {
+      "kind": "turn",
+      "id": "event:execution-observed-00002",
+      "observed": "tool_execution_end",
+      "summary": "mars_read",
+      "entry_ids": ["entry-3"],
+      "running": false,
+      "provenance": {
+        "source": "@mars/execution",
+        "event_id": "execution-observed-00002"
+      }
+    },
+    {
+      "kind": "assistant",
+      "id": "journal:entry-4",
+      "text": "Done. `mars render --json` prints the processed document. Nothing is executed.",
+      "provenance": {
+        "source": "tasks.journal entry-4",
+        "event_id": "execution-observed-00003"
+      }
+    }
+  ],
+  "trimmed": 0,
+  "totals": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost_usd": null
+  },
+  "children": 0,
+  "verify": {
+    "pass": 0,
+    "fail": 0
+  },
+  "journal": "available",
+  "last_event_id": "execution-observed-00003"
+}

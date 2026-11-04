@@ -1,0 +1,16 @@
+╭─ Knowledge graph · read only ────────────────────────────╮
+│ state          ready                                     │
+│ revision       r12                                       │
+│ built at       2026-11-04T11:58:00.000Z                  │
+│ isolation      process-level confinement, not a kernel … │
+│                                                          │
+│ Last graph.build in this task                            │
+│   ready · r12 · graph built: 412 nodes, 1,280 edges · m… │
+│                                                          │
+│ graph.query in this task                                 │
+│   ready · r12 · render.ts is imported by main.ts and se… │
+╰────────────────────────────────────────────── Esc close ─╯
+                                                            
+────────────────────────────────────────────────────────────
+❯ read-only session · type / for commands · start, steer an…
+read-only session  model free  tokens 41.2k in  ·  6.1k out 

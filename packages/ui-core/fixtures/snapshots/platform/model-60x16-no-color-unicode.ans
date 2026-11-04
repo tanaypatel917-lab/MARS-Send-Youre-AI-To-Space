@@ -1,0 +1,16 @@
+╭─ Models · read only ─────────────────────────────────────╮
+│ this task  ·  free (pinned at launch)                    │
+│                                                          │
+│ provider                     kind         health       … │
+│ omniroute                    omniroute    available    … │
+│ local                        local        available    … │
+│ anthropic-direct             direct       unavailable  … │
+│                                                          │
+│ policy owner: mars                                       │
+│                                                          │
+│ per-model capabilities and prices are not in workbench … │
+╰────────────────────────────────── Esc close  ·  +1 more ─╯
+                                                            
+────────────────────────────────────────────────────────────
+❯ read-only session · type / for commands · start, steer an…
+read-only session  model free  tokens 41.2k in  ·  6.1k out 

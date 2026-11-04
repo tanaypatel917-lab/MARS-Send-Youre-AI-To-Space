@@ -16,7 +16,9 @@
     "@mars/research-worker": "workspace:*",
     "@mars/skills": "workspace:*",
     "@mars/team": "workspace:*",
+    "@mars/ui-core": "workspace:*",
     "@mars/workbench": "workspace:*",
+    "@oh-my-pi/pi-tui": "18.14.0",
     "zod": "3.25.76"
   }
 }

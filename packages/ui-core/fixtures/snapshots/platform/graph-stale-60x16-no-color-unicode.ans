@@ -1,0 +1,16 @@
+╭─ Knowledge graph · read only ────────────────────────────╮
+│ state          stale                                     │
+│ revision       r9                                        │
+│ built at       2026-11-03T09:00:00.000Z                  │
+│ isolation      process-level confinement, not a kernel … │
+│                                                          │
+│ the graph built at r9 is stale for this workspace        │
+│ action (a steer draft, not in this read-only client): a… │
+│                                                          │
+│ Last graph.build in this task                            │
+│   ready · r12 · graph built: 412 nodes, 1,280 edges · m… │
+╰────────────────────────────────── Esc close  ·  +3 more ─╯
+                                                            
+────────────────────────────────────────────────────────────
+❯ read-only session · type / for commands · start, steer an…
+read-only session  model free  tokens 41.2k in  ·  6.1k out 

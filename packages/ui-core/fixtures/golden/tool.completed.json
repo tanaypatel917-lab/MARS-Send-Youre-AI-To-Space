@@ -1,0 +1,243 @@
+{
+  "entries": [
+    {
+      "kind": "user",
+      "id": "request:task-fixture",
+      "text": "Add a --json flag to mars render and document it",
+      "source": "request",
+      "provenance": {
+        "source": "tasks.inspect.request",
+        "event_id": null
+      }
+    },
+    {
+      "kind": "explored",
+      "id": "explored:event:tool-completed-00000",
+      "counts": [
+        {
+          "verb": "read",
+          "count": 2
+        },
+        {
+          "verb": "search",
+          "count": 1
+        }
+      ],
+      "tools": [
+        {
+          "kind": "tool",
+          "id": "event:tool-completed-00000",
+          "name": "mars_read",
+          "primary": "apps/cli/src/render.ts",
+          "status": "ok",
+          "output": "import { parseArgs } from \"node:util\";",
+          "provenance": {
+            "source": "@mars/workbench",
+            "event_id": "tool-completed-00000"
+          }
+        },
+        {
+          "kind": "tool",
+          "id": "event:tool-completed-00001",
+          "name": "mars_grep",
+          "primary": "--json",
+          "status": "ok",
+          "output": "line 1: src/render.ts matched `--json`\nline 2: src/render.ts matched `--json`\nline 3: src/render.ts matched `--json`\nline 4: src/render.ts matched `--json`\nline 5: src/render.ts matched `--json`\nline 6: src/render.ts matched `--json`\nline 7: src/render.ts matched `--json`\nline 8: src/render.ts matched `--json`\nline 9: src/render.ts matched `--json`\nline 10: src/render.ts matched `--json`\nline 11: src/render.ts matched `--json`\nline 12: src/render.ts matched `--json`\nline 13: src/render.ts matched `--json`\nline 14: src/render.ts matched `--json`\nline 15: src/render.ts matched `--json`\nline 16: src/render.ts matched `--json`\nline 17: src/render.ts matched `--json`\nline 18: src/render.ts matched `--json`",
+          "provenance": {
+            "source": "@mars/workbench",
+            "event_id": "tool-completed-00001"
+          }
+        },
+        {
+          "kind": "tool",
+          "id": "event:tool-completed-00002",
+          "name": "mars_read",
+          "primary": "documentation/OUTPUT_FORMAT.md",
+          "status": "ok",
+          "output": "# MARS Output Format",
+          "provenance": {
+            "source": "@mars/workbench",
+            "event_id": "tool-completed-00002"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "tool",
+      "id": "event:tool-completed-00003",
+      "name": "mars_exec",
+      "primary": "bun test apps/cli",
+      "status": "error",
+      "output": "line 1: src/render.ts matched `--json`\nline 2: src/render.ts matched `--json`\nline 3: src/render.ts matched `--json`\nline 4: src/render.ts matched `--json`\nline 5: src/render.ts matched `--json`\nline 6: src/render.ts matched `--json`\nline 7: src/render.ts matched `--json`\nline 8: src/render.ts matched `--json`\nline 9: src/render.ts matched `--json`\nline 10: src/render.ts matched `--json`\nline 11: src/render.ts matched `--json`\nline 12: src/render.ts matched `--json`\nline 13: src/render.ts matched `--json`\nline 14: src/render.ts matched `--json`\nline 15: src/render.ts matched `--json`\nline 16: src/render.ts matched `--json`\nline 17: src/render.ts matched `--json`\nline 18: src/render.ts matched `--json`\nerror: 1 test failed",
+      "provenance": {
+        "source": "@mars/workbench",
+        "event_id": "tool-completed-00003"
+      }
+    },
+    {
+      "kind": "hook",
+      "id": "event:tool-completed-00004",
+      "phase": "pre-tool",
+      "command": "./scripts/lint",
+      "exit_code": 2,
+      "blocked": true,
+      "reason": "lint must pass before exec",
+      "output": "src/render.ts:3 unused import",
+      "provenance": {
+        "source": "@mars/workbench",
+        "event_id": "tool-completed-00004"
+      }
+    },
+    {
+      "kind": "diff",
+      "id": "event:tool-completed-00005",
+      "files": [
+        {
+          "path": "apps/cli/src/render.ts",
+          "status": "modified",
+          "patch": "--- a/apps/cli/src/render.ts\n+++ b/apps/cli/src/render.ts\n@@ -1,30 +1,52 @@\n-old line 0\n+new line 1 with --json handling\n+new line 2 with --json handling\n-old line 3\n+new line 4 with --json handling\n+new line 5 with --json handling\n-old line 6\n+new line 7 with --json handling\n+new line 8 with --json handling\n-old line 9\n+new line 10 with --json handling\n+new line 11 with --json handling\n-old line 12\n+new line 13 with --json handling\n+new line 14 with --json handling\n-old line 15\n+new line 16 with --json handling\n+new line 17 with --json handling\n-old line 18\n+new line 19 with --json handling\n+new line 20 with --json handling\n-old line 21\n+new line 22 with --json handling\n+new line 23 with --json handling\n-old line 24\n+new line 25 with --json handling\n+new line 26 with --json handling\n-old line 27\n+new line 28 with --json handling\n+new line 29 with --json handling\n-old line 30\n+new line 31 with --json handling\n+new line 32 with --json handling\n-old line 33\n+new line 34 with --json handling\n+new line 35 with --json handling\n-old line 36\n+new line 37 with --json handling\n+new line 38 with --json handling\n-old line 39\n+new line 40 with --json handling\n+new line 41 with --json handling\n-old line 42\n+new line 43 with --json handling",
+          "added": 29,
+          "removed": 15
+        },
+        {
+          "path": "documentation/CLI.md",
+          "status": "added",
+          "patch": "+# CLI\n+mars render --json",
+          "added": 2,
+          "removed": 0
+        }
+      ],
+      "added": 31,
+      "removed": 15
+    },
+    {
+      "kind": "child",
+      "id": "event:tool-completed-00006",
+      "label": "worker-2",
+      "status": "running",
+      "tool_calls": 3,
+      "model": "omniroute/openrouter/free-x",
+      "tier": "free",
+      "provenance": {
+        "source": "@mars/workbench",
+        "event_id": "tool-completed-00006"
+      }
+    },
+    {
+      "kind": "evidence",
+      "id": "event:tool-completed-00007",
+      "check": "mars_verify",
+      "evidence_kind": "verify",
+      "verdict": "pass",
+      "verified": true,
+      "advisory": false,
+      "files": ["evidence/render-json.txt", "evidence/screenshot-1.png"],
+      "summary": "bun test apps/cli passed (12 tests)",
+      "record": {
+        "schema_version": 1,
+        "operation": "watch.evidence",
+        "kind": "verify",
+        "tool": "mars_verify",
+        "verdict": "pass",
+        "assurance": "deterministic_local",
+        "verified": true,
+        "advisory": false,
+        "files": ["evidence/render-json.txt", "evidence/screenshot-1.png"],
+        "limitations": [],
+        "summary": "bun test apps/cli passed (12 tests)",
+        "cli_version": null,
+        "recorded_at": "2026-11-04T12:00:30.000Z"
+      },
+      "provenance": {
+        "source": "@mars/watch",
+        "event_id": "tool-completed-00007"
+      }
+    },
+    {
+      "kind": "evidence",
+      "id": "event:tool-completed-00008",
+      "check": "mars_verify",
+      "evidence_kind": "verify",
+      "verdict": "fail",
+      "verified": false,
+      "advisory": false,
+      "files": ["evidence/lint.txt"],
+      "summary": "biome reported 1 error",
+      "record": {
+        "schema_version": 1,
+        "operation": "watch.evidence",
+        "kind": "verify",
+        "tool": "mars_verify",
+        "verdict": "fail",
+        "assurance": "deterministic_local",
+        "verified": false,
+        "advisory": false,
+        "files": ["evidence/lint.txt"],
+        "limitations": ["lint only"],
+        "summary": "biome reported 1 error",
+        "cli_version": null,
+        "recorded_at": "2026-11-04T12:00:31.000Z"
+      },
+      "provenance": {
+        "source": "@mars/watch",
+        "event_id": "tool-completed-00008"
+      }
+    },
+    {
+      "kind": "graph",
+      "id": "event:tool-completed-00009",
+      "operation": "graph.build",
+      "status": "ready",
+      "revision": "r12",
+      "isolation": "process_env",
+      "summary": "graph built: 412 nodes, 1,280 edges",
+      "provenance": {
+        "source": "@mars/knowledge-graph",
+        "event_id": "tool-completed-00009"
+      }
+    },
+    {
+      "kind": "graph",
+      "id": "event:tool-completed-00010",
+      "operation": "graph.query",
+      "status": "ready",
+      "revision": "r12",
+      "isolation": null,
+      "summary": "render.ts is imported by main.ts and serve.ts",
+      "provenance": {
+        "source": "@mars/knowledge-graph",
+        "event_id": "tool-completed-00010"
+      }
+    },
+    {
+      "kind": "notice",
+      "id": "event:tool-completed-00011",
+      "tone": "info",
+      "text": "conventions.applied · ok",
+      "detail": "AGENTS.md (trusted), 2 commands"
+    },
+    {
+      "kind": "summary",
+      "id": "event:tool-completed-00012",
+      "status": "completed",
+      "seconds": 12,
+      "input_tokens": 2100,
+      "output_tokens": 640,
+      "cost_usd": 0,
+      "tools": 5
+    }
+  ],
+  "trimmed": 0,
+  "totals": {
+    "input_tokens": 3300,
+    "output_tokens": 940,
+    "cost_usd": 0
+  },
+  "children": 1,
+  "verify": {
+    "pass": 1,
+    "fail": 1
+  },
+  "journal": "available",
+  "last_event_id": "tool-completed-00012"
+}
