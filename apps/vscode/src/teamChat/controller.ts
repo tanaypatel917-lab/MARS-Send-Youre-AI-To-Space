@@ -420,7 +420,10 @@ export class TeamChatController {
   ): Promise<void> {
     if (this.selected?.conversation.conversation_id !== conversationId)
       await this.select(conversationId);
-    for (let i = 0; i < 64; i++) {
+    // Page back while the hit is older than what is loaded and each page
+    // still advances; the in-memory cap (older_blocked) or an exhausted
+    // cursor ends the walk.
+    for (;;) {
       const selected = this.selected;
       if (selected?.conversation.conversation_id !== conversationId) return;
       const earliest = selected.messages[0]?.sequence;
@@ -430,7 +433,15 @@ export class TeamChatController {
         selected.older_cursor === null
       )
         break;
-      await this.loadOlder(conversationId, selected.older_cursor);
+      const cursor = selected.older_cursor;
+      await this.loadOlder(conversationId, cursor);
+      const next = this.selected;
+      if (
+        next?.conversation.conversation_id !== conversationId ||
+        next.older_cursor === cursor ||
+        (next.messages[0]?.sequence ?? earliest) >= earliest
+      )
+        break;
     }
     const selected = this.selected;
     if (selected?.conversation.conversation_id !== conversationId) return;

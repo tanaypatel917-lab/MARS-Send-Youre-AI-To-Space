@@ -232,8 +232,8 @@ const CONNECTION_TEXT: Record<TeamChatViewState["connection"], string> = {
 };
 
 let searchDraft = "";
-/** Search hit already scrolled into view, so a re-render does not move the thread again. */
-let highlighted: string | null = null;
+/** Search hit already scrolled into view; re-renders keep the outline but do not move the thread again. */
+let scrolledToHit: string | null = null;
 
 function renderSearch(s: TeamChatViewState): HTMLElement {
   const input = h("input", { label: "Search messages" });
@@ -289,6 +289,7 @@ function renderSearch(s: TeamChatViewState): HTMLElement {
         `hit-${hit.message_id}`,
         () => {
           stickToBottom = false;
+          scrolledToHit = null;
           post({
             type: "openSearchHit",
             conversationId: hit.conversation_id,
@@ -521,7 +522,9 @@ function renderMessage(
   if (reply) reply.className = "reply-quote";
   const item = h(
     "li",
-    { class: `message ${mine ? "mine" : ""}` },
+    {
+      class: `message ${mine ? "mine" : ""} ${s.selected?.highlight_message_id === message.message_id ? "highlight" : ""}`,
+    },
     h(
       "div",
       { class: "message-head" },
@@ -967,17 +970,16 @@ function render(): void {
     scroller.scrollTop = scroller.scrollHeight;
   }
   const highlightId = s.selected?.highlight_message_id ?? null;
-  if (highlightId && highlightId !== highlighted) {
-    highlighted = highlightId;
+  if (highlightId && highlightId !== scrolledToHit) {
     const target = scroller.querySelector<HTMLElement>(
       `[data-message-id="${CSS.escape(highlightId)}"]`,
     );
     if (target) {
-      target.classList.add("highlight");
+      scrolledToHit = highlightId;
       target.scrollIntoView({ block: "center" });
       stickToBottom = false;
     }
-  } else if (!highlightId) highlighted = null;
+  } else if (!highlightId) scrolledToHit = null;
   jumpButton.hidden = stickToBottom;
   reportViewport();
   const first = code?.querySelector<HTMLElement>("[data-first-highlight]");

@@ -213,10 +213,7 @@ export class RpcTeamService implements TeamService {
       (covered
         ? after.filter((m) => m.author_id !== me).length
         : Math.max(0, conversation.last_seq - floor));
-    const firstUnread =
-      unread > 0
-        ? (after.find((m) => m.author_id !== me)?.seq ?? floor + 1)
-        : null;
+    const firstUnread = unread > 0 ? firstUnreadSeq(after, floor, me) : null;
     const others = members
       .filter((m) => m.state === "active" && m.user_id !== me)
       .map((m) => m.user_id);
@@ -564,4 +561,24 @@ export class RpcTeamService implements TeamService {
   mentionIndex(): MentionIndex {
     return { repos: [] };
   }
+}
+
+/**
+ * First unread sequence the read-cursor gate may trust: walks the cache from
+ * `floor + 1` and stops at the first message by someone else, but only while
+ * the cache is contiguous — an uncached gap means unseen messages may hide
+ * there, so the conservative `floor + 1` is kept.
+ */
+function firstUnreadSeq(
+  after: readonly ServiceMessage[],
+  floor: number,
+  me: string,
+): number {
+  let seq = floor + 1;
+  for (const message of after) {
+    if (message.seq !== seq) return floor + 1;
+    if (message.author_id !== me) return seq;
+    seq += 1;
+  }
+  return floor + 1;
 }

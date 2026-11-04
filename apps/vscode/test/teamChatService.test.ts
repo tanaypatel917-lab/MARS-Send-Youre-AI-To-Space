@@ -854,3 +854,83 @@ describe("review fixes", () => {
     expect(last().selected?.highlight_message_id).toBeNull();
   });
 });
+
+describe("review fixes, round 2", () => {
+  test("a partially cached unread span keeps the conservative first-unread boundary", async () => {
+    const { controller, last, server, dm } = setup({ pageSize: 3 });
+    for (let i = 0; i < 20; i++) server.post(GRACE, dm, `unread ${i}`);
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    // Only the last 3 of 23 messages are loaded: the boundary must stay at 1,
+    // so a focused viewer at the bottom does not mark 1..20 read unseen.
+    expect(last().selected?.messages.map((m) => m.sequence)).toEqual([
+      21, 22, 23,
+    ]);
+    expect(last().selected?.conversation.first_unread_sequence).toBe(1);
+    await controller.handleMessage({
+      type: "viewport",
+      focused: true,
+      atBottom: true,
+    });
+    expect(last().selected?.conversation.read_cursor).toBe(0);
+    expect(
+      server.calls.some((c) => c.method === "conversations.mark_read"),
+    ).toBe(false);
+  });
+
+  test("a contiguous cache lets the boundary skip the viewer's own leading posts", async () => {
+    const { controller, last, server, dm } = setup({ pageSize: 50 });
+    server.post(ADA, dm, "mine first");
+    server.post(GRACE, dm, "then theirs");
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    // Seeded: 1 grace, 2 ada, 3 grace, 4 ada, 5 grace → first by someone else is 1.
+    expect(last().selected?.conversation.first_unread_sequence).toBe(1);
+    await controller.handleMessage({
+      type: "viewport",
+      focused: true,
+      atBottom: true,
+    });
+    expect(last().selected?.conversation.read_cursor).toBe(5);
+    await controller.handleMessage({
+      type: "viewport",
+      focused: false,
+      atBottom: true,
+    });
+    server.post(ADA, dm, "own again");
+    server.post(GRACE, dm, "theirs again");
+    await controller.handleMessage({
+      type: "selectConversation",
+      conversationId: dm,
+    });
+    expect(last().selected?.conversation.first_unread_sequence).toBe(7);
+    expect(last().selected?.conversation.unread_count).toBe(1);
+  });
+
+  test("opening a hit walks every page down to the message, not a fixed number of pages", async () => {
+    const { controller, last, server, dm } = setup({
+      capabilities: { stream: false, reactions: false, search: true },
+      pageSize: 1,
+    });
+    for (let i = 0; i < 90; i++) server.post(GRACE, dm, `filler ${i}`);
+    await controller.handleMessage({ type: "ready" });
+    await controller.handleMessage({ type: "search", query: "launch key" });
+    const hit = last().search?.hits[0];
+    if (!hit) throw new Error("no hit");
+    await controller.handleMessage({
+      type: "openSearchHit",
+      conversationId: hit.conversation_id,
+      messageId: hit.message_id,
+      sequence: hit.sequence,
+    });
+    expect(last().selected?.messages[0]?.sequence).toBe(1);
+    expect(last().selected?.highlight_message_id).toBe(hit.message_id);
+    expect(last().notice).toBeNull();
+  });
+});
