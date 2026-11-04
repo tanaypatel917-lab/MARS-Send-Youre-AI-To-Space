@@ -231,7 +231,48 @@ export const FixtureDatasetSchema = z
     references: z.array(ReferenceSchema).max(500),
     shares: z.array(ShareSchema).max(1000),
   })
-  .strict();
+  .strict()
+  .superRefine((data, ctx) => {
+    const pairs = new Set<string>();
+    for (const conversation of data.conversations) {
+      const members = data.participants
+        .filter((p) => p.conversation_id === conversation.conversation_id)
+        .map((p) => p.user_id);
+      if (conversation.kind !== "dm") {
+        if (members.length < 2)
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `group ${conversation.conversation_id} needs at least two participants`,
+          });
+        continue;
+      }
+      const [a, b] = members;
+      if (
+        members.length !== 2 ||
+        a === undefined ||
+        b === undefined ||
+        a === b
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `DM ${conversation.conversation_id} needs exactly two distinct participants`,
+        });
+        continue;
+      }
+      if (conversation.canonical_pair !== canonicalPair(a, b))
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `DM ${conversation.conversation_id} canonical_pair does not match its participants`,
+        });
+      const key = `${conversation.team_id}|${conversation.canonical_pair}`;
+      if (pairs.has(key))
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate DM for pair ${conversation.canonical_pair} in team ${conversation.team_id}`,
+        });
+      pairs.add(key);
+    }
+  });
 export type FixtureDataset = z.infer<typeof FixtureDatasetSchema>;
 
 // ---------------------------------------------------------------- operations

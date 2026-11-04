@@ -1,6 +1,7 @@
 import { cloneFixture, FIXTURE } from "./fixture";
 import {
   type FixtureDataset,
+  FixtureDatasetSchema,
   fail,
   MAX_GROUP_MEMBERS,
   MAX_MESSAGE_CHARS,
@@ -9,6 +10,7 @@ import {
   type ReactionEmoji,
   ReactionEmojiSchema,
   type Reference,
+  type ReferenceInput,
   type ReferenceKind,
   type SendMessageInput,
   SendMessageInputSchema,
@@ -192,6 +194,28 @@ function decodeCursor(cursor: string): number | null {
   return Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
+/** Fixed key order so equal references always serialize identically. */
+function canonicalReference(r: ReferenceInput): ReferenceInput {
+  return {
+    kind: r.kind,
+    repo_id: r.repo_id,
+    commit_sha: r.commit_sha,
+    path: r.path,
+    line_start: r.line_start,
+    line_end: r.line_end,
+    symbol: r.symbol,
+  };
+}
+
+/** Content identity of a send: trimmed body, reply target and canonical references. */
+function fingerprintOf(
+  body: string,
+  replyTo: string | null,
+  references: ReferenceInput[],
+): string {
+  return JSON.stringify([body.trim(), replyTo, references]);
+}
+
 function fixedClock(): () => string {
   let minute = 40;
   return () => {
@@ -222,17 +246,37 @@ export class FixtureTeamService implements TeamService {
   private referenceCounter = 0;
 
   constructor(options: FixtureTeamServiceOptions = {}) {
-    this.data = cloneFixture(options.dataset ?? FIXTURE);
+    // Re-validated here so a custom dataset gets the same DM/participant invariants.
+    this.data = cloneFixture(
+      FixtureDatasetSchema.parse(options.dataset ?? FIXTURE),
+    );
     this.now = options.now ?? fixedClock();
-    for (const message of this.data.messages)
+    for (const message of this.data.messages) {
+      const references = this.data.shares
+        .filter((share) => share.message_id === message.message_id)
+        .map((share) =>
+          this.data.references.find(
+            (r) => r.reference_id === share.reference_id,
+          ),
+        )
+        .filter((r): r is Reference => r !== undefined)
+        .map(canonicalReference);
       this.sends.set(
         this.sendKey(
           message.author_id,
           message.conversation_id,
           message.client_message_id,
         ),
-        { message_id: message.message_id, fingerprint: "" },
+        {
+          message_id: message.message_id,
+          fingerprint: fingerprintOf(
+            message.body,
+            message.reply_to,
+            references,
+          ),
+        },
       );
+    }
   }
 
   users(): UserView[] {
@@ -298,11 +342,11 @@ export class FixtureTeamService implements TeamService {
     const participant = this.participant(viewer, input.conversation_id);
     if (!participant) return fail("not_found");
     const body = input.body.trim();
-    const fingerprint = JSON.stringify([
+    const fingerprint = fingerprintOf(
       body,
       input.reply_to,
-      input.references,
-    ]);
+      input.references.map(canonicalReference),
+    );
     const key = this.sendKey(
       viewer,
       input.conversation_id,

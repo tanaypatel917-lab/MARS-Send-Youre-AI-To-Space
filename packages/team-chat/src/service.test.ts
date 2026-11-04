@@ -400,3 +400,84 @@ describe("reference previews", () => {
     expect(FIXTURE.messages).toHaveLength(8);
   });
 });
+
+describe("review fixes", () => {
+  test("replaying a seeded message with its original content is a duplicate, not a conflict", () => {
+    const service = new FixtureTeamService();
+    const original = FIXTURE.messages.find((m) => m.message_id === "msg_dm_2");
+    if (!original) throw new Error("fixture message missing");
+    const result = service.sendMessage(U.ada, {
+      conversation_id: C.dmAdaGrace,
+      client_message_id: "cm_ada_0001",
+      body: original.body,
+      reply_to: "msg_dm_1",
+      references: [
+        {
+          kind: "range",
+          repo_id: R.platform,
+          commit_sha: PLATFORM_SHA,
+          path: "packages/watch/src/service.ts",
+          line_start: 12,
+          line_end: 19,
+          symbol: null,
+        },
+      ],
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: { message_id: "msg_dm_2", sequence: 2, duplicate: true },
+    });
+    expect(
+      ok(service.openConversation(U.ada, C.dmAdaGrace)).messages,
+    ).toHaveLength(4);
+    expect(
+      service.sendMessage(U.ada, {
+        conversation_id: C.dmAdaGrace,
+        client_message_id: "cm_ada_0001",
+        body: original.body,
+        reply_to: null,
+        references: [],
+      }),
+    ).toEqual({ ok: false, code: "client_message_id_reused" });
+  });
+
+  test("a DM's canonical pair must match its two participants and be unique per team", () => {
+    const dm = FIXTURE.conversations.find(
+      (c) => c.conversation_id === C.dmAdaGrace,
+    );
+    if (!dm) throw new Error("fixture dm missing");
+    const reversed = {
+      ...FIXTURE,
+      conversations: FIXTURE.conversations.map((c) =>
+        c.conversation_id === C.dmAdaGrace
+          ? { ...c, canonical_pair: `${U.grace}|${U.ada}` }
+          : c,
+      ),
+    };
+    expect(FixtureDatasetSchema.safeParse(reversed).success).toBe(false);
+    const duplicate = {
+      ...FIXTURE,
+      conversations: [
+        ...FIXTURE.conversations,
+        { ...dm, conversation_id: "conv_dm_dup" },
+      ],
+      participants: [
+        ...FIXTURE.participants,
+        ...FIXTURE.participants
+          .filter((p) => p.conversation_id === C.dmAdaGrace)
+          .map((p) => ({ ...p, conversation_id: "conv_dm_dup" })),
+      ],
+    };
+    expect(FixtureDatasetSchema.safeParse(duplicate).success).toBe(false);
+    const mismatch = {
+      ...FIXTURE,
+      participants: FIXTURE.participants.map((p) =>
+        p.conversation_id === C.dmAdaGrace && p.user_id === U.grace
+          ? { ...p, user_id: U.linus }
+          : p,
+      ),
+    };
+    expect(FixtureDatasetSchema.safeParse(mismatch).success).toBe(false);
+    expect(() => new FixtureTeamService({ dataset: mismatch })).toThrow();
+  });
+});
