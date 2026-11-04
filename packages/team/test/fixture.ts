@@ -4,10 +4,11 @@ import { join } from "node:path";
 import type { RepoRegistry } from "@mars/code-refs";
 import type { TeamDeliveryEvent } from "@mars/contracts";
 import type { TeamAgentOptions } from "../src/agent";
+import type { AgentReferencePort } from "../src/agent-references";
 import { createDevAuthenticator } from "../src/auth";
 import type { StreamClose } from "../src/protocol";
 import type { TeamLimits } from "../src/schemas";
-import { serveTeam } from "../src/server";
+import { serveTeam, type TeamServerLogEntry } from "../src/server";
 import { createTeamStore, type TeamStore } from "../src/store";
 
 export const TEAM = "team-1";
@@ -23,6 +24,7 @@ export type User = keyof typeof TOKENS;
 
 export interface RpcResult {
   status: number;
+  headers: Headers;
   body: { result?: unknown; error?: { code: string; message: string } };
 }
 
@@ -53,11 +55,19 @@ export interface FixtureOptions {
   repos?: RepoRegistry;
   /** Host agent options; when given, `agent.*` are served. */
   agent?: TeamAgentOptions;
+  /** Host reference port the server pre-resolves agent selections through. */
+  agentReferences?: AgentReferencePort;
+  /** Kill switch state at start (default on; the store default is off). */
+  enabled?: boolean;
 }
 
 export function fixture(options: Partial<TeamLimits> | FixtureOptions = {}) {
   const resolved: FixtureOptions =
-    "limits" in options || "repos" in options || "agent" in options
+    "limits" in options ||
+    "repos" in options ||
+    "agent" in options ||
+    "agentReferences" in options ||
+    "enabled" in options
       ? (options as FixtureOptions)
       : { limits: options as Partial<TeamLimits> };
   const limits = resolved.limits ?? {};
@@ -68,6 +78,10 @@ export function fixture(options: Partial<TeamLimits> | FixtureOptions = {}) {
     limits,
     ...(agent ? { agent } : {}),
   });
+  // The kill switch defaults to off; tests exercise the enabled service
+  // unless they flip it themselves.
+  store.setEnabled(resolved.enabled ?? true);
+  const logs: TeamServerLogEntry[] = [];
   for (const user of ["alice", "bob", "carol"])
     store.setTeamMember({ team_id: TEAM, user_id: user, role: "member" });
   store.setTeamMember({ team_id: OTHER_TEAM, user_id: "dave", role: "admin" });
@@ -83,7 +97,11 @@ export function fixture(options: Partial<TeamLimits> | FixtureOptions = {}) {
     store,
     authenticator,
     port: 0,
+    log: (entry) => logs.push(entry),
     ...(resolved.repos ? { repos: resolved.repos } : {}),
+    ...(resolved.agentReferences
+      ? { agentReferences: resolved.agentReferences }
+      : {}),
   });
   const url = `http://127.0.0.1:${server.port}/v1/rpc`;
   let counter = 0;
@@ -122,6 +140,7 @@ export function fixture(options: Partial<TeamLimits> | FixtureOptions = {}) {
     );
     return {
       status: response.status,
+      headers: response.headers,
       body: (await response.json()) as RpcResult["body"],
     };
   };
@@ -252,6 +271,7 @@ export function fixture(options: Partial<TeamLimits> | FixtureOptions = {}) {
     rootDir,
     store: store as TeamStore,
     server,
+    logs,
     url,
     streamUrl,
     raw,

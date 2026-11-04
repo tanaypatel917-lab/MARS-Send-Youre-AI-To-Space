@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@mars/code-refs": "workspace:*",
     "@mars/codex-tools": "workspace:*",
     "@mars/contracts": "workspace:*",
     "@mars/execution": "workspace:*",
@@ -14,6 +15,8 @@
     "@mars/providers-omniroute": "workspace:*",
     "@mars/research-worker": "workspace:*",
     "@mars/skills": "workspace:*",
-    "@mars/workbench": "workspace:*"
+    "@mars/team": "workspace:*",
+    "@mars/workbench": "workspace:*",
+    "zod": "3.25.76"
   }
 }

@@ -30,7 +30,7 @@ const server = serveTeam({
   membership, then participation, inside one transaction.
 - `Authenticator` — `authenticate(bearerToken) → {user_id, team_ids} | null`.
   `createDevAuthenticator(users)` is for tests and the pilot only.
-- `serveTeam({ store, authenticator, port? })` — same checks, caps, envelope
+- `serveTeam({ store, authenticator, port?, repos?, agentReferences?, log? })` — same checks, caps, envelope
   and error codes as `packages/workbench/src/server.ts`; `/v1/stream` serves
   membership-filtered outbox metadata as SSE (`id:` = `event_seq`, heartbeat
   comments, `event: close` on revocation) by re-polling the store from the
@@ -60,3 +60,15 @@ the frozen conversation provenance and the attested card. See
 `documentation/TEAM_CHAT.md` → "Task handoff" for the flow and the rules
 (frozen provenance, one launch key per link, verification copied not judged,
 stale on re-share, no scope ids to other members).
+
+## Pilot rollout (PR 7)
+
+`store.isEnabled()` / `store.setEnabled()` (kill switch in `meta`, default
+**off**; off → only `team.describe` answers), `store.metrics` +
+`team.metrics` (admin-only redacted counters, `TeamMetricsSchema`),
+per-user sliding-minute limits for sends/reactions/search/agent calls
+(`unavailable` + `Retry-After`), `store.exportSnapshot()` /
+`importSnapshot()` (`TeamStoreSnapshotSchema`), `createAgentReferencePort`
+(backs the agent `TeamReferencePort` with `repo_access` + `@mars/code-refs`).
+Operated through `mars team serve|enable|disable|stats|export|import|revoke|readmit|grant|rotate-tokens`;
+see `documentation/TEAM_CHAT_RUNBOOK.md`.

@@ -22,7 +22,8 @@
     "doctor": "bun apps/cli/src/main.ts doctor",
     "smoke:execution": "bun apps/cli/src/main.ts smoke",
     "build": "bun build apps/cli/src/main.ts packages/providers/src/index.ts packages/integration-trust/src/index.ts packages/workbench/src/index.ts --target=bun --packages=external --outdir dist",
-    "check": "bun run lint && bun run typecheck && bun run audit:sources && bun run test && bun run smoke:execution && bun run build"
+    "check:team": "bun scripts/team-chat-staging.ts",
+    "check": "bun run lint && bun run typecheck && bun run audit:sources && bun run test && bun run smoke:execution && bun run check:team && bun run build"
   },
   "devDependencies": {
     "@biomejs/biome": "2.3.3",

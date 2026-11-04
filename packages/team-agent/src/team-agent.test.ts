@@ -121,6 +121,8 @@ async function fixture(
       },
     },
   });
+  // The kill switch defaults to off; the worker claims nothing while it is off.
+  store.setEnabled(true);
   cleanup.push(async () => store.close());
   for (const user of ["alice", "bob", "carol"])
     store.setTeamMember({ team_id: TEAM, user_id: user, role: "member" });

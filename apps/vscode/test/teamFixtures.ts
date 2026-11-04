@@ -77,6 +77,8 @@ export class FakeTeamServer {
   dropNextAck = false;
   /** When true, every call fails as unavailable (server down). */
   offline = false;
+  /** PR 7 kill switch: every method but `team.describe` answers 503 `unavailable`; describe reports `enabled: false`. */
+  disabled = false;
   /** When true, the next history page is cut to one row (the server's byte budget). */
   shortPageOnce = false;
   private counter = 0;
@@ -276,6 +278,8 @@ export class FakeTeamServer {
         this.calls.push(structuredClone(request));
         if (this.offline) throw rpc("disconnected", undefined, undefined);
         if (!this.members.has(userId)) throw rpc("forbidden", "forbidden", 403);
+        if (this.disabled && request.method !== "team.describe")
+          throw rpc("server", "unavailable", 503);
         if (
           request.method !== "team.describe" &&
           request.context?.team_id !== TEAM_ID
@@ -297,6 +301,7 @@ export class FakeTeamServer {
           team_id: TEAM_ID,
           user_id: userId,
           role: "member",
+          enabled: !this.disabled,
           limits: { page_limit: this.pageLimit, max_body_bytes: 16384 },
           // `references` is always present on `main` (PR 4).
           capabilities: { ...this.capabilities, references: false },

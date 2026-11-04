@@ -379,6 +379,74 @@ it (without the two fields) stay valid, and idempotency results stored for
 `messages.send` / `shares.create` before the upgrade are adapted on replay
 (`upgrade.test.ts` exercises a store downgraded to the pre-0004 shape).
 
+## Pilot rollout (PR 7)
+
+Operator surface, limits, monitoring and recovery for the pilot; procedures
+and the acceptance matrix are in `documentation/TEAM_CHAT_RUNBOOK.md`.
+Everything here is **offline-verified only** (loopback process, dev tokens,
+temp `git` repos; no live window or second machine).
+
+- **`mars team` CLI** (`apps/cli/src/team.ts`): `serve --state DIR [--port]
+  [--team ID] (--dev-users a,b,c | --auth-provider none) [--repo ID=DIR]…
+  [--repo-access ID=users]… [--agent-model ID] [--enable] [--quiet]`,
+  `enable|disable`, `stats`, `export --out FILE`, `import --in FILE`,
+  `revoke --user ID [--repo ID]`, `readmit --user ID`, `grant --user ID --repo ID`,
+  `rotate-tokens` (revocations persist across restarts; re-admission is
+  explicit). `serve` opens the store
+  (pending migrations run; the startup line lists `migrations_applied` and
+  `ledger_head`), registers `--repo` checkouts in the `@mars/code-refs`
+  registry and the store, writes `<state>/team-connection.json` (0600,
+  `{schema_version: 1, url, team_id}` — never a token; dev tokens live in
+  `<state>/team-dev-tokens.json`, 0600, reused across restarts, first user is
+  the admin), listens on loopback, and closes every stream on `SIGTERM`.
+  `mars doctor [--team-state DIR]` gained a `team` section (format version,
+  ledger head, pending migrations, flag state, repo count; no paths).
+- **Kill switch.** `meta.team.enabled`, **default off**, re-read per request.
+  Off → every method but `team.describe` (which now carries `enabled`) answers
+  `unavailable`; new streams are refused; open streams close with
+  `reason: "unavailable"` (immediately in-process via a `disabled` store notice,
+  at the next heartbeat re-poll from another process); `agentHost.claimNext()`
+  returns nothing. Durable data is never touched. The VS Code inbox treats the
+  `unavailable` answer like other fatal kinds: it shows the disabled state and
+  stops polling.
+- **Limits.** `TeamLimitsSchema` gained `max_sends_per_minute` (120; send,
+  edit, delete, `shares.create`), `max_reactions_per_minute` (240) and
+  `max_agent_requests_per_minute` (10; `agent.preview` + `agent.request`)
+  beside the existing `max_search_per_minute` (60) and
+  `max_resolves_per_minute` (120). One sliding-minute window per
+  (window, team, user) in the serving process; exceeding answers
+  `503 unavailable` (frozen vocabulary) **with a `Retry-After` header** carrying
+  the seconds until the oldest stamp leaves the window.
+- **Redacted monitoring.** Durable integer counters under fixed names
+  (`TEAM_METRIC_COUNTERS`: `sends`, `send_replays`, `conflicts`,
+  `stream_connects`, `stream_disconnects`, `backfill_pages`, `links`, `shares`,
+  `rate_limit_hits`, `disabled_refusals`, `denied_reads.<code>`,
+  `agent_requests.<status>`, `rpc_errors.<code>`) in the `metrics` table
+  (migration `0005_metrics`), exposed by `team.metrics` (**team admins only**;
+  the stored `members.role`) and `mars team stats`. Server log entries are
+  `{op, id, method, code, status, ms}` with a server-minted `id`; the client's
+  `request_id`, bodies, paths, SHAs, tokens and user ids never appear.
+  `rollout.test.ts` walks a snapshot and proves every key is an allowed name
+  and every leaf an integer.
+- **Export / import.** `store.exportSnapshot()` (`TeamStoreSnapshotSchema`:
+  ledger, flag, every table's rows; no credential exists in the store) and
+  `store.importSnapshot()` (refuses a non-empty store and a different ledger;
+  the restored store stays disabled). Roll back by restoring the previous
+  state directory under the previous binary — an older binary refuses a newer
+  ledger without modifying it.
+- **Agent reference port.** `createAgentReferencePort({repos, store})` backs
+  `TeamReferencePort` with `code_references` + `repo_access` + the
+  `@mars/code-refs` resolver: the server pre-resolves the selection
+  (`prepare`, async `git`, bounded cache of immutable excerpts keyed by
+  `reference_id` and checked against `blob_sha256`) before the store's
+  synchronous `describe` computes `readers` through `store.hasRepoAccess` per
+  participant. A participant without repo access makes the reference
+  `restricted` (no path, label or SHA in any preview) and `agent.request`
+  answers `forbidden`.
+- **Staging verification.** `bun run check:team` (`scripts/team-chat-staging.ts`,
+  part of `bun run check`, ≈ 6 s) starts `mars team serve` with three dev
+  users and two temp repos and drives the plan's minimum matrix over HTTP.
+
 ## Decisions recorded
 
 - **`not_found` for "absent" and "not yours".** Every conversation-scoped read
@@ -445,6 +513,14 @@ it (without the two fields) stay valid, and idempotency results stored for
   the next step; until then agent citations to ids outside `code_references`
   render as `restricted` chips. Where the plan's "team's allowed provider"
   would widen the model set, MARS policy wins: `tier` is always `free`.
+- **Flag default off; admin role gates metrics; export is a full-row JSON
+  snapshot (PR 7).** The pilot must be switched on deliberately per store;
+  disabling is reversible and never deletes. `team.metrics` uses the existing
+  `members.role` (`admin`) rather than a new permission table. The export
+  format is the store's rows verbatim under the ledger that wrote them (not a
+  logical re-encoding), so a restore is exact and a mismatched ledger is
+  refused instead of translated. Rate limits stay `unavailable` + `Retry-After`
+  because the RPC vocabulary is frozen.
 - **Audience = exact participant set.** The plan asks to re-check "membership
   or access changes"; we treat additions as changes too, because a member
   added after the selection cannot see the source messages (`joined_seq`).

@@ -13,12 +13,27 @@ export {
   type TeamReferencePort,
 } from "./agent";
 export {
+  type AgentReferencePort,
+  type AgentReferencePortOptions,
+  createAgentReferencePort,
+} from "./agent-references";
+export {
   type AuthenticatedUser,
   type Authenticator,
   createDevAuthenticator,
   type DevUser,
 } from "./auth";
 export { TEAM_ERROR_CODES, TeamError, type TeamErrorCode } from "./errors";
+export {
+  isTeamMetricCounter,
+  METRIC_AGENT_STATUSES,
+  METRIC_ERROR_CODES,
+  TEAM_METRIC_COUNTERS,
+  type TeamMetricCounter,
+  type TeamMetrics,
+  TeamMetricsSchema,
+  type TeamMetricsSnapshot,
+} from "./metrics";
 export * from "./protocol";
 export {
   createReferenceService,
@@ -37,6 +52,7 @@ export {
   type RpcErrorCode,
   serveTeam,
   TeamServerError,
+  type TeamServerLogEntry,
   type TeamServerOptions,
 } from "./server";
 export {
@@ -61,11 +77,15 @@ export {
   type StoreNotice,
   sha256,
   TEAM_MIGRATIONS,
+  TEAM_SNAPSHOT_SCHEMA_VERSION,
+  TEAM_SNAPSHOT_TABLES,
   TEAM_STORE_FORMAT_VERSION,
   type TeamActor,
   type TeamDescription,
   type TeamStore,
   type TeamStoreOptions,
+  type TeamStoreSnapshot,
+  TeamStoreSnapshotSchema,
 } from "./store";
 export {
   excerptAround,

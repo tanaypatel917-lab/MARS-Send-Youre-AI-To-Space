@@ -122,7 +122,8 @@ export class TeamRealtime implements TeamRealtimeSource {
       return;
     }
     if (!this.running) this.running = this.loop();
-    else if (changed) this.interrupt();
+    // A resubscribe while paused by the host switch is the user's reconnect.
+    else if (changed || this.state === "disabled") this.interrupt();
   }
 
   stop(): void {
@@ -209,6 +210,17 @@ export class TeamRealtime implements TeamRealtimeSource {
             delay = this.min;
             continue;
           }
+          if (await this.hostDisabled(rpc, signal)) {
+            // Same shape as the fatal kinds: no polling until the owner
+            // resubscribes (the user reconnects); the server keeps the data.
+            await this.setState("disabled");
+            await new Promise<void>((resolve) => {
+              this.wake = resolve;
+            });
+            this.wake = null;
+            delay = this.min;
+            continue;
+          }
           if (rpc.kind === "not-found" || rpc.kind === "forbidden") {
             // One of the cursors is no longer ours; let the owner re-list and
             // resubscribe, which drops the revoked conversation.
@@ -221,6 +233,24 @@ export class TeamRealtime implements TeamRealtimeSource {
       }
     }
     await this.setState("offline");
+  }
+
+  /**
+   * A 503 `unavailable` is either an outage (retry with backoff) or the PR 7
+   * kill switch; only `team.describe`, which still answers while the switch
+   * is off, can tell them apart.
+   */
+  private async hostDisabled(
+    rpc: RpcError,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (rpc.kind !== "server" || rpc.code !== "unavailable") return false;
+    try {
+      const described = await this.options.client.describe(signal);
+      return described.enabled === false;
+    } catch {
+      return false;
+    }
   }
 
   /** Advances new conversations from cursor 0 to the present without notifying. */
@@ -278,6 +308,13 @@ export class TeamRealtime implements TeamRealtimeSource {
       redirect: "error",
     });
     if (response.status === 401) throw unauthorized();
+    if (response.status === 503)
+      throw new RpcError(
+        "server",
+        "Team stream unavailable.",
+        "unavailable",
+        503,
+      );
     if (response.status === 404 || response.status === 405) {
       this.streamBroken = true;
       return this.poll(signal);

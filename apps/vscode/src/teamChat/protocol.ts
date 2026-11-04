@@ -89,6 +89,8 @@ export const TeamDescribeResultSchema = z
     team_id: id,
     user_id: id,
     role: TeamRoleSchema,
+    /** PR 7 kill switch; absent on older servers means enabled. When false every other method answers `unavailable`. */
+    enabled: z.boolean().optional(),
     limits: z.record(z.number().int().nonnegative()),
     capabilities: TeamCapabilitiesSchema,
   })

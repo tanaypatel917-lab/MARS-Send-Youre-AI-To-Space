@@ -1,12 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 import { join } from "node:path";
-import type {
-  Message,
-  MessageView,
-  SharePreview,
-  TaskLink,
-} from "@mars/contracts";
+import type { MessageView, SharePreview, TaskLink } from "@mars/contracts";
 import { fixture } from "../test/fixture";
 import type { ConversationViewResult, TaskLinkDraftResult } from "./protocol";
 import { canonicalJson, createTeamStore, sha256 } from "./store";
@@ -93,7 +88,7 @@ function downgrade(rootDir: string) {
       );
     }
     db.exec(
-      "ALTER TABLE messages DROP COLUMN agent_request_id; ALTER TABLE messages DROP COLUMN kind; DROP TABLE agent_requests; DELETE FROM migrations WHERE id = '0004_agent_requests';",
+      "ALTER TABLE messages DROP COLUMN agent_request_id; ALTER TABLE messages DROP COLUMN kind; DROP TABLE agent_requests; DELETE FROM migrations WHERE id = '0004_agent_requests'; DROP TABLE metrics; DELETE FROM migrations WHERE id = '0005_metrics';",
     );
   })();
   db.close();

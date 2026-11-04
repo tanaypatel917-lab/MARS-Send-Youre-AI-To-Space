@@ -120,7 +120,9 @@ export type TeamConnectionState =
   | "live"
   | "polling"
   | "retrying"
-  | "unauthenticated";
+  | "unauthenticated"
+  /** The host switched `team.enabled` off: polling stops until the user reconnects; nothing is deleted. */
+  | "disabled";
 
 /** Content-free `aria-live` announcement; `seq` changes once per new announcement. */
 export interface TeamChatAnnouncement {

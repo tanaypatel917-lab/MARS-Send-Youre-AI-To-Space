@@ -70,6 +70,10 @@ const NOTICE_UNAVAILABLE: TeamChatNotice = {
   kind: "error",
   text: "The team service is not reachable.",
 };
+const NOTICE_DISABLED: TeamChatNotice = {
+  kind: "info",
+  text: "Team Chat is disabled by the host. Nothing is deleted; reopen the view once it is enabled again.",
+};
 const NOTICE_UNAUTHORIZED: TeamChatNotice = {
   kind: "error",
   text: "No valid team token. Run “MARS: Set team token”.",
@@ -320,8 +324,12 @@ export class TeamChatController {
 
   /** Maps a failed service result to a notice; removal codes on a known conversation drop it. */
   private failed(code: TeamErrorCode, conversationId?: string): void {
-    if (code === "unavailable") this.notice = NOTICE_UNAVAILABLE;
-    else if (code === "unauthorized") {
+    if (code === "unavailable") {
+      if (this.service.disabled?.() === true) {
+        this.notice = NOTICE_DISABLED;
+        this.connection = "disabled";
+      } else this.notice = NOTICE_UNAVAILABLE;
+    } else if (code === "unauthorized") {
       this.notice = NOTICE_UNAUTHORIZED;
       this.connection = "unauthenticated";
     } else if (conversationId && REMOVAL_CODES.has(code))
@@ -370,7 +378,11 @@ export class TeamChatController {
       return;
     }
     this.conversations = result.value;
-    if (this.connection === "unauthenticated") this.connection = "offline";
+    if (this.connection === "unauthenticated" || this.connection === "disabled")
+      this.connection = "offline";
+    // A successful list ends a connection-level notice; content notices stay.
+    if (this.notice === NOTICE_DISABLED || this.notice === NOTICE_UNAVAILABLE)
+      this.notice = null;
     const ids = new Set(this.conversations.map((c) => c.conversation_id));
     if (this.selected && !ids.has(this.selected.conversation.conversation_id))
       this.forget(this.selected.conversation.conversation_id);
