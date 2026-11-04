@@ -43,16 +43,41 @@ export function normalisePunctuation(text: string): string {
   return out;
 }
 
+/**
+ * MARS bound: line comparisons one update hunk may spend locating its chunks.
+ * The search is quadratic in the worst case and runs on the host's event
+ * loop, so a model-controlled file and patch could otherwise stall the host.
+ */
+export const MAX_SEEK_LINE_COMPARISONS = 20_000_000;
+
+/** Shared across the seeks of one update hunk; `remaining` counts down. */
+export interface SeekBudget {
+  remaining: number;
+}
+
+export class SeekBudgetExceededError extends Error {
+  constructor() {
+    super(
+      `context search exceeded ${MAX_SEEK_LINE_COMPARISONS} line comparisons`,
+    );
+    this.name = "SeekBudgetExceededError";
+  }
+}
+
 function matchesWith(
   lines: readonly string[],
   pattern: readonly string[],
   searchStart: number,
   equal: (line: string, pat: string) => boolean,
+  budget: SeekBudget | undefined,
 ): number | null {
   const last = lines.length - pattern.length;
   for (let i = searchStart; i <= last; i += 1) {
     let ok = true;
     for (let p = 0; p < pattern.length; p += 1) {
+      if (budget !== undefined && --budget.remaining < 0) {
+        throw new SeekBudgetExceededError();
+      }
       if (!equal(lines[i + p] ?? "", pattern[p] ?? "")) {
         ok = false;
         break;
@@ -70,13 +95,15 @@ function matchesWith(
  * exact, trailing-whitespace-insensitive, whitespace-insensitive, then with
  * Unicode punctuation normalised. With `eof` the end-of-file position is tried
  * first. An empty pattern matches at `start`; a pattern longer than `lines`
- * never matches.
+ * never matches. With a `budget`, every line comparison counts against it and
+ * `SeekBudgetExceededError` is thrown once it is spent.
  */
 export function seekSequence(
   lines: readonly string[],
   pattern: readonly string[],
   start: number,
   eof: boolean,
+  budget?: SeekBudget,
 ): number | null {
   if (pattern.length === 0) {
     return start;
@@ -88,24 +115,33 @@ export function seekSequence(
     ? Math.max(lines.length - pattern.length, start)
     : start;
   return (
-    matchesWith(lines, pattern, searchStart, (line, pat) => line === pat) ??
+    matchesWith(
+      lines,
+      pattern,
+      searchStart,
+      (line, pat) => line === pat,
+      budget,
+    ) ??
     matchesWith(
       lines,
       pattern,
       searchStart,
       (line, pat) => line.trimEnd() === pat.trimEnd(),
+      budget,
     ) ??
     matchesWith(
       lines,
       pattern,
       searchStart,
       (line, pat) => line.trim() === pat.trim(),
+      budget,
     ) ??
     matchesWith(
       lines,
       pattern,
       searchStart,
       (line, pat) => normalisePunctuation(line) === normalisePunctuation(pat),
+      budget,
     )
   );
 }

@@ -7,10 +7,12 @@ import {
   applyPatch,
   MAX_HUNKS,
   MAX_PATCH_BYTES,
+  MAX_SEEK_LINE_COMPARISONS,
   PatchParseError,
   parsePatch,
   renderApplyPatchInstructions,
   renderApplyPatchSummary,
+  SeekBudgetExceededError,
   SourceFile,
   StreamingPatchParser,
   seekSequence,
@@ -320,6 +322,33 @@ describe("MARS bounds", () => {
     if (!result.ok) {
       expect(result.error).toContain(`limit is ${MAX_PATCH_BYTES} bytes`);
     }
+  });
+
+  test("a pathological context search fails fast instead of stalling the host", async () => {
+    // Every candidate position matches until the final pattern line, so an
+    // unbounded search would cost ~(lines × pattern) comparisons.
+    const lines = Array.from({ length: 20_000 }, () => "a");
+    const pattern = [...Array.from({ length: 10_000 }, () => "a"), "b"];
+    expect(lines.length * pattern.length).toBeGreaterThan(
+      MAX_SEEK_LINE_COMPARISONS,
+    );
+    expect(() =>
+      seekSequence(lines, pattern, 0, false, {
+        remaining: MAX_SEEK_LINE_COMPARISONS,
+      }),
+    ).toThrow(SeekBudgetExceededError);
+    const fs = new MemoryFs({ "big.txt": `${lines.join("\n")}\n` });
+    const result = await applyPatch(
+      `*** Begin Patch\n*** Update File: big.txt\n@@\n${pattern.map((line) => `-${line}`).join("\n")}\n+c\n*** End Patch`,
+      fs,
+    );
+    expect(result).toMatchObject({ ok: false, failed_hunk: 0 });
+    if (!result.ok) {
+      expect(result.error).toBe(
+        `Failed to apply chunks to big.txt: context search exceeded ${MAX_SEEK_LINE_COMPARISONS} line comparisons`,
+      );
+    }
+    expect(fs.snapshot()).toEqual({ "big.txt": `${lines.join("\n")}\n` });
   });
 
   test("more than 4096 hunks are rejected", () => {

@@ -4,7 +4,12 @@
 // packages/codex-tools/third_party/codex/LICENSE.txt. Modified by MARS (TypeScript port).
 
 import type { UpdateFileChunk } from "../types";
-import { seekSequence } from "./seek-sequence";
+import {
+  MAX_SEEK_LINE_COMPARISONS,
+  type SeekBudget,
+  SeekBudgetExceededError,
+  seekSequence,
+} from "./seek-sequence";
 import { type Replacement, SourceFile } from "./source-file";
 
 export class ReplacementError extends Error {
@@ -20,12 +25,32 @@ export class ReplacementError extends Error {
  * position, then `old_lines` (retrying without a trailing empty line that
  * stands for the final newline). Parsed context lines are kept in place so
  * their exact text and terminators survive. A chunk without old lines is
- * appended at end of file.
+ * appended at end of file (upstream behaviour, even after a `@@` anchor).
+ * MARS bounds the whole search at `MAX_SEEK_LINE_COMPARISONS` per hunk.
  */
 export function computeReplacements(
   originalLines: readonly string[],
   path: string,
   chunks: readonly UpdateFileChunk[],
+): Replacement[] {
+  const budget: SeekBudget = { remaining: MAX_SEEK_LINE_COMPARISONS };
+  try {
+    return locateReplacements(originalLines, path, chunks, budget);
+  } catch (error) {
+    if (error instanceof SeekBudgetExceededError) {
+      throw new ReplacementError(
+        `Failed to apply chunks to ${path}: ${error.message}`,
+      );
+    }
+    throw error;
+  }
+}
+
+function locateReplacements(
+  originalLines: readonly string[],
+  path: string,
+  chunks: readonly UpdateFileChunk[],
+  budget: SeekBudget,
 ): Replacement[] {
   const replacements: Replacement[] = [];
   let lineIndex = 0;
@@ -36,6 +61,7 @@ export function computeReplacements(
         [chunk.change_context],
         lineIndex,
         false,
+        budget,
       );
       if (idx === null) {
         throw new ReplacementError(
@@ -55,6 +81,7 @@ export function computeReplacements(
       pattern,
       lineIndex,
       chunk.is_end_of_file,
+      budget,
     );
     if (found === null && pattern[pattern.length - 1] === "") {
       pattern = pattern.slice(0, -1);
@@ -66,6 +93,7 @@ export function computeReplacements(
         pattern,
         lineIndex,
         chunk.is_end_of_file,
+        budget,
       );
     }
     if (found === null) {

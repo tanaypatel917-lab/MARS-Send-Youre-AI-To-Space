@@ -19,5 +19,11 @@ export {
   parsePatch,
   StreamingPatchParser,
 } from "./parser";
-export { normalisePunctuation, seekSequence } from "./seek-sequence";
+export {
+  MAX_SEEK_LINE_COMPARISONS,
+  normalisePunctuation,
+  type SeekBudget,
+  SeekBudgetExceededError,
+  seekSequence,
+} from "./seek-sequence";
 export { type Replacement, SourceFile } from "./source-file";
