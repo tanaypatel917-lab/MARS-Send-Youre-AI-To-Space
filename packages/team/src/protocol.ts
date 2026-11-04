@@ -1,9 +1,14 @@
 import {
+  AGENT_MAX_IDEMPOTENCY_KEY_CHARS,
+  AGENT_MAX_MESSAGES,
+  AgentPreviewSchema,
+  AgentRequestSchema,
   ConversationSchema,
   MessageSchema,
   ParticipantSchema,
   TEAM_MAX_BODY_CHARS,
   TEAM_MAX_CLIENT_MESSAGE_ID_CHARS,
+  TEAM_MAX_REFERENCES,
   TEAM_MAX_TITLE_CHARS,
   TeamContextSchema,
   TeamDeliveryEventSchema,
@@ -19,6 +24,9 @@ import { TEAM_MAX_GROUP_SIZE, TeamLimitsSchema } from "./schemas";
  * appears in a request; the server derives it from the bearer token.
  *
  * TODO(PR 3): `events.stream` (SSE), `reactions.set`, `messages.search`.
+ *
+ * `agent.publish` is deliberately absent: answers are stored through the
+ * host-only `TeamAgentHostPort`, never by a client.
  */
 const id = z.string().min(1).max(256);
 const seq = z.number().int().nonnegative();
@@ -76,6 +84,21 @@ export const PollParamsSchema = z
   })
   .strict();
 
+const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
+export const AgentSelectionParamsSchema = z
+  .object({
+    conversation_id: id,
+    message_ids: z.array(id).max(AGENT_MAX_MESSAGES),
+    reference_ids: z.array(id).max(TEAM_MAX_REFERENCES),
+  })
+  .strict();
+export const AgentRequestParamsSchema = AgentSelectionParamsSchema.extend({
+  idempotency_key: z.string().min(1).max(AGENT_MAX_IDEMPOTENCY_KEY_CHARS),
+  audience: z.literal("conversation"),
+  preview_sha256: sha256,
+}).strict();
+const requestId = z.object({ request_id: id }).strict();
+
 export const TeamRpcRequestSchema = z.discriminatedUnion("method", [
   method("team.describe", empty),
   method("conversations.create_dm", z.object({ peer_user_id: id }).strict()),
@@ -102,8 +125,23 @@ export const TeamRpcRequestSchema = z.discriminatedUnion("method", [
   ),
   method("messages.send", SendParamsSchema),
   method("messages.history", HistoryParamsSchema),
+  method(
+    "messages.edit",
+    z
+      .object({
+        message_id: id,
+        body: z.string().min(1).max(TEAM_MAX_BODY_CHARS),
+      })
+      .strict(),
+  ),
+  method("messages.delete", z.object({ message_id: id }).strict()),
   method("events.poll", PollParamsSchema),
+  method("agent.preview", AgentSelectionParamsSchema),
+  method("agent.request", AgentRequestParamsSchema),
+  method("agent.cancel", requestId),
+  method("agent.inspect", requestId),
 ]);
+export { AgentPreviewSchema, AgentRequestSchema };
 export type TeamRpcRequest = z.infer<typeof TeamRpcRequestSchema>;
 export type TeamRpcMethod = TeamRpcRequest["method"];
 
@@ -135,6 +173,7 @@ export const TeamDescribeResultSchema = z
         stream: z.boolean(),
         reactions: z.boolean(),
         search: z.boolean(),
+        agent: z.boolean(),
       })
       .strict(),
   })

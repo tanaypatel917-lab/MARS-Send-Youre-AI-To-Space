@@ -32,6 +32,17 @@ export const TeamLimitsSchema = z
     max_cursors_per_poll: z.number().int().positive().max(50),
     max_poll_events: z.number().int().positive().max(1000),
     max_pending_idempotency_rows: z.number().int().positive().max(100_000),
+    /** Total bytes of message bodies and reference excerpts one @MARS request may freeze. */
+    max_agent_context_bytes: z
+      .number()
+      .int()
+      .positive()
+      .max(1024 * 1024),
+    max_reference_excerpt_bytes: z
+      .number()
+      .int()
+      .positive()
+      .max(256 * 1024),
   })
   .strict();
 export type TeamLimits = z.infer<typeof TeamLimitsSchema>;
@@ -46,4 +57,6 @@ export const DEFAULT_TEAM_LIMITS: TeamLimits = {
   max_cursors_per_poll: 50,
   max_poll_events: 1000,
   max_pending_idempotency_rows: 10_000,
+  max_agent_context_bytes: 64 * 1024,
+  max_reference_excerpt_bytes: 16 * 1024,
 };

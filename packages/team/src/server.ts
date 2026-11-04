@@ -1,4 +1,10 @@
-import { MessageSchema, ParticipantSchema } from "@mars/contracts";
+import {
+  AgentPreviewSchema,
+  AgentRequestSchema,
+  MARS_AGENT_USER_ID,
+  MessageSchema,
+  ParticipantSchema,
+} from "@mars/contracts";
 import type { Authenticator } from "./auth";
 import { TeamError } from "./errors";
 import {
@@ -80,6 +86,8 @@ function errorCode(error: unknown): RpcErrorCode {
         return "conflict";
       case "too_large":
         return "too_large";
+      case "unavailable":
+        return "unavailable";
       case "corrupt_record":
         return "internal_error";
     }
@@ -126,8 +134,26 @@ function dispatch(
       return MessageSchema.parse(store.send(actor, requestId, request.params));
     case "messages.history":
       return MessageListSchema.parse(store.history(actor, request.params));
+    case "messages.edit":
+      return MessageSchema.parse(store.editMessage(actor, request.params));
+    case "messages.delete":
+      return MessageSchema.parse(store.deleteMessage(actor, request.params));
     case "events.poll":
       return EventListSchema.parse(store.poll(actor, request.params));
+    case "agent.preview":
+      return AgentPreviewSchema.parse(
+        store.agentPreview(actor, request.params),
+      );
+    case "agent.request":
+      return AgentRequestSchema.parse(
+        store.agentRequest(actor, request.params),
+      );
+    case "agent.cancel":
+      return AgentRequestSchema.parse(store.agentCancel(actor, request.params));
+    case "agent.inspect":
+      return AgentRequestSchema.parse(
+        store.agentInspect(actor, request.params),
+      );
   }
 }
 
@@ -211,6 +237,41 @@ function validateResult(
         invalid();
       break;
     }
+    case "messages.edit":
+    case "messages.delete": {
+      const message = MessageSchema.parse(result);
+      if (
+        message.message_id !== request.params.message_id ||
+        message.author_id !== actor.user_id ||
+        message.kind !== "user"
+      )
+        invalid();
+      break;
+    }
+    case "agent.preview": {
+      const preview = AgentPreviewSchema.parse(result);
+      if (preview.conversation_id !== request.params.conversation_id) invalid();
+      break;
+    }
+    case "agent.request":
+    case "agent.cancel": {
+      const record = AgentRequestSchema.parse(result);
+      if (
+        record.team_id !== actor.team_id ||
+        record.requester_id !== actor.user_id
+      )
+        invalid();
+      break;
+    }
+    case "agent.inspect": {
+      const record = AgentRequestSchema.parse(result);
+      if (
+        record.team_id !== actor.team_id ||
+        record.request_id !== request.params.request_id
+      )
+        invalid();
+      break;
+    }
     case "messages.history": {
       let previous = 0;
       for (const message of MessageListSchema.parse(result)) {
@@ -279,7 +340,9 @@ export function serveTeam(options: TeamServerOptions) {
       } catch {
         return responseError("unavailable");
       }
-      if (!user) return responseError("unauthorized");
+      // The agent author id is reserved; no provider may mint it.
+      if (!user || user.user_id === MARS_AGENT_USER_ID)
+        return responseError("unauthorized");
       if (
         request.headers
           .get("content-type")

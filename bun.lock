@@ -248,6 +248,19 @@
         "zod": "3.25.76",
       },
     },
+    "packages/team-agent": {
+      "name": "@mars/team-agent",
+      "version": "0.0.1",
+      "dependencies": {
+        "@mars/contracts": "workspace:*",
+        "@mars/execution": "workspace:*",
+        "@mars/memory": "workspace:*",
+        "@mars/output-format": "workspace:*",
+        "@mars/providers": "workspace:*",
+        "@mars/team": "workspace:*",
+        "zod": "3.25.76",
+      },
+    },
     "packages/team-chat": {
       "name": "@mars/team-chat",
       "version": "0.0.1",
@@ -431,6 +444,8 @@
     "@mars/tasks": ["@mars/tasks@workspace:packages/tasks"],
 
     "@mars/team": ["@mars/team@workspace:packages/team"],
+
+    "@mars/team-agent": ["@mars/team-agent@workspace:packages/team-agent"],
 
     "@mars/team-chat": ["@mars/team-chat@workspace:packages/team-chat"],
 

@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { TeamAgentOptions } from "../src/agent";
 import { createDevAuthenticator } from "../src/auth";
 import type { TeamLimits } from "../src/schemas";
 import { serveTeam } from "../src/server";
@@ -22,9 +23,16 @@ export interface RpcResult {
   body: { result?: unknown; error?: { code: string; message: string } };
 }
 
-export function fixture(limits: Partial<TeamLimits> = {}) {
+export function fixture(
+  limits: Partial<TeamLimits> = {},
+  agent?: TeamAgentOptions,
+) {
   const rootDir = mkdtempSync(join(tmpdir(), "mars-team-"));
-  const store = createTeamStore({ rootDir, limits });
+  const store = createTeamStore({
+    rootDir,
+    limits,
+    ...(agent ? { agent } : {}),
+  });
   for (const user of ["alice", "bob", "carol"])
     store.setTeamMember({ team_id: TEAM, user_id: user, role: "member" });
   store.setTeamMember({ team_id: OTHER_TEAM, user_id: "dave", role: "admin" });
