@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
@@ -500,11 +500,18 @@ test("acceptance: textual tool call + missing file -> run completed, verificatio
   });
   expect(view.record?.diagnostics[0]).toContain("<function=mars_write>");
   expect(view.candidate?.revision).toBe(view.record?.candidate?.revision);
-  // The launch metadata, not the model, carries the required check.
+  // The launch metadata, not the model, carries the required check — in
+  // digest form only, so the expected bytes never sit in launch.json.
   const metadata = JSON.parse(
     await readFile(join(launch.stateDir, "launch.json"), "utf8"),
   );
-  expect(metadata.required_checks).toEqual([REPAIR_CHECK]);
+  expect(metadata.required_checks).toEqual([
+    {
+      kind: "file_content",
+      path: "repair.txt",
+      sha256: createHash("sha256").update("repaired").digest("hex"),
+    },
+  ]);
   // The evidence is an ordinary task event with no host-private path in it.
   const events = await client.events(created.task_id, undefined);
   const texts = await Promise.all(
