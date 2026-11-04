@@ -78,6 +78,8 @@ export const WatchEvidenceRecordSchema = z
     summary: z.string().max(2048),
     cli_version: z.string().max(64).nullable(),
     recorded_at: z.string().datetime(),
+    /** Workspace the verifier actually inspected (host-stamped, additive); a child's private copy differs from the parent's. */
+    workspace_id: id.optional(),
     /** Workspace provider revision when the host recorded the evidence (host-stamped, additive). */
     workspace_revision: id.optional(),
     /** Canonical `tasks.diff` digest when the host recorded the evidence (host-stamped, additive). */

@@ -22,6 +22,7 @@ const MAX_LISTED_RECORDS = 50;
  */
 /** Host-authoritative binding stamped onto every evidence record it writes. */
 export interface EvidenceBinding {
+  workspace_id: string;
   workspace_revision: string;
   diff_sha256: string;
 }
@@ -35,6 +36,7 @@ export function watchEvidence(
   return {
     async append(record) {
       const {
+        workspace_id: _workspace,
         workspace_revision: _revision,
         diff_sha256: _digest,
         ...unbound

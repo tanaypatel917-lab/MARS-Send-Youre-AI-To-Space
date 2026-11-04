@@ -198,6 +198,7 @@ describe("MarsClient", () => {
       verified: true,
       contract_id: "c1",
       recorded_at: "2026-01-01T00:00:00.000Z",
+      workspace_id: checkpoint.workspace.workspace_id,
       workspace_revision: "rev-1",
       diff_sha256: "a".repeat(64),
       stale: false,

@@ -93,6 +93,7 @@ export const EvidenceRecordSchema = z
     contract_id: id.optional(),
     contract_digest: z.string().min(1).max(256).optional(),
     recorded_at: z.string().datetime(),
+    workspace_id: id.nullable(),
     workspace_revision: id.nullable(),
     diff_sha256: sha256Hex.nullable(),
     stale: z.boolean(),

@@ -1458,8 +1458,27 @@ export async function createTaskStore(
           task.task_id,
           inputHash,
         );
-        if (replay !== null)
+        if (replay !== null) {
+          // A request-id replay that now carries a launch key binds it in the
+          // same transaction (no row exists for it, see above), unless the
+          // task already has a different key; an unkeyed replay is unchanged.
+          if (launchKey !== undefined) {
+            const bound = db
+              .query(
+                "SELECT launch_key FROM launch_keys WHERE scope_key = ? AND task_id = ?",
+              )
+              .get(key, task.task_id) as { launch_key: string } | null;
+            if (bound !== null && bound.launch_key !== launchKey) {
+              fail("conflict", "Task is bound to a different launch key");
+            }
+            if (bound === null) {
+              db.query(
+                "INSERT INTO launch_keys (scope_key, launch_key, task_id, input_sha256) VALUES (?, ?, ?, ?)",
+              ).run(key, launchKey, task.task_id, inputHash);
+            }
+          }
           return taskFromIdempotency(replay, key, task.task_id);
+        }
         if (
           db
             .query(

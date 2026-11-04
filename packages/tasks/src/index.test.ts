@@ -1996,6 +1996,21 @@ describe("@mars/tasks durable store", () => {
       task_id: "unkeyed-task",
     });
     expect(unkeyed.task_id).toBe("unkeyed-task");
+    // A request-id replay of an unkeyed create may acquire a key once; later
+    // retries under fresh request ids then replay instead of conflicting.
+    expect(
+      await store.create(context("launch-7"), unkeyed, { launch_key: "late" }),
+    ).toEqual(unkeyed);
+    expect(
+      await store.create(context("launch-8"), unkeyed, { launch_key: "late" }),
+    ).toEqual(unkeyed);
+    await expect(
+      store.create(context("launch-7"), unkeyed, { launch_key: "other" }),
+    ).rejects.toMatchObject({ code: "conflict" });
+    await expect(
+      store.create(context("launch-1"), task, { launch_key: "other" }),
+    ).rejects.toMatchObject({ code: "conflict" });
+    expect(await store.list(context("launch-list-3"))).toHaveLength(2);
   });
 
   test("stores and echoes opaque team-chat provenance", async () => {

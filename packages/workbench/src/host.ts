@@ -348,6 +348,7 @@ export async function createWorkbenchHost(
     taskId: string,
     cwd: string,
     approvals: Pick<Approvals, "read" | "execute">,
+    workspaceTaskId: string = taskId,
   ): RuntimeWatch | undefined => {
     const watch = options.watch;
     if (!watch) return undefined;
@@ -359,11 +360,17 @@ export async function createWorkbenchHost(
         options.store,
         () => internalContext(options.scope),
         taskId,
+        // Stamp the workspace the verifier inspected: a delegated child's
+        // private copy, not the parent task that stores the event.
         async (): Promise<EvidenceBinding> => {
           const context = internalContext(options.scope);
-          const workspace = await options.workspace.reopen(context, taskId);
+          const workspace = await options.workspace.reopen(
+            context,
+            workspaceTaskId,
+          );
           const diff = await options.workspace.diff(context, workspace);
           return {
+            workspace_id: workspace.workspace_id,
             workspace_revision: workspace.revision,
             diff_sha256: diffDigest(diff),
           };
@@ -1722,12 +1729,17 @@ export async function createWorkbenchHost(
             ...(options.watch
               ? {
                   watchFor: (launch: ChildLaunch, cwd: string) =>
-                    watchFor(launch.task_id, cwd, {
-                      read: launch.approvals.read,
-                      execute:
-                        launch.approvals.execute &&
-                        launch.workspace_mode !== "read_only",
-                    }),
+                    watchFor(
+                      launch.task_id,
+                      cwd,
+                      {
+                        read: launch.approvals.read,
+                        execute:
+                          launch.approvals.execute &&
+                          launch.workspace_mode !== "read_only",
+                      },
+                      childWorkspaceTaskId(launch.child_task_id),
+                    ),
                 }
               : {}),
           }),
@@ -2449,9 +2461,11 @@ export async function createWorkbenchHost(
             ? {}
             : { contract_digest: record.contract_digest }),
           recorded_at: record.recorded_at,
+          workspace_id: record.workspace_id ?? null,
           workspace_revision: record.workspace_revision ?? null,
           diff_sha256: record.diff_sha256 ?? null,
           stale:
+            record.workspace_id !== workspace.workspace_id ||
             record.workspace_revision !== workspace.revision ||
             record.diff_sha256 !== digest,
         });

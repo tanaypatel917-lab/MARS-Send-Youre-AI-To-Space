@@ -94,6 +94,8 @@ export const EvidenceRecordSchema = z
     contract_id: id.optional(),
     contract_digest: z.string().min(1).max(256).optional(),
     recorded_at: z.string().datetime(),
+    /** Workspace the verifier inspected (a child's private copy differs from the task's); null if unknown. */
+    workspace_id: id.nullable(),
     /** Provider revision stamped when the evidence was recorded; null if unknown. */
     workspace_revision: id.nullable(),
     /** Diff digest stamped when the evidence was recorded; null if unknown. */

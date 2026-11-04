@@ -31,6 +31,7 @@ const evidenceRecord = {
   verified: true,
   contract_id: "contract",
   recorded_at: "2026-11-01T12:00:00.000Z",
+  workspace_id: workspace.workspace_id,
   workspace_revision: "r1",
   diff_sha256: "a".repeat(64),
   stale: false,

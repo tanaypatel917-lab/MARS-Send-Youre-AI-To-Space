@@ -3468,6 +3468,7 @@ test("tasks.evidence pins verify records to the workspace revision and diff dige
               input.action === "run",
             ),
             // a tool-supplied stamp is never trusted; the host overwrites it
+            workspace_id: "forged",
             workspace_revision: "forged",
             diff_sha256: "0".repeat(64),
           });
@@ -3514,6 +3515,7 @@ test("tasks.evidence pins verify records to the workspace revision and diff dige
   expect(await tools.verify({ action: "show" })).toBe("recorded");
   const forged = {
     ...record("fail", true),
+    workspace_id: "workspace",
     workspace_revision: "r1",
     diff_sha256: digest,
   };
@@ -3530,6 +3532,21 @@ test("tasks.evidence pins verify records to the workspace revision and diff dige
   };
   expect(await tools.verify({ action: "run" })).toBe("recorded");
   f.workspace.diff = originalDiff;
+  // A delegated child's pass is stamped with the child's private workspace;
+  // it is never fresh evidence for the parent tree even at the same revision
+  // and digest.
+  await f.store.appendEvent(context(), "task", {
+    event_type: "tool.completed",
+    run_id: "child",
+    producer: "@mars/watch",
+    versions: [{ component: "@mars/watch", revision: "0" }],
+    payload: {
+      ...record("pass", true),
+      workspace_id: "child-workspace",
+      workspace_revision: "r1",
+      diff_sha256: digest,
+    },
+  });
 
   const fresh = await api.evidence(context(), "task");
   expect(fresh.task_revision).toBe(
@@ -3542,16 +3559,18 @@ test("tasks.evidence pins verify records to the workspace revision and diff dige
       item.verdict,
       item.verified,
       item.stale,
+      item.workspace_id,
       item.workspace_revision,
       item.diff_sha256,
     ]),
   ).toEqual([
-    ["pass", true, false, "r1", digest],
-    ["fail", false, false, "r1", digest],
-    ["pass", true, true, null, null],
+    ["pass", true, false, "workspace", "r1", digest],
+    ["fail", false, false, "workspace", "r1", digest],
+    ["pass", true, true, null, null, null],
+    ["pass", true, true, "child-workspace", "r1", digest],
   ]);
   expect(new Set(fresh.verify_records.map((item) => item.event_id)).size).toBe(
-    3,
+    4,
   );
   expect(fresh.verify_records.every((item) => item.contract_id === "c1")).toBe(
     true,
@@ -3569,6 +3588,7 @@ test("tasks.evidence pins verify records to the workspace revision and diff dige
     true,
     true,
     true,
+    true,
   ]);
   expect(moved.verify_records[0]?.verified).toBe(true);
   f.revision = "r1";
@@ -3580,13 +3600,14 @@ test("tasks.evidence pins verify records to the workspace revision and diff dige
     true,
     true,
     true,
+    true,
   ]);
   f.diffFiles = files;
   expect(
     (await api.evidence(context(), "task")).verify_records.map(
       (item) => item.stale,
     ),
-  ).toEqual([false, false, true]);
+  ).toEqual([false, false, true, true]);
 
   f.workspace.diff = async () => {
     throw new WorkspaceModifiedError();
