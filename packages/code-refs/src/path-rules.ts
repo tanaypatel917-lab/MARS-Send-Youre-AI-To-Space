@@ -74,7 +74,7 @@ export function hasInvisibleCodePoint(text: string): boolean {
 /**
  * Validates a repository-relative POSIX path with exactly the rules of
  * `checkRelativePath` in `apps/vscode/src/pathSafety.ts`. The caller is
- * expected to have NFC-normalised the input (`normalizeLocatorPath`).
+ * is expected to have checked the NFC form too (`validateLocatorPath`).
  */
 export function checkLocatorPath(path: string): PathCheck {
   if (path.length === 0 || path.length > MAX_PATH_LENGTH)
@@ -103,6 +103,15 @@ export function checkLocatorPath(path: string): PathCheck {
   return { ok: true, path, segments };
 }
 
-export function normalizeLocatorPath(path: string): PathCheck {
-  return checkLocatorPath(path.normalize("NFC"));
+/**
+ * Git stores paths as bytes and never normalises Unicode, so the committed
+ * spelling is kept verbatim for lookup; the NFC form is checked as well so
+ * that normalisation cannot hide a rejected segment.
+ */
+export function validateLocatorPath(path: string): PathCheck {
+  const raw = checkLocatorPath(path);
+  if (!raw.ok) return raw;
+  const nfc = checkLocatorPath(path.normalize("NFC"));
+  if (!nfc.ok) return nfc;
+  return raw;
 }

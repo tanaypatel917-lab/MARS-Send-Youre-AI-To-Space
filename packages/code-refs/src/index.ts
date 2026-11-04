@@ -10,6 +10,7 @@ export {
 } from "./digest";
 export {
   createGitRunner,
+  GIT_CONFIG_OVERRIDES,
   GIT_GLOBAL_FLAGS,
   type GitChild,
   type GitInvocation,
@@ -27,9 +28,9 @@ export {
   INVISIBLE_CODE_POINT_RANGES,
   isInvisibleCodePoint,
   MAX_PATH_LENGTH,
-  normalizeLocatorPath,
   type PathCheck,
   type PathRejectReason,
+  validateLocatorPath,
 } from "./path-rules";
 export {
   createRepoRegistry,

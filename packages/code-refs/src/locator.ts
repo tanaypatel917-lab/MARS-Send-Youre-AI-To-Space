@@ -1,4 +1,4 @@
-import { normalizeLocatorPath } from "./path-rules";
+import { validateLocatorPath } from "./path-rules";
 import {
   COMMIT_SHA_PATTERN,
   type Locator,
@@ -19,8 +19,10 @@ function isPositiveInt(value: number): boolean {
 
 /**
  * Validates an untrusted locator before anything touches git. Path rules are
- * those of `checkRelativePath` plus NFC normalisation and the invisible
- * code point denylist; ranges are inclusive, both bounds present or absent.
+ * those of `checkRelativePath` (applied to the path and to its NFC form) plus
+ * the invisible code point denylist; the path itself is kept verbatim because
+ * git looks entries up by bytes. Ranges are inclusive, both bounds present
+ * or absent.
  */
 export function validateLocator(
   input: unknown,
@@ -33,7 +35,7 @@ export function validateLocator(
     return { ok: false, reason: "invalid_repo_id" };
   if (!COMMIT_SHA_PATTERN.test(raw.commit_sha))
     return { ok: false, reason: "invalid_commit_sha" };
-  const path = normalizeLocatorPath(raw.path);
+  const path = validateLocatorPath(raw.path);
   if (!path.ok) return { ok: false, reason: path.reason };
 
   const hasStart = raw.line_start !== undefined;
