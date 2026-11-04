@@ -70,5 +70,5 @@ per-user sliding-minute limits for sends/reactions/search/agent calls
 (`unavailable` + `Retry-After`), `store.exportSnapshot()` /
 `importSnapshot()` (`TeamStoreSnapshotSchema`), `createAgentReferencePort`
 (backs the agent `TeamReferencePort` with `repo_access` + `@mars/code-refs`).
-Operated through `mars team serve|enable|disable|stats|export|import|revoke|rotate-tokens`;
+Operated through `mars team serve|enable|disable|stats|export|import|revoke|readmit|grant|rotate-tokens`;
 see `documentation/TEAM_CHAT_RUNBOOK.md`.

@@ -390,7 +390,9 @@ temp `git` repos; no live window or second machine).
   [--team ID] (--dev-users a,b,c | --auth-provider none) [--repo ID=DIR]…
   [--repo-access ID=users]… [--agent-model ID] [--enable] [--quiet]`,
   `enable|disable`, `stats`, `export --out FILE`, `import --in FILE`,
-  `revoke --user ID [--repo ID]`, `rotate-tokens`. `serve` opens the store
+  `revoke --user ID [--repo ID]`, `readmit --user ID`, `grant --user ID --repo ID`,
+  `rotate-tokens` (revocations persist across restarts; re-admission is
+  explicit). `serve` opens the store
   (pending migrations run; the startup line lists `migrations_applied` and
   `ledger_head`), registers `--repo` checkouts in the `@mars/code-refs`
   registry and the store, writes `<state>/team-connection.json` (0600,

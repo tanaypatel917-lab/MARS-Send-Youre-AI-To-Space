@@ -986,9 +986,7 @@ export function serveTeam(options: TeamServerOptions) {
       if (method !== null && READ_METHODS.has(method) && DENIAL_CODES.has(code))
         count(`denied_reads.${code}` as "denied_reads.not_found");
       if (code === "conflict") count("conflicts");
-    } else if (method === "messages.send") count("sends");
-    else if (method === "tasks.link_confirm") count("links");
-    else if (method === "shares.create") count("shares");
+    }
     log({
       op,
       id,

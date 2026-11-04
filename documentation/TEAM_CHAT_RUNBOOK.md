@@ -91,6 +91,13 @@ mars team revoke --state /private/mars-team --user linus --repo site   # repo ac
 mars team revoke --state /private/mars-team --user linus               # team membership + dev token
 ```
 
+- Revocations survive restarts. `serve` never re-adds a revoked member or a
+  removed repo grant even when the user is still in `--dev-users` /
+  `--repo-access`; the dev token file records `revoked` ids. Re-admission is
+  explicit: `mars team readmit --state DIR --user linus` (then restart `serve`
+  with linus listed to issue a new token) and
+  `mars team grant --state DIR --user linus --repo site`.
+
 - Repo access revocation is effective on the next call: `references.resolve`
   answers `{state: "restricted"}`, chips become `{reference_id, restricted: true}`,
   `references.search_paths`/`create` and sends with that repo's references

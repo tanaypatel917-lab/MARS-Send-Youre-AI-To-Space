@@ -7,6 +7,7 @@ import {
 import type { GitRangeReference, ReferencePreview } from "@mars/contracts";
 import {
   invalidInput,
+  rateLimited,
   referenceNotFound,
   TeamError,
   unavailable,
@@ -65,7 +66,11 @@ export function createReferenceService(
     );
     if (recent.length >= limits.max_resolves_per_minute) {
       resolves.set(key, recent);
-      throw new TeamError("rate_limited", "Reference resolve rate exceeded");
+      const oldest = recent[0] ?? current;
+      throw rateLimited(
+        "Reference resolve rate exceeded",
+        Math.max(1, Math.ceil((oldest + RATE_WINDOW_MS - current) / 1000)),
+      );
     }
     recent.push(current);
     resolves.set(key, recent);

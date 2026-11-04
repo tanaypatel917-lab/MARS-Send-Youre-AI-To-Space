@@ -679,6 +679,7 @@ describe.skipIf(!GIT)("@mars/team committed code references", () => {
         200,
       );
       const third = await g.rpc("alice", "references.resolve", params);
+      expect(third.headers.get("Retry-After")).toMatch(/^[1-9]\d*$/);
       expect([third.status, third.body.error?.code]).toEqual([
         503,
         "unavailable",

@@ -96,6 +96,7 @@ test("mars team serve: dev users, private files, flag default off, enable/disabl
   const state = join(root, "state");
   const env = { PATH: process.env.PATH ?? "", HOME: root };
   let served: Served | null = null;
+  let relaunch: Served | null = null;
   try {
     served = await spawnServe(
       ["--state", state, "--port", "0", "--dev-users", "ada,grace,linus"],
@@ -298,6 +299,58 @@ test("mars team serve: dev users, private files, flag default off, enable/disabl
 
     served.child.kill("SIGTERM");
     expect(await served.child.exited).toBe(143);
+
+    // A routine restart with the original arguments does not readmit linus.
+    relaunch = await spawnServe(
+      ["--state", state, "--port", "0", "--dev-users", "ada,grace,linus"],
+      env,
+    );
+    const restarted = JSON.parse(
+      await readFile(String(relaunch.report.dev_tokens_file), "utf8"),
+    );
+    expect(restarted.users.map((u: { user_id: string }) => u.user_id)).toEqual([
+      "ada",
+      "grace",
+    ]);
+    expect(restarted.revoked).toEqual(["linus"]);
+    expect(relaunch.report.dev_users).toBe(2);
+    expect(
+      (
+        await rpc(
+          String(relaunch.report.url),
+          linusToken,
+          "conversations.list",
+          {},
+          "team-local",
+        )
+      ).status,
+    ).toBe(401);
+    relaunch.child.kill("SIGTERM");
+    expect(await relaunch.child.exited).toBe(143);
+
+    // Only an explicit readmit lets the next start issue linus a new token.
+    lines.length = 0;
+    await runTeam(["readmit", "--state", state, "--user", "linus"], (line) =>
+      lines.push(line),
+    );
+    expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+      readmitted: true,
+      was_revoked: true,
+    });
+    relaunch = await spawnServe(
+      ["--state", state, "--port", "0", "--dev-users", "ada,grace,linus"],
+      env,
+    );
+    const readmitted = JSON.parse(
+      await readFile(String(relaunch.report.dev_tokens_file), "utf8"),
+    );
+    expect(readmitted.users.map((u: { user_id: string }) => u.user_id)).toEqual(
+      ["ada", "grace", "linus"],
+    );
+    expect(readmitted.users[2].token).not.toBe(linusToken);
+    expect(readmitted.revoked).toEqual([]);
+    relaunch.child.kill("SIGTERM");
+    expect(await relaunch.child.exited).toBe(143);
     await served.drained;
     expect(served.stderr()).toBe("");
     // Log lines on stdout carry operation ids and codes only.
@@ -334,6 +387,7 @@ test("mars team serve: dev users, private files, flag default off, enable/disabl
       await again.child.exited;
     }
   } finally {
+    relaunch?.child.kill("SIGKILL");
     served?.child.kill("SIGKILL");
     await served?.child.exited;
     await rm(root, { recursive: true, force: true });

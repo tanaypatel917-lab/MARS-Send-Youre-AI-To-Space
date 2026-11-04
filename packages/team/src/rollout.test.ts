@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createRepoRegistry } from "@mars/code-refs";
 import type {
   AgentPreview,
+  AgentRequest,
   GitRangeReference,
   MessageView,
 } from "@mars/contracts";
@@ -247,7 +248,8 @@ test("team.metrics is admin-only, counts replays/conflicts/denials/streams, and 
   const denied = await f.rpc("bob", "team.metrics", {});
   expect([denied.status, denied.body.error?.code]).toEqual([403, "forbidden"]);
   const metrics = await f.ok<TeamMetricsSnapshot>("alice", "team.metrics", {});
-  expect(metrics.sends).toBe(2);
+  // One committed message: the replayed send counts as a replay, not a send.
+  expect(metrics.sends).toBe(1);
   expect(metrics.send_replays).toBe(1);
   expect(metrics.conflicts).toBe(1);
   expect(metrics.rpc_errors.conflict).toBe(1);
@@ -376,6 +378,12 @@ test("export dumps every durable row without credentials; import refuses a non-e
     };
     expect(() => restored.importSnapshot(foreign)).toThrow(/ledger/);
     expect(() => restored.importSnapshot({ nope: true })).toThrow(TeamError);
+    // A snapshot missing a table is not a restore.
+    const { members: _omitted, ...partialTables } = snapshot.tables;
+    expect(() =>
+      restored.importSnapshot({ ...snapshot, tables: partialTables }),
+    ).toThrow(/missing a table/);
+    expect(restored.exportSnapshot().tables.conversations).toEqual([]);
     const report = restored.importSnapshot(
       JSON.parse(JSON.stringify(snapshot)),
     );
@@ -613,6 +621,9 @@ test.skipIf(!GIT)(
     const preview = previewByBob.body.result as AgentPreview;
     expect(preview.restricted_reference_ids).toEqual([ref.reference_id]);
     expect(preview.participant_count).toBe(2);
+    // The restricted excerpt's size and threat flag stay behind the gate too.
+    for (const item of preview.items.filter((i) => i.kind === "reference"))
+      expect([item.bytes, item.flagged]).toEqual([0, null]);
     const bobText = JSON.stringify(previewByBob.body);
     for (const forbidden of [
       SECRET_PATH,
@@ -649,12 +660,35 @@ test.skipIf(!GIT)(
     // The resolver returns the two lines without the trailing newline.
     expect(bytes).toBeGreaterThanOrEqual(60);
     expect(bytes).toBeLessThanOrEqual(66);
+    // A queued request moves the durable agent counters.
+    await f.ok<AgentRequest>("alice", "agent.request", {
+      idempotency_key: "k-metrics",
+      ...selection,
+      audience: "conversation",
+      preview_sha256: open.preview_sha256,
+    });
+    expect(f.store.metrics.snapshot().agent_requests.pending).toBe(1);
     // Revoking again restricts the next call immediately (no cache of access, only of immutable text).
     f.store.revokeRepoAccess({
       team_id: TEAM,
       repo_id: "repo-h",
       user_id: "bob",
     });
+    // Provisioning reads the row state so a restart never re-grants a revoked row.
+    expect(
+      f.store.repoAccessState({
+        team_id: TEAM,
+        repo_id: "repo-h",
+        user_id: "bob",
+      }),
+    ).toBe("removed");
+    expect(
+      f.store.repoAccessState({
+        team_id: TEAM,
+        repo_id: "repo-h",
+        user_id: "carol",
+      }),
+    ).toBeNull();
     expect(
       (await f.ok<AgentPreview>("alice", "agent.preview", selection))
         .restricted_reference_ids,

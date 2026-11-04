@@ -24,6 +24,7 @@ export type User = keyof typeof TOKENS;
 
 export interface RpcResult {
   status: number;
+  headers: Headers;
   body: { result?: unknown; error?: { code: string; message: string } };
 }
 
@@ -139,6 +140,7 @@ export function fixture(options: Partial<TeamLimits> | FixtureOptions = {}) {
     );
     return {
       status: response.status,
+      headers: response.headers,
       body: (await response.json()) as RpcResult["body"],
     };
   };

@@ -533,6 +533,12 @@ export interface TeamStore {
     repo_id: string;
     user_id: string;
   }): RepoAccess;
+  /** Host-side: the stored access row's state, or null when none was ever written (lets provisioning skip revoked rows). */
+  repoAccessState(input: {
+    team_id: string;
+    repo_id: string;
+    user_id: string;
+  }): "active" | "removed" | null;
   /** Repos in the actor's team the actor currently has access to. */
   listRepos(actor: TeamActor): Repo[];
   /** Active team member, repo registered for the team, access `active`; re-read every call. */
@@ -1217,6 +1223,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
 
   const saveLink = (link: TaskLink, insert: boolean) => {
     const recordHash = sha256(canonicalJson(link));
+    if (insert) metrics.increment("links");
     if (insert)
       db.query(
         "INSERT INTO task_links (link_id, team_id, conversation_id, requester_id, launch_key, provenance_json, reference_ids_json, target_json, workbench_json, task_revision, status, created_at, updated_at, record_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1389,6 +1396,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
       ).run(record.message_id, position, conversation.team_id, referenceId);
     });
     conversation.last_seq = record.seq;
+    metrics.increment("sends");
     emitEvent(
       conversation,
       "message",
@@ -2031,13 +2039,25 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
         body_sha256: message.body_sha256,
         flagged: scan(message.body) ?? null,
       })),
-      references: references.map((entry) => ({
-        reference_id: entry.reference_id,
-        label: entry.label,
-        text: entry.text,
-        bytes: Buffer.byteLength(entry.text),
-        flagged: scan(entry.text) ?? scan(entry.label) ?? null,
-      })),
+      // A reference someone in the audience cannot read contributes nothing
+      // but its id: no label, text, size or threat flag leaves the gate.
+      references: references.map((entry) =>
+        entry.readers.length === participants.length
+          ? {
+              reference_id: entry.reference_id,
+              label: entry.label,
+              text: entry.text,
+              bytes: Buffer.byteLength(entry.text),
+              flagged: scan(entry.text) ?? scan(entry.label) ?? null,
+            }
+          : {
+              reference_id: entry.reference_id,
+              label: "",
+              text: "",
+              bytes: 0,
+              flagged: null,
+            },
+      ),
       participants,
       reference_access_sha256: referenceAccessDigest(references),
     };
@@ -2103,6 +2123,10 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
       throw new TeamError("corrupt_record", "Stored agent input is invalid");
     return parsed.data;
   };
+  const countAgentStatus = (status: string) => {
+    const name = `agent_requests.${status}`;
+    if (isTeamMetricCounter(name)) metrics.increment(name);
+  };
   const saveAgentRecord = (
     row: AgentRequestRow,
     record: AgentRequest,
@@ -2113,6 +2137,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
       updated_at: timestamp(),
     });
     const json = canonicalJson(next);
+    if (next.status !== row.status) countAgentStatus(next.status);
     db.query(
       "UPDATE agent_requests SET status = ?, record_json = ?, record_sha256 = ?, cancel_requested = ?, answer_body = ? WHERE request_id = ?",
     ).run(
@@ -2417,6 +2442,10 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
         throw conflict(
           "Snapshot was exported under a different migration ledger",
         );
+      // A partial snapshot is not a restore: every table must be present (empty arrays included).
+      for (const table of TEAM_SNAPSHOT_TABLES)
+        if (!snapshot.tables[table])
+          throw invalidInput("Snapshot is missing a table");
       return write(() => {
         for (const table of TEAM_SNAPSHOT_TABLES) {
           const count =
@@ -3111,6 +3140,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
               "SELECT MAX(created_seq) AS max FROM agent_requests",
             )
             .get()?.max ?? 0) + 1;
+        metrics.increment("agent_requests.pending");
         db.query(
           "INSERT INTO agent_requests (request_id, team_id, conversation_id, requester_id, idempotency_key, params_sha256, status, cancel_requested, anchor_seq, input_json, input_sha256, record_json, record_sha256, answer_body, created_seq) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, NULL, ?)",
         ).run(
@@ -3503,6 +3533,12 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
     setRepoAccess(input) {
       return write(() => setAccess(input, "active"));
     },
+    repoAccessState(input) {
+      const row = read(() =>
+        repoAccessRow(input.team_id, input.repo_id, input.user_id),
+      );
+      return row ? toRepoAccess(row).state : null;
+    },
     revokeRepoAccess(input) {
       return write(() => setAccess(input, "removed"));
     },
@@ -3832,6 +3868,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
               card_json: canonicalJson(preview.card),
               created_at: at,
             };
+            metrics.increment("shares");
             db.query(
               "INSERT INTO result_shares (share_id, link_id, message_id, message_seq, preview_sha256, candidate_diff_sha256, evidence_sha256, card_json, created_at, record_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ).run(

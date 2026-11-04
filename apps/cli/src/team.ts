@@ -38,6 +38,8 @@ export const TEAM_USAGE = [
   "       mars team export --state DIR --out FILE [--force]",
   "       mars team import --state DIR --in FILE",
   "       mars team revoke --state DIR --user ID [--repo ID]",
+  "       mars team readmit --state DIR --user ID",
+  "       mars team grant --state DIR --user ID --repo ID",
   "       mars team rotate-tokens --state DIR",
   "  serve        open the store (pending migrations run first), register repos, listen on loopback, write <state>/team-connection.json (0600, no token)",
   "  enable/disable  flip the server-side team.enabled kill switch (default off; disable never deletes data, open streams are closed)",
@@ -71,6 +73,8 @@ const DevTokensFileSchema = z
           .strict(),
       )
       .max(256),
+    /** Users removed by `mars team revoke`; never re-added by `serve` until `mars team readmit`. */
+    revoked: z.array(z.string().regex(ID_PATTERN)).max(256).default([]),
   })
   .strict();
 export type DevTokensFile = z.infer<typeof DevTokensFileSchema>;
@@ -143,12 +147,20 @@ async function ensureDevTokens(
       `${DEV_TOKENS_FILE} belongs to another team id; remove it or pass --team ${existing.team_id}.`,
     );
   const known = new Map(existing?.users.map((u) => [u.user_id, u]) ?? []);
-  const users = userIds.map((user_id, index) => ({
-    user_id,
-    token: known.get(user_id)?.token ?? newToken(),
-    role: index === 0 ? ("admin" as const) : ("member" as const),
-  }));
-  const next: DevTokensFile = { schema_version: 1, team_id: team, users };
+  const revoked = existing?.revoked ?? [];
+  const users = userIds
+    .filter((user_id) => !revoked.includes(user_id))
+    .map((user_id, index) => ({
+      user_id,
+      token: known.get(user_id)?.token ?? newToken(),
+      role: index === 0 ? ("admin" as const) : ("member" as const),
+    }));
+  const next: DevTokensFile = {
+    schema_version: 1,
+    team_id: team,
+    users,
+    revoked,
+  };
   await writePrivate(join(state, DEV_TOKENS_FILE), JSON.stringify(next));
   return next;
 }
@@ -338,6 +350,7 @@ async function runServe(
   const opened: TeamStore = store;
   let authenticator: Authenticator;
   let devTokensFile: string | null = null;
+  let activeDevUsers = 0;
   if (options.devUsers) {
     const tokens = await ensureDevTokens(
       options.state,
@@ -345,6 +358,7 @@ async function runServe(
       options.devUsers,
     );
     devTokensFile = join(options.state, DEV_TOKENS_FILE);
+    activeDevUsers = tokens.users.length;
     const users: DevUser[] = tokens.users.map((user) => ({
       token: user.token,
       user_id: user.user_id,
@@ -368,12 +382,12 @@ async function runServe(
     });
     const grant =
       options.repoAccess.get(repo.repo_id) ?? options.devUsers ?? [];
-    for (const user_id of grant)
-      opened.setRepoAccess({
-        team_id: options.team,
-        repo_id: repo.repo_id,
-        user_id,
-      });
+    // Initial provisioning only: a row revoked by `mars team revoke --repo`
+    // stays removed across restarts until `mars team grant`.
+    for (const user_id of grant) {
+      const access = { team_id: options.team, repo_id: repo.repo_id, user_id };
+      if (opened.repoAccessState(access) === null) opened.setRepoAccess(access);
+    }
   }
   if (options.enable) opened.setEnabled(true);
   const server = serveTeam({
@@ -412,7 +426,7 @@ async function runServe(
         connection_file: connectionFile,
         auth_provider: options.devUsers ? "dev" : "none",
         dev_tokens_file: devTokensFile,
-        dev_users: options.devUsers?.length ?? 0,
+        dev_users: activeDevUsers,
         migrations_applied: opened.migrationsApplied,
         ledger_head: opened.ledgerHead,
         repos: options.repos.length,
@@ -504,7 +518,6 @@ export async function runTeam(
     const store = openStore(stateDir(values.state));
     try {
       const snapshot = store.exportSnapshot();
-      if (existsSync(target)) await unlink(target);
       await writePrivate(target, JSON.stringify(snapshot));
       out(
         JSON.stringify({
@@ -554,6 +567,53 @@ export async function runTeam(
     }
     return;
   }
+  if (subcommand === "readmit" || subcommand === "grant") {
+    const values = simpleArgs(rest, {
+      user: { type: "string" },
+      repo: { type: "string" },
+      team: { type: "string" },
+    });
+    if (values.help) return out(TEAM_USAGE);
+    const userId = values.user;
+    if (typeof userId !== "string" || !ID_PATTERN.test(userId))
+      throw new TeamUsageError(`${subcommand} needs --user ID.`);
+    const state = stateDir(values.state);
+    const team = teamId(
+      typeof values.team === "string"
+        ? values.team
+        : (await readDevTokens(state))?.team_id,
+    );
+    if (subcommand === "grant") {
+      const repo = values.repo;
+      if (typeof repo !== "string" || !ID_PATTERN.test(repo))
+        throw new TeamUsageError("grant needs --repo ID.");
+      const store = openStore(state);
+      try {
+        store.setRepoAccess({ team_id: team, repo_id: repo, user_id: userId });
+      } finally {
+        store.close();
+      }
+      out(JSON.stringify({ granted: "repo_access", team_id: team }));
+      return;
+    }
+    // Membership and a fresh dev token come back on the next `serve` with the user listed in --dev-users.
+    const tokens = await readDevTokens(state);
+    if (!tokens)
+      throw new TeamUsageError("readmit: no dev token file in this state dir.");
+    const revoked = tokens.revoked.filter((id) => id !== userId);
+    await writePrivate(
+      join(state, DEV_TOKENS_FILE),
+      JSON.stringify({ ...tokens, revoked }),
+    );
+    out(
+      JSON.stringify({
+        readmitted: true,
+        team_id: team,
+        was_revoked: revoked.length !== tokens.revoked.length,
+      }),
+    );
+    return;
+  }
   if (subcommand === "revoke") {
     const values = simpleArgs(rest, {
       user: { type: "string" },
@@ -584,9 +644,10 @@ export async function runTeam(
         const tokens = await readDevTokens(state);
         if (tokens) {
           const users = tokens.users.filter((u) => u.user_id !== user);
+          const revoked = [...new Set([...tokens.revoked, user])];
           await writePrivate(
             join(state, DEV_TOKENS_FILE),
-            JSON.stringify({ ...tokens, users }),
+            JSON.stringify({ ...tokens, users, revoked }),
           );
         }
         out(

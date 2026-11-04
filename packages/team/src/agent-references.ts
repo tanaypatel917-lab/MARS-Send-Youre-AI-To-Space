@@ -3,6 +3,13 @@ import type { GitRangeReference } from "@mars/contracts";
 import type { TeamReferenceAccess, TeamReferencePort } from "./agent";
 import type { TeamActor, TeamStore } from "./store";
 
+/** Resolver outcomes that may change without the pinned commit changing. */
+const TRANSIENT_STATES: ReadonlySet<string> = new Set([
+  "unavailable",
+  "unknown_repo",
+  "error",
+]);
+
 export interface AgentReferencePortOptions {
   /** Host-trusted `@mars/code-refs` registry (the one `serveTeam({repos})` uses). */
   repos: RepoRegistry;
@@ -74,14 +81,18 @@ export function createAgentReferencePort(
           },
           limits,
         );
-        remember(
-          reference.reference_id,
-          resolved.state === "ok" &&
-            (reference.blob_sha256 === null ||
-              resolved.text_sha256 === reference.blob_sha256)
-            ? resolved.text
-            : null,
-        );
+        // Only outcomes that are stable for a pinned commit are cached; a
+        // checkout that is briefly unavailable is retried on the next call.
+        if (resolved.state === "ok")
+          remember(
+            reference.reference_id,
+            reference.blob_sha256 === null ||
+              resolved.text_sha256 === reference.blob_sha256
+              ? resolved.text
+              : null,
+          );
+        else if (!TRANSIENT_STATES.has(resolved.state))
+          remember(reference.reference_id, null);
       }
     },
     describe({ team_id, reference_ids, viewers }) {
