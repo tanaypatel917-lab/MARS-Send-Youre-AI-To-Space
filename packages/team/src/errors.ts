@@ -6,6 +6,7 @@ export const TEAM_ERROR_CODES = [
   "conflict",
   "too_large",
   "unavailable",
+  "rate_limited",
   "unknown_cursor",
   "unsafe_path",
   "corrupt_record",
@@ -30,6 +31,9 @@ export const invalidInput = (message: string) =>
 /** Used for both "does not exist" and "not yours" so existence never leaks. */
 export const notFound = () =>
   new TeamError("not_found", "Conversation or member not found");
+/** Repos and references share the choice: absent and inaccessible look alike. */
+export const referenceNotFound = () =>
+  new TeamError("not_found", "Repository or reference not found");
 export const conflict = (message: string) => new TeamError("conflict", message);
 export const unavailable = (message: string) =>
   new TeamError("unavailable", message);

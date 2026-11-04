@@ -1,6 +1,8 @@
+import { ResolveLimitsSchema } from "@mars/code-refs";
 import {
   TEAM_MAX_BODY_CHARS,
   TEAM_MAX_CLIENT_MESSAGE_ID_CHARS,
+  TEAM_MAX_REFERENCES,
   TEAM_MAX_TITLE_CHARS,
 } from "@mars/contracts";
 import { z } from "zod";
@@ -11,6 +13,12 @@ import { z } from "zod";
  * reachable over RPC.
  */
 export const TEAM_MAX_GROUP_SIZE = 32;
+/** `references.search_paths` never returns more hits than this per call. */
+export const TEAM_MAX_SEARCH_HITS = 50;
+/** Preview caps reuse the `@mars/code-refs` resolver defaults (400 lines, 1 MiB). */
+const CODE_REFS_DEFAULTS = ResolveLimitsSchema.parse({});
+export const TEAM_MAX_PREVIEW_LINES = CODE_REFS_DEFAULTS.max_range_lines;
+export const TEAM_MAX_PREVIEW_BLOB_BYTES = CODE_REFS_DEFAULTS.max_blob_bytes;
 
 /** Server-side limits, in the style of `CollaborationLimitsSchema`. */
 export const TeamLimitsSchema = z
@@ -32,6 +40,23 @@ export const TeamLimitsSchema = z
     max_cursors_per_poll: z.number().int().positive().max(50),
     max_poll_events: z.number().int().positive().max(1000),
     max_pending_idempotency_rows: z.number().int().positive().max(100_000),
+    /** Committed code references one message may carry. */
+    max_references_per_message: z
+      .number()
+      .int()
+      .positive()
+      .max(TEAM_MAX_REFERENCES),
+    /** `references.resolve` calls one user may make per sliding minute. */
+    max_resolves_per_minute: z.number().int().positive().max(10_000),
+    /** Lines a preview (or a stored range) may span; the code-refs `max_range_lines`. */
+    max_preview_lines: z.number().int().positive().max(TEAM_MAX_PREVIEW_LINES),
+    /** Largest blob a preview reads; the code-refs `max_blob_bytes`. */
+    max_preview_blob_bytes: z
+      .number()
+      .int()
+      .positive()
+      .max(TEAM_MAX_PREVIEW_BLOB_BYTES),
+    max_search_hits: z.number().int().positive().max(TEAM_MAX_SEARCH_HITS),
   })
   .strict();
 export type TeamLimits = z.infer<typeof TeamLimitsSchema>;
@@ -46,4 +71,9 @@ export const DEFAULT_TEAM_LIMITS: TeamLimits = {
   max_cursors_per_poll: 50,
   max_poll_events: 1000,
   max_pending_idempotency_rows: 10_000,
+  max_references_per_message: TEAM_MAX_REFERENCES,
+  max_resolves_per_minute: 120,
+  max_preview_lines: TEAM_MAX_PREVIEW_LINES,
+  max_preview_blob_bytes: TEAM_MAX_PREVIEW_BLOB_BYTES,
+  max_search_hits: TEAM_MAX_SEARCH_HITS,
 };

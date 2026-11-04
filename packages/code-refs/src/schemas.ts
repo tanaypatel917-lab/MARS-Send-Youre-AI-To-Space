@@ -1,4 +1,3 @@
-import { SCHEMA_VERSION } from "@mars/contracts";
 import { z } from "zod";
 import { MAX_PATH_LENGTH } from "./path-rules";
 
@@ -255,22 +254,10 @@ export type SearchPathsResult = z.infer<typeof SearchPathsResultSchema>;
 
 /**
  * Shape of a stored `git_range` reference (TEAM_CHAT_DISCOVERY.md section 4.1).
- * TODO: replace with the `git_range` member of `ReferenceSchema` from
- * `packages/contracts/src/team.ts` once Team Chat PR 2 lands, then delete
- * this definition.
+ * Defined once in `packages/contracts/src/team.ts`; re-exported here so the
+ * resolver and the chat service share the same runtime schema.
  */
-export const GitRangeReferenceSchema = z
-  .object({
-    schema_version: z.literal(SCHEMA_VERSION),
-    kind: z.literal("git_range"),
-    reference_id: z.string().min(1),
-    team_id: z.string().min(1),
-    repo_id: RepoIdSchema,
-    commit_sha: CommitShaSchema,
-    path: z.string().min(1).max(MAX_PATH_LENGTH),
-    line_start: positiveInt.nullable(),
-    line_end: positiveInt.nullable(),
-    blob_sha256: z.string().regex(SHA256_PATTERN).nullable(),
-  })
-  .strict();
-export type GitRangeReference = z.infer<typeof GitRangeReferenceSchema>;
+export {
+  type GitRangeReference,
+  GitRangeReferenceSchema,
+} from "@mars/contracts";
