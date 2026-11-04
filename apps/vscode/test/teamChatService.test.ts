@@ -948,18 +948,22 @@ describe("older servers", () => {
       if (Array.isArray(value)) return value.map(strip);
       if (value && typeof value === "object") {
         const out: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(value as Record<string, unknown>))
-          if (
-            ![
+        for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+          // Pre-#64 shapes: no list counters, no chips/summaries/excerpts on
+          // messages, no `references` capability (the boolean `reactions`
+          // capability itself stays).
+          const dropped =
+            [
               "unread_count",
               "last_message_at",
-              "references",
-              "reactions",
               "reply_excerpt",
               "reply_restricted",
-            ].includes(k)
-          )
-            out[k] = k === "capabilities" ? strip(v) : v;
+            ].includes(k) ||
+            (k === "references" &&
+              (Array.isArray(v) || typeof v === "boolean")) ||
+            (k === "reactions" && Array.isArray(v));
+          if (!dropped) out[k] = k === "capabilities" ? strip(v) : v;
+        }
         return out;
       }
       return value;
