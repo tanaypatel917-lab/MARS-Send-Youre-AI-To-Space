@@ -18,6 +18,7 @@ export const TOKENS = {
   bob: "bob_dev_token_not_a_secret_00000000000002",
   carol: "carol_dev_token_not_a_secret_000000000003",
   dave: "dave_dev_token_not_a_secret_0000000000004",
+  multi: "multi_dev_token_not_a_secret_00000000000006",
   stranger: "stranger_dev_token_not_a_secret_00000005",
 } as const;
 export type User = keyof typeof TOKENS;
@@ -90,6 +91,11 @@ export function fixture(options: Partial<TeamLimits> | FixtureOptions = {}) {
     { token: TOKENS.bob, user_id: "bob", team_ids: [TEAM] },
     { token: TOKENS.carol, user_id: "carol", team_ids: [TEAM] },
     { token: TOKENS.dave, user_id: "dave", team_ids: [OTHER_TEAM] },
+    {
+      token: TOKENS.multi,
+      user_id: "multi",
+      team_ids: [TEAM, OTHER_TEAM],
+    },
     // Authenticated but never added to the team store.
     { token: TOKENS.stranger, user_id: "stranger", team_ids: [TEAM] },
   ]);
