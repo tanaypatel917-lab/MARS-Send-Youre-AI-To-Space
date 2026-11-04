@@ -5,6 +5,7 @@ export const TEAM_ERROR_CODES = [
   "not_found",
   "conflict",
   "too_large",
+  "unavailable",
   "unknown_cursor",
   "unsafe_path",
   "corrupt_record",
@@ -30,3 +31,5 @@ export const invalidInput = (message: string) =>
 export const notFound = () =>
   new TeamError("not_found", "Conversation or member not found");
 export const conflict = (message: string) => new TeamError("conflict", message);
+export const unavailable = (message: string) =>
+  new TeamError("unavailable", message);
