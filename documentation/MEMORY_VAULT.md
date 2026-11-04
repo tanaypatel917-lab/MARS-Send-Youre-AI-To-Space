@@ -147,13 +147,18 @@ edges as wikilinks to the other file notes.
   removed **only if the file is byte-identical to what was generated**
   (`file_digest`); a stale note you edited anywhere — body, frontmatter or
   Related — is kept and reported as `kept_modified`, as is any stale note from
-  a manifest written before `file_digest` was recorded. Untracked files are
-  never touched.
+  a manifest written before `file_digest` was recorded. Kept notes stay in the
+  manifest so the next import still reads them and reports `stale_export`
+  (`entry … was removed after the export`) instead of treating them as
+  untracked. Untracked files are never touched.
 - Refuses a `vaultDir` that overlaps a host-private root or the memory/skills
-  state directories (`VaultPathError`), refuses note paths that escape the
-  vault lexically or through a symlinked directory/file inside the vault
-  (`path_escape`), and refuses to export into a vault whose manifest belongs to
-  a different `owner_id`/`project_id`/`workspace_id` (`scope_mismatch`).
+  state directories (`VaultPathError`; both sides are compared after symlink
+  resolution, so a vault that is a link into the state directory is refused
+  too), refuses note paths that escape the vault lexically or through a
+  symlinked directory/file inside the vault (`path_escape`, checked before any
+  directory is created), and refuses to export into a vault whose manifest
+  belongs to a different `owner_id`/`project_id`/`workspace_id`
+  (`scope_mismatch`).
 
 The manifest `.mars-vault.json` records `schema_version: 1`, `exported_at`,
 `scope`, `memory_revision`, `skills_revision`, `graph` digests and one
@@ -173,10 +178,12 @@ Reconciliation rules, per tracked note:
 | new `facts/*.md` with `mars_kind: memory_fact` and no `entry_id` | `add` proposal with a fresh `vault-<digest>` entry id, scope from `ctx`, `target` from frontmatter (default `project`) |
 | fact note deleted | reported as `deleted`; with `--allow-remove` a `remove` proposal |
 | skill body changed | `SkillStore.submitProposal({ ops:[{op:"update", name, content}] })` |
-| new `skills/<name>.md` | `op: "create"` (the name must satisfy the skill store's own validation) |
+| new `skills/<name>.md` | `op: "create"` (the name must satisfy the skill store's own validation; a frontmatter `name` that does not match the file name is `invalid`) |
 | skill note deleted | reported; with `--allow-remove` an `archive` proposal (skills are never erased) |
 | project/graph note edited or deleted | `ignored_derived` — rebuilt by the next export, never proposed |
 | frontmatter unparsable, or `mars_kind` differs from the exported kind | `invalid`, nothing proposed |
+| note is a symlink or sits in a symlinked directory (tracked or new) | `invalid` (`path_escape`), never read |
+| tracked note edited after its entry/skill left the store | `stale_export` with reason `entry … was removed after the export`; copy the body into a new note to propose it |
 | identical proposal already pending from the vault | `already_proposed` (no duplicate) |
 
 Revision fencing and `stale_export`:

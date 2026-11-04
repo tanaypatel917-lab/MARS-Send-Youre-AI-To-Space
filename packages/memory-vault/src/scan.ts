@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import type { RequestContext } from "@mars/contracts";
 import { canonicalJson, RequestContextSchema } from "@mars/memory";
 import { VaultError } from "./errors";
-import { readManifest } from "./export";
+import { readManifest, skillNotePath } from "./export";
 import { type ParsedNote, parseNote, sha256 } from "./notes";
 import {
   assertVaultDirectory,
@@ -66,6 +66,30 @@ async function listMarkdown(dir: string, prefix: string): Promise<string[]> {
     .map((name) => `${prefix}/${name}`);
 }
 
+/**
+ * Reads a note without ever following a link out of the vault: a symlinked
+ * note (or a note in a symlinked directory) could pull private files into a
+ * proposal. Throws VaultPathError for links, ENOENT for a missing file.
+ */
+async function readNoteInside(
+  vaultDir: string,
+  absolute: string,
+  path: string,
+): Promise<string> {
+  if ((await lstat(absolute)).isSymbolicLink())
+    throw new VaultPathError("path_escape", `${path} is a symlink`);
+  const [realVault, realParent] = await Promise.all([
+    realpath(vaultDir),
+    realpath(dirname(absolute)),
+  ]);
+  if (realParent !== realVault && !contains(realVault, realParent))
+    throw new VaultPathError(
+      "path_escape",
+      `${path} resolves outside the vault`,
+    );
+  return readFile(absolute, "utf8");
+}
+
 function kindOf(note: ParsedNote): NoteKind | null {
   const parsed = NoteKindSchema.safeParse(note.frontmatter.mars_kind);
   return parsed.success ? parsed.data : null;
@@ -83,7 +107,7 @@ export async function scanVault(
   if (!RequestContextSchema.safeParse(ctx).success)
     throw new VaultError("invalid_context");
   const vaultDir = resolve(options.vaultDir);
-  assertVaultDirectory(vaultDir, [
+  await assertVaultDirectory(vaultDir, [
     ...(options.privateRoots ?? []),
     options.skills.root,
   ]);
@@ -124,20 +148,7 @@ export async function scanVault(
     }
     let text: string;
     try {
-      // Never follow a link out of the vault: a symlinked note (or a note in a
-      // symlinked directory) could pull private files into a proposal.
-      if ((await lstat(absolute)).isSymbolicLink())
-        throw new VaultPathError("path_escape", `${tracked.path} is a symlink`);
-      const [realVault, realParent] = await Promise.all([
-        realpath(vaultDir),
-        realpath(dirname(absolute)),
-      ]);
-      if (realParent !== realVault && !contains(realVault, realParent))
-        throw new VaultPathError(
-          "path_escape",
-          `${tracked.path} resolves outside the vault`,
-        );
-      text = await readFile(absolute, "utf8");
+      text = await readNoteInside(vaultDir, absolute, tracked.path);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         notes.push({ ...base, state: "deleted", note: null, reason: null });
@@ -187,15 +198,39 @@ export async function scanVault(
   for (const dir of CANDIDATE_DIRS) {
     for (const path of await listMarkdown(join(vaultDir, dir), dir)) {
       if (trackedPaths.has(path)) continue;
+      const expected: NoteKind = dir === "facts" ? "memory_fact" : "skill";
+      let text: string;
+      try {
+        text = await readNoteInside(
+          vaultDir,
+          resolveInside(vaultDir, path),
+          path,
+        );
+      } catch (error) {
+        if (error instanceof VaultPathError) {
+          notes.push({
+            path,
+            kind: expected,
+            id: null,
+            state: "invalid",
+            derived: false,
+            tracked: null,
+            note: null,
+            reason: error.message,
+          });
+          continue;
+        }
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
       let note: ParsedNote;
       try {
-        note = parseNote(await readFile(resolveInside(vaultDir, path), "utf8"));
+        note = parseNote(text);
       } catch {
         untracked += 1;
         continue;
       }
       const kind = kindOf(note);
-      const expected: NoteKind = dir === "facts" ? "memory_fact" : "skill";
       if (kind !== expected) {
         untracked += 1;
         continue;
@@ -210,6 +245,21 @@ export async function scanVault(
           state: "invalid",
           reason:
             "untracked fact note carries an entry_id; remove it to propose a new fact or re-export to track it",
+        });
+        continue;
+      }
+      if (
+        kind === "skill" &&
+        typeof id === "string" &&
+        skillNotePath(id) !== path
+      ) {
+        // The proposed skill is named by its frontmatter; a file that does
+        // not match would leave an orphan note once the skill is exported.
+        notes.push({
+          ...base,
+          id,
+          state: "invalid",
+          reason: `skill name ${id} does not match the file name; rename the note to ${skillNotePath(id)} or drop the name field`,
         });
         continue;
       }

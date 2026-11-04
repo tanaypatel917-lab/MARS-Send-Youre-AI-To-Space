@@ -1,4 +1,5 @@
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { lstat, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 const SAFE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const KEEP = /[A-Za-z0-9._-]/;
@@ -113,14 +114,49 @@ export function resolveInside(vaultDir: string, notePath: string): string {
   return absolute;
 }
 
-/** Refuses a vault directory that overlaps any host-private root. */
-export function assertVaultDirectory(
+/**
+ * Resolves symlinks in `path` even when its tail does not exist yet: the
+ * nearest existing ancestor is resolved and the missing tail re-appended.
+ */
+export async function realpathExisting(path: string): Promise<string> {
+  const absolute = resolve(path);
+  const missing: string[] = [];
+  let current = absolute;
+  for (;;) {
+    try {
+      await lstat(current);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const parent = dirname(current);
+    if (parent === current) break;
+    missing.unshift(relative(parent, current));
+    current = parent;
+  }
+  return resolve(await realpath(current), ...missing);
+}
+
+/**
+ * Refuses a vault directory that overlaps any host-private root. Both sides
+ * are compared after symlink resolution so a vault that is a link into the
+ * state directory (or a private root reached through a link) is caught.
+ */
+export async function assertVaultDirectory(
   vaultDir: string,
   privateRoots: readonly string[],
-): void {
+): Promise<void> {
+  const vault = await realpathExisting(vaultDir);
   for (const root of privateRoots) {
     const resolved = resolve(root);
-    if (contains(resolved, vaultDir) || contains(vaultDir, resolved))
-      throw new VaultPathError("private_root");
+    const real = await realpathExisting(root);
+    for (const candidate of [resolved, real])
+      if (
+        contains(candidate, vaultDir) ||
+        contains(vaultDir, candidate) ||
+        contains(candidate, vault) ||
+        contains(vault, candidate)
+      )
+        throw new VaultPathError("private_root");
   }
 }

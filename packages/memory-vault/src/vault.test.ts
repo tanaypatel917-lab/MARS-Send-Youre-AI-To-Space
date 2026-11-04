@@ -653,7 +653,18 @@ test("re-export removes stale unmodified notes and leaves user notes alone", asy
   expect(existsSync(join(vaultDir, "graph/ws1/index.md"))).toBe(false);
   expect(read(vaultDir, "scratch.md")).toBe("mine\n");
   const status = await vaultStatus(ctx, common);
-  expect(status.memory.notes).toMatchObject({ unchanged: 1, invalid: 1 });
+  expect(status.memory.notes).toMatchObject({ unchanged: 1, modified: 1 });
+  // review: the kept edit stays tracked and import says why it cannot land
+  const imported = await importVault(ctx, { ...common, actor: "tester" });
+  const kept = imported.items.find((i) => i.path === "facts/fact-graph.md");
+  expect(kept?.action).toBe("stale_export");
+  expect(kept?.reason).toContain("removed after the export");
+  expect(imported.proposals.memory).toEqual([]);
+  expect(await memory.listProposals(ctx, "pending")).toEqual([]);
+  // a third export keeps it again rather than erasing the edit
+  const again = await exportVault(ctx, common);
+  expect(again).toMatchObject({ removed: 0, kept_modified: 1 });
+  expect(read(vaultDir, "facts/fact-graph.md")).toContain("keep it tiny");
 });
 
 test("status reports revisions, note counts and pending vault proposals", async () => {
@@ -832,6 +843,110 @@ test("review: a symlinked directory inside the vault cannot redirect the export"
   expect(readdirSync(outside)).toEqual([]);
 });
 
+test("review: a symlinked directory never makes export create directories outside the vault", async () => {
+  if (process.platform === "win32") return;
+  const { common, vaultDir } = await fixture();
+  const outside = mkdtempSync(join(tmpdir(), "mars-vault-outside-"));
+  roots.push(outside);
+  mkdirSync(vaultDir, { recursive: true });
+  symlinkSync(outside, join(vaultDir, "graph"));
+  await expect(
+    exportVault(ctx, { ...common, graph: graphFixture() }),
+  ).rejects.toMatchObject({ code: "path_escape" });
+  expect(readdirSync(outside)).toEqual([]);
+});
+
+test("review: a vault that is a symlink into a private root is refused", async () => {
+  if (process.platform === "win32") return;
+  const { common, state, root } = await fixture();
+  mkdirSync(join(state, "inner"), { recursive: true });
+  const linked = join(root, "linked-vault");
+  symlinkSync(join(state, "inner"), linked);
+  await expect(
+    exportVault(ctx, { ...common, vaultDir: linked }),
+  ).rejects.toMatchObject({ code: "private_root" });
+  await expect(
+    exportVault(ctx, { ...common, vaultDir: join(linked, "deeper", "vault") }),
+  ).rejects.toMatchObject({ code: "private_root" });
+  expect(readdirSync(join(state, "inner"))).toEqual([]);
+  // a private root reached through a link is caught as well
+  const aliasedState = join(root, "state-alias");
+  symlinkSync(state, aliasedState);
+  await expect(
+    exportVault(ctx, {
+      ...common,
+      vaultDir: join(state, "elsewhere"),
+      privateRoots: [aliasedState],
+    }),
+  ).rejects.toMatchObject({ code: "private_root" });
+});
+
+test("review: an untracked note that is a symlink is refused, not proposed", async () => {
+  if (process.platform === "win32") return;
+  const { common, vaultDir, state, memory, skills } = await fixture();
+  await exportVault(ctx, common);
+  writeFileSync(
+    join(state, "private-skill.md"),
+    `---\nmars_kind: skill\n---\n${SKILL("private", "sk-live-private-token\n")}`,
+  );
+  symlinkSync(
+    join(state, "private-skill.md"),
+    join(vaultDir, "skills/private.md"),
+  );
+  writeFileSync(
+    join(state, "private-fact.md"),
+    `---\nmars_kind: memory_fact\n---\nsk-live-private-token\n`,
+  );
+  symlinkSync(join(state, "private-fact.md"), join(vaultDir, "facts/new.md"));
+  const report = await importVault(ctx, { ...common, actor: "tester" });
+  for (const path of ["skills/private.md", "facts/new.md"]) {
+    const item = report.items.find((i) => i.path === path);
+    expect(item?.action).toBe("invalid");
+    expect(item?.reason).toContain("symlink");
+  }
+  expect(report.proposals).toEqual({ memory: [], skills: [] });
+  expect(await memory.listProposals(ctx, "pending")).toEqual([]);
+  expect(await skills.listProposals()).toEqual([]);
+  expect(JSON.stringify(report)).not.toContain("sk-live-private-token");
+});
+
+test("review: a new skill note must be named after its file", async () => {
+  const { common, vaultDir, skills } = await fixture();
+  await exportVault(ctx, common);
+  writeFileSync(
+    join(vaultDir, "skills/triage.md"),
+    `---\nmars_kind: skill\nname: release\n---\n${SKILL("release", "Step A\n")}`,
+  );
+  const report = await importVault(ctx, { ...common, actor: "tester" });
+  const item = report.items.find((i) => i.path === "skills/triage.md");
+  expect(item?.action).toBe("invalid");
+  expect(item?.reason).toContain("skills/release.md");
+  expect(report.proposals.skills).toEqual([]);
+  expect(await skills.listProposals()).toEqual([]);
+  // a mismatch only inside the skill markdown is refused by the store itself
+  writeFileSync(
+    join(vaultDir, "skills/triage.md"),
+    `---\nmars_kind: skill\n---\n${SKILL("release", "Step A\n")}`,
+  );
+  const inner = await importVault(ctx, { ...common, actor: "tester" });
+  const innerItem = inner.items.find((i) => i.path === "skills/triage.md");
+  expect(innerItem?.action).toBe("failed");
+  expect(innerItem?.reason).toContain("name must match");
+  expect(await skills.listProposals()).toEqual([]);
+  // a note whose name matches its file is proposed
+  writeFileSync(
+    join(vaultDir, "skills/triage.md"),
+    `---\nmars_kind: skill\n---\n${SKILL("triage", "Step A\n")}`,
+  );
+  const named = await importVault(ctx, { ...common, actor: "tester" });
+  expect(named.items.find((i) => i.path === "skills/triage.md")?.action).toBe(
+    "proposed",
+  );
+  const pending = await skills.listProposals();
+  expect(pending).toHaveLength(1);
+  expect(pending[0]?.ops[0]).toMatchObject({ op: "create", name: "triage" });
+});
+
 test("review: encoded graph file names stay within file-name limits", () => {
   const underscores = `a${"_".repeat(85)}.ts`;
   const encoded = encodeSourcePath(`src/${underscores}`);
@@ -858,10 +973,16 @@ test("review: manifests written without file_digest still open and keep stale no
   expect(report.removed).toBe(0);
   expect(report.kept_modified).toBe(1);
   expect(existsSync(join(vaultDir, "facts/fact-plain.md"))).toBe(true);
+  const notes: { path: string; file_digest?: string }[] = JSON.parse(
+    readFileSync(manifestPath, "utf8"),
+  ).notes;
+  // the kept note is carried over as it was recorded; everything regenerated
+  // now carries a file digest
+  expect(notes.some((note) => note.path === "facts/fact-plain.md")).toBe(true);
   expect(
-    JSON.parse(readFileSync(manifestPath, "utf8")).notes.every(
-      (note: { file_digest?: string }) => typeof note.file_digest === "string",
-    ),
+    notes
+      .filter((note) => note.path !== "facts/fact-plain.md")
+      .every((note) => typeof note.file_digest === "string"),
   ).toBe(true);
 });
 

@@ -3,7 +3,6 @@ import {
   lstat,
   mkdir,
   readFile,
-  realpath,
   rename,
   rm,
   writeFile,
@@ -19,6 +18,7 @@ import {
   contains,
   encodeSegment,
   encodeSourcePath,
+  realpathExisting,
   resolveInside,
   VaultPathError,
 } from "./paths";
@@ -113,16 +113,18 @@ async function writeAtomic(
   absolute: string,
   text: string,
 ): Promise<boolean> {
-  await mkdir(dirname(absolute), { recursive: true, mode: 0o700 });
+  // Resolve links before creating anything so a symlinked directory inside
+  // the vault cannot make mkdir build a tree outside it.
   const [realVault, realParent] = await Promise.all([
-    realpath(vaultDir),
-    realpath(dirname(absolute)),
+    realpathExisting(vaultDir),
+    realpathExisting(dirname(absolute)),
   ]);
   if (realParent !== realVault && !contains(realVault, realParent))
     throw new VaultPathError(
       "path_escape",
       `${relative(vaultDir, absolute)} resolves outside the vault`,
     );
+  await mkdir(dirname(absolute), { recursive: true, mode: 0o700 });
   try {
     if ((await lstat(absolute)).isSymbolicLink())
       throw new VaultPathError(
@@ -417,7 +419,7 @@ export async function exportVault(
   const context = RequestContextSchema.safeParse(ctx);
   if (!context.success) throw new VaultError("invalid_context");
   const vaultDir = resolve(options.vaultDir);
-  assertVaultDirectory(vaultDir, [
+  await assertVaultDirectory(vaultDir, [
     ...(options.privateRoots ?? []),
     options.skills.root,
   ]);
@@ -624,8 +626,14 @@ export async function exportVault(
     ) {
       await rm(absolute, { force: true });
       removed += 1;
-    } else keptModified += 1;
+    } else {
+      // The edited note stays tracked so the next import can still read it
+      // (and report that its entry is gone) instead of calling it untracked.
+      keptModified += 1;
+      manifestNotes.push(stale);
+    }
   }
+  manifestNotes.sort((a, b) => byString(a.path, b.path));
   const exportedAt = (options.now?.() ?? new Date()).toISOString();
   const manifest: VaultManifest = {
     schema_version: VAULT_SCHEMA_VERSION,
