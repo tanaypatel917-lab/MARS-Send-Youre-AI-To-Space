@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { projectTranscript } from "./projection";
+import { pendingJournalIds, projectTranscript } from "./projection";
 import {
   EVENT_TYPES,
   FIXTURE_ROOT,
@@ -54,6 +54,56 @@ describe("projectTranscript (criterion 1)", () => {
       ),
     ).toBe(false);
     expect(projection.journal).toBe("unavailable");
+  });
+
+  test("not_found and non-text journal rows fall back to turn markers", () => {
+    const events = loadEventFixture("execution.observed");
+    const ids = pendingJournalIds(events, new Set());
+    expect(ids.length).toBeGreaterThan(0);
+    for (const kind of ["not_found", "tool_result", "compaction"] as const) {
+      const projection = projectTranscript({
+        task: fixtureTask(),
+        events,
+        journal: {
+          status: "available",
+          entries: new Map(
+            ids.map((entry_id) => [entry_id, { entry_id, kind, text: "" }]),
+          ),
+        },
+      });
+      expect(projection.entries.filter((e) => e.kind === "turn")).toHaveLength(
+        4,
+      );
+    }
+  });
+
+  test("a repeated journal id renders its text once and adds no turn marker", () => {
+    const [first] = loadEventFixture("execution.observed").filter(
+      (row) => pendingJournalIds([row], new Set()).length > 0,
+    );
+    if (!first) throw new Error("fixture has no observed entry ids");
+    const [entry_id = ""] = pendingJournalIds([first], new Set());
+    const repeat = {
+      ...first,
+      event: {
+        ...first.event,
+        event_id: `${first.event.event_id}-repeat`,
+      },
+    };
+    const projection = projectTranscript({
+      task: fixtureTask(),
+      events: [first, repeat],
+      journal: {
+        status: "available",
+        entries: new Map([
+          [entry_id, { entry_id, kind: "assistant", text: "once" }],
+        ]),
+      },
+    });
+    expect(
+      projection.entries.filter((e) => e.kind === "assistant"),
+    ).toHaveLength(1);
+    expect(projection.entries.filter((e) => e.kind === "turn")).toHaveLength(0);
   });
 
   test("journal reply resolves thinking and assistant text; unmatched ids stay turns", () => {
