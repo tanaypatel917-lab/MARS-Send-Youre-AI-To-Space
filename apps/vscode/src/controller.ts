@@ -5,7 +5,12 @@ import type {
   Scope,
   Task,
   TaskStatus,
+  VerificationView,
   WorkspaceRef,
+} from "@mars/contracts";
+import {
+  VERIFICATION_STATE_LABEL,
+  verificationStateFor,
 } from "@mars/contracts";
 import { DEFAULT_MAX_REVIEW_LINES } from "@mars/output-format";
 import type { MarsClient, VerifiedArtifact } from "./client";
@@ -18,6 +23,7 @@ import type {
   EventView,
   Notice,
   SelectedView,
+  VerificationBadge,
   ViewState,
   WebviewMessage,
 } from "./messages";
@@ -78,7 +84,26 @@ interface Selection {
   checkpoints: CheckpointRef[];
   workspace: WorkspaceRef | null;
   artifact: ArtifactView | null;
+  verification: VerificationBadge | null;
   refreshing: boolean;
+}
+
+/** Every "Verified" word the client shows comes from the shared presentation rule. */
+function verificationBadge(view: VerificationView): VerificationBadge {
+  const presentation = verificationStateFor(
+    view.candidate?.revision ?? null,
+    view.records,
+  );
+  return {
+    state: presentation.state,
+    label: VERIFICATION_STATE_LABEL[presentation.state],
+    candidate: view.candidate?.revision ?? null,
+    bound: presentation.record?.candidate?.revision ?? null,
+    verdict: presentation.record?.verdict ?? null,
+    reasons: presentation.reasons,
+    diagnostics: presentation.record?.diagnostics ?? [],
+    recorded_at: presentation.record?.recorded_at ?? null,
+  };
 }
 
 function disconnected(
@@ -227,6 +252,7 @@ export class WorkbenchController {
         checkpoints: selected.checkpoints,
         workspace: selected.workspace,
         artifact: selected.artifact,
+        verification: selected.verification,
       };
     }
     return {
@@ -469,7 +495,27 @@ export class WorkbenchController {
     if (index >= 0) this.tasks[index] = task;
     else this.tasks.unshift(task);
     const selected = this.current(task.task_id);
-    if (selected) selected.task = task;
+    if (!selected) return;
+    const wasTerminal = TERMINAL.includes(selected.task.status);
+    selected.task = task;
+    // A run that just ended (or any reopened finished run) asks the host for
+    // its verdict; the badge is never derived from the status alone.
+    if (
+      TERMINAL.includes(task.status) &&
+      (!wasTerminal || !selected.verification)
+    )
+      void this.loadVerification(task.task_id);
+  }
+
+  private async loadVerification(taskId: string): Promise<void> {
+    const generation = this.generation;
+    const view = await this.request(null, (client, signal) =>
+      client.verification(taskId, signal),
+    );
+    const selected = this.current(taskId);
+    if (!view || !selected || generation !== this.generation) return;
+    selected.verification = verificationBadge(view);
+    this.emit();
   }
 
   async select(taskId: string): Promise<void> {
@@ -502,10 +548,12 @@ export class WorkbenchController {
       checkpoints: [...(cached?.checkpoints ?? [])],
       workspace: cached?.workspace ?? null,
       artifact: null,
+      verification: null,
       refreshing: false,
     };
     this.startPolling(generation, taskId);
     this.emit();
+    if (TERMINAL.includes(task.status)) await this.loadVerification(taskId);
   }
 
   private startPolling(generation: number, taskId: string): void {
@@ -1038,6 +1086,14 @@ export class WorkbenchController {
       `Workspace ${restored.workspace_id} restored to checkpoint ${checkpointId}.`,
     );
     await this.reloadSelected();
+    // The candidate changed: a verdict shown for the old revision is no
+    // longer about what the user is looking at, so ask the host again.
+    const after = this.current(taskId);
+    if (after && TERMINAL.includes(after.task.status)) {
+      after.verification = null;
+      this.emit();
+      await this.loadVerification(taskId);
+    }
   }
 }
 

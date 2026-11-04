@@ -611,6 +611,7 @@ export interface ModelRegistry {
 export * from "./models";
 
 export * from "./output-format";
+export * from "./verification";
 
 /**
  * Milestone 4 additive contracts: prompt-target scoring shared by

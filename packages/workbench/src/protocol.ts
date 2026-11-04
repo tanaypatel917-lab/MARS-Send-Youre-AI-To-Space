@@ -1,5 +1,6 @@
 import {
   ArtifactRefSchema,
+  RequiredCheckSchema,
   SCHEMA_VERSION,
   ScopeSchema,
   TaskSchema,
@@ -72,7 +73,7 @@ export const DiffResultSchema = z
     /**
      * Canonical SHA-256 of the diff (see `diffDigest`). Optional on the wire
      * so older servers' results still validate; the host always sets it.
-     * This is the first additive change to the frozen protocol.
+     * Additive change to the frozen protocol (Team Chat PR 6).
      */
     digest: sha256Hex.optional(),
   })
@@ -130,6 +131,8 @@ export const StartParamsSchema = z
     expected_revision: revision,
     approvals: ApprovalsSchema,
     model_id: id.optional(),
+    /** Host-run checks fixed at launch, outside the model's control; absent means the run is never verified. */
+    required_checks: z.array(RequiredCheckSchema).max(32).optional(),
   })
   .strict();
 export type StartParams = z.infer<typeof StartParamsSchema>;
@@ -176,6 +179,7 @@ export const RpcRequestSchema = z.discriminatedUnion("method", [
   method("tasks.diff", taskId),
   method("tasks.evidence", taskId),
   method("tasks.checkpoint", taskId),
+  method("tasks.verification", taskId),
   method(
     "tasks.restore",
     z

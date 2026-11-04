@@ -65,7 +65,7 @@ const sha256Hex = z.string().regex(/^[a-f0-9]{64}$/);
 
 /**
  * `digest` is the canonical SHA-256 of the diff (server `diffDigest`). It is
- * the first additive change to the frozen protocol and stays optional so a
+ * an additive change to the frozen protocol and stays optional so a
  * result from an older server still validates.
  */
 export const DiffResultSchema = z
@@ -135,6 +135,7 @@ export const RPC_METHODS = {
   evidence: "tasks.evidence",
   checkpoint: "tasks.checkpoint",
   restore: "tasks.restore",
+  verification: "tasks.verification",
 } as const;
 export type RpcMethod = (typeof RPC_METHODS)[keyof typeof RPC_METHODS];
 

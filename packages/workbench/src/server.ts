@@ -9,6 +9,8 @@ import {
   ScopeSchema,
   type Task,
   TaskSchema,
+  type VerificationView,
+  VerificationViewSchema,
   type WorkspaceRef,
 } from "@mars/contracts";
 import { z } from "zod";
@@ -65,6 +67,11 @@ export interface WorkbenchOperations {
   diff(context: RequestContext, taskId: string): Promise<DiffResult>;
   evidence(context: RequestContext, taskId: string): Promise<EvidenceResult>;
   checkpoint(context: RequestContext, taskId: string): Promise<CheckpointRef>;
+  /** The host-owned verification verdict for the task's current candidate revision. */
+  verification(
+    context: RequestContext,
+    taskId: string,
+  ): Promise<VerificationView>;
   restore(
     context: RequestContext,
     taskId: string,
@@ -263,6 +270,10 @@ async function dispatch(
     case "tasks.checkpoint":
       return CheckpointRefSchema.parse(
         await api.checkpoint(context, request.params.task_id),
+      );
+    case "tasks.verification":
+      return VerificationViewSchema.parse(
+        await api.verification(context, request.params.task_id),
       );
     case "tasks.restore":
       return WorkspaceRefSchema.parse(

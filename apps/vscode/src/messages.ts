@@ -4,6 +4,8 @@ import type {
   CheckpointRef,
   Task,
   TaskStatus,
+  VerificationState,
+  VerificationVerdict,
   WorkspaceRef,
 } from "@mars/contracts";
 import { z } from "zod";
@@ -157,6 +159,19 @@ export interface ArtifactView {
   final_text: boolean;
 }
 
+export interface VerificationBadge {
+  state: VerificationState;
+  label: string;
+  /** Revision the badge speaks about (the current candidate), when known. */
+  candidate: string | null;
+  /** Revision the underlying verdict was recorded for, when a verdict exists. */
+  bound: string | null;
+  verdict: VerificationVerdict | null;
+  reasons: string[];
+  diagnostics: string[];
+  recorded_at: string | null;
+}
+
 export interface SelectedView {
   task: Task;
   events: EventView[];
@@ -167,6 +182,8 @@ export interface SelectedView {
   checkpoints: CheckpointRef[];
   workspace: WorkspaceRef | null;
   artifact: ArtifactView | null;
+  /** Host-owned verification verdict; null until the server has answered. */
+  verification: VerificationBadge | null;
 }
 
 export interface TaskSummary {
