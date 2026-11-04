@@ -1,0 +1,155 @@
+<div id="app">
+  <div class="app-shell">
+    <nav aria-label="Sidebar" class="sidebar">
+      <h1 class="brand">MARS Shell</h1>
+      <h2 class="section-title">Sessions</h2>
+      <section aria-label="running" class="session-group">
+        <h3 class="group-title">running</h3>
+        <ul class="session-list">
+          <li class="session-item">
+            <button aria-pressed="false" class="session" data-task-id="fixture-running" title="fixture-running" type="button">
+              <span aria-label="running" class="status status-running">● running</span>
+              <span class="provenance" data-provenance="task request">untrusted · task request</span>
+              <span class="session-request">Review current work and report observations.</span>
+              <span class="session-runtime">
+                <span class="runtime-label">oh-my-pi</span>
+                <span class="session-id" title="fixture-running">fixture-running</span>
+              </span>
+            </button>
+          </li>
+        </ul>
+      </section>
+      <section aria-label="pending" class="session-group">
+        <h3 class="group-title">pending</h3>
+        <ul class="session-list">
+          <li class="session-item">
+            <button aria-pressed="true" class="session selected" data-task-id="fixture-pending" title="fixture-pending" type="button">
+              <span aria-label="pending" class="status status-pending">○ pending</span>
+              <span class="provenance" data-provenance="task request">untrusted · task request</span>
+              <span class="session-request">Pending sample task.</span>
+              <span class="session-runtime">
+                <span class="runtime-label">oh-my-pi</span>
+                <span class="session-id" title="fixture-pending">fixture-pending</span>
+              </span>
+            </button>
+          </li>
+        </ul>
+      </section>
+      <section aria-label="completed" class="session-group">
+        <h3 class="group-title">completed</h3>
+        <ul class="session-list">
+          <li class="session-item">
+            <button aria-pressed="false" class="session" data-task-id="fixture-completed-verified" title="fixture-completed-verified" type="button">
+              <span aria-label="completed" class="status status-completed">✔ completed</span>
+              <span class="provenance" data-provenance="task request">untrusted · task request</span>
+              <span class="session-request">Inspect sample notes. &lt;script&gt;alert(1)&lt;/script&gt; https://evil.example/x :mars-fo…</span>
+              <span class="session-runtime">
+                <span class="runtime-label">oh-my-pi</span>
+                <span class="session-id" title="fixture-completed-verified">fixture-completed-verified</span>
+              </span>
+            </button>
+          </li>
+          <li class="session-item">
+            <button aria-pressed="false" class="session" data-task-id="fixture-completed-unverified" title="fixture-completed-unverified" type="button">
+              <span aria-label="completed" class="status status-completed">✔ completed</span>
+              <span class="provenance" data-provenance="task request">untrusted · task request</span>
+              <span class="session-request">Show a completed task without a verification verdict.</span>
+              <span class="session-runtime">
+                <span class="runtime-label">oh-my-pi</span>
+                <span class="session-id" title="fixture-completed-unverified">fixture-completed-unverified</span>
+              </span>
+            </button>
+          </li>
+        </ul>
+      </section>
+      <section aria-label="failed" class="session-group">
+        <h3 class="group-title">failed</h3>
+        <ul class="session-list">
+          <li class="session-item">
+            <button aria-pressed="false" class="session" data-task-id="fixture-failed" title="fixture-failed" type="button">
+              <span aria-label="failed" class="status status-failed">✗ failed</span>
+              <span class="provenance" data-provenance="task request">untrusted · task request</span>
+              <span class="session-request">Observe a task with a failed verification verdict.</span>
+              <span class="session-runtime">
+                <span class="runtime-label">oh-my-pi</span>
+                <span class="session-id" title="fixture-failed">fixture-failed</span>
+              </span>
+            </button>
+          </li>
+        </ul>
+      </section>
+      <section class="workspace-placeholder">
+        <h2 class="section-title">Workspace tree</h2>
+        <p>arrives with @mars/ui-core</p>
+      </section>
+      <section class="team-chat">
+        <button aria-disabled="true" disabled="" type="button">Team chat</button>
+        <p>reserved · not in this build</p>
+      </section>
+    </nav>
+    <main class="main">
+      <div class="main-toolbar">
+        <header class="task-header">
+          <h1>Task fixture-pending</h1>
+          <div class="task-meta">
+            <span class="verification verification-unverified">Unverified</span>
+            <span aria-label="pending" class="status status-pending">○ pending</span>
+            <span class="meta-value">Candidate revision: not available</span>
+            <span class="meta-value">Mode: not reported by host</span>
+            <span class="meta-value">Model · tier: not reported by host</span>
+            <span class="meta-value">Task revision: 0</span>
+          </div>
+        </header>
+        <button class="refresh" type="button">Refresh</button>
+      </div>
+      <section aria-live="polite" class="transcript" role="log">
+        <p>Transcript projection arrives with @mars/ui-core. 0 task events available via tasks.events (content not rendered in this build).</p>
+      </section>
+    </main>
+    <aside aria-label="Task inspector" class="inspector">
+      <section class="inspector-section">
+        <h2 class="section-title">Task</h2>
+        <h3 class="minor-title">Request</h3>
+        <section class="untrusted" data-provenance="task request" role="note">
+          <span class="provenance">untrusted · task request</span>
+          <pre class="untrusted-text">Pending sample task.</pre>
+        </section>
+        <h3 class="minor-title">Acceptance criteria</h3>
+        <div class="criteria-list">
+          <section class="untrusted" data-provenance="acceptance criterion" role="note">
+            <span class="provenance">untrusted · acceptance criterion</span>
+            <pre class="untrusted-text">Keep this entry visible in the session list.</pre>
+          </section>
+        </div>
+        <dl class="budget">
+          <dt>Budget</dt>
+          <dd>2000 tokens · $0 · 30000 ms · depth 0 · concurrency 1</dd>
+        </dl>
+      </section>
+      <section class="inspector-section">
+        <h2 class="section-title">Verification</h2>
+        <p class="verification verification-unverified">Unverified</p>
+        <div class="records"></div>
+      </section>
+      <section class="inspector-section">
+        <h2 class="section-title">Changes</h2>
+        <p class="muted">unavailable · Workbench resource was not found.</p>
+      </section>
+      <section class="inspector-section">
+        <h2 class="section-title">Evidence</h2>
+        <p class="muted">unavailable · Workbench resource was not found.</p>
+      </section>
+      <section class="inspector-section">
+        <h2 class="section-title">Artifacts</h2>
+        <p>No artifacts.</p>
+      </section>
+    </aside>
+    <footer class="status-bar">
+      <span>Connected</span>
+      <span>fixture-repo (fixture)</span>
+      <span>loopback</span>
+      <span>read-only</span>
+      <span>execute: off</span>
+    </footer>
+  </div>
+</div>
