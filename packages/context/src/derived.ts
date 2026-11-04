@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   mkdir,
   readdir,
@@ -93,7 +93,15 @@ export function createDerivedArtifactStore(options: {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
         throw error;
       }
-      const envelope = envelopeSchema.safeParse(JSON.parse(raw));
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        /* A damaged derived file is disposable: report it as absent so the
+           owner can rebuild instead of every read failing. */
+        return null;
+      }
+      const envelope = envelopeSchema.safeParse(parsed);
       if (!envelope.success) return null;
       const matches =
         envelope.data.key.owner_id === key.owner_id &&
@@ -119,11 +127,17 @@ export function createDerivedArtifactStore(options: {
         value: schema.parse(value),
       };
       const target = join(rootDir, fileName(key));
-      const temp = `${target}.${process.pid}.tmp`;
-      await writeFile(temp, JSON.stringify({ schema_version: 1, ...entry }), {
-        mode: 0o600,
-      });
-      await rename(temp, target);
+      const temp = `${target}.${randomBytes(6).toString("hex")}.tmp`;
+      try {
+        await writeFile(temp, JSON.stringify({ schema_version: 1, ...entry }), {
+          mode: 0o600,
+          flag: "wx",
+        });
+        await rename(temp, target);
+      } catch (error) {
+        await rm(temp, { force: true }).catch(() => undefined);
+        throw error;
+      }
       return entry;
     },
     async remove(key) {
