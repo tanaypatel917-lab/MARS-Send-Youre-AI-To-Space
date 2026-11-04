@@ -1223,7 +1223,6 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
 
   const saveLink = (link: TaskLink, insert: boolean) => {
     const recordHash = sha256(canonicalJson(link));
-    if (insert) metrics.increment("links");
     if (insert)
       db.query(
         "INSERT INTO task_links (link_id, team_id, conversation_id, requester_id, launch_key, provenance_json, reference_ids_json, target_json, workbench_json, task_revision, status, created_at, updated_at, record_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1396,7 +1395,6 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
       ).run(record.message_id, position, conversation.team_id, referenceId);
     });
     conversation.last_seq = record.seq;
-    metrics.increment("sends");
     emitEvent(
       conversation,
       "message",
@@ -2929,6 +2927,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
               if (!target || target.seq <= participant.joined_seq)
                 throw invalidInput("Reply target is not in this conversation");
             }
+            metrics.increment("sends");
             return insertMessage(conversation, {
               message_id: randomId(),
               conversation_id: conversation.conversation_id,
@@ -3741,6 +3740,7 @@ export function createTeamStore(options: TeamStoreOptions): TeamStore {
               updated_at: timestamp(),
             });
             saveLink(confirmed, false);
+            metrics.increment("links");
             return confirmed;
           },
         );

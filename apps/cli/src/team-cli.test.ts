@@ -348,7 +348,24 @@ test("mars team serve: dev users, private files, flag default off, enable/disabl
       ["ada", "grace", "linus"],
     );
     expect(readmitted.users[2].token).not.toBe(linusToken);
+    expect(readmitted.users.map((u: { role: string }) => u.role)).toEqual([
+      "admin",
+      "member",
+      "member",
+    ]);
     expect(readmitted.revoked).toEqual([]);
+    await expect(
+      runTeam(
+        ["readmit", "--state", state, "--user", "linus", "--team", "other"],
+        () => {},
+      ),
+    ).rejects.toThrow(/another team id/);
+    await expect(
+      runTeam(
+        ["revoke", "--state", state, "--user", "grace", "--team", "other"],
+        () => {},
+      ),
+    ).rejects.toThrow(/another team id/);
     relaunch.child.kill("SIGTERM");
     expect(await relaunch.child.exited).toBe(143);
     await served.drained;
@@ -393,6 +410,44 @@ test("mars team serve: dev users, private files, flag default off, enable/disabl
     await rm(root, { recursive: true, force: true });
   }
 }, 60000);
+
+test("revoking the first dev user never promotes the next survivor to admin", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-cli-team-admin-"));
+  const state = join(root, "state");
+  const env = { PATH: process.env.PATH ?? "", HOME: root };
+  let served: Served | null = null;
+  try {
+    served = await spawnServe(
+      ["--state", state, "--port", "0", "--dev-users", "ada,grace"],
+      env,
+    );
+    served.child.kill("SIGTERM");
+    expect(await served.child.exited).toBe(143);
+    await runTeam(["revoke", "--state", state, "--user", "ada"], () => {});
+    served = await spawnServe(
+      ["--state", state, "--port", "0", "--dev-users", "ada,grace,linus"],
+      env,
+    );
+    const tokens = JSON.parse(
+      await readFile(String(served.report.dev_tokens_file), "utf8"),
+    );
+    expect(
+      tokens.users.map((u: { user_id: string; role: string }) => [
+        u.user_id,
+        u.role,
+      ]),
+    ).toEqual([
+      ["grace", "member"],
+      ["linus", "member"],
+    ]);
+    expect(tokens.revoked).toEqual(["ada"]);
+    served.child.kill("SIGTERM");
+    expect(await served.child.exited).toBe(143);
+  } finally {
+    served?.child.kill("SIGKILL");
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("mars team serve requires an identity option, rejects bad repo specs, and --auth-provider none authenticates nobody", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-cli-team-none-"));

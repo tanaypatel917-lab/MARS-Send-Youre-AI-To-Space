@@ -153,7 +153,9 @@ async function ensureDevTokens(
     .map((user_id, index) => ({
       user_id,
       token: known.get(user_id)?.token ?? newToken(),
-      role: index === 0 ? ("admin" as const) : ("member" as const),
+      role:
+        known.get(user_id)?.role ??
+        (!existing && index === 0 ? ("admin" as const) : ("member" as const)),
     }));
   const next: DevTokensFile = {
     schema_version: 1,
@@ -163,6 +165,15 @@ async function ensureDevTokens(
   };
   await writePrivate(join(state, DEV_TOKENS_FILE), JSON.stringify(next));
   return next;
+}
+
+/** `--team` must name the team the dev token file was issued for. */
+async function assertTokenTeam(state: string, team: string): Promise<void> {
+  const tokens = await readDevTokens(state);
+  if (tokens && tokens.team_id !== team)
+    throw new TeamUsageError(
+      `${DEV_TOKENS_FILE} belongs to another team id; remove it or pass --team ${tokens.team_id}.`,
+    );
 }
 
 function parseUsers(value: unknown): string[] {
@@ -583,6 +594,7 @@ export async function runTeam(
         ? values.team
         : (await readDevTokens(state))?.team_id,
     );
+    await assertTokenTeam(state, team);
     if (subcommand === "grant") {
       const repo = values.repo;
       if (typeof repo !== "string" || !ID_PATTERN.test(repo))
@@ -630,6 +642,7 @@ export async function runTeam(
         ? values.team
         : (await readDevTokens(state))?.team_id,
     );
+    await assertTokenTeam(state, team);
     const store = openStore(state);
     try {
       const user = userId;

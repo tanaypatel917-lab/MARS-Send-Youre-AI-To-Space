@@ -97,6 +97,12 @@ mars team revoke --state /private/mars-team --user linus               # team me
   explicit: `mars team readmit --state DIR --user linus` (then restart `serve`
   with linus listed to issue a new token) and
   `mars team grant --state DIR --user linus --repo site`.
+- The `admin` role is assigned once, to the first `--dev-users` entry when the
+  token file is created; later starts keep stored roles and give new users
+  `member`. Revoking the admin promotes nobody (`team.metrics` then has no
+  caller; `mars team stats` reads the store directly and keeps working).
+  `revoke`/`readmit`/`grant` refuse a `--team` that differs from the token
+  file's team.
 
 - Repo access revocation is effective on the next call: `references.resolve`
   answers `{state: "restricted"}`, chips become `{reference_id, restricted: true}`,
