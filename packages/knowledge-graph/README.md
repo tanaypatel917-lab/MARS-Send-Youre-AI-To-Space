@@ -44,9 +44,13 @@ level produced a graph.
 - Doctor: `graphify --version` must print the pinned version, otherwise every
   build answers `unavailable` and nothing is stored.
 - Build: a crash, timeout, missing or malformed `graph.json`, or an empty graph
-  is `failed`; nothing is stored. Only a non-empty, schema-valid graph for the
+  is `failed`; nothing is stored and a stored graph built for an **older**
+  revision is discarded (a graph for the very revision that failed describes
+  the same tree and is kept). Only a non-empty, schema-valid graph for the
   current workspace revision is written, with a content digest independent of
-  build time (same inputs, same digest).
+  build time (same inputs, same digest). Each build extracts into its own
+  private directory, so overlapping builds for one task never erase each
+  other's output.
 - Query (`neighbours`, `paths`, `communities`): answers only when the stored
   artifact's workspace revision equals the current one; otherwise `not_built`
   or `stale`, never an answer from an old graph.

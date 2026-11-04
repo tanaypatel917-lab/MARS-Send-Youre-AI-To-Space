@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DerivedArtifactStore } from "@mars/context";
@@ -485,8 +485,14 @@ export function createKnowledgeGraphService(
     }
     const revision = await currentRevision(binding);
     const fenced = { ...binding, revision };
-    const taskRoot = join(options.dataRoot, "tasks", taskKey(binding.task_id));
-    await rm(taskRoot, { recursive: true, force: true });
+    // One private directory per build: overlapping builds for the same task
+    // must never erase each other's extraction output.
+    const taskRoot = join(
+      options.dataRoot,
+      "tasks",
+      taskKey(binding.task_id),
+      randomBytes(6).toString("hex"),
+    );
     await mkdir(taskRoot, { recursive: true, mode: 0o700 });
     const outRoot = join(taskRoot, "out");
     const result = await runner.run({
@@ -502,8 +508,16 @@ export function createKnowledgeGraphService(
       extra: Partial<GraphBuildRecord> = {},
     ): Promise<GraphBuildOutcome> => {
       await rm(taskRoot, { recursive: true, force: true });
-      /* A failed rebuild must not leave an older graph answering as current. */
-      await options.artifacts.remove(key(binding)).catch(() => undefined);
+      /* A failed rebuild must not leave an older graph answering as current.
+         A graph already built for this very revision (for example by an
+         overlapping build) describes the same tree and is kept. */
+      const stored = await options.artifacts
+        .read(key(binding), KnowledgeGraphArtifactSchema)
+        .catch(() => null);
+      const discarded =
+        stored !== null && stored.value.workspace.revision !== revision;
+      if (discarded)
+        await options.artifacts.remove(key(binding)).catch(() => undefined);
       return {
         status: "failed",
         reason,
@@ -514,7 +528,9 @@ export function createKnowledgeGraphService(
             "failed",
             {
               graphify_version: report.version,
-              limitations: ["previous graph for this workspace discarded"],
+              limitations: discarded
+                ? ["previous graph for this workspace discarded"]
+                : [],
               ...extra,
             },
             `graphify build failed: ${reason}`,

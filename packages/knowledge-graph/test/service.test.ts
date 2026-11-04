@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDerivedArtifactStore } from "@mars/context";
@@ -317,8 +317,13 @@ describe("knowledge graph service", () => {
       join(f.root, "scenario.json"),
       JSON.stringify({ graph: rawGraph(f.workspace), analysis }),
     );
-    expect((await f.service.build(f.binding)).status).toBe("built");
-    expect((await f.service.lookup(f.binding)).status).toBe("ready");
+    let revision = "rev-1";
+    const binding: GraphBinding = {
+      ...f.binding,
+      currentRevision: async () => revision,
+    };
+    expect((await f.service.build(binding)).status).toBe("built");
+    expect((await f.service.lookup(binding)).status).toBe("ready");
     await writeFile(
       join(f.root, "scenario.json"),
       JSON.stringify({
@@ -326,7 +331,17 @@ describe("knowledge graph service", () => {
         extract_stderr: `Traceback: ${f.workspace}/src/a.ts failed; see ${f.dataRoot}/tasks/x/out and /etc/hosts`,
       }),
     );
-    const outcome = await f.service.build(f.binding);
+    // review: a failure at the very revision the stored graph describes keeps
+    // it (same tree, same graph); only an older graph is discarded
+    const sameRevision = await f.service.build(binding);
+    expect(sameRevision.status).toBe("failed");
+    if (sameRevision.status === "built") throw new Error("unreachable");
+    expect(sameRevision.record.limitations).not.toContain(
+      "previous graph for this workspace discarded",
+    );
+    expect((await f.service.lookup(binding)).status).toBe("ready");
+    revision = "rev-2";
+    const outcome = await f.service.build(binding);
     expect(outcome.status).toBe("failed");
     if (outcome.status === "built") throw new Error("unreachable");
     expect(outcome.reason).not.toContain(f.workspace);
@@ -337,9 +352,9 @@ describe("knowledge graph service", () => {
     expect(outcome.record.limitations).toContain(
       "previous graph for this workspace discarded",
     );
-    expect(await f.service.lookup(f.binding)).toEqual({ status: "not_built" });
+    expect(await f.service.lookup(binding)).toEqual({ status: "not_built" });
     const text = await f.service
-      .toolsFor(f.binding)
+      .toolsFor(binding)
       .query({ kind: "communities" });
     expect(text).toContain("· not_built ·");
 
@@ -394,6 +409,47 @@ describe("knowledge graph service", () => {
     if (raced.status === "built") throw new Error("unreachable");
     expect(raced.reason).toContain("workspace changed during extraction");
     expect(await f.service.lookup(binding)).toEqual({ status: "not_built" });
+  });
+
+  test("review: overlapping builds for one task never erase each other", async () => {
+    await writeFile(
+      join(f.root, "scenario.json"),
+      JSON.stringify({ graph: rawGraph(f.workspace), analysis, hang_ms: 150 }),
+    );
+    const outcomes = await Promise.all([
+      f.service.build(f.binding),
+      f.service.build(f.binding),
+      f.service.build(f.binding),
+    ]);
+    expect(outcomes.map((outcome) => outcome.status)).toEqual([
+      "built",
+      "built",
+      "built",
+    ]);
+    expect((await f.service.lookup(f.binding)).status).toBe("ready");
+    // every build cleaned up its own private directory
+    const [taskDir] = await readdir(join(f.dataRoot, "tasks"));
+    if (!taskDir) throw new Error("task directory missing");
+    expect(await readdir(join(f.dataRoot, "tasks", taskDir))).toEqual([]);
+  });
+
+  test("review: a damaged graph file reads as not_built instead of failing every query", async () => {
+    await writeFile(
+      join(f.root, "scenario.json"),
+      JSON.stringify({ graph: rawGraph(f.workspace), analysis }),
+    );
+    expect((await f.service.build(f.binding)).status).toBe("built");
+    const artifactsDir = join(f.dataRoot, "artifacts");
+    const [file] = await readdir(artifactsDir);
+    if (!file) throw new Error("artifact file missing");
+    await writeFile(join(artifactsDir, file), "{not json");
+    expect(await f.service.lookup(f.binding)).toEqual({ status: "not_built" });
+    const text = await f.service
+      .toolsFor(f.binding)
+      .query({ kind: "communities" });
+    expect(text).toContain("· not_built ·");
+    expect((await f.service.build(f.binding)).status).toBe("built");
+    expect((await f.service.lookup(f.binding)).status).toBe("ready");
   });
 
   test("queries are refused without read approval", async () => {
