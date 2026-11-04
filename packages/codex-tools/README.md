@@ -39,7 +39,11 @@ without `.`/`..`/empty segments or control characters and ≤ 1024 bytes
 (`validatePatchPath`; absolute paths are rejected, the workspace provider
 validates again). Patches over `MAX_PATCH_BYTES` (1 MiB) or with more than
 `MAX_HUNKS` (4096) hunks are rejected. Path validation runs before any hunk is
-applied.
+applied. The context search is bounded at `MAX_SEEK_LINE_COMPARISONS` (20M line
+comparisons per Update hunk; the hunk fails instead of stalling the host). An
+addition-only chunk (`@@ anchor` followed only by `+` lines) is inserted right
+after its anchor, where upstream appends it at end of file; without an anchor it
+is appended at end of file as upstream does.
 
 ### Sandbox / approval mapping (`src/policy.ts`)
 
