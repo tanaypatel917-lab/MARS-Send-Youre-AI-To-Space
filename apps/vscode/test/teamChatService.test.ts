@@ -610,6 +610,48 @@ describe("TeamRealtime", () => {
   });
 });
 
+describe("host kill switch (PR 7)", () => {
+  test("a disabled server shows the disabled state, stops polling, keeps nothing stale, and resumes when enabled again", async () => {
+    const { controller, last, server, realtime, statuses, dm } = setup({
+      realtime: true,
+    });
+    await controller.handleMessage({ type: "ready" });
+    await until(() => statuses.includes("polling"));
+    expect(last().conversations.length).toBeGreaterThan(0);
+    server.disabled = true;
+    // The next poll fails with 503 unavailable; describe says the host switched the team off.
+    await until(() => statuses.includes("disabled"));
+    expect(last().connection).toBe("disabled");
+    // No further calls while disabled: the source waits like the fatal kinds.
+    const callsAtPause = server.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(server.calls.length).toBe(callsAtPause);
+    // A user action meets the same answer and a fixed notice; data on the server is untouched.
+    await controller.handleMessage({ type: "ready" });
+    expect(last().connection).toBe("disabled");
+    expect(last().notice?.text).toContain("disabled by the host");
+    expect(last().notice?.text).not.toContain("not reachable");
+    expect(JSON.stringify(last())).not.toContain("fake team");
+    expect(server.messages.length).toBeGreaterThan(0);
+    // Enabled again: the inbox reloads and the realtime source resumes.
+    server.disabled = false;
+    await controller.handleMessage({ type: "ready" });
+    expect(last().conversations.map((c) => c.conversation_id)).toContain(dm);
+    expect(last().notice).toBeNull();
+    await until(() => last().connection === "polling");
+    realtime?.stop();
+    await realtime?.settled();
+  });
+
+  test("an outage is still reported as unreachable, not disabled", async () => {
+    const { controller, last, server } = setup();
+    server.offline = true;
+    await controller.handleMessage({ type: "ready" });
+    expect(last().connection).not.toBe("disabled");
+    expect(last().notice?.text).toContain("not reachable");
+  });
+});
+
 describe("review fixes", () => {
   test("accepts the PR 4 server description (extra boolean capabilities) and chip-bearing history items", async () => {
     const server = new FakeTeamServer();

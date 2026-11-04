@@ -1,12 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 import { join } from "node:path";
-import type {
-  Message,
-  MessageView,
-  SharePreview,
-  TaskLink,
-} from "@mars/contracts";
+import type { MessageView, SharePreview, TaskLink } from "@mars/contracts";
 import { fixture } from "../test/fixture";
 import type { ConversationViewResult, TaskLinkDraftResult } from "./protocol";
 import { canonicalJson, createTeamStore, sha256 } from "./store";

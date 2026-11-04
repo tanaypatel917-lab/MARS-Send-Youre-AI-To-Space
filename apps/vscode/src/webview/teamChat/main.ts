@@ -229,6 +229,7 @@ const CONNECTION_TEXT: Record<TeamChatViewState["connection"], string> = {
   polling: "Polling",
   retrying: "Reconnecting…",
   unauthenticated: "No token",
+  disabled: "Disabled by host",
 };
 
 let searchDraft = "";

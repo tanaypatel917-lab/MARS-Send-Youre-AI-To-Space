@@ -104,8 +104,14 @@ export class RpcTeamService implements TeamService {
   private readonly messages = new Map<string, Map<number, ServiceMessage>>();
   /** Reaction summaries by message id (from history items or `reactions.set`). */
   private readonly reactions = new Map<string, ReactionSummary[]>();
+  /** Last `team.describe.enabled === false` seen (PR 7 kill switch); re-read on every `unavailable` failure. */
+  private hostDisabled = false;
 
   constructor(private readonly client: TeamClient) {}
+
+  disabled(): boolean {
+    return this.hostDisabled;
+  }
 
   get capabilities(): TeamCapabilities {
     return { ...this.serverCapabilities };
@@ -154,6 +160,7 @@ export class RpcTeamService implements TeamService {
     const known = this.client.identity;
     if (known) return known.user_id;
     const described = await this.client.describe();
+    this.hostDisabled = described.enabled === false;
     this.serverCapabilities = {
       reactions: described.capabilities.reactions,
       search: described.capabilities.search,
@@ -173,7 +180,18 @@ export class RpcTeamService implements TeamService {
       if (conversationId && (code === "not_found" || code === "forbidden"))
         this.forgetConversation(conversationId);
       if (code === "unauthorized") this.client.forget();
+      if (code === "unavailable") await this.refreshDisabled();
       return fail(code);
+    }
+  }
+
+  /** Only `team.describe` answers while the host switch is off; an outage leaves the flag as it was. */
+  private async refreshDisabled(): Promise<void> {
+    try {
+      const described = await this.client.describe();
+      this.hostDisabled = described.enabled === false;
+    } catch {
+      // Unreachable server: not a kill switch.
     }
   }
 

@@ -167,6 +167,8 @@ export interface TeamService {
   readonly capabilities: TeamCapabilities;
   /** Server-derived identity when known (real service); absent for the fixture, whose viewer is a parameter. */
   currentUser?(): string | undefined;
+  /** True after the server reported `team.describe.enabled === false` (host kill switch); re-read on every failed call. */
+  disabled?(): boolean;
   /** A delivery event said this message changed (edit/delete): drop any cached copy so the next read refetches it. */
   forgetMessage?(conversationId: string, sequence: number): void;
   users(): UserView[];
