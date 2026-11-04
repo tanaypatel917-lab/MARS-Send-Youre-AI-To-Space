@@ -1,4 +1,4 @@
-import { checkLocatorPath, hasInvisibleCodePoint } from "./path-rules";
+import { hasInvisibleCodePoint, validateLocatorPath } from "./path-rules";
 import type { RepoRegistry } from "./registry";
 import {
   COMMIT_SHA_PATTERN,
@@ -34,6 +34,19 @@ export function compareMatches(a: PathMatch, b: PathMatch): number {
   if (a.rank !== b.rank) return a.rank - b.rank;
   if (a.path.length !== b.path.length) return a.path.length - b.path.length;
   return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+}
+
+const RANKS = 5;
+
+/** Inserts `match` and, past `limit`, drops the worst entry of the bucket. */
+function keepBest(bucket: PathMatch[], match: PathMatch, limit: number): void {
+  bucket.push(match);
+  if (bucket.length <= limit) return;
+  let worst = 0;
+  for (let i = 1; i < bucket.length; i += 1)
+    if (compareMatches(bucket[i] as PathMatch, bucket[worst] as PathMatch) > 0)
+      worst = i;
+  bucket.splice(worst, 1);
 }
 
 function normalizeQuery(query: string): string | null {
@@ -95,21 +108,23 @@ export async function searchPaths(
     return { state: "unavailable", ...base };
 
   const decoder = new TextDecoder("utf-8", { fatal: false });
-  const matches: PathMatch[] = [];
+  // One bounded bucket per rank: memory stays at most RANKS * limit matches
+  // however broad the query or large the tree.
+  const buckets: PathMatch[][] = Array.from({ length: RANKS }, () => []);
   let scanned = 0;
   let skipped = 0;
   let stopped = false;
   let pending = "";
   const consider = (path: string): void => {
     scanned += 1;
-    const nfc = path.normalize("NFC");
-    if (!checkLocatorPath(nfc).ok) {
+    if (!validateLocatorPath(path).ok) {
       skipped += 1;
       return;
     }
-    const rank = rankPath(nfc, query);
+    const rank = rankPath(path.normalize("NFC"), query);
     if (rank < 0) return;
-    matches.push({ path: nfc, rank });
+    // The committed spelling is returned verbatim: git never normalises names.
+    keepBest(buckets[rank] as PathMatch[], { path, rank }, limit);
   };
   const listing = await git.run({
     args: ["ls-tree", "-r", "-z", "--name-only", commit_sha],
@@ -120,12 +135,12 @@ export async function searchPaths(
       pending += decoder.decode(chunk, { stream: true });
       let nul = pending.indexOf("\0");
       while (nul >= 0) {
-        consider(pending.slice(0, nul));
-        pending = pending.slice(nul + 1);
         if (scanned >= limits.max_entries) {
           stopped = true;
           return false;
         }
+        consider(pending.slice(0, nul));
+        pending = pending.slice(nul + 1);
         nul = pending.indexOf("\0");
       }
       return true;
@@ -136,11 +151,13 @@ export async function searchPaths(
   if (listing.timed_out) return { state: "error", ...base, reason: "timeout" };
   if (!stopped && !listing.truncated && listing.exit_code !== 0)
     return { state: "error", ...base, reason: "git_error" };
-  matches.sort(compareMatches);
+  const matches = buckets
+    .flatMap((bucket) => bucket.sort(compareMatches))
+    .slice(0, limit);
   return {
     state: "ok",
     ...base,
-    matches: matches.slice(0, limit),
+    matches,
     scanned,
     skipped,
     truncated: stopped || listing.truncated,
