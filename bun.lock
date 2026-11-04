@@ -15,12 +15,14 @@
       "name": "@mars/cli",
       "version": "0.0.1",
       "dependencies": {
+        "@mars/codex-tools": "workspace:*",
         "@mars/contracts": "workspace:*",
         "@mars/execution": "workspace:*",
         "@mars/output-format": "workspace:*",
         "@mars/providers": "workspace:*",
         "@mars/providers-omniroute": "workspace:*",
         "@mars/research-worker": "workspace:*",
+        "@mars/skills": "workspace:*",
         "@mars/workbench": "workspace:*",
       },
     },
@@ -35,6 +37,13 @@
       "devDependencies": {
         "@types/node": "26.6.6",
         "@types/vscode": "1.96.0",
+      },
+    },
+    "packages/codex-tools": {
+      "name": "@mars/codex-tools",
+      "version": "0.0.1",
+      "dependencies": {
+        "zod": "3.25.76",
       },
     },
     "packages/collaboration": {
@@ -212,6 +221,7 @@
       "name": "@mars/workbench",
       "version": "0.0.1",
       "dependencies": {
+        "@mars/codex-tools": "workspace:*",
         "@mars/collaboration": "workspace:*",
         "@mars/context": "workspace:*",
         "@mars/contracts": "workspace:*",
@@ -330,6 +340,8 @@
     "@img/sharp-win32-x64": ["@img/sharp-win32-x64@0.35.5", "", { "os": "win32", "cpu": "x64" }, "sha512-x76eH0vEiHlcMQu8Y8IenntaACtddpT6W0wmXtWrnKcnKI7ME5DdgqhAD6SEWOEl1v2zDvkZDhFA9KnURwpfqg=="],
 
     "@mars/cli": ["@mars/cli@workspace:apps/cli"],
+
+    "@mars/codex-tools": ["@mars/codex-tools@workspace:packages/codex-tools"],
 
     "@mars/collaboration": ["@mars/collaboration@workspace:packages/collaboration"],
 

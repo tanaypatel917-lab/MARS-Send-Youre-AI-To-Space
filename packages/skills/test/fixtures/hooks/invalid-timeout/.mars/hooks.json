@@ -1,0 +1,1 @@
+{ "schema_version": 1, "hooks": { "pre-tool": [{ "matcher": "mars_write", "command": ["echo"], "timeout_ms": 500 }] } }

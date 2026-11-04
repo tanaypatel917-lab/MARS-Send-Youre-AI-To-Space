@@ -14,6 +14,7 @@ import {
   toChatRequest,
 } from "./model-bridge";
 import {
+  boundPatchSummary,
   MAX_SYSTEM_PROMPT_CHARS,
   openRuntimeSession,
   type RuntimeSession,
@@ -31,7 +32,7 @@ function sse(delta: Record<string, unknown>, reason = "stop") {
   );
 }
 
-async function fixture() {
+async function fixture(contextWindow = 32000) {
   const root = await mkdtemp(join(tmpdir(), "mars-runtime-test-"));
   const cwd = join(root, "workspace");
   const home = join(root, "home");
@@ -54,21 +55,21 @@ async function fixture() {
           id: "fixture/free",
           providerId: "fixture",
           model: "stub",
-          capabilities: { tools: true, vision: false, contextWindow: 32000 },
+          capabilities: { tools: true, vision: false, contextWindow },
           pricing: { free: true },
         },
         {
           id: "fixture/paid",
           providerId: "fixture",
           model: "stub",
-          capabilities: { tools: true, vision: false, contextWindow: 32000 },
+          capabilities: { tools: true, vision: false, contextWindow },
           pricing: { free: false, inputPerMTokUsd: 1, outputPerMTokUsd: 2 },
         },
         {
           id: "fixture/unknown",
           providerId: "fixture",
           model: "stub",
-          capabilities: { tools: true, vision: false, contextWindow: 32000 },
+          capabilities: { tools: true, vision: false, contextWindow },
           pricing: { free: false },
         },
       ],
@@ -738,6 +739,167 @@ test("systemPromptOverride replaces the fixed prompt only when supplied", async 
         systemPromptOverride: "x".repeat(MAX_SYSTEM_PROMPT_CHARS + 1),
       }),
     ).rejects.toThrow("exceeds the size limit");
+  } finally {
+    await f.cleanup();
+  }
+}, 30000);
+
+test("mars_apply_patch is a host-bound tool: Oh My Pi passes the patch text to the host applier and relays its summary", async () => {
+  const f = await fixture();
+  const requests: Record<string, unknown>[] = [];
+  const patches: string[] = [];
+  const patchText =
+    "*** Begin Patch\n*** Add File: greet.txt\n+Hello\n*** End Patch";
+  try {
+    const session = await f.open({
+      patch: {
+        async apply(patch) {
+          patches.push(patch);
+          await writeFile(join(f.cwd, "greet.txt"), "Hello\n");
+          return "Success. Updated the following files:\nA greet.txt";
+        },
+      },
+      fetch: async (_url, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return requests.length === 1
+          ? sse(
+              {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_patch",
+                    type: "function",
+                    function: {
+                      name: "mars_apply_patch",
+                      arguments: JSON.stringify({ patch: patchText }),
+                    },
+                  },
+                ],
+              },
+              "tool_calls",
+            )
+          : sse({ content: "Applied the patch." });
+      },
+    });
+    const outcome = await session.run(f.task.request);
+    expect(outcome.status).toBe("completed");
+    expect(patches).toEqual([patchText]);
+    expect(await readFile(join(f.cwd, "greet.txt"), "utf8")).toBe("Hello\n");
+    expect(JSON.stringify(requests[0])).toContain("mars_apply_patch");
+    expect(JSON.stringify(requests[1])).toContain(
+      "Success. Updated the following files:",
+    );
+  } finally {
+    await f.cleanup();
+  }
+}, 30000);
+
+test("boundPatchSummary keeps the whole result within the byte limit at a character boundary", () => {
+  const bytesOf = (text: string) => new TextEncoder().encode(text).byteLength;
+  expect(boundPatchSummary("short", 64)).toBe("short");
+  const ascii = "A path/to/file.txt\n".repeat(10_000);
+  const boundedAscii = boundPatchSummary(ascii, 1_000);
+  expect(bytesOf(boundedAscii)).toBeLessThanOrEqual(1_000);
+  expect(boundedAscii).toMatch(
+    /\n\[summary truncated: \d+ more bytes omitted\]$/,
+  );
+  expect(
+    ascii.startsWith(boundedAscii.split("\n[summary truncated")[0] ?? ""),
+  ).toBe(true);
+  const multibyte = "A ééé/日本語/🙂.txt\n".repeat(2_000);
+  for (const limit of [1_000, 1_001, 1_002, 1_003, 4_096]) {
+    const bounded = boundPatchSummary(multibyte, limit);
+    expect(bytesOf(bounded)).toBeLessThanOrEqual(limit);
+    expect(bounded).not.toContain("\uFFFD");
+    expect(
+      multibyte.startsWith(bounded.split("\n[summary truncated")[0] ?? ""),
+    ).toBe(true);
+  }
+  expect(bytesOf(boundPatchSummary(multibyte))).toBeLessThanOrEqual(128 * 1024);
+  for (const limit of [0, 1, 2, 3, 4, 10, 40]) {
+    const bounded = boundPatchSummary(multibyte, limit);
+    expect(bytesOf(bounded)).toBeLessThanOrEqual(limit);
+    expect(bounded).not.toContain("\uFFFD");
+    expect(multibyte.startsWith(bounded)).toBe(true);
+  }
+});
+
+test("mars_apply_patch keeps a persisted patch successful when its summary exceeds the output limit", async () => {
+  const f = await fixture(1_000_000);
+  const requests: Record<string, unknown>[] = [];
+  const summary = `Success. Updated the following files:\n${"A a/very/long/path/to/a/generated/file.txt\n".repeat(4_000)}`;
+  expect(summary.length).toBeGreaterThan(128 * 1024);
+  try {
+    const session = await f.open({
+      task: { ...f.task, budget: { ...f.task.budget, max_tokens: 400_000 } },
+      patch: { apply: async () => summary },
+      fetch: async (_url, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return requests.length === 1
+          ? sse(
+              {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_patch",
+                    type: "function",
+                    function: {
+                      name: "mars_apply_patch",
+                      arguments: JSON.stringify({
+                        patch:
+                          "*** Begin Patch\n*** Add File: a.txt\n+a\n*** End Patch",
+                      }),
+                    },
+                  },
+                ],
+              },
+              "tool_calls",
+            )
+          : sse({ content: "Applied." });
+      },
+    });
+    const outcome = await session.run(f.task.request);
+    expect(outcome.status).toBe("completed");
+    const relayed = JSON.stringify(requests[1]);
+    expect(relayed).toContain("Success. Updated the following files:");
+    expect(relayed).toContain("[summary truncated:");
+    expect(relayed).not.toContain("exceeds tool output limit");
+    const relayedTool = (
+      requests[1]?.messages as Array<{ role: string; content: string }>
+    ).find((m) => m.role === "tool");
+    expect(
+      new TextEncoder().encode(relayedTool?.content ?? "").byteLength,
+    ).toBeLessThanOrEqual(128 * 1024);
+  } finally {
+    await f.cleanup();
+  }
+}, 30000);
+
+test("mars_apply_patch is not declared without read approval, without write approval or without a host applier", async () => {
+  const f = await fixture();
+  const requests: Record<string, unknown>[] = [];
+  try {
+    const respond = async (_url: string, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return sse({ content: "Nothing to do." });
+    };
+    const readOnly = await f.open({
+      approvals: { read: true, write: false, execute: false },
+      patch: { apply: async () => "unreachable" },
+      fetch: respond,
+    });
+    await readOnly.run(f.task.request);
+    const writeOnly = await f.open({
+      approvals: { read: false, write: true, execute: false },
+      patch: { apply: async () => "unreachable" },
+      fetch: respond,
+    });
+    await writeOnly.run(f.task.request);
+    const noApplier = await f.open({ fetch: respond });
+    await noApplier.run(f.task.request);
+    expect(requests).toHaveLength(3);
+    for (const request of requests)
+      expect(JSON.stringify(request)).not.toContain("mars_apply_patch");
   } finally {
     await f.cleanup();
   }

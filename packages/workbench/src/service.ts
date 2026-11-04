@@ -53,6 +53,7 @@ import {
   WorkspaceNotFoundError,
 } from "@mars/workspaces";
 import type { WorkbenchCollaboration } from "./collaboration-context";
+import type { WorkbenchConventions } from "./conventions-context";
 import { createWorkbenchHost, type WorkbenchHostOptions } from "./host";
 import { serveWorkbench, WorkbenchError } from "./server";
 import type { WorkbenchSpecialists } from "./specialist-routing";
@@ -139,6 +140,8 @@ export interface WorkbenchServiceOptions {
   collaboration?: WorkbenchCollaboration;
   /** Background research worker and control plane; sessions get no research tools without it. */
   research?: WorkbenchResearchOptions;
+  /** Repository conventions (instruction files, skill folders, hooks, slash commands, apply_patch) loaded by the caller from the trusted checkout. */
+  conventions?: WorkbenchConventions;
   /** OmniRoute provider target; absent means no OmniRoute models exist. */
   omniroute?: WorkbenchOmniRouteOptions;
   runtimeFactory?: WorkbenchHostOptions["runtimeFactory"];
@@ -386,6 +389,7 @@ export async function createWorkbenchService(
         ? { collaboration: options.collaboration }
         : {}),
       ...(research ? { research } : {}),
+      ...(options.conventions ? { conventions: options.conventions } : {}),
       hostPrivateRoots: [
         memoryRoot,
         skillsRoot,
@@ -397,6 +401,7 @@ export async function createWorkbenchService(
         prepare: provider.prepare.bind(provider),
         read: provider.read.bind(provider),
         write: provider.write.bind(provider),
+        remove: provider.remove.bind(provider),
         execute: provider.execute.bind(provider),
         checkpoint: provider.checkpoint.bind(provider),
         restore: provider.restore.bind(provider),
