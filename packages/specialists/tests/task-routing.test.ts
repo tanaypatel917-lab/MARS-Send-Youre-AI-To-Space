@@ -19,6 +19,8 @@ import {
   context,
   createRegistry,
   createTempRoot,
+  fakeCatalog,
+  fakeModel,
   installNoNetworkStub,
   MemoryArtifacts,
   makeBaseline,
@@ -107,6 +109,391 @@ async function adapterSetup() {
 
 const ADAPTER_REF = "specialist:adapter-specialist@1";
 const BASELINE_REF = "baseline:baseline@1";
+
+const MULTI_REF = "specialist:multi@1";
+const MULTI_BINDINGS = ["a", "b"].map((id) => ({
+  model_id: `model-${id}`,
+  provider_id: `provider-${id}`,
+  provider_model: `upstream-${id}`,
+  adapter_format: "peft-lora" as const,
+}));
+
+async function multiBindingSetup(
+  options: { adapter?: boolean; reverse?: boolean } = {},
+) {
+  const root = await createTempRoot();
+  roots.push(root);
+  const artifacts = new MemoryArtifacts();
+  const adapter = artifactRef("multi-adapter", new Uint8Array([4, 5, 6]));
+  const chatTemplate = artifactRef("multi-template");
+  const state = {
+    absent: new Set<string>(),
+    throwing: new Set<string>(),
+    revoked: new Set<string>(),
+    unavailable: new Set<string>(),
+    missing: new Set<string>(),
+    calls: [] as string[],
+  };
+  const catalog = fakeCatalog({
+    models: [
+      fakeModel({
+        id: "baseline-model",
+        providerId: "local",
+        model: "baseline-upstream",
+      }),
+      ...MULTI_BINDINGS.map((binding) =>
+        fakeModel({
+          id: binding.model_id,
+          providerId: binding.provider_id,
+          model: binding.provider_model,
+        }),
+      ),
+    ],
+  });
+  const registry = createRegistry(root, artifacts, {
+    catalog: {
+      policy: catalog.policy,
+      getModel: (id) =>
+        state.missing.has(id) ? undefined : catalog.getModel(id),
+      unavailableReason: (id) =>
+        state.unavailable.has(id) ? "offline" : undefined,
+    },
+    servingAttestor: {
+      async attest(_context, binding) {
+        state.calls.push(binding.model_id);
+        if (state.throwing.has(binding.model_id))
+          throw new Error("attestor timeout");
+        if (state.absent.has(binding.model_id)) return null;
+        return {
+          ...binding,
+          base_model: { component: "model/base", revision: "1" },
+          tokenizer: { component: "tokenizer/base", revision: "1" },
+          chat_template_sha256: chatTemplate.sha256,
+          adapter_formats: ["peft-lora"],
+          loaded_adapter_sha256s: state.revoked.has(binding.model_id)
+            ? []
+            : [adapter.sha256],
+        };
+      },
+    },
+  });
+  await registry.registerBaseline(context, makeBaseline());
+  const useAdapter = options.adapter !== false;
+  const serving = options.reverse
+    ? [...MULTI_BINDINGS].reverse()
+    : MULTI_BINDINGS;
+  const fixture = await makeSpecialistFixture(artifacts, {
+    specialistId: "multi",
+    serving: serving.map((binding) => ({
+      ...binding,
+      adapter_format: useAdapter ? "peft-lora" : null,
+    })),
+    chatTemplate,
+    ...(useAdapter
+      ? {
+          adapter,
+          adapterSpec: {
+            format: "peft-lora",
+            base_model: { component: "model/base", revision: "1" },
+            tokenizer: { component: "tokenizer/base", revision: "1" },
+            chat_template_sha256: chatTemplate.sha256,
+          },
+          datasetLineage: await makeLineageArtifact(artifacts, context.scope, {
+            specialistId: "multi",
+          }),
+        }
+      : {}),
+  });
+  await registry.registerSpecialist(context, fixture.registration);
+  await registry.promote(context, "multi", "1", null);
+  state.calls.length = 0;
+  return { registry, router: new SpecialistTaskRouter(registry), state };
+}
+
+describe("multi-binding specialist task routing", () => {
+  for (const guarded of [false, true]) {
+    test(`keeps the revision pin when the passing binding changes ${guarded ? "with" : "without"} free_target`, async () => {
+      const { registry, router, state } = await multiBindingSetup();
+      const first = await router.routeStep(context, {
+        request: routingRequest(),
+      });
+      expect(first.step.selected?.model_id).toBe("model-a");
+      if (!first.step.selected) throw new Error("expected first binding");
+      state.absent.add("model-a");
+      const guardCalls: string[] = [];
+      const second = await router.routeStep(context, {
+        request: routingRequest(),
+        ...(guarded
+          ? {
+              free_target: (target) => {
+                guardCalls.push(target.model_id);
+                return false;
+              },
+            }
+          : {}),
+      });
+      expect(second.step).toEqual({
+        schema: "mars.specialist-routing-step/v1",
+        task_id: "route-task",
+        role: "worker",
+        step: 2,
+        mode: "pinned",
+        decision_id: second.step.decision_id,
+        decision_ids: [second.step.decision_id as string],
+        selected: {
+          ...first.step.selected,
+          model_id: "model-b",
+          provider_id: "provider-b",
+          provider_model: "upstream-b",
+        },
+        fallback_from: null,
+        rejected: [],
+        step_reasons: [],
+        lost_refs: [],
+        ...(guarded ? { paid_skipped: [] } : {}),
+        remaining: { tokens: 1000, usd: 1, duration_ms: 1000 },
+      });
+      expect(second.state).toEqual({
+        ...first.state,
+        step: 2,
+        last_decision_id: second.step.decision_id,
+      });
+      expect(guardCalls).toEqual([]);
+      expect(
+        (await registry.decision(context, second.step.decision_id as string))
+          .fallback,
+      ).toBeNull();
+    });
+  }
+
+  for (const failure of [
+    "absent",
+    "throwing",
+    "revoked",
+    "unavailable",
+    "missing",
+  ] as const) {
+    test(`selects another binding when one binding is ${failure}`, async () => {
+      const { router, state } = await multiBindingSetup();
+      state[failure].add(failure === "unavailable" ? "provider-a" : "model-a");
+      const result = await router.routeStep(context, {
+        request: routingRequest(),
+      });
+      expect(result.step).toMatchObject({
+        mode: "routed",
+        selected: {
+          ref: MULTI_REF,
+          model_id: "model-b",
+          serving_attestation: "verified",
+        },
+        fallback_from: null,
+        rejected: [],
+        step_reasons: [],
+        lost_refs: [],
+      });
+      expect(result.state.pinned).toEqual({
+        ref: MULTI_REF,
+        via: "route",
+        decision_id: result.step.decision_id as string,
+      });
+    });
+  }
+
+  for (const [failure, reason] of [
+    ["absent", "serving_unattested"],
+    ["throwing", "serving_unattested"],
+    ["revoked", "serving_adapter_not_loaded"],
+    ["unavailable", "provider_unavailable"],
+  ] as const) {
+    test(`loses the pin and falls back when all bindings become ${failure}`, async () => {
+      const { router, state } = await multiBindingSetup();
+      await router.routeStep(context, { request: routingRequest() });
+      for (const binding of MULTI_BINDINGS)
+        state[failure].add(
+          failure === "unavailable" ? binding.provider_id : binding.model_id,
+        );
+      const result = await router.routeStep(context, {
+        request: routingRequest(),
+      });
+      expect(result.step).toMatchObject({
+        mode: "fallback",
+        selected: { ref: BASELINE_REF, adapter_sha256: null },
+        fallback_from: MULTI_REF,
+        rejected: [{ ref: MULTI_REF, reasons: [reason] }],
+        step_reasons: ["pinned_ineligible"],
+        lost_refs: [MULTI_REF],
+      });
+      expect(result.state.pinned).toEqual({
+        ref: BASELINE_REF,
+        via: "fallback",
+        decision_id: result.step.decision_id as string,
+      });
+    });
+  }
+
+  for (const [limit, reason] of [
+    ["cost", "budget_cost_exceeded"],
+    ["runtime", "budget_runtime_exceeded"],
+  ] as const) {
+    test(`${limit} limit rejects every binding rather than switching the pinned binding`, async () => {
+      const { router } = await multiBindingSetup();
+      await router.routeStep(context, { request: routingRequest() });
+      const budget = {
+        ...routingRequest().budget,
+        ...(limit === "cost" ? { max_usd: 0.009 } : { max_duration_ms: 99 }),
+      };
+      const result = await router.routeStep(context, {
+        request: routingRequest({ budget }),
+      });
+      expect(result.step).toMatchObject({
+        mode: "fallback",
+        selected: { ref: BASELINE_REF },
+        fallback_from: MULTI_REF,
+        rejected: [{ ref: MULTI_REF, reasons: [reason] }],
+        step_reasons: ["pinned_ineligible"],
+        lost_refs: [MULTI_REF],
+        remaining: {
+          tokens: 1000,
+          usd: budget.max_usd,
+          duration_ms: budget.max_duration_ms,
+        },
+      });
+    });
+  }
+
+  test("measured cost and runtime exactly at the limits keep the first binding eligible", async () => {
+    const { router } = await multiBindingSetup();
+    const result = await router.routeStep(context, {
+      request: routingRequest({
+        budget: {
+          ...routingRequest().budget,
+          max_usd: 0.01,
+          max_duration_ms: 100,
+        },
+      }),
+    });
+    expect(result.step).toMatchObject({
+      mode: "routed",
+      selected: { ref: MULTI_REF, model_id: "model-a" },
+      rejected: [],
+      step_reasons: [],
+    });
+  });
+
+  test("distinct_model selects a different binding while keeping the same revision pin", async () => {
+    const { router, registry } = await multiBindingSetup();
+    const first = await router.routeStep(context, {
+      request: routingRequest(),
+    });
+    const result = await router.routeStep(context, {
+      request: routingRequest({
+        independence: {
+          policy: "distinct_model",
+          from_decision_ids: [first.step.decision_id as string],
+        },
+      }),
+    });
+    expect(result.step).toMatchObject({
+      mode: "pinned",
+      selected: { ref: MULTI_REF, model_id: "model-b" },
+      fallback_from: null,
+      rejected: [],
+      step_reasons: [],
+      lost_refs: [],
+    });
+    expect(result.state.pinned).toEqual(first.state.pinned);
+    expect(
+      (await registry.decision(context, result.step.decision_id as string))
+        .override,
+    ).toBe(true);
+  });
+
+  test("distinct_lineage rejects both bindings sharing the pinned specialist lineage", async () => {
+    const { router } = await multiBindingSetup();
+    const first = await router.routeStep(context, {
+      request: routingRequest(),
+    });
+    const result = await router.routeStep(context, {
+      request: routingRequest({
+        independence: {
+          policy: "distinct_lineage",
+          from_decision_ids: [first.step.decision_id as string],
+        },
+      }),
+    });
+    expect(result.step).toMatchObject({
+      mode: "fallback",
+      selected: { ref: BASELINE_REF },
+      rejected: [
+        {
+          ref: MULTI_REF,
+          reasons: ["independence_same_lineage", "independence_same_model"],
+        },
+      ],
+      fallback_from: MULTI_REF,
+      step_reasons: ["pinned_ineligible"],
+      lost_refs: [MULTI_REF],
+    });
+  });
+
+  for (const reverse of [false, true]) {
+    test(`binding order is deterministic and follows declaration order (reverse=${reverse})`, async () => {
+      const { router, state } = await multiBindingSetup({ reverse });
+      const expected = reverse
+        ? ["model-b", "model-a"]
+        : ["model-a", "model-b"];
+      for (const task_id of ["order-1", "order-2"]) {
+        state.calls.length = 0;
+        const result = await router.routeStep(context, {
+          request: routingRequest({ task_id }),
+        });
+        expect(result.step.selected?.model_id).toBe(expected[0]);
+        expect(result.step.mode).toBe("routed");
+        expect(state.calls).toEqual(expected);
+      }
+    });
+  }
+
+  test("adapter-free bindings remain reachable without attestation", async () => {
+    const { router, state } = await multiBindingSetup({ adapter: false });
+    state.absent = new Set(["model-a", "model-b"]);
+    const result = await router.routeStep(context, {
+      request: routingRequest(),
+    });
+    expect(result.step).toMatchObject({
+      mode: "routed",
+      selected: {
+        ref: MULTI_REF,
+        model_id: "model-a",
+        adapter_sha256: null,
+        serving_attestation: "absent",
+      },
+      rejected: [],
+      step_reasons: [],
+      lost_refs: [],
+    });
+  });
+
+  test("unattested adapter bindings are not reachable when no baseline is available", async () => {
+    const { router, state } = await multiBindingSetup();
+    state.absent = new Set(["model-a", "model-b"]);
+    const result = await router.routeStep(context, {
+      request: routingRequest({ exclude_refs: [BASELINE_REF] }),
+    });
+    expect(result.step).toMatchObject({
+      mode: "unavailable",
+      selected: null,
+      fallback_from: null,
+      step_reasons: [],
+      lost_refs: [],
+      rejected: [
+        { ref: BASELINE_REF, reasons: ["excluded"] },
+        { ref: MULTI_REF, reasons: ["serving_unattested"] },
+      ],
+    });
+    expect(result.state.pinned).toBeNull();
+  });
+});
 
 describe("specialist task routing", () => {
   test("free guard skips general candidates without losing them and leaves pins unfiltered", async () => {
