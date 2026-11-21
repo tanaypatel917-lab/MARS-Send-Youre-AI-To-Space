@@ -1,14 +1,22 @@
+import { execFileSync } from "node:child_process";
+import { basename } from "node:path";
 import type { ReferenceChip } from "@mars/contracts";
 import {
+  type AgentPreviewView,
+  type AgentRequestView,
   type ConversationPage,
   type ConversationSummary,
   decodeCursor,
+  type EvidenceSharePreviewView,
+  type EvidenceShareView,
   encodeCursor,
   excerpt,
   fail,
   MAX_SEARCH_HITS,
   type MentionIndex,
+  type MentionRepo,
   type MessageView,
+  type PathSearchMatch,
   type ReactionEmoji,
   type ReactionView,
   type ReferencePreview,
@@ -17,6 +25,9 @@ import {
   type SendMessageInput,
   type SendResult,
   succeed,
+  type TaskLinkDraftView,
+  type TaskLinkRecordView,
+  type TaskLinkView,
   type TeamCapabilities,
   type TeamErrorCode,
   type TeamResult,
@@ -92,10 +103,28 @@ export class RpcTeamService implements TeamService {
   private readonly messages = new Map<string, Map<number, ServiceMessage>>();
   /** Reaction summaries by message id (from history items or `reactions.set`). */
   private readonly reactions = new Map<string, ReactionSummary[]>();
+  /** Repositories the viewer may read (from `repos.list`), keyed by `repo_id`. */
+  private readonly repos = new Map<
+    string,
+    { repo_id: string; label: string; revision: number }
+  >();
+  /** Most recently observed pinned commit SHA per `repo_id`. */
+  private readonly repoCommits = new Map<string, string>();
+  /** Cached git HEAD SHA per workspace directory (null = checked and unavailable). */
+  private readonly cachedDirHeads = new Map<
+    string,
+    { sha: string | null; at: number }
+  >();
   /** Last `team.describe.enabled === false` seen (PR 7 kill switch); re-read on every `unavailable` failure. */
   private hostDisabled = false;
+  private readonly workspaceRoots: readonly string[] | undefined;
 
-  constructor(private readonly client: TeamClient) {}
+  constructor(
+    private readonly client: TeamClient,
+    options?: { workspaceRoots?: readonly string[] },
+  ) {
+    this.workspaceRoots = options?.workspaceRoots;
+  }
 
   disabled(): boolean {
     return this.hostDisabled;
@@ -124,6 +153,9 @@ export class RpcTeamService implements TeamService {
     this.views.clear();
     this.messages.clear();
     this.reactions.clear();
+    this.repos.clear();
+    this.repoCommits.clear();
+    this.cachedDirHeads.clear();
     this.client.forget();
   }
 
@@ -153,6 +185,10 @@ export class RpcTeamService implements TeamService {
       reactions: described.capabilities.reactions,
       search: described.capabilities.search,
       realtime: true,
+      ...(described.capabilities.references ? { references: true } : {}),
+      ...(described.capabilities.agent ? { agent: true } : {}),
+      ...(described.capabilities.links ? { links: true } : {}),
+      ...(described.capabilities.shares ? { shares: true } : {}),
     };
     return described.user_id;
   }
@@ -377,6 +413,21 @@ export class RpcTeamService implements TeamService {
     return this.guard(null, async () => {
       const me = await this.identity();
       const views = await this.client.listConversations();
+      if (this.serverCapabilities.references) {
+        try {
+          const repoList = await this.client.listRepos();
+          this.repos.clear();
+          for (const repo of repoList) {
+            this.repos.set(repo.repo_id, {
+              repo_id: repo.repo_id,
+              label: repo.label,
+              revision: repo.revision,
+            });
+          }
+        } catch {
+          // Repo listing is best-effort for mention autocomplete.
+        }
+      }
       const seen = new Set<string>();
       for (const view of views) {
         seen.add(view.conversation.conversation_id);
@@ -536,18 +587,29 @@ export class RpcTeamService implements TeamService {
   ): Promise<TeamResult<SendResult>> {
     if (input.body.trim().length === 0)
       return Promise.resolve(fail("empty_message"));
-    if (input.references.length > 0)
-      return Promise.resolve(fail("reference_not_attachable"));
     return this.guard(input.conversation_id, async () => {
       await this.identity();
       const known = this.cachedSorted(input.conversation_id).find(
         (m) => m.client_message_id === input.client_message_id,
       );
+      const referenceIds: string[] = [];
+      for (const ref of input.references) {
+        const created = await this.client.createReference({
+          repo_id: ref.repo_id,
+          commit_sha: ref.commit_sha,
+          path: ref.path,
+          ...(ref.line_start !== null ? { line_start: ref.line_start } : {}),
+          ...(ref.line_end !== null ? { line_end: ref.line_end } : {}),
+        });
+        this.repoCommits.set(ref.repo_id, ref.commit_sha);
+        referenceIds.push(created.reference_id);
+      }
       const message = await this.client.send({
         conversation_id: input.conversation_id,
         client_message_id: input.client_message_id,
         body: input.body,
         ...(input.reply_to ? { reply_to: input.reply_to } : {}),
+        ...(referenceIds.length > 0 ? { reference_ids: referenceIds } : {}),
       });
       this.remember(message);
       return {
@@ -618,8 +680,50 @@ export class RpcTeamService implements TeamService {
     _viewer: string,
     _messageId: string,
     referenceId: string,
-  ): TeamResult<ReferencePreview> {
-    return succeed({ state: "restricted", reference_id: referenceId });
+  ): Promise<TeamResult<ReferencePreview>> {
+    if (!this.serverCapabilities.references) {
+      return Promise.resolve(
+        succeed({ state: "restricted", reference_id: referenceId }),
+      );
+    }
+    return this.guard(null, async (): Promise<ReferencePreview> => {
+      await this.identity();
+      const preview = await this.client.resolveReference(referenceId);
+      if (preview.state === "restricted") {
+        return { state: "restricted", reference_id: referenceId };
+      }
+      if (preview.state !== "ok") {
+        return { state: "unavailable", reference_id: referenceId };
+      }
+      const repoLabel =
+        this.repos.get(preview.repo_id)?.label ?? preview.repo_id;
+      this.repoCommits.set(preview.repo_id, preview.commit_sha);
+      const startLine = preview.line_start ?? 1;
+      const rawLines = preview.text.length > 0 ? preview.text.split("\n") : [];
+      const lines = rawLines.map((text, idx) => ({
+        number: startLine + idx,
+        text,
+      }));
+      const highlight =
+        preview.line_start !== null && preview.line_end !== null
+          ? {
+              start: preview.line_start,
+              end: preview.line_end,
+            }
+          : null;
+      return {
+        state: "ok",
+        reference_id: preview.reference_id,
+        kind: preview.line_start === null ? "file" : "range",
+        repo_name: repoLabel,
+        path: preview.path,
+        commit_sha: preview.commit_sha,
+        short_sha: preview.commit_sha.slice(0, 7),
+        symbol: null,
+        lines,
+        highlight,
+      };
+    });
   }
 
   searchMessages(
@@ -671,8 +775,329 @@ export class RpcTeamService implements TeamService {
     });
   }
 
+  private openWorkspaceDirs(): string[] {
+    if (this.workspaceRoots) return [...this.workspaceRoots];
+    try {
+      // Optional dynamic load so Bun/Node tests without the VS Code host still run.
+      const dynamicRequire =
+        typeof require === "function"
+          ? require
+          : (globalThis as unknown as { require?: (id: string) => unknown })
+              .require;
+      const vscodeModule = dynamicRequire?.("vscode") as
+        | {
+            workspace?: {
+              workspaceFolders?: readonly { uri?: { fsPath?: string } }[];
+            };
+          }
+        | undefined;
+      const folders = vscodeModule?.workspace?.workspaceFolders;
+      if (folders && folders.length > 0) {
+        const dirs = folders
+          .map((folder) => folder.uri?.fsPath)
+          .filter(
+            (dir): dir is string => typeof dir === "string" && dir.length > 0,
+          );
+        if (dirs.length > 0) return dirs;
+      }
+    } catch {
+      // Not running inside a VS Code extension host.
+    }
+    return [process.cwd()];
+  }
+
+  private gitHeadIn(dir: string): string | null {
+    const now = Date.now();
+    const cached = this.cachedDirHeads.get(dir);
+    if (cached !== undefined && now - cached.at < 2_000) return cached.sha;
+    try {
+      const out = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: dir,
+        encoding: "utf8",
+        timeout: 1000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      const sha = /^[0-9a-f]{40}$/.test(out) ? out : null;
+      this.cachedDirHeads.set(dir, { sha, at: now });
+      return sha;
+    } catch {
+      this.cachedDirHeads.set(dir, { sha: null, at: now });
+      return null;
+    }
+  }
+
+  private gitRemoteNameIn(dir: string): string | null {
+    try {
+      const url = execFileSync("git", ["remote", "get-url", "origin"], {
+        cwd: dir,
+        encoding: "utf8",
+        timeout: 1000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      const segment = url.split(/[/:]/).filter(Boolean).pop();
+      if (!segment) return null;
+      return (
+        segment
+          .replace(/\.git$/i, "")
+          .trim()
+          .toLowerCase() || null
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  private matchedWorkspaceDir(repoId: string, label: string): string | null {
+    const dirs = this.openWorkspaceDirs();
+    const candidates = new Set(
+      [label, repoId]
+        .map((v) => v.trim().toLowerCase())
+        .filter((v) => v.length > 0),
+    );
+    const matchedByDir = dirs.find(
+      (dir) =>
+        candidates.has(basename(dir).trim().toLowerCase()) &&
+        this.gitHeadIn(dir) !== null,
+    );
+    if (matchedByDir) return matchedByDir;
+    const matchedByRemote = dirs.find((dir) => {
+      const remoteName = this.gitRemoteNameIn(dir);
+      return (
+        remoteName !== null &&
+        candidates.has(remoteName) &&
+        this.gitHeadIn(dir) !== null
+      );
+    });
+    return matchedByRemote ?? null;
+  }
+
+  private workspaceHeadForRepo(repoId: string, label: string): string | null {
+    const matched = this.matchedWorkspaceDir(repoId, label);
+    if (matched) return this.gitHeadIn(matched);
+    const pinned = this.repoCommits.get(repoId);
+    if (pinned) return pinned;
+    for (const dir of this.openWorkspaceDirs()) {
+      const sha = this.gitHeadIn(dir);
+      if (sha) return sha;
+    }
+    return null;
+  }
+
   mentionIndex(): MentionIndex {
-    return { repos: [] };
+    const repos: MentionRepo[] = [];
+    if (!this.serverCapabilities.references && !this.serverCapabilities.agent) {
+      return { repos };
+    }
+    if (this.serverCapabilities.references) {
+      for (const repo of this.repos.values()) {
+        const commitSha = this.workspaceHeadForRepo(repo.repo_id, repo.label);
+        if (commitSha) {
+          repos.push({
+            repo_id: repo.repo_id,
+            name: repo.label,
+            commit_sha: commitSha,
+            files: [],
+          });
+        }
+      }
+    }
+    return {
+      repos,
+      users: this.users(),
+      agent_available: Boolean(this.serverCapabilities.agent),
+    };
+  }
+
+  searchPaths(
+    _viewer: string,
+    input: {
+      repo_id: string;
+      commit_sha: string;
+      query: string;
+      limit?: number;
+    },
+  ): Promise<TeamResult<PathSearchMatch[]>> {
+    if (!this.serverCapabilities.references)
+      return Promise.resolve(succeed([]));
+    return this.guard(null, async () => {
+      await this.identity();
+      const first = await this.client.searchPaths(input);
+      if (first.state === "ok") {
+        return first.matches.map((m) => ({
+          repo_id: input.repo_id,
+          commit_sha: input.commit_sha,
+          path: m.path,
+          rank: m.rank,
+        }));
+      }
+      // Only probe other workspace folders when no open folder matched this repo by name or remote
+      // (an aliased checkout); never substitute another checkout when a matching checkout is on an
+      // unpushed commit.
+      const repo = this.repos.get(input.repo_id);
+      if (repo && this.matchedWorkspaceDir(repo.repo_id, repo.label) !== null) {
+        return [];
+      }
+      const tried = new Set<string>([input.commit_sha]);
+      for (const dir of this.openWorkspaceDirs()) {
+        const candidateSha = this.gitHeadIn(dir);
+        if (!candidateSha || tried.has(candidateSha)) continue;
+        tried.add(candidateSha);
+        const fallback = await this.client.searchPaths({
+          ...input,
+          commit_sha: candidateSha,
+        });
+        if (fallback.state === "ok") {
+          return fallback.matches.map((m) => ({
+            repo_id: input.repo_id,
+            commit_sha: candidateSha,
+            path: m.path,
+            rank: m.rank,
+          }));
+        }
+      }
+      return [];
+    });
+  }
+
+  agentPreview(
+    _viewer: string,
+    input: {
+      conversation_id: string;
+      message_ids: string[];
+      reference_ids: string[];
+    },
+  ): Promise<TeamResult<AgentPreviewView>> {
+    return this.guard(input.conversation_id, async () => {
+      await this.identity();
+      return await this.client.agentPreview(input);
+    });
+  }
+
+  agentRequest(
+    _viewer: string,
+    input: {
+      conversation_id: string;
+      message_ids: string[];
+      reference_ids: string[];
+      idempotency_key: string;
+      preview_sha256: string;
+    },
+  ): Promise<TeamResult<AgentRequestView>> {
+    return this.guard(input.conversation_id, async () => {
+      await this.identity();
+      return await this.client.agentRequest(input);
+    });
+  }
+
+  agentCancel(
+    _viewer: string,
+    requestId: string,
+  ): Promise<TeamResult<AgentRequestView>> {
+    return this.guard(null, async () => {
+      await this.identity();
+      return await this.client.agentCancel(requestId);
+    });
+  }
+
+  agentInspect(
+    _viewer: string,
+    requestId: string,
+  ): Promise<TeamResult<AgentRequestView>> {
+    return this.guard(null, async () => {
+      await this.identity();
+      return await this.client.agentInspect(requestId);
+    });
+  }
+
+  taskLinkDraft(
+    _viewer: string,
+    input: {
+      conversation_id: string;
+      message_ids: string[];
+      reference_ids: string[];
+    },
+  ): Promise<TeamResult<TaskLinkDraftView>> {
+    return this.guard(input.conversation_id, async () => {
+      await this.identity();
+      return await this.client.taskLinkDraft(input);
+    });
+  }
+
+  taskLinkConfirm(
+    _viewer: string,
+    input: {
+      link_id: string;
+      workbench: {
+        scope: Record<string, unknown>;
+        task_id: string;
+        request_id: string;
+      };
+      target: { repo_id?: string; base_revision?: string };
+    },
+  ): Promise<TeamResult<TaskLinkRecordView>> {
+    return this.guard(null, async () => {
+      await this.identity();
+      return await this.client.taskLinkConfirm(input);
+    });
+  }
+
+  taskLinkCreated(
+    _viewer: string,
+    input: { link_id: string; task_revision: number },
+  ): Promise<TeamResult<TaskLinkRecordView>> {
+    return this.guard(null, async () => {
+      await this.identity();
+      return await this.client.taskLinkCreated(input);
+    });
+  }
+
+  taskLinkInspect(
+    _viewer: string,
+    linkId: string,
+  ): Promise<TeamResult<TaskLinkView>> {
+    return this.guard(null, async () => {
+      await this.identity();
+      return await this.client.taskLinkInspect(linkId);
+    });
+  }
+
+  sharePreview(
+    _viewer: string,
+    input: {
+      link_id: string;
+      evidence: Record<string, unknown>;
+      run_status: string;
+      selection: {
+        summary: string;
+        include_diff_digest: boolean;
+        verify_event_ids: string[];
+      };
+    },
+  ): Promise<TeamResult<EvidenceSharePreviewView>> {
+    return this.guard(null, async () => {
+      await this.identity();
+      return await this.client.sharePreview(input);
+    });
+  }
+
+  shareCreate(
+    _viewer: string,
+    input: {
+      link_id: string;
+      evidence: Record<string, unknown>;
+      run_status: string;
+      selection: {
+        summary: string;
+        include_diff_digest: boolean;
+        verify_event_ids: string[];
+      };
+      preview_sha256: string;
+    },
+  ): Promise<TeamResult<EvidenceShareView>> {
+    return this.guard(null, async () => {
+      await this.identity();
+      return await this.client.shareCreate(input);
+    });
   }
 }
 

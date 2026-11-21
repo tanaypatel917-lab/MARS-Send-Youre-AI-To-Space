@@ -579,3 +579,54 @@ test("mars doctor --team-state reports the flag and ledger without paths or toke
     await rm(root, { recursive: true, force: true });
   }
 }, 30000);
+
+test("omitting and re-adding a dev administrator preserves their admin role and metrics access", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-cli-team-admin-return-"));
+  const state = join(root, "state");
+  const env = { PATH: process.env.PATH ?? "", HOME: root };
+  let active: Awaited<ReturnType<typeof spawnServe>> | null = null;
+  try {
+    // 1. Initial start: ada is admin, bob is member
+    active = await spawnServe(
+      ["--state", state, "--port", "0", "--dev-users", "ada,bob", "--enable"],
+      env,
+    );
+    active.child.kill("SIGTERM");
+    expect(await active.child.exited).toBe(143);
+    active = null;
+
+    // 2. Restart omitting ada from --dev-users
+    active = await spawnServe(
+      ["--state", state, "--port", "0", "--dev-users", "bob", "--enable"],
+      env,
+    );
+    active.child.kill("SIGTERM");
+    expect(await active.child.exited).toBe(143);
+    active = null;
+
+    // 3. Restart re-adding ada (even listed second): ada must retain admin role and team.metrics access
+    active = await spawnServe(
+      ["--state", state, "--port", "0", "--dev-users", "bob,ada", "--enable"],
+      env,
+    );
+    const tokens = JSON.parse(
+      await readFile(String(active.report.dev_tokens_file), "utf8"),
+    ) as { users: { user_id: string; token: string; role: string }[] };
+    const ada = tokens.users.find((u) => u.user_id === "ada");
+    expect(ada?.role).toBe("admin");
+    const metricsRes = await rpc(
+      String(active.report.url),
+      ada?.token ?? "",
+      "team.metrics",
+      {},
+      "team-local",
+    );
+    expect(metricsRes.status).toBe(200);
+  } finally {
+    if (active) {
+      active.child.kill("SIGKILL");
+      await active.child.exited;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30000);

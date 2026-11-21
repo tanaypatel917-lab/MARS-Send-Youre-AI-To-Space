@@ -86,6 +86,17 @@ export function reduceComposer(
       if (!picker || !candidate) return state;
       const before = state.text.slice(0, picker.trigger_start);
       const after = state.text.slice(state.caret);
+      if (candidate.kind === "user" || candidate.kind === "agent") {
+        const insertion =
+          candidate.kind === "agent" ? "@MARS " : `@${candidate.handle} `;
+        const text = `${before}${insertion}${after}`;
+        return {
+          ...state,
+          text,
+          caret: before.length + insertion.length,
+          picker: null,
+        };
+      }
       const text = `${before}${after}`;
       const chips = state.chips.some((c) => c.key === candidate.key)
         ? state.chips

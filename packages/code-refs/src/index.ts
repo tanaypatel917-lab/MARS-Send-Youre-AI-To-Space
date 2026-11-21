@@ -40,6 +40,13 @@ export {
   type RepoRegistry,
   type RepoRegistryOptions,
 } from "./registry";
+export {
+  createRemoteRepoMirror,
+  type RemoteRepoMirror,
+  type RemoteRepoMirrorOptions,
+  type RemoteRepoRegistration,
+  RemoteRepoRegistrationSchema,
+} from "./remote";
 export { resolveReference, splitLines } from "./resolve";
 export * from "./schemas";
 export { compareMatches, rankPath, searchPaths } from "./search";

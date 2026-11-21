@@ -1,9 +1,19 @@
 import {
+  AgentPreviewSchema,
+  AgentRequestSchema,
   ConversationSchema,
+  GitRangeReferenceSchema,
   MessageSchema,
   ParticipantSchema,
   ReactionSummarySchema,
   ReferenceChipSchema,
+  ReferencePreviewSchema,
+  RepoSchema,
+  ResultShareSchema,
+  SharePreviewSchema,
+  TASK_LINK_MAX_MESSAGES,
+  TaskLinkSchema,
+  TaskLinkViewSchema,
   TEAM_MAX_EMOJI_CHARS,
   TEAM_MAX_EXCERPT_CHARS,
   TEAM_MAX_REACTION_SUMMARIES,
@@ -17,13 +27,12 @@ import { z } from "zod";
 
 /**
  * Client-side mirror of the `@mars/team` RPC surface (`packages/team/src/
- * protocol.ts` on `main`, PR 2 + PR 3 service half + PR 4). The extension
- * cannot import `@mars/team` itself (it pulls in `bun:sqlite`), so the
- * request/result shapes are re-stated here over the shared `@mars/contracts`
- * records and every response is validated before it reaches the controller.
- * `team.describe().capabilities` still gates reactions/search/stream so a
- * server built without them degrades to host-side behaviour instead of
- * failing.
+ * protocol.ts` on `main`, PR 2 + PR 3 service half + PR 4 + PR 5 + PR 6).
+ * The extension cannot import `@mars/team` itself (it pulls in `bun:sqlite`),
+ * so the request/result shapes are re-stated here over the shared
+ * `@mars/contracts` records and every response is validated before it reaches
+ * the controller. `team.describe().capabilities` gates optional features so a
+ * server built without them degrades cleanly.
  */
 export const TEAM_RPC_METHODS = {
   describe: "team.describe",
@@ -40,6 +49,20 @@ export const TEAM_RPC_METHODS = {
   search: "messages.search",
   /** Body of `POST /v1/stream` (same envelope): `{ cursors }` → `text/event-stream`. */
   stream: "events.stream",
+  reposList: "repos.list",
+  referencesCreate: "references.create",
+  referencesResolve: "references.resolve",
+  referencesSearchPaths: "references.search_paths",
+  tasksLinkDraft: "tasks.link_draft",
+  tasksLinkConfirm: "tasks.link_confirm",
+  tasksLinkCreated: "tasks.link_created",
+  tasksLinkInspect: "tasks.link_inspect",
+  sharesPreview: "shares.preview",
+  sharesCreate: "shares.create",
+  agentPreview: "agent.preview",
+  agentRequest: "agent.request",
+  agentCancel: "agent.cancel",
+  agentInspect: "agent.inspect",
 } as const;
 export type TeamRpcMethod =
   (typeof TEAM_RPC_METHODS)[keyof typeof TEAM_RPC_METHODS];
@@ -81,6 +104,7 @@ export const TeamCapabilitiesSchema = z
     reactions: z.boolean(),
     search: z.boolean(),
     references: z.boolean().optional(),
+    agent: z.boolean().optional(),
   })
   .catchall(z.boolean());
 
@@ -209,3 +233,68 @@ export const PollCursorSchema = z
 export type PollCursor = z.infer<typeof PollCursorSchema>;
 
 export const ParticipantResultSchema = ParticipantSchema;
+
+export const RepoListSchema = z.array(RepoSchema).max(10_000);
+export type RepoListItem = z.infer<typeof RepoSchema>;
+
+export const ReferenceResultSchema = GitRangeReferenceSchema;
+export type ReferenceResult = z.infer<typeof ReferenceResultSchema>;
+
+export const ReferencePreviewResultSchema = ReferencePreviewSchema;
+export type ReferencePreviewResult = z.infer<
+  typeof ReferencePreviewResultSchema
+>;
+
+export const PathSearchResultSchema = z.discriminatedUnion("state", [
+  z
+    .object({
+      state: z.literal("ok"),
+      matches: z
+        .array(
+          z
+            .object({
+              path: z.string().min(1).max(1024),
+              rank: z.number().int().min(0).max(4),
+            })
+            .strict(),
+        )
+        .max(200),
+      truncated: z.boolean(),
+    })
+    .strict(),
+  z.object({ state: z.literal("unavailable") }).strict(),
+]);
+export type PathSearchResult = z.infer<typeof PathSearchResultSchema>;
+
+export const TaskLinkExcerptSchema = z
+  .object({
+    message_id: id,
+    seq: z.number().int().positive(),
+    author_id: id,
+    excerpt: z.string().max(280),
+    truncated: z.boolean(),
+  })
+  .strict();
+
+export const TaskLinkDraftResultSchema = z
+  .object({
+    link: TaskLinkSchema,
+    excerpts: z.array(TaskLinkExcerptSchema).max(TASK_LINK_MAX_MESSAGES),
+  })
+  .strict();
+export type TaskLinkDraftResult = z.infer<typeof TaskLinkDraftResultSchema>;
+
+export {
+  AgentPreviewSchema,
+  AgentRequestSchema,
+  ResultShareSchema,
+  SharePreviewSchema,
+  TaskLinkSchema,
+  TaskLinkViewSchema,
+};
+export type AgentPreviewResult = z.infer<typeof AgentPreviewSchema>;
+export type AgentRequestResult = z.infer<typeof AgentRequestSchema>;
+export type TaskLinkRecordResult = z.infer<typeof TaskLinkSchema>;
+export type TaskLinkViewResult = z.infer<typeof TaskLinkViewSchema>;
+export type SharePreviewResult = z.infer<typeof SharePreviewSchema>;
+export type ResultShareResult = z.infer<typeof ResultShareSchema>;

@@ -23,13 +23,13 @@ VS Code extension host (apps/vscode)      ──HTTP loopback, team bearer token
 
 | Responsibility | Owner | Notes |
 | --- | --- | --- |
-| Who the caller is (`user_id`) | `Authenticator` in `@mars/team` | Derived from the bearer token on every request; never accepted from the client. Only `createDevAuthenticator` exists; the real provider (GitHub OAuth / OIDC / MARS accounts) is an owner decision. |
+| Who the caller is (`user_id`) | `Authenticator` in `@mars/team` | Derived from the bearer token on every request; never accepted from the client. Supports verified HS256 JWT tokens (`createVerifiedTokenAuthenticator`), GitHub OAuth tokens (`createGitHubAuthenticator`), composite multi-provider auth (`createCompositeAuthenticator`), and local-dev fallback (`createDevAuthenticator`) for offline tests. |
 | Team membership, conversations, participants, messages, read cursors, pins, delivery outbox | `@mars/team` store (`team.sqlite`) | Postgres-portable schema; first forward-only migration ledger in the repo (private to this store). |
 | Tasks, workspaces, artifacts, evidence | `@mars/workbench` / `@mars/tasks` | Team Chat stores only the workbench's ids (PR 6), never copies of task state. |
-| Model execution | Oh My Pi via `@mars/execution` | The team service never calls a model. @MARS answers run in `@mars/team-agent` (`runTeamAgentRequest` → `openRuntimeSession`) with one read-only tool. |
+| Model execution | Oh My Pi via `@mars/execution` | The team service never calls a model. @MARS answers run in `@mars/team-agent` (`createTeamAgentWorker` + `runTeamAgentRequest` → `openRuntimeSession`) with one read-only tool, wired into `mars team serve`. |
 | Agent-to-agent rooms | `@mars/collaboration` | Different thing; its idempotency / seq / delivery patterns were copied, not extended. |
-| Team token on the client | VS Code `SecretStorage` (own key, VS Code wiring PR) | Never the workbench token, never in `ViewState`. |
-| Repo registration (`repo_id` → directory) and repo access (`repos`, `repo_access` tables) | Host administers both: `createRepoRegistry().register` (`@mars/code-refs`) and `store.setRepo` / `setRepoAccess` / `revokeRepoAccess` (`@mars/team`) | No RPC grants access in the pilot. The team store never holds a path; `repo_id` is opaque. |
+| Team token on the client | VS Code `SecretStorage` (`apps/vscode/src/teamChat`) | Never the workbench token, never in `ViewState`. |
+| Repo registration (`repo_id` → directory or remote mirror) and repo access (`repos`, `repo_access` tables) | Host administers both: `createRepoRegistry().register` / `createRemoteRepoMirror().registerRemote` (`@mars/code-refs`) and `store.setRepo` / `setRepoAccess` / `revokeRepoAccess` (`@mars/team`) | Remote Git mirrors fetch pinned commits on demand into private bare caches. The team store never holds a path or URL; `repo_id` is opaque. |
 | Reading committed Git objects | `@mars/code-refs` | Argv-only `git`, pinned commit, bounded output; **no authorization in the package**. |
 | Who may see a reference | `@mars/team` (`references.*`, message chips) | Re-checks team membership, conversation visibility and `repo_access` inside each call; renders `restricted` otherwise. |
 
@@ -72,9 +72,9 @@ There is no `agent.publish` RPC. Answers are stored through the host-only
 `fail(request_id, reason_code)`), driven by `createTeamAgentWorker` in the
 workbench process. A client can never publish an answer.
 
-Not implemented: artifact shares (artifact access gate); the reference picker,
-preview panel and @MARS composer action. The agent `TeamReferencePort` is backed
-by `code_references`/`repo_access`, and the VS Code inbox has an RPC-backed client.
+End-to-end wiring includes:
+- `mars team serve` supports verified HS256 tokens (`--auth-provider token`, `--auth-secret-env`, `--auth-issuer`, `--auth-audience`), GitHub OAuth (`--auth-provider github`, `--github-api-url`, `--github-allowed-ids` mapped to immutable `gh_<id>` identities), composite auth with local-dev fallback (`--dev-users`), remote Git mirrors (`--remote-repo`, `--remote-auth-host`), repository access provisioning (`--repo-access`), and the `@mars/team-agent` worker (`--agent-model`).
+- `apps/vscode/src/teamChat` wires `repos.list`, `references.*`, `agent.*`, `tasks.link_*`, and `shares.*` RPCs into the extension host service, controller, and webview command protocol so teammates can `@` mention each other, quote pinned code ranges, invoke `@MARS`, link tasks, and share verified evidence cards bound to `preview_sha256`.
 
 ## Code references (PR 4, service half)
 

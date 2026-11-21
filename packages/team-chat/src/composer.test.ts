@@ -39,19 +39,16 @@ describe("mention candidates", () => {
       "file",
       "file",
     ]);
-    expect(candidates.map((c) => c.repo_id)).toEqual([
-      R.platform,
-      R.platform,
-      R.site,
-      R.site,
-    ]);
+    expect(
+      candidates.map((c) => (c.kind === "file" ? c.repo_id : null)),
+    ).toEqual([R.platform, R.platform, R.site, R.site]);
   });
 
   test("a path query matches files across both repos and a symbol query matches symbols", () => {
     const files = mentionCandidates(index, "src/", null);
-    expect(new Set(files.map((c) => c.repo_id))).toEqual(
-      new Set([R.platform, R.site]),
-    );
+    expect(
+      new Set(files.map((c) => ("repo_id" in c ? c.repo_id : null))),
+    ).toEqual(new Set([R.platform, R.site]));
     const symbols = mentionCandidates(index, "banner", R.site);
     expect(symbols.map((c) => `${c.kind}:${c.label}`)).toEqual([
       "symbol:bannerHeight",
@@ -59,7 +56,11 @@ describe("mention candidates", () => {
       "symbol:.banner",
       "symbol:.banner .verdict",
     ]);
-    expect(symbols[1]?.reference).toMatchObject({
+    const second = symbols[1];
+    if (!second || !("reference" in second)) {
+      throw new Error("expected code candidate");
+    }
+    expect(second.reference).toMatchObject({
       kind: "symbol",
       path: "src/style.css",
       line_start: 5,
@@ -82,7 +83,7 @@ describe("mention candidates", () => {
 
   test("chip labels show repo, path, short SHA and range", () => {
     const [range] = mentionCandidates(index, "style.css:14-23", null);
-    if (!range) throw new Error("no candidate");
+    if (!range || !("reference" in range)) throw new Error("no candidate");
     expect(chipLabel(range.reference, range.repo_name)).toBe(
       "mars-site (fixture) · src/style.css:14-23 @ a1b2c3d",
     );
@@ -294,5 +295,44 @@ describe("composer problems", () => {
     expect(composerProblem(type(EMPTY_COMPOSER, "x".repeat(4000)))).toBeNull();
     expect(composerProblem(EMPTY_COMPOSER)).toBe("empty");
     expect(composerProblem(type(EMPTY_COMPOSER, "   "))).toBe("empty");
+  });
+});
+
+describe("dynamic remote path search mentions", () => {
+  test("supports remote search results with unknown line_count for both file and range mentions", () => {
+    const dynamicEnv = {
+      index: {
+        repos: [
+          {
+            repo_id: "repo_live",
+            name: "mars",
+            commit_sha: "abcdef1234567890abcdef1234567890abcdef12",
+            files: [{ path: "src/auth.ts", line_count: 0, symbols: [] }],
+          },
+        ],
+      },
+      activeRepoId: "repo_live",
+      maxChips: 5,
+    };
+    const fileCandidates = mentionCandidates(
+      dynamicEnv.index,
+      "src/auth",
+      "repo_live",
+    );
+    expect(fileCandidates).toHaveLength(1);
+    expect(fileCandidates[0]?.kind).toBe("file");
+    expect(fileCandidates[0]?.detail).toBe("mars @ abcdef1");
+
+    const rangeCandidates = mentionCandidates(
+      dynamicEnv.index,
+      "src/auth.ts:10-25",
+      "repo_live",
+    );
+    expect(rangeCandidates).toHaveLength(1);
+    expect(rangeCandidates[0]?.kind).toBe("range");
+    if (rangeCandidates[0]?.kind === "range") {
+      expect(rangeCandidates[0].reference.line_start).toBe(10);
+      expect(rangeCandidates[0].reference.line_end).toBe(25);
+    }
   });
 });

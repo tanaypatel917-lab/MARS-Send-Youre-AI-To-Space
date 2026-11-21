@@ -122,9 +122,122 @@ export interface MentionRepo {
   files: MentionFile[];
 }
 
-/** Everything the `@` picker may offer the viewer: only repos they can read. */
+/** Everything the `@` picker may offer the viewer: repos they can read, teammates, and optional `@MARS`. */
 export interface MentionIndex {
   repos: MentionRepo[];
+  users?: UserView[];
+  agent_available?: boolean;
+}
+
+export interface AgentPreviewItemView {
+  kind: "message" | "reference";
+  message_id?: string;
+  seq?: number;
+  body_sha256?: string;
+  reference_id?: string;
+  bytes: number;
+  flagged: string | null;
+}
+
+export interface AgentPreviewView {
+  conversation_id: string;
+  audience: "conversation";
+  items: AgentPreviewItemView[];
+  participant_count: number;
+  restricted_reference_ids: string[];
+  model: { model_id: string; tier: "free" };
+  preview_sha256: string;
+}
+
+export interface AgentRequestView {
+  request_id: string;
+  team_id: string;
+  conversation_id: string;
+  requester_id: string;
+  idempotency_key: string;
+  audience: "conversation";
+  reference_ids: string[];
+  preview_sha256: string;
+  model_id: string;
+  status:
+    | "pending"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "restricted";
+  dropped_citations: number;
+  reason_code: string | null;
+  answer: { message_id: string } | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskLinkExcerptView {
+  message_id: string;
+  seq: number;
+  author_id: string;
+  excerpt: string;
+  truncated: boolean;
+}
+
+export interface TaskLinkRecordView {
+  link_id: string;
+  team_id: string;
+  conversation_id: string;
+  requester_id: string;
+  reference_ids: string[];
+  task_revision: number | null;
+  status: "draft" | "confirmed" | "created" | "shared" | "abandoned";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskLinkDraftView {
+  link: TaskLinkRecordView;
+  excerpts: TaskLinkExcerptView[];
+}
+
+export interface TaskLinkView {
+  view: "requester" | "member";
+  link: TaskLinkRecordView;
+}
+
+export interface EvidenceShareCardView {
+  link_id: string;
+  requester_id: string;
+  attested_by: string;
+  summary: string;
+  run_status: string;
+  verified: boolean;
+  verified_reason: string | null;
+  task_revision: number;
+  diff_sha256: string | null;
+  evidence_event_id: string | null;
+  evidence_sha256: string;
+  export_status: "not_exported";
+  git_status: "unknown" | "clean" | "dirty";
+}
+
+export interface EvidenceSharePreviewView {
+  preview_sha256: string;
+  card: EvidenceShareCardView;
+}
+
+export interface EvidenceShareView extends EvidenceShareCardView {
+  share_id: string;
+  message_id: string;
+  preview_sha256: string;
+  stale: boolean;
+  superseded_by: string | null;
+  created_at: string;
+}
+
+export interface PathSearchMatch {
+  repo_id: string;
+  commit_sha: string;
+  path: string;
+  rank: number;
 }
 
 export interface SendResult {
@@ -148,6 +261,10 @@ export interface TeamCapabilities {
   reactions: boolean;
   search: boolean;
   realtime: boolean;
+  references?: boolean;
+  agent?: boolean;
+  links?: boolean;
+  shares?: boolean;
 }
 
 export interface SearchResult {
@@ -219,6 +336,100 @@ export interface TeamService {
     conversationId?: string | null,
   ): MaybePromise<TeamResult<SearchResult>>;
   mentionIndex(viewer: string): MentionIndex;
+  /** Optional server-backed path search for `@` code quoting at a pinned commit. */
+  searchPaths?(
+    viewer: string,
+    input: {
+      repo_id: string;
+      commit_sha: string;
+      query: string;
+      limit?: number;
+    },
+  ): MaybePromise<TeamResult<PathSearchMatch[]>>;
+  /** Optional `@MARS` read-only assistant operations. */
+  agentPreview?(
+    viewer: string,
+    input: {
+      conversation_id: string;
+      message_ids: string[];
+      reference_ids: string[];
+    },
+  ): MaybePromise<TeamResult<AgentPreviewView>>;
+  agentRequest?(
+    viewer: string,
+    input: {
+      conversation_id: string;
+      message_ids: string[];
+      reference_ids: string[];
+      idempotency_key: string;
+      preview_sha256: string;
+    },
+  ): MaybePromise<TeamResult<AgentRequestView>>;
+  agentCancel?(
+    viewer: string,
+    requestId: string,
+  ): MaybePromise<TeamResult<AgentRequestView>>;
+  agentInspect?(
+    viewer: string,
+    requestId: string,
+  ): MaybePromise<TeamResult<AgentRequestView>>;
+  /** Optional task-link card operations (draft -> confirm -> created -> inspect). */
+  taskLinkDraft?(
+    viewer: string,
+    input: {
+      conversation_id: string;
+      message_ids: string[];
+      reference_ids: string[];
+    },
+  ): MaybePromise<TeamResult<TaskLinkDraftView>>;
+  taskLinkConfirm?(
+    viewer: string,
+    input: {
+      link_id: string;
+      workbench: {
+        scope: Record<string, unknown>;
+        task_id: string;
+        request_id: string;
+      };
+      target: { repo_id?: string; base_revision?: string };
+    },
+  ): MaybePromise<TeamResult<TaskLinkRecordView>>;
+  taskLinkCreated?(
+    viewer: string,
+    input: { link_id: string; task_revision: number },
+  ): MaybePromise<TeamResult<TaskLinkRecordView>>;
+  taskLinkInspect?(
+    viewer: string,
+    linkId: string,
+  ): MaybePromise<TeamResult<TaskLinkView>>;
+  /** Optional verified-evidence share card operations (preview -> create). */
+  sharePreview?(
+    viewer: string,
+    input: {
+      link_id: string;
+      evidence: Record<string, unknown>;
+      run_status: string;
+      selection: {
+        summary: string;
+        include_diff_digest: boolean;
+        verify_event_ids: string[];
+      };
+    },
+  ): MaybePromise<TeamResult<EvidenceSharePreviewView>>;
+  shareCreate?(
+    viewer: string,
+    input: {
+      link_id: string;
+      evidence: Record<string, unknown>;
+      run_status: string;
+      selection: {
+        summary: string;
+        include_diff_digest: boolean;
+        verify_event_ids: string[];
+      };
+      preview_sha256: string;
+    },
+  ): MaybePromise<TeamResult<EvidenceShareView>>;
 }
 
 export interface FixtureTeamServiceOptions {

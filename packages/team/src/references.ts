@@ -9,7 +9,6 @@ import {
   invalidInput,
   rateLimited,
   referenceNotFound,
-  TeamError,
   unavailable,
 } from "./errors";
 import type {

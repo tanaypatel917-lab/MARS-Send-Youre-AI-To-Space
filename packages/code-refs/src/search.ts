@@ -87,12 +87,13 @@ export async function searchPaths(
   const git_version = await git.version();
   const base = { repo_id, commit_sha, git_version };
 
-  const commit = await verifyCommit(
-    git,
-    repo.dir,
-    commit_sha,
-    limits.timeout_ms,
-  );
+  let commit = await verifyCommit(git, repo.dir, commit_sha, limits.timeout_ms);
+  if (commit.state === "unavailable" && registry.ensureCommit) {
+    const fetched = await registry.ensureCommit(repo_id, commit_sha);
+    if (fetched) {
+      commit = await verifyCommit(git, repo.dir, commit_sha, limits.timeout_ms);
+    }
+  }
   if (commit.state === "error")
     return { state: "error", ...base, reason: commit.reason };
   if (commit.state === "unavailable") return { state: "unavailable", ...base };

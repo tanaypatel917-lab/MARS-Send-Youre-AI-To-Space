@@ -20,8 +20,16 @@ export {
 export {
   type AuthenticatedUser,
   type Authenticator,
+  createCompositeAuthenticator,
   createDevAuthenticator,
+  createGitHubAuthenticator,
+  createVerifiedTokenAuthenticator,
   type DevUser,
+  type GitHubAuthenticatorOptions,
+  type GitHubUserProfile,
+  issueVerifiedToken,
+  type VerifiedTokenAuthenticatorOptions,
+  type VerifiedTokenClaims,
 } from "./auth";
 export { TEAM_ERROR_CODES, TeamError, type TeamErrorCode } from "./errors";
 export {

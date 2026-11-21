@@ -103,7 +103,7 @@ export class TeamServerError extends Error {
 
 const MAX_REQUEST_BYTES = 512 * 1024;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
-const MAX_AUTHORIZATION_CHARS = 300;
+const MAX_AUTHORIZATION_CHARS = 4103; // "Bearer ".length + 4096 (matches MAX_BEARER_LENGTH)
 const headers = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",

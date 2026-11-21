@@ -1,10 +1,18 @@
 import type { TeamDeliveryEvent } from "@mars/contracts";
 import {
+  type AgentPreviewView,
+  type AgentRequestView,
   type ConversationSummary,
+  type EvidenceSharePreviewView,
+  type EvidenceShareView,
   FIXTURE_USERS,
   FixtureTeamService,
+  MAX_REFERENCES_PER_MESSAGE,
   type MessageView,
+  type PathSearchMatch,
   type SendMessageInput,
+  type TaskLinkDraftView,
+  type TaskLinkView,
   type TeamErrorCode,
   type TeamResult,
   type TeamService,
@@ -111,7 +119,20 @@ export class TeamChatController {
   private selected: SelectedConversation | null = null;
   private readonly pending: PendingSend[] = [];
   private readonly pendingInputs = new Map<string, SendMessageInput>();
+  private readonly pendingAgentPreviews = new Map<
+    string,
+    { conversationId: string; messageIds: string[]; referenceIds: string[] }
+  >();
   private panel: TeamChatViewState["panel"] = null;
+  private pathSearch: PathSearchMatch[] = [];
+  private pathSearchQuery: string | null = null;
+  private readonly pathSearchByRepo = new Map<string, PathSearchMatch[]>();
+  private agentPreviewState: AgentPreviewView | null = null;
+  private agentRequestState: AgentRequestView | null = null;
+  private taskLinkDraftState: TaskLinkDraftView | null = null;
+  private taskLinkState: TaskLinkView | null = null;
+  private sharePreviewState: EvidenceSharePreviewView | null = null;
+  private shareResultState: EvidenceShareView | null = null;
   private notice: TeamChatNotice | null = null;
   private search: TeamChatViewState["search"] = null;
   private announcement: TeamChatAnnouncement | null = null;
@@ -262,11 +283,21 @@ export class TeamChatController {
       this.conversations = [];
       this.selected = null;
       this.panel = null;
+      this.pathSearch = [];
+      this.pathSearchQuery = null;
+      this.pathSearchByRepo.clear();
+      this.agentPreviewState = null;
+      this.agentRequestState = null;
+      this.taskLinkDraftState = null;
+      this.taskLinkState = null;
+      this.sharePreviewState = null;
+      this.shareResultState = null;
       this.notice = null;
       this.search = null;
       this.announcement = null;
       this.pending.splice(0, this.pending.length);
       this.pendingInputs.clear();
+      this.pendingAgentPreviews.clear();
       this.options.realtime?.subscribe([]);
       this.emit();
     });
@@ -288,20 +319,48 @@ export class TeamChatController {
         await this.loadOlder(message.conversationId, message.cursor);
         return this.emit();
       case "send":
-        return this.send({
+        await this.send({
           conversation_id: message.conversationId,
           client_message_id: message.clientMessageId,
           body: message.body,
           reply_to: message.replyTo,
           references: message.references,
         });
+        return;
       case "retrySend": {
         const input = this.pendingInputs.get(message.clientMessageId);
         const item = this.pending.find(
           (p) => p.client_message_id === message.clientMessageId,
         );
         if (!input || item?.status === "conflict") return;
-        return this.send(input);
+        const previewFollowup = this.pendingAgentPreviews.get(
+          message.clientMessageId,
+        );
+        const sent = await this.send(input);
+        if (sent && previewFollowup) {
+          this.pendingAgentPreviews.delete(message.clientMessageId);
+          const sentMessage = this.selected?.messages.find(
+            (m) =>
+              m.conversation_id === previewFollowup.conversationId &&
+              m.sequence === sent.sequence,
+          );
+          const nextMessageIds = sentMessage
+            ? [...previewFollowup.messageIds, sentMessage.message_id]
+            : previewFollowup.messageIds;
+          const nextReferenceIds = sentMessage
+            ? [
+                ...sentMessage.references.map((r) => r.reference_id),
+                ...previewFollowup.referenceIds,
+              ]
+            : previewFollowup.referenceIds;
+          await this.runAgentPreview(
+            previewFollowup.conversationId,
+            nextMessageIds,
+            nextReferenceIds,
+          );
+          this.emit();
+        }
+        return;
       }
       case "discardSend":
         this.removePending(message.clientMessageId);
@@ -345,6 +404,89 @@ export class TeamChatController {
       case "fixtureSwitchViewer":
         await this.switchViewer(message.userId);
         return this.emit();
+      case "searchPaths":
+        await this.runSearchPaths(
+          message.repoId,
+          message.commitSha,
+          message.query,
+          message.limit,
+        );
+        return this.emit();
+      case "agentPreview":
+        await this.runAgentPreview(
+          message.conversationId,
+          message.messageIds,
+          message.referenceIds,
+          message.draft,
+        );
+        return this.emit();
+      case "agentRequest":
+        await this.runAgentRequest(
+          message.conversationId,
+          message.messageIds,
+          message.referenceIds,
+          message.idempotencyKey,
+          message.previewSha256,
+        );
+        return this.emit();
+      case "agentCancel":
+        await this.runAgentCancel(message.requestId);
+        return this.emit();
+      case "agentInspect":
+        await this.runAgentInspect(message.requestId);
+        return this.emit();
+      case "clearAgent":
+        this.agentPreviewState = null;
+        this.agentRequestState = null;
+        return this.emit();
+      case "taskLinkDraft":
+        await this.runTaskLinkDraft(
+          message.conversationId,
+          message.messageIds,
+          message.referenceIds,
+        );
+        return this.emit();
+      case "taskLinkConfirm":
+        await this.runTaskLinkConfirm(message.linkId, message.workbench, {
+          ...(message.target.repo_id !== undefined
+            ? { repo_id: message.target.repo_id }
+            : {}),
+          ...(message.target.base_revision !== undefined
+            ? { base_revision: message.target.base_revision }
+            : {}),
+        });
+        return this.emit();
+      case "taskLinkCreated":
+        await this.runTaskLinkCreated(message.linkId, message.taskRevision);
+        return this.emit();
+      case "taskLinkInspect":
+        await this.runTaskLinkInspect(message.linkId);
+        return this.emit();
+      case "clearTaskLink":
+        this.taskLinkDraftState = null;
+        this.taskLinkState = null;
+        return this.emit();
+      case "sharePreview":
+        await this.runSharePreview(
+          message.linkId,
+          message.evidence,
+          message.runStatus,
+          message.selection,
+        );
+        return this.emit();
+      case "shareCreate":
+        await this.runShareCreate(
+          message.linkId,
+          message.evidence,
+          message.runStatus,
+          message.selection,
+          message.previewSha256,
+        );
+        return this.emit();
+      case "clearShare":
+        this.sharePreviewState = null;
+        this.shareResultState = null;
+        return this.emit();
     }
   }
 
@@ -380,6 +522,7 @@ export class TeamChatController {
       if (item && item.conversation_id === conversationId) {
         this.pending.splice(i, 1);
         this.pendingInputs.delete(item.client_message_id);
+        this.pendingAgentPreviews.delete(item.client_message_id);
       }
     }
     if (this.search)
@@ -688,11 +831,13 @@ export class TeamChatController {
 
   // ---------------------------------------------------------------- writes
 
-  private async send(input: SendMessageInput): Promise<void> {
+  private async send(
+    input: SendMessageInput,
+  ): Promise<{ sequence: number; duplicate: boolean } | null> {
     const existing = this.pending.find(
       (p) => p.client_message_id === input.client_message_id,
     );
-    if (existing?.status === "pending") return;
+    if (existing?.status === "pending") return null;
     if (existing) {
       existing.status = "pending";
       existing.reason = null;
@@ -711,19 +856,21 @@ export class TeamChatController {
     this.emit();
     const delay = this.options.sendDelayMs ?? 0;
     if (delay > 0) await (this.options.sleep ?? defaultSleep)(delay);
-    if (this.disposedFlag) return;
+    if (this.disposedFlag) return null;
     const result: TeamResult<{ sequence: number; duplicate: boolean }> =
       await this.service.sendMessage(this.viewer, input);
     const item = this.pending.find(
       (p) => p.client_message_id === input.client_message_id,
     );
-    if (!item) return;
+    if (!item) return null;
     if (result.ok) {
       this.removePending(input.client_message_id);
       await this.refreshInbox();
       await this.reloadSelected(result.value.duplicate ? 0 : 1);
       if (this.viewport.focused && this.viewport.atBottom)
         await this.markRead(input.conversation_id, result.value.sequence);
+      this.emit();
+      return result.value;
     } else if (
       REMOVAL_CODES.has(result.code) &&
       this.conversations.some(
@@ -740,6 +887,7 @@ export class TeamChatController {
       if (result.code === "unauthorized") this.failed(result.code);
     }
     this.emit();
+    return null;
   }
 
   private removePending(clientMessageId: string): void {
@@ -748,6 +896,7 @@ export class TeamChatController {
     );
     if (index !== -1) this.pending.splice(index, 1);
     this.pendingInputs.delete(clientMessageId);
+    this.pendingAgentPreviews.delete(clientMessageId);
   }
 
   private async togglePin(conversationId: string): Promise<void> {
@@ -826,6 +975,358 @@ export class TeamChatController {
     };
   }
 
+  private async runSearchPaths(
+    repoId: string,
+    commitSha: string,
+    query: string,
+    limit?: number,
+  ): Promise<void> {
+    if (!this.service.searchPaths) {
+      this.pathSearch = [];
+      this.pathSearchQuery = null;
+      this.pathSearchByRepo.clear();
+      return;
+    }
+    if (this.pathSearchQuery !== query) {
+      this.pathSearchQuery = query;
+      this.pathSearchByRepo.clear();
+    }
+    const result = await this.service.searchPaths(this.viewer, {
+      repo_id: repoId,
+      commit_sha: commitSha,
+      query,
+      ...(limit !== undefined ? { limit } : {}),
+    });
+    if (!result.ok) {
+      this.pathSearchByRepo.delete(repoId);
+    } else {
+      this.pathSearchByRepo.set(repoId, result.value);
+    }
+    this.pathSearch = Array.from(this.pathSearchByRepo.values()).flat();
+  }
+
+  private async runAgentPreview(
+    conversationId: string,
+    messageIds: string[],
+    referenceIds: string[],
+    draft?: {
+      clientMessageId: string;
+      body: string;
+      replyTo: string | null;
+      references: SendMessageInput["references"];
+    },
+  ): Promise<void> {
+    if (!this.service.agentPreview) {
+      this.notice = {
+        kind: "error",
+        text: "@MARS is not enabled on this team service.",
+      };
+      return;
+    }
+    let effectiveMessageIds = [...messageIds];
+    let effectiveReferenceIds = [...referenceIds];
+    if (draft) {
+      const sent = await this.send({
+        conversation_id: conversationId,
+        client_message_id: draft.clientMessageId,
+        body: draft.body,
+        reply_to: draft.replyTo,
+        references: draft.references,
+      });
+      if (!sent) {
+        if (this.pendingInputs.has(draft.clientMessageId)) {
+          this.pendingAgentPreviews.set(draft.clientMessageId, {
+            conversationId,
+            messageIds,
+            referenceIds,
+          });
+        }
+        return;
+      }
+      const sentMessage = this.selected?.messages.find(
+        (m) =>
+          m.conversation_id === conversationId && m.sequence === sent.sequence,
+      );
+      if (sentMessage) {
+        effectiveMessageIds = [...effectiveMessageIds, sentMessage.message_id];
+        // Prioritize references attached to the user's new question, then prior context.
+        effectiveReferenceIds = [
+          ...sentMessage.references.map((r) => r.reference_id),
+          ...effectiveReferenceIds,
+        ];
+      }
+    }
+    effectiveMessageIds = Array.from(new Set(effectiveMessageIds)).slice(-200);
+    effectiveReferenceIds = Array.from(new Set(effectiveReferenceIds)).slice(
+      0,
+      MAX_REFERENCES_PER_MESSAGE,
+    );
+    if (effectiveMessageIds.length === 0) return;
+    let result = await this.service.agentPreview(this.viewer, {
+      conversation_id: conversationId,
+      message_ids: effectiveMessageIds,
+      reference_ids: effectiveReferenceIds,
+    });
+    if (!result.ok) {
+      this.notice = null;
+      this.failed(result.code, conversationId);
+      if (!this.notice && !REMOVAL_CODES.has(result.code)) {
+        this.notice = this.noticeForAgentError(result.code, "preview");
+      }
+      return;
+    }
+    if (result.value.restricted_reference_ids.length > 0) {
+      const restricted = new Set(result.value.restricted_reference_ids);
+      const allowedRefs = effectiveReferenceIds.filter(
+        (refId) => !restricted.has(refId),
+      );
+      const filtered = await this.service.agentPreview(this.viewer, {
+        conversation_id: conversationId,
+        message_ids: effectiveMessageIds,
+        reference_ids: allowedRefs,
+      });
+      if (filtered.ok) {
+        result = filtered;
+        this.notice = {
+          kind: "info",
+          text: `Omitted ${restricted.size} restricted code reference(s) not readable by every participant.`,
+        };
+        this.agentPreviewState = result.value;
+        return;
+      }
+    }
+    this.notice = null;
+    this.agentPreviewState = result.value;
+  }
+
+  private async runAgentRequest(
+    conversationId: string,
+    messageIds: string[],
+    referenceIds: string[],
+    idempotencyKey: string,
+    previewSha256: string,
+  ): Promise<void> {
+    if (!this.service.agentRequest) {
+      this.notice = {
+        kind: "error",
+        text: "@MARS is not enabled on this team service.",
+      };
+      return;
+    }
+    const result = await this.service.agentRequest(this.viewer, {
+      conversation_id: conversationId,
+      message_ids: messageIds,
+      reference_ids: referenceIds,
+      idempotency_key: idempotencyKey,
+      preview_sha256: previewSha256,
+    });
+    if (!result.ok) {
+      this.notice = null;
+      this.failed(result.code, conversationId);
+      if (!this.notice && !REMOVAL_CODES.has(result.code)) {
+        this.notice = this.noticeForAgentError(result.code, "request");
+      }
+      return;
+    }
+    this.notice = null;
+    this.agentPreviewState = null;
+    this.agentRequestState = result.value;
+  }
+
+  private noticeForAgentError(
+    code: TeamErrorCode,
+    phase: "preview" | "request",
+  ): TeamChatNotice {
+    if (code === "invalid") {
+      return {
+        kind: "error",
+        text:
+          phase === "preview"
+            ? "Could not build @MARS preview: selected messages or attached code references exceed the agent context limit."
+            : "Could not submit @MARS request: selection is invalid or exceeds the agent context limit.",
+      };
+    }
+    if (code === "conflict") {
+      return {
+        kind: "error",
+        text: "The @MARS preview is out of date. Re-preview before confirming.",
+      };
+    }
+    if (code === "forbidden") {
+      return {
+        kind: "error",
+        text: "Not every participant can read the selected @MARS context.",
+      };
+    }
+    return {
+      kind: "error",
+      text: `@MARS ${phase} failed (${code}).`,
+    };
+  }
+
+  private async runAgentCancel(requestId: string): Promise<void> {
+    if (!this.service.agentCancel) return;
+    const result = await this.service.agentCancel(this.viewer, requestId);
+    if (!result.ok) {
+      this.failed(result.code);
+      return;
+    }
+    this.agentRequestState = result.value;
+  }
+
+  private async runAgentInspect(requestId: string): Promise<void> {
+    if (!this.service.agentInspect) return;
+    const result = await this.service.agentInspect(this.viewer, requestId);
+    if (!result.ok) {
+      this.failed(result.code);
+      return;
+    }
+    this.agentRequestState = result.value;
+  }
+
+  private async runTaskLinkDraft(
+    conversationId: string,
+    messageIds: string[],
+    referenceIds: string[],
+  ): Promise<void> {
+    if (!this.service.taskLinkDraft) {
+      this.notice = {
+        kind: "error",
+        text: "Task links are not supported by this team service.",
+      };
+      return;
+    }
+    const result = await this.service.taskLinkDraft(this.viewer, {
+      conversation_id: conversationId,
+      message_ids: messageIds,
+      reference_ids: referenceIds,
+    });
+    if (!result.ok) {
+      this.failed(result.code, conversationId);
+      return;
+    }
+    this.notice = null;
+    this.taskLinkDraftState = result.value;
+  }
+
+  private async runTaskLinkConfirm(
+    linkId: string,
+    workbench: {
+      scope: Record<string, unknown>;
+      task_id: string;
+      request_id: string;
+    },
+    target: { repo_id?: string; base_revision?: string },
+  ): Promise<void> {
+    if (!this.service.taskLinkConfirm) return;
+    const result = await this.service.taskLinkConfirm(this.viewer, {
+      link_id: linkId,
+      workbench,
+      target,
+    });
+    if (!result.ok) {
+      this.failed(result.code);
+      return;
+    }
+    this.notice = null;
+    this.taskLinkState = { view: "requester", link: result.value };
+  }
+
+  private async runTaskLinkCreated(
+    linkId: string,
+    taskRevision: number,
+  ): Promise<void> {
+    if (!this.service.taskLinkCreated) return;
+    const result = await this.service.taskLinkCreated(this.viewer, {
+      link_id: linkId,
+      task_revision: taskRevision,
+    });
+    if (!result.ok) {
+      this.failed(result.code);
+      return;
+    }
+    this.notice = null;
+    this.taskLinkState = { view: "requester", link: result.value };
+  }
+
+  private async runTaskLinkInspect(linkId: string): Promise<void> {
+    if (!this.service.taskLinkInspect) return;
+    const result = await this.service.taskLinkInspect(this.viewer, linkId);
+    if (!result.ok) {
+      this.failed(result.code);
+      return;
+    }
+    this.taskLinkState = result.value;
+  }
+
+  private async runSharePreview(
+    linkId: string,
+    evidence: Record<string, unknown>,
+    runStatus: string,
+    selection: {
+      summary: string;
+      include_diff_digest: boolean;
+      verify_event_ids: string[];
+    },
+  ): Promise<void> {
+    if (!this.service.sharePreview) {
+      this.notice = {
+        kind: "error",
+        text: "Evidence sharing is not supported by this team service.",
+      };
+      return;
+    }
+    const result = await this.service.sharePreview(this.viewer, {
+      link_id: linkId,
+      evidence,
+      run_status: runStatus,
+      selection,
+    });
+    if (!result.ok) {
+      this.failed(result.code);
+      return;
+    }
+    this.notice = null;
+    this.sharePreviewState = result.value;
+  }
+
+  private async runShareCreate(
+    linkId: string,
+    evidence: Record<string, unknown>,
+    runStatus: string,
+    selection: {
+      summary: string;
+      include_diff_digest: boolean;
+      verify_event_ids: string[];
+    },
+    previewSha256: string,
+  ): Promise<void> {
+    if (!this.service.shareCreate) {
+      this.notice = {
+        kind: "error",
+        text: "Evidence sharing is not supported by this team service.",
+      };
+      return;
+    }
+    const result = await this.service.shareCreate(this.viewer, {
+      link_id: linkId,
+      evidence,
+      run_status: runStatus,
+      selection,
+      preview_sha256: previewSha256,
+    });
+    if (!result.ok) {
+      this.failed(result.code);
+      return;
+    }
+    this.notice = null;
+    this.sharePreviewState = null;
+    this.shareResultState = result.value;
+    if (this.selected) {
+      await this.select(this.selected.conversation.conversation_id);
+    }
+  }
+
   private async switchViewer(userId: string): Promise<void> {
     if (this.service.label !== "FIXTURE") return;
     if (!this.service.users().some((u) => u.user_id === userId)) return;
@@ -836,6 +1337,7 @@ export class TeamChatController {
     this.search = null;
     this.pending.splice(0, this.pending.length);
     this.pendingInputs.clear();
+    this.pendingAgentPreviews.clear();
     await this.refreshInbox();
     const first = this.conversations[0];
     if (first) await this.select(first.conversation_id);
@@ -874,6 +1376,13 @@ export class TeamChatController {
       pending: this.pending.map((p) => ({ ...p })),
       panel: this.panel,
       mention_index: this.service.mentionIndex(this.viewer),
+      path_search: this.pathSearch,
+      agent_preview: this.agentPreviewState,
+      agent_request: this.agentRequestState,
+      task_link_draft: this.taskLinkDraftState,
+      task_link: this.taskLinkState,
+      share_preview: this.sharePreviewState,
+      share_result: this.shareResultState,
       notice: this.notice,
       search: this.search,
       announcement: this.announcement,

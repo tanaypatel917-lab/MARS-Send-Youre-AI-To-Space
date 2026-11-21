@@ -4,14 +4,18 @@ import { chmodSync, existsSync, lstatSync, mkdirSync } from "node:fs";
 import { open, rename, unlink } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { createRepoRegistry } from "@mars/code-refs";
+import { createRemoteRepoMirror, createRepoRegistry } from "@mars/code-refs";
 import { registerRuntimeCleanup } from "@mars/execution";
 import { scanThreat } from "@mars/memory";
+import { loadModelRegistry } from "@mars/providers";
 import {
   type Authenticator,
   createAgentReferencePort,
+  createCompositeAuthenticator,
   createDevAuthenticator,
+  createGitHubAuthenticator,
   createTeamStore,
+  createVerifiedTokenAuthenticator,
   type DevUser,
   serveTeam,
   TEAM_MIGRATIONS,
@@ -20,6 +24,11 @@ import {
   TeamStoreSnapshotSchema,
 } from "@mars/team";
 import { z } from "zod";
+import {
+  createTeamAgentWorker,
+  runTeamAgentRequest,
+  type TeamAgentWorker,
+} from "../../../packages/team-agent/src/index";
 import { CliUsageError } from "./cli-errors";
 
 /**
@@ -33,7 +42,7 @@ import { CliUsageError } from "./cli-errors";
  */
 
 export const TEAM_USAGE = [
-  "Usage: mars team serve --state DIR [--port 7332] [--team ID] (--dev-users a,b,c | --auth-provider none) [--repo ID=DIR]... [--repo-access ID=user,user]... [--agent-model ID] [--enable] [--quiet]",
+  "Usage: mars team serve --state DIR [--port 7332] [--team ID] (--dev-users a,b,c | --auth-provider token|github|none) [--members a,b,c] [--auth-secret-env VAR] [--auth-issuer ISS] [--auth-audience AUD] [--github-api-url URL] [--github-allowed-ids 101,102] [--repo ID=DIR]... [--remote-repo ID=URL]... [--remote-auth-host HOST] [--repo-access ID=user,user]... [--agent-model ID] [--enable] [--quiet]",
   "       mars team enable|disable --state DIR",
   "       mars team stats --state DIR",
   "       mars team export --state DIR --out FILE [--force]",
@@ -42,13 +51,13 @@ export const TEAM_USAGE = [
   "       mars team readmit --state DIR --user ID",
   "       mars team grant --state DIR --user ID --repo ID",
   "       mars team rotate-tokens --state DIR",
-  "  serve        open the store (pending migrations run first), register repos, listen on loopback, write <state>/team-connection.json (0600, no token)",
+  "  serve        open the store (pending migrations run first), register local/remote repos, start @MARS worker when --agent-model is set, listen on loopback, write <state>/team-connection.json (0600, no token)",
   "  enable/disable  flip the server-side team.enabled kill switch (default off; disable never deletes data, open streams are closed)",
   "  stats        print the redacted counters (team.metrics) and the flag state",
   "  export/import  JSON snapshot of every durable row (no tokens); import refuses a non-empty store",
   "  revoke       remove a user's repo access (--repo) or their team membership and dev token (no --repo)",
   "  rotate-tokens  replace every dev token; clients must re-import the new file",
-  "  The dev authenticator is for the pilot only; tokens are never printed.",
+  "  Auth providers: token (HS256 verified bearer tokens via MARS_TEAM_AUTH_SECRET), github (GitHub OAuth/PAT via /user), dev (--dev-users offline fallback), or none.",
 ].join("\n");
 
 export class TeamUsageError extends CliUsageError {}
@@ -141,6 +150,7 @@ async function ensureDevTokens(
   state: string,
   team: string,
   userIds: string[],
+  storedRole?: (userId: string) => "admin" | "member" | null,
 ): Promise<DevTokensFile> {
   const existing = await readDevTokens(state);
   if (existing && existing.team_id !== team)
@@ -151,13 +161,21 @@ async function ensureDevTokens(
   const revoked = existing?.revoked ?? [];
   const users = userIds
     .filter((user_id) => !revoked.includes(user_id))
-    .map((user_id, index) => ({
-      user_id,
-      token: known.get(user_id)?.token ?? newToken(),
-      role:
-        known.get(user_id)?.role ??
-        (!existing && index === 0 ? ("admin" as const) : ("member" as const)),
-    }));
+    .map((user_id, index) => {
+      const persisted = storedRole?.(user_id) ?? null;
+      const fileRole = known.get(user_id)?.role ?? null;
+      const role: "admin" | "member" =
+        persisted === "admin" ||
+        fileRole === "admin" ||
+        (!existing && index === 0)
+          ? "admin"
+          : "member";
+      return {
+        user_id,
+        token: known.get(user_id)?.token ?? newToken(),
+        role,
+      };
+    });
   const next: DevTokensFile = {
     schema_version: 1,
     team_id: team,
@@ -211,6 +229,24 @@ function parseRepos(
   return repos;
 }
 
+function parseRemoteRepos(
+  values: string[] | undefined,
+): { repo_id: string; url: string }[] {
+  const repos = (values ?? []).map((spec) => {
+    const eq = spec.indexOf("=");
+    const repo_id = eq < 0 ? "" : spec.slice(0, eq);
+    const url = eq < 0 ? "" : spec.slice(eq + 1);
+    if (!ID_PATTERN.test(repo_id) || url.length === 0)
+      throw new TeamUsageError(
+        "--remote-repo expects ID=https://... (or file://... with MARS_TEAM_ALLOW_FILE_REMOTE=1).",
+      );
+    return { repo_id, url };
+  });
+  if (new Set(repos.map((r) => r.repo_id)).size !== repos.length)
+    throw new TeamUsageError("--remote-repo ids must be distinct.");
+  return repos;
+}
+
 function parseRepoAccess(
   values: string[] | undefined,
   repos: ReadonlySet<string>,
@@ -230,23 +266,34 @@ function parseRepoAccess(
             .filter(Boolean);
     if (!repos.has(repo_id) || access.has(repo_id))
       throw new TeamUsageError(
-        "--repo-access expects REPO_ID=user,user for a repo given once with --repo.",
+        "--repo-access expects REPO_ID=user,user for a repo given once with --repo or --remote-repo.",
       );
-    if (list.some((user) => !users.has(user)))
+    if (users.size > 0 && list.some((user) => !users.has(user)))
       throw new TeamUsageError(
-        "--repo-access may only name users from --dev-users.",
+        "--repo-access may only name users from --dev-users or --members.",
       );
     access.set(repo_id, list);
   }
   return access;
 }
 
+export type TeamAuthProviderKind = "dev" | "token" | "github" | "none";
+
 export interface TeamServeOptions {
   state: string;
   port: number;
   team: string;
+  authProvider: TeamAuthProviderKind;
   devUsers: string[] | null;
+  members: string[];
+  authSecretEnv: string;
+  authIssuer: string | null;
+  authAudience: string | null;
+  githubApiUrl: string | null;
+  githubAllowedIds: number[] | null;
   repos: { repo_id: string; dir: string }[];
+  remoteRepos: { repo_id: string; url: string }[];
+  remoteAuthHost: string | null;
   repoAccess: Map<string, string[]>;
   enable: boolean;
   agentModel: string | null;
@@ -262,8 +309,16 @@ export function teamServeOptions(args: string[]): TeamServeOptions | null {
       port: { type: "string" },
       team: { type: "string" },
       "dev-users": { type: "string" },
+      members: { type: "string" },
       "auth-provider": { type: "string" },
+      "auth-secret-env": { type: "string" },
+      "auth-issuer": { type: "string" },
+      "auth-audience": { type: "string" },
+      "github-api-url": { type: "string" },
+      "github-allowed-ids": { type: "string" },
       repo: { type: "string", multiple: true },
+      "remote-repo": { type: "string", multiple: true },
+      "remote-auth-host": { type: "string" },
       "repo-access": { type: "string", multiple: true },
       "agent-model": { type: "string" },
       enable: { type: "boolean" },
@@ -277,24 +332,74 @@ export function teamServeOptions(args: string[]): TeamServeOptions | null {
   if (!Number.isInteger(port) || port < 0 || port > 65_535)
     throw new TeamUsageError("--port must be an integer between 0 and 65535.");
   const team = teamId(values.team);
+  const rawProvider = values["auth-provider"];
   if (
-    values["dev-users"] !== undefined &&
-    values["auth-provider"] !== undefined
+    rawProvider !== undefined &&
+    rawProvider !== "none" &&
+    rawProvider !== "token" &&
+    rawProvider !== "github"
   )
+    throw new TeamUsageError(
+      "--auth-provider must be 'token', 'github', or 'none'.",
+    );
+  if (values["dev-users"] !== undefined && rawProvider === "none")
     throw new TeamUsageError(
       "Pass either --dev-users or --auth-provider none, not both.",
     );
-  if (values["dev-users"] === undefined && values["auth-provider"] !== "none")
+  if (values["dev-users"] === undefined && rawProvider === undefined)
     throw new TeamUsageError(
-      `Identity is required: --dev-users a,b,c (pilot) or --auth-provider none (no caller can authenticate).\n${TEAM_USAGE}`,
+      `Identity is required: --auth-provider token|github|none or --dev-users a,b,c (local dev fallback).\n${TEAM_USAGE}`,
     );
+  const authProvider: TeamAuthProviderKind =
+    rawProvider === "token" ||
+    rawProvider === "github" ||
+    rawProvider === "none"
+      ? rawProvider
+      : "dev";
   const devUsers =
     values["dev-users"] === undefined ? null : parseUsers(values["dev-users"]);
+  const members =
+    values.members === undefined ? [] : parseUsers(values.members);
+  const githubAllowedIds =
+    values["github-allowed-ids"] === undefined
+      ? null
+      : values["github-allowed-ids"]
+          .split(",")
+          .map((raw) => raw.trim())
+          .filter(Boolean)
+          .map((raw) => {
+            if (!/^[1-9][0-9]*$/.test(raw))
+              throw new TeamUsageError(
+                "--github-allowed-ids expects comma-separated positive GitHub numeric account IDs.",
+              );
+            const id = Number(raw);
+            if (!Number.isSafeInteger(id) || id <= 0)
+              throw new TeamUsageError(
+                "--github-allowed-ids expects comma-separated positive GitHub numeric account IDs.",
+              );
+            return id;
+          });
+  if (githubAllowedIds !== null && githubAllowedIds.length === 0)
+    throw new TeamUsageError(
+      "--github-allowed-ids must list at least one GitHub numeric account ID.",
+    );
   const repos = parseRepos(values.repo);
+  const remoteRepos = parseRemoteRepos(values["remote-repo"]);
+  const allRepoIds = new Set([
+    ...repos.map((r) => r.repo_id),
+    ...remoteRepos.map((r) => r.repo_id),
+  ]);
+  if (allRepoIds.size !== repos.length + remoteRepos.length)
+    throw new TeamUsageError("--repo and --remote-repo ids must be distinct.");
+  const knownUsers = new Set([
+    ...(devUsers ?? []),
+    ...members,
+    ...(githubAllowedIds?.map((id) => `gh_${id}`) ?? []),
+  ]);
   const repoAccess = parseRepoAccess(
     values["repo-access"],
-    new Set(repos.map((r) => r.repo_id)),
-    new Set(devUsers ?? []),
+    allRepoIds,
+    knownUsers,
   );
   const agentModel = values["agent-model"] ?? null;
   if (
@@ -306,8 +411,17 @@ export function teamServeOptions(args: string[]): TeamServeOptions | null {
     state,
     port,
     team,
+    authProvider,
     devUsers,
+    members,
+    authSecretEnv: values["auth-secret-env"] ?? "MARS_TEAM_AUTH_SECRET",
+    authIssuer: values["auth-issuer"] ?? null,
+    authAudience: values["auth-audience"] ?? null,
+    githubApiUrl: values["github-api-url"] ?? null,
+    githubAllowedIds,
     repos,
+    remoteRepos,
+    remoteAuthHost: values["remote-auth-host"]?.trim().toLowerCase() || null,
     repoAccess,
     enable: values.enable === true,
     agentModel,
@@ -340,6 +454,82 @@ async function runServe(
       dir: repo.dir,
       label: repo.repo_id,
     });
+  if (options.remoteRepos.length > 0) {
+    const mirror = createRemoteRepoMirror({
+      cacheDir: join(options.state, "repos"),
+      registry,
+      allowLocalFileUrl: process.env.MARS_TEAM_ALLOW_FILE_REMOTE === "1",
+    });
+    registry.ensureCommit = mirror.ensureCommit;
+    const globalAuthHeader = process.env.MARS_TEAM_GIT_AUTH_HEADER;
+    const repoEnvKeyOf = (repoId: string) =>
+      `MARS_TEAM_GIT_AUTH_HEADER_${repoId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+    const envKeyOwners = new Map<string, string[]>();
+    for (const remote of options.remoteRepos) {
+      let isHttps = false;
+      try {
+        isHttps = new URL(remote.url).protocol === "https:";
+      } catch {
+        // invalid URLs are rejected by mirror.registerRemote
+      }
+      if (!isHttps) continue;
+      const key = repoEnvKeyOf(remote.repo_id);
+      const owners = envKeyOwners.get(key) ?? [];
+      owners.push(remote.repo_id);
+      envKeyOwners.set(key, owners);
+    }
+    for (const [key, owners] of envKeyOwners) {
+      if (owners.length > 1 && process.env[key]) {
+        throw new TeamUsageError(
+          `Ambiguous per-repo credential ${key} matches multiple --remote-repo ids (${owners.join(", ")}); rename repo ids so each has a distinct env key.`,
+        );
+      }
+    }
+    const fallbackHttpsHosts = new Set<string>();
+    for (const remote of options.remoteRepos) {
+      if (process.env[repoEnvKeyOf(remote.repo_id)]) continue;
+      try {
+        const parsed = new URL(remote.url);
+        if (parsed.protocol === "https:")
+          fallbackHttpsHosts.add(parsed.hostname.toLowerCase());
+      } catch {
+        // invalid URLs are rejected by mirror.registerRemote
+      }
+    }
+    if (
+      globalAuthHeader &&
+      fallbackHttpsHosts.size > 1 &&
+      !options.remoteAuthHost
+    ) {
+      throw new TeamUsageError(
+        "MARS_TEAM_GIT_AUTH_HEADER cannot be shared across multiple HTTPS remote hosts; set --remote-auth-host or per-repo MARS_TEAM_GIT_AUTH_HEADER_<REPO_ID>.",
+      );
+    }
+    for (const remote of options.remoteRepos) {
+      const perRepoHeader = process.env[repoEnvKeyOf(remote.repo_id)];
+      let remoteHost: string | null = null;
+      try {
+        const parsed = new URL(remote.url);
+        if (parsed.protocol === "https:")
+          remoteHost = parsed.hostname.toLowerCase();
+      } catch {
+        // invalid URLs are rejected by mirror.registerRemote
+      }
+      const scopedGlobalHeader =
+        globalAuthHeader &&
+        remoteHost !== null &&
+        (!options.remoteAuthHost || options.remoteAuthHost === remoteHost)
+          ? globalAuthHeader
+          : undefined;
+      const authHeader = perRepoHeader ?? scopedGlobalHeader;
+      await mirror.registerRemote({
+        repo_id: remote.repo_id,
+        url: remote.url,
+        label: remote.repo_id,
+        ...(authHeader ? { auth_header: authHeader } : {}),
+      });
+    }
+  }
   let store: TeamStore | null = null;
   const port = createAgentReferencePort({
     repos: registry,
@@ -360,14 +550,33 @@ async function runServe(
       : undefined,
   );
   const opened: TeamStore = store;
-  let authenticator: Authenticator;
+  const authenticators: Authenticator[] = [];
   let devTokensFile: string | null = null;
   let activeDevUsers = 0;
+  const provisionedUsers = new Set<string>();
+  // Initial provisioning only: a member removed via removeTeamMember stays
+  // removed across restarts until explicitly re-added.
+  const ensureMember = (user_id: string, isFirst: boolean) => {
+    provisionedUsers.add(user_id);
+    if (opened.teamMemberState({ team_id: options.team, user_id }) === null) {
+      opened.setTeamMember({
+        team_id: options.team,
+        user_id,
+        role: isFirst ? "admin" : "member",
+      });
+    }
+  };
+  for (const [index, user_id] of options.members.entries())
+    ensureMember(user_id, index === 0);
+  // Register local authenticators (dev, HS256 token) before remote providers
+  // (GitHub) so local credentials are never forwarded to upstream APIs.
   if (options.devUsers) {
     const tokens = await ensureDevTokens(
       options.state,
       options.team,
       options.devUsers,
+      (userId) =>
+        opened.teamMemberRole({ team_id: options.team, user_id: userId }),
     );
     devTokensFile = join(options.state, DEV_TOKENS_FILE);
     activeDevUsers = tokens.users.length;
@@ -376,51 +585,150 @@ async function runServe(
       user_id: user.user_id,
       team_ids: [options.team],
     }));
-    authenticator = createDevAuthenticator(users);
-    for (const user of tokens.users)
+    authenticators.push(createDevAuthenticator(users));
+    for (const user of tokens.users) {
+      provisionedUsers.add(user.user_id);
+      // `ensureDevTokens` already omits revoked users until `mars team readmit`,
+      // so every user in `tokens.users` is active and keeps their token-file role.
       opened.setTeamMember({
         team_id: options.team,
         user_id: user.user_id,
         role: user.role,
       });
-  } else {
-    authenticator = { authenticate: async () => null };
+    }
   }
-  for (const repo of options.repos) {
+  if (options.authProvider === "token") {
+    const secret = process.env[options.authSecretEnv];
+    if (!secret || Buffer.byteLength(secret, "utf8") < 32)
+      throw new TeamUsageError(
+        `--auth-provider token requires ${options.authSecretEnv} to be set to at least 32 bytes.`,
+      );
+    authenticators.push(
+      createVerifiedTokenAuthenticator({
+        secret,
+        ...(options.authIssuer ? { issuer: options.authIssuer } : {}),
+        ...(options.authAudience ? { audience: options.authAudience } : {}),
+        resolveTeams: (userId) => opened.activeTeamIds(userId),
+      }),
+    );
+  } else if (options.authProvider === "github") {
+    if (options.githubAllowedIds) {
+      for (const [index, ghId] of options.githubAllowedIds.entries()) {
+        const userId = `gh_${ghId}`;
+        if (!provisionedUsers.has(userId))
+          ensureMember(userId, provisionedUsers.size === 0 && index === 0);
+      }
+    }
+    authenticators.push(
+      createGitHubAuthenticator({
+        ...(options.githubApiUrl ? { apiBaseUrl: options.githubApiUrl } : {}),
+        ...(options.githubAllowedIds
+          ? { allowedIds: options.githubAllowedIds }
+          : {}),
+        mapUserId: (profile) => `gh_${profile.id}`,
+        resolveTeams: (_profile, userId) => opened.activeTeamIds(userId),
+      }),
+    );
+  }
+  const authenticator: Authenticator =
+    authenticators.length === 0
+      ? { authenticate: async () => null }
+      : authenticators.length === 1
+        ? (authenticators[0] as Authenticator)
+        : createCompositeAuthenticator(authenticators);
+  const allRepoIds = [
+    ...options.repos.map((r) => r.repo_id),
+    ...options.remoteRepos.map((r) => r.repo_id),
+  ];
+  const defaultGrantUsers = [...provisionedUsers];
+  for (const repo_id of allRepoIds) {
     opened.setRepo({
       team_id: options.team,
-      repo_id: repo.repo_id,
-      label: repo.repo_id,
+      repo_id,
+      label: repo_id,
     });
-    const grant =
-      options.repoAccess.get(repo.repo_id) ?? options.devUsers ?? [];
+    const grant = options.repoAccess.get(repo_id) ?? defaultGrantUsers;
     // Initial provisioning only: a row revoked by `mars team revoke --repo`
     // stays removed across restarts until `mars team grant`.
     for (const user_id of grant) {
-      const access = { team_id: options.team, repo_id: repo.repo_id, user_id };
+      const access = { team_id: options.team, repo_id, user_id };
       if (opened.repoAccessState(access) === null) opened.setRepoAccess(access);
     }
   }
   if (options.enable) opened.setEnabled(true);
-  const server = serveTeam({
-    store: opened,
-    authenticator,
-    port: options.port,
-    repos: registry,
-    agentReferences: port,
-    ...(options.quiet
-      ? {}
-      : { log: (entry) => out(JSON.stringify({ log: "team", ...entry })) }),
-  });
+  let agentWorker: TeamAgentWorker | null = null;
+  if (agentModel !== null) {
+    const modelRegistry = await loadModelRegistry({
+      cwd: options.state,
+      env: process.env,
+    });
+    const agentRootDir = join(options.state, "agent");
+    mkdirSync(agentRootDir, { recursive: true, mode: 0o700 });
+    chmodSync(agentRootDir, 0o700);
+    agentWorker = createTeamAgentWorker({
+      host: opened.agentHost,
+      run: (claimed) =>
+        runTeamAgentRequest({
+          request: claimed.request,
+          input: claimed.input,
+          signal: claimed.signal,
+          registry: modelRegistry,
+          rootDir: agentRootDir,
+          scan: scanThreat,
+          env: process.env,
+          ...(options.quiet
+            ? {}
+            : {
+                onError: (notice) =>
+                  out(JSON.stringify({ log: "team-agent", ...notice })),
+              }),
+        }),
+      ...(options.quiet
+        ? {}
+        : {
+            onError: () =>
+              out(
+                JSON.stringify({
+                  log: "team-agent",
+                  reason_code: "worker_error",
+                }),
+              ),
+          }),
+    });
+  }
+  let server: ReturnType<typeof serveTeam>;
+  try {
+    server = serveTeam({
+      store: opened,
+      authenticator,
+      port: options.port,
+      repos: registry,
+      agentReferences: port,
+      ...(options.quiet
+        ? {}
+        : { log: (entry) => out(JSON.stringify({ log: "team", ...entry })) }),
+    });
+  } catch (error) {
+    opened.close();
+    throw error;
+  }
   const url = `http://127.0.0.1:${server.port}`;
   const connectionFile = join(options.state, CONNECTION_FILE);
-  await writePrivate(
-    connectionFile,
-    JSON.stringify({ schema_version: 1, url, team_id: options.team }),
-  );
+  try {
+    await writePrivate(
+      connectionFile,
+      JSON.stringify({ schema_version: 1, url, team_id: options.team }),
+    );
+  } catch (error) {
+    await server.stop(true);
+    opened.close();
+    throw error;
+  }
+  if (agentWorker) agentWorker.start();
   await new Promise<void>((resolve, reject) => {
     registerRuntimeCleanup("mars-team", async () => {
       try {
+        if (agentWorker) await agentWorker.stop();
         // `stop(true)` ends every open stream before the process exits.
         await server.stop(true);
         opened.close();
@@ -436,12 +744,13 @@ async function runServe(
         url,
         team_id: options.team,
         connection_file: connectionFile,
-        auth_provider: options.devUsers ? "dev" : "none",
+        auth_provider: options.authProvider,
         dev_tokens_file: devTokensFile,
         dev_users: activeDevUsers,
         migrations_applied: opened.migrationsApplied,
         ledger_head: opened.ledgerHead,
-        repos: options.repos.length,
+        repos: allRepoIds.length,
+        remote_repos: options.remoteRepos.length,
         enabled: opened.isEnabled(),
         agent: agentModel !== null,
       }),

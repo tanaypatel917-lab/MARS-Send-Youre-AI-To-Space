@@ -98,12 +98,26 @@ export async function resolveReference(
       maxOutputBytes,
     });
 
-  const commit = await verifyCommit(
+  let commit = await verifyCommit(
     git,
     repo.dir,
     locator.commit_sha,
     limits.timeout_ms,
   );
+  if (commit.state === "unavailable" && registry.ensureCommit) {
+    const fetched = await registry.ensureCommit(
+      locator.repo_id,
+      locator.commit_sha,
+    );
+    if (fetched) {
+      commit = await verifyCommit(
+        git,
+        repo.dir,
+        locator.commit_sha,
+        limits.timeout_ms,
+      );
+    }
+  }
   if (commit.state === "error")
     return { state: "error", ...located, reason: commit.reason };
   if (commit.state === "unavailable")

@@ -46,6 +46,11 @@ export interface RepoRegistry {
   list(): RepoSummary[];
   /** Host-internal lookup used by the resolver; undefined for unknown ids. */
   lookup(repo_id: string): RegisteredRepo | undefined;
+  /**
+   * Optional host-internal hook to fetch a missing pinned commit from a
+   * remote mirror before concluding the commit is unavailable.
+   */
+  ensureCommit?: (repo_id: string, commit_sha: string) => Promise<boolean>;
   readonly git: GitRunner;
 }
 

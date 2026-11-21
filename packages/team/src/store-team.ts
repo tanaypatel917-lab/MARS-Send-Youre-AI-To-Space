@@ -15,6 +15,9 @@ export function teamOperations(
   | "metricsSnapshot"
   | "setTeamMember"
   | "removeTeamMember"
+  | "activeTeamIds"
+  | "teamMemberState"
+  | "teamMemberRole"
   | "describe"
 > {
   const {
@@ -117,6 +120,42 @@ export function teamOperations(
         const row = memberRow(parsed.team_id, parsed.user_id);
         if (!row) throw new TeamError("corrupt_record", "Member row missing");
         return membership(row);
+      });
+    },
+    activeTeamIds(user_id) {
+      const parsed = idSchema.safeParse(user_id);
+      if (!parsed.success) return [];
+      return read(() =>
+        db
+          .query<{ team_id: string }, [string]>(
+            "SELECT team_id FROM members WHERE user_id = ? AND state = 'active' ORDER BY team_id ASC",
+          )
+          .all(parsed.data)
+          .map((row) => row.team_id),
+      );
+    },
+    teamMemberState(input) {
+      const parsed = z
+        .object({ team_id: idSchema, user_id: idSchema })
+        .strict()
+        .safeParse(input);
+      if (!parsed.success) return null;
+      return read(() => {
+        const row = memberRow(parsed.data.team_id, parsed.data.user_id);
+        if (!row) return null;
+        return row.state === "active" ? "active" : "removed";
+      });
+    },
+    teamMemberRole(input) {
+      const parsed = z
+        .object({ team_id: idSchema, user_id: idSchema })
+        .strict()
+        .safeParse(input);
+      if (!parsed.success) return null;
+      return read(() => {
+        const row = memberRow(parsed.data.team_id, parsed.data.user_id);
+        if (!row) return null;
+        return row.role === "admin" ? "admin" : "member";
       });
     },
     describe(actor) {

@@ -4,6 +4,10 @@ import { TEAM_MAX_CLIENT_MESSAGE_ID_CHARS } from "@mars/contracts";
 import type { z } from "zod";
 import { RpcError, type RpcTransport } from "../rpc";
 import {
+  type AgentPreviewResult,
+  AgentPreviewSchema,
+  type AgentRequestResult,
+  AgentRequestSchema,
   type ConversationListItem,
   ConversationListSchema,
   type ConversationView,
@@ -17,11 +21,29 @@ import {
   type MessageView,
   MIN_SEARCH_QUERY_CHARS,
   ParticipantResultSchema,
+  type PathSearchResult,
+  PathSearchResultSchema,
   type PollCursor,
   type ReactionState,
   ReactionStateSchema,
+  type ReferencePreviewResult,
+  ReferencePreviewResultSchema,
+  type ReferenceResult,
+  ReferenceResultSchema,
+  type RepoListItem,
+  RepoListSchema,
+  type ResultShareResult,
+  ResultShareSchema,
   type SearchResponse,
   SearchResultSchema,
+  type SharePreviewResult,
+  SharePreviewSchema,
+  type TaskLinkDraftResult,
+  TaskLinkDraftResultSchema,
+  type TaskLinkRecordResult,
+  TaskLinkSchema,
+  type TaskLinkViewResult,
+  TaskLinkViewSchema,
   TEAM_RPC_METHODS,
   TEAM_SCHEMA_VERSION,
   type TeamContext,
@@ -100,6 +122,12 @@ export class TeamClient {
       team_id: this.described.team_id,
       request_id: this.newId(),
     };
+  }
+
+  private teamId(): string {
+    if (!this.described)
+      throw new RpcError("disconnected", "Not connected to a team server.");
+    return this.described.team_id;
   }
 
   private async call(
@@ -200,6 +228,7 @@ export class TeamClient {
       client_message_id: string;
       body: string;
       reply_to?: string;
+      reference_ids?: string[];
     },
     signal?: AbortSignal,
   ): Promise<MessageView> {
@@ -214,6 +243,8 @@ export class TeamClient {
       body: input.body,
     };
     if (input.reply_to) params.reply_to = input.reply_to;
+    if (input.reference_ids && input.reference_ids.length > 0)
+      params.reference_ids = input.reference_ids;
     const result = await this.call(TEAM_RPC_METHODS.send, params, signal);
     const [message] = this.checkMessages([result], input.conversation_id);
     if (!message || message.client_message_id !== input.client_message_id)
@@ -317,5 +348,259 @@ export class TeamClient {
       context: this.context(),
       params: { cursors },
     });
+  }
+
+  async listRepos(signal?: AbortSignal): Promise<RepoListItem[]> {
+    const result = await this.call(TEAM_RPC_METHODS.reposList, {}, signal);
+    const repos = validate(RepoListSchema, result, "repo list");
+    const teamId = this.teamId();
+    for (const repo of repos)
+      if (repo.team_id !== teamId) throw invalid("repo tenant");
+    return repos;
+  }
+
+  async createReference(
+    input: {
+      repo_id: string;
+      commit_sha: string;
+      path: string;
+      line_start?: number;
+      line_end?: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<ReferenceResult> {
+    const params: Record<string, unknown> = {
+      repo_id: input.repo_id,
+      commit_sha: input.commit_sha,
+      path: input.path,
+    };
+    if (input.line_start !== undefined) params.line_start = input.line_start;
+    if (input.line_end !== undefined) params.line_end = input.line_end;
+    const result = await this.call(
+      TEAM_RPC_METHODS.referencesCreate,
+      params,
+      signal,
+    );
+    const ref = validate(ReferenceResultSchema, result, "reference");
+    if (ref.team_id !== this.teamId()) throw invalid("reference tenant");
+    return ref;
+  }
+
+  async resolveReference(
+    referenceId: string,
+    signal?: AbortSignal,
+  ): Promise<ReferencePreviewResult> {
+    const result = await this.call(
+      TEAM_RPC_METHODS.referencesResolve,
+      { reference_id: referenceId },
+      signal,
+    );
+    return validate(ReferencePreviewResultSchema, result, "reference preview");
+  }
+
+  async searchPaths(
+    input: {
+      repo_id: string;
+      commit_sha: string;
+      query: string;
+      limit?: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<PathSearchResult> {
+    const params: Record<string, unknown> = {
+      repo_id: input.repo_id,
+      commit_sha: input.commit_sha,
+      query: input.query,
+    };
+    if (input.limit !== undefined) params.limit = input.limit;
+    const result = await this.call(
+      TEAM_RPC_METHODS.referencesSearchPaths,
+      params,
+      signal,
+    );
+    return validate(PathSearchResultSchema, result, "path search");
+  }
+
+  async agentPreview(
+    input: {
+      conversation_id: string;
+      message_ids: string[];
+      reference_ids: string[];
+    },
+    signal?: AbortSignal,
+  ): Promise<AgentPreviewResult> {
+    const result = await this.call(
+      TEAM_RPC_METHODS.agentPreview,
+      input,
+      signal,
+    );
+    const preview = validate(AgentPreviewSchema, result, "agent preview");
+    if (preview.conversation_id !== input.conversation_id)
+      throw invalid("agent preview conversation");
+    return preview;
+  }
+
+  async agentRequest(
+    input: {
+      conversation_id: string;
+      message_ids: string[];
+      reference_ids: string[];
+      idempotency_key: string;
+      preview_sha256: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<AgentRequestResult> {
+    const result = await this.call(
+      TEAM_RPC_METHODS.agentRequest,
+      { ...input, audience: "conversation" },
+      signal,
+    );
+    const req = validate(AgentRequestSchema, result, "agent request");
+    if (req.team_id !== this.teamId()) throw invalid("agent request tenant");
+    return req;
+  }
+
+  async agentCancel(
+    requestId: string,
+    signal?: AbortSignal,
+  ): Promise<AgentRequestResult> {
+    const result = await this.call(
+      TEAM_RPC_METHODS.agentCancel,
+      { request_id: requestId },
+      signal,
+    );
+    const req = validate(AgentRequestSchema, result, "agent cancel");
+    if (req.team_id !== this.teamId()) throw invalid("agent cancel tenant");
+    return req;
+  }
+
+  async agentInspect(
+    requestId: string,
+    signal?: AbortSignal,
+  ): Promise<AgentRequestResult> {
+    const result = await this.call(
+      TEAM_RPC_METHODS.agentInspect,
+      { request_id: requestId },
+      signal,
+    );
+    const req = validate(AgentRequestSchema, result, "agent inspect");
+    if (req.team_id !== this.teamId()) throw invalid("agent inspect tenant");
+    return req;
+  }
+
+  async taskLinkDraft(
+    input: {
+      conversation_id: string;
+      message_ids: string[];
+      reference_ids: string[];
+    },
+    signal?: AbortSignal,
+  ): Promise<TaskLinkDraftResult> {
+    const result = await this.call(
+      TEAM_RPC_METHODS.tasksLinkDraft,
+      input,
+      signal,
+    );
+    const draft = validate(
+      TaskLinkDraftResultSchema,
+      result,
+      "task link draft",
+    );
+    if (draft.link.team_id !== this.teamId())
+      throw invalid("task link draft tenant");
+    return draft;
+  }
+
+  async taskLinkConfirm(
+    input: {
+      link_id: string;
+      workbench: {
+        scope: Record<string, unknown>;
+        task_id: string;
+        request_id: string;
+      };
+      target: { repo_id?: string; base_revision?: string };
+    },
+    signal?: AbortSignal,
+  ): Promise<TaskLinkRecordResult> {
+    const result = await this.call(
+      TEAM_RPC_METHODS.tasksLinkConfirm,
+      input,
+      signal,
+    );
+    const link = validate(TaskLinkSchema, result, "task link confirm");
+    if (link.team_id !== this.teamId()) throw invalid("task link tenant");
+    return link;
+  }
+
+  async taskLinkCreated(
+    input: { link_id: string; task_revision: number },
+    signal?: AbortSignal,
+  ): Promise<TaskLinkRecordResult> {
+    const result = await this.call(
+      TEAM_RPC_METHODS.tasksLinkCreated,
+      input,
+      signal,
+    );
+    const link = validate(TaskLinkSchema, result, "task link created");
+    if (link.team_id !== this.teamId()) throw invalid("task link tenant");
+    return link;
+  }
+
+  async taskLinkInspect(
+    linkId: string,
+    signal?: AbortSignal,
+  ): Promise<TaskLinkViewResult> {
+    const result = await this.call(
+      TEAM_RPC_METHODS.tasksLinkInspect,
+      { link_id: linkId },
+      signal,
+    );
+    const view = validate(TaskLinkViewSchema, result, "task link view");
+    if (view.link.team_id !== this.teamId()) throw invalid("task link tenant");
+    return view;
+  }
+
+  async sharePreview(
+    input: {
+      link_id: string;
+      evidence: Record<string, unknown>;
+      run_status: string;
+      selection: {
+        summary: string;
+        include_diff_digest: boolean;
+        verify_event_ids: string[];
+      };
+    },
+    signal?: AbortSignal,
+  ): Promise<SharePreviewResult> {
+    const result = await this.call(
+      TEAM_RPC_METHODS.sharesPreview,
+      input,
+      signal,
+    );
+    return validate(SharePreviewSchema, result, "share preview");
+  }
+
+  async shareCreate(
+    input: {
+      link_id: string;
+      evidence: Record<string, unknown>;
+      run_status: string;
+      selection: {
+        summary: string;
+        include_diff_digest: boolean;
+        verify_event_ids: string[];
+      };
+      preview_sha256: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<ResultShareResult> {
+    const result = await this.call(
+      TEAM_RPC_METHODS.sharesCreate,
+      input,
+      signal,
+    );
+    return validate(ResultShareSchema, result, "result share");
   }
 }
