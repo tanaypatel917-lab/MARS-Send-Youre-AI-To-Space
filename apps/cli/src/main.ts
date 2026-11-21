@@ -15,6 +15,7 @@ import { cliErrorMessage } from "./cli-errors";
 import { runCommands } from "./commands";
 import { runDatasets } from "./datasets";
 import { runEvolution } from "./evolution";
+import { runMcp } from "./mcp";
 import { runMemory } from "./memory";
 import { omnirouteDoctorReport } from "./omniroute";
 import { runRender } from "./render";
@@ -371,6 +372,8 @@ try {
     await runServer(serve.args, serve.vllm ? { vllm: serve.vllm } : {});
   } else if (command === "vault") {
     await runVault(process.argv.slice(3));
+  } else if (command === "mcp") {
+    await runMcp(process.argv.slice(3));
   } else if (command === "memory") {
     await runMemory(process.argv.slice(3));
   } else if (command === "skills") {
@@ -392,7 +395,7 @@ try {
     }
   } else {
     console.error(
-      "Usage: bun apps/cli/src/main.ts <doctor|smoke|models|serve|session|render|commands|vault|memory|skills|team|evolution|datasets|specialists|bench>",
+      "Usage: bun apps/cli/src/main.ts <doctor|smoke|models|serve|session|render|commands|vault|mcp|memory|skills|team|evolution|datasets|specialists|bench>",
     );
     process.exitCode = 2;
   }

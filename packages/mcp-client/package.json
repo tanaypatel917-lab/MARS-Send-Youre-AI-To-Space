@@ -1,0 +1,12 @@
+{
+  "name": "@mars/mcp-client",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@mars/contracts": "workspace:*",
+    "@mars/integration-trust": "workspace:*",
+    "zod": "3.25.76"
+  }
+}

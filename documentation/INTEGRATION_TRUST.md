@@ -40,15 +40,57 @@ Any failure is audited as `dispatch.denied` with an error code, and the callback
 
 ## What this increment protects, and what it does not
 
-Protected when a host routes through it: admission (`admit`) and invocation (`invoke`) callbacks wired to this gate, approval/deny/revoke state transitions, and persistence integrity of the trust store.
+Protected when a host routes through it: admission (`admit`) and invocation (`invoke`) callbacks wired to this gate, approval/deny/revoke state transitions, persistence integrity of the trust store, and MCP server loading/dispatch via `@mars/mcp-client` and `mars mcp`.
 
 Not protected or not implemented:
 
-- Integration discovery and enablement in MARS remain **disabled**. No existing code path loads MCPs, connectors, plugins or skills, so nothing is newly enabled or newly gated in the running product until the parent wires `gate` into those paths.
+- Ambient integration discovery remains **disabled**. `@mars/mcp-client` starts with an empty registry and never auto-discovers MCP servers from project configs, `$PATH`, or global editor manifests; servers must be explicitly registered, probed, and approved by the host.
 - Permission metadata is **not a sandbox**. Process isolation, filesystem confinement, network egress control and secret storage remain separate enforcement layers that must enforce the frozen permissions independently.
 - A remote MCP descriptor digest only shows what the server *advertised* at probe time. It cannot prove the server implementation is unchanged. MARS therefore re-probes the descriptor on every dispatch and caps remote-endpoint grants (default 24 h, hard cap 7 days). This is bounded validity, not an immutable-code guarantee.
-- The evidence probe and authorizer are host-supplied. If they are wrong, the gate is wrong. Real user-presence UX (an IDE approval dialog) is future work.
+- The evidence probe and authorizer are host-supplied. If they are wrong, the gate is wrong. Real user-presence UX (an IDE approval dialog) is future work; today the host-owned CLI (`mars mcp`) signs approvals with a host-held HMAC key.
 - Cross-process locking uses a lock file with stale-lock recovery on a local POSIX filesystem. Network filesystems are unverified.
+
+## MCP client/loader (`@mars/mcp-client`)
+
+`@mars/mcp-client` wires `@mars/integration-trust` into a real, default-deny MCP client and server loader supporting both **stdio** and **Streamable HTTP** transports:
+
+- **Explicit registry (`FileMcpRegistry` / `MemoryMcpRegistry`)**: Starts empty with no ambient discovery. Persists server definitions in a host-owned state directory outside all agent-writable workspaces (`0700` dir, `0600` files, atomic writes).
+- **Exclusive gate routing (`McpServerLoader`)**:
+  - Every server admission goes through `gate.admit(ctx, { kind: "mcp", integration_id, action: "load" }, loader)`.
+  - Every tool dispatch goes through `gate.invoke(ctx, { kind: "mcp", integration_id, tool_name, permissions, caller, target_origin, credential_ref }, callback)`.
+  - Consumers receive only the `loader` (backed by `gate`), never `admin` or the host approval key. Today `mars mcp test` is the only product path wired to invoke the loader; `packages/execution/src/runtime.ts` does not yet register MCP tools for agent sessions (future work, keeping ambient/agent MCP execution disabled until wired).
+- **Transports**:
+  - **stdio**: Spawns only the explicitly registered command/args with `shell: false` and a minimal environment allowlist (plus `PATH` if configured) so ambient secrets never leak to child processes.
+  - **Streamable HTTP**: Supports both JSON and `text/event-stream` (SSE) responses, `MCP-Protocol-Version` headers, `Mcp-Session-Id` tracking, and `redirect: "error"` so cross-origin redirects are rejected at transport level.
+- **Per-dispatch descriptor re-probing and drift**: `McpEvidenceProbe` performs live `initialize` + `tools/list` probes (and hashes local stdio entrypoints). Any schema, tool-list, or server-version change changes `binding_sha256`, causing `@mars/integration-trust` to supersede the grant into a new pending review and deny dispatch until re-approved.
+- **Origin-bound credentials**: Credentials are resolved only after `gate.invoke` verifies the host-selected `credential_bindings` entry matches the exact normalized target origin; mismatched origins fail closed with `endpoint_mismatch`.
+- **Mid-flight revocation**: Active invocations poll grant status on the trust store and re-check before returning, aborting the transport and tearing down the connection if the grant is revoked mid-flight.
+- **Untrusted output handling (`sanitizeToolOutput`)**: Every MCP tool result is returned as a deeply frozen `UntrustedToolOutput` (`untrusted: true`) after recursively stripping prompt-steering keys (`_instructions`, `instructions`, `system_prompt`, etc.) and XML-style steering tags (`<system>`, `<instructions>`, etc.) from content and structured output.
+
+## Host-owned CLI approval flow (`mars mcp`)
+
+`mars mcp` provides a host-owned CLI backed by `createHostMcpControlPlane` (storing the trust store, server registry, and 32-byte HMAC approval key in a host-owned state directory outside workspaces, defaulting to `$XDG_STATE_HOME/mars/integration-trust` or `~/.local/state/mars/integration-trust`):
+
+```sh
+# List registered servers, pending reviews, and active grants (empty by default)
+mars mcp list [--state-dir <dir>] [--owner <id>] [--project <id>] [--json]
+
+# Register + live-probe an MCP server and open a pending trust review
+mars mcp review <server-id> (--command <cmd> [--arg <arg>]... | --url <url>) \
+  [--permission <cap>:<res>]... [--credential <ref>@<origin>]... [--json]
+
+# Approve a pending review using the host-held HMAC key (remote endpoints capped <= 7d)
+mars mcp approve <review-id> [--ttl-ms <ms>] [--approved-by <name>] [--json]
+
+# Test admission or invoke a tool through gate.admit / gate.invoke
+mars mcp test <server-id> [--tool <name>] [--input <json>] \
+  [--permission <cap>:<res>]... [--credential-ref <ref>] [--target-origin <origin>] [--json]
+
+# Revoke an active grant immediately
+mars mcp revoke <grant-id> [--approved-by <name>] [--json]
+```
+
+Model output, tool output, project configs, and downloaded skills never have access to the host approval key or `admin` methods and cannot self-approve.
 
 ## Host setup / migration
 

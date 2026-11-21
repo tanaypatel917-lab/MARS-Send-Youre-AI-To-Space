@@ -115,6 +115,7 @@ export interface IntegrationTrustOptions {
     remoteEndpointMaxGrantTtlMs?: number;
     requiredScanners?: string[];
     maxDelegationDepth?: number;
+    probeTimeoutMs?: number;
   };
 }
 const ContextSchema = z
@@ -143,6 +144,7 @@ export function createIntegrationTrust(options: IntegrationTrustOptions): {
     remoteEndpointMaxGrantTtlMs: 86400000,
     requiredScanners: [] as string[],
     maxDelegationDepth: 2,
+    probeTimeoutMs: 2000,
     ...options.policy,
   };
   for (const n of [
@@ -150,11 +152,14 @@ export function createIntegrationTrust(options: IntegrationTrustOptions): {
     policy.maxGrantTtlMs,
     policy.remoteEndpointMaxGrantTtlMs,
     policy.maxDelegationDepth,
+    policy.probeTimeoutMs,
   ])
     if (!Number.isSafeInteger(n) || n < 0) fail("config_invalid");
   if (
     policy.maxGrantTtlMs > 90 * 86400000 ||
     policy.remoteEndpointMaxGrantTtlMs > 7 * 86400000 ||
+    policy.probeTimeoutMs < 1 ||
+    policy.probeTimeoutMs > 15000 ||
     !policy.requiredScanners.every((s) => CodeSchema.safeParse(s).success)
   )
     fail("config_invalid");
@@ -184,7 +189,7 @@ export function createIntegrationTrust(options: IntegrationTrustOptions): {
           new Promise<never>((_, reject) => {
             timer = setTimeout(
               () => reject(new Error("evidence_unavailable")),
-              2000,
+              policy.probeTimeoutMs,
             );
           }),
         ]),

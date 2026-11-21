@@ -12,6 +12,8 @@
     "@mars/evaluation": "workspace:*",
     "@mars/evolution": "workspace:*",
     "@mars/execution": "workspace:*",
+    "@mars/integration-trust": "workspace:*",
+    "@mars/mcp-client": "workspace:*",
     "@mars/memory": "workspace:*",
     "@mars/memory-vault": "workspace:*",
     "@mars/output-format": "workspace:*",
