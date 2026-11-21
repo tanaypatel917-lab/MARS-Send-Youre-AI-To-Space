@@ -158,12 +158,68 @@ function workspaceRelative(
   return rel.split(sep).join("/");
 }
 
+function slugifyHostPath(path: string): string {
+  let cur = path;
+  for (let i = 0; i < 6; i++) {
+    const next = cur.toLowerCase().normalize("NFKC");
+    if (next === cur) break;
+    cur = next;
+  }
+  return cur
+    .replace(/[^\p{L}\p{N}_]+/gu, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function slugMatchesPrefix(candidate: string, slug: string): boolean {
+  if (!slug) return false;
+  return candidate === slug || candidate.startsWith(`${slug}_`);
+}
+
+function hostPathSlugs(
+  root: string,
+  dataRoot: string,
+  includeAncestors: boolean,
+): string[] {
+  const slugs = new Set<string>();
+  for (const base of [root, dataRoot]) {
+    if (!base) continue;
+    const fullSlug = slugifyHostPath(base);
+    if (fullSlug) slugs.add(fullSlug);
+    if (!includeAncestors) continue;
+    const parts = base.split(/[\\/]+/).filter(Boolean);
+    for (let len = 2; len < parts.length; len++) {
+      const slug = slugifyHostPath(parts.slice(0, len).join("/"));
+      if (slug) slugs.add(slug);
+    }
+  }
+  return [...slugs];
+}
+
 function containsHostPath(
   root: string,
   dataRoot: string,
-  text: string,
+  id: string,
+  label: string,
+  slugs: readonly string[],
 ): boolean {
-  return text.includes(root) || text.includes(dataRoot);
+  if (
+    (root && (id.includes(root) || label.includes(root))) ||
+    (dataRoot && (id.includes(dataRoot) || label.includes(dataRoot)))
+  ) {
+    return true;
+  }
+  const normalizedId = slugifyHostPath(id);
+  const normalizedLabel = slugifyHostPath(label);
+  for (const slug of slugs) {
+    if (
+      slugMatchesPrefix(normalizedId, slug) ||
+      slugMatchesPrefix(normalizedLabel, slug)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -184,6 +240,8 @@ export function normalizeGraph(input: {
 }): KnowledgeGraphArtifact {
   const raw = rawGraphSchema.parse(input.raw);
   const analysis = rawAnalysisSchema.safeParse(input.analysis ?? {});
+  const rootSlugs = hostPathSlugs(input.root, input.dataRoot, false);
+  const ancestorSlugs = hostPathSlugs(input.root, input.dataRoot, true);
   const nodes: GraphNode[] = [];
   let droppedNodes = 0;
   const seen = new Set<string>();
@@ -196,7 +254,13 @@ export function normalizeGraph(input: {
     const id = node.id.slice(0, GRAPH_LIMITS.max_id_length);
     if (
       seen.has(id) ||
-      containsHostPath(input.root, input.dataRoot, `${id}\u0000${label}`) ||
+      containsHostPath(
+        input.root,
+        input.dataRoot,
+        id,
+        label,
+        sourceFile !== null ? rootSlugs : ancestorSlugs,
+      ) ||
       (sourceFile === null && node.source_file) ||
       nodes.length >= GRAPH_LIMITS.max_nodes
     ) {
@@ -281,7 +345,8 @@ export function normalizeGraph(input: {
       return {
         id,
         label:
-          label && !containsHostPath(input.root, input.dataRoot, label)
+          label &&
+          !containsHostPath(input.root, input.dataRoot, "", label, rootSlugs)
             ? label.slice(0, GRAPH_LIMITS.max_label_length)
             : null,
         cohesion:

@@ -6,7 +6,7 @@
  * sandbox contract. No network, no Python, no model.
  */
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 interface Scenario {
   version?: string;
@@ -52,12 +52,22 @@ if (args[0] === "extract") {
     await Bun.sleep(scenario.hang_ms);
   }
   const outFlag = args.indexOf("--out");
-  const out = outFlag >= 0 ? args[outFlag + 1] : process.env.GRAPHIFY_OUT;
+  const outRoot = outFlag >= 0 ? args[outFlag + 1] : undefined;
+  const envOut = (process.env.GRAPHIFY_OUT ?? "").trim();
+  // Mirror real graphifyy==0.9.101 pathlib semantics: Path(out_root) / GRAPHIFY_OUT
+  const dir = envOut
+    ? isAbsolute(envOut)
+      ? envOut
+      : outRoot
+        ? join(outRoot, envOut)
+        : envOut
+    : outRoot
+      ? join(outRoot, "graphify-out")
+      : undefined;
   if (
-    out &&
+    dir &&
     (scenario.graph !== undefined || scenario.graph_text !== undefined)
   ) {
-    const dir = join(out, "graphify-out");
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, "graph.json"),

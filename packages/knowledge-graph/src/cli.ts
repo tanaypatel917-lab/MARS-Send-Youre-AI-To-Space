@@ -6,6 +6,8 @@
  * an external runtime: nothing here owns a session, a model or a tool loop.
  */
 
+import { join } from "node:path";
+
 export interface GraphifyInvocation {
   args: string[];
   cwd: string;
@@ -61,7 +63,10 @@ export function sandboxEnvironment(
   env.HOME = options.dataRoot;
   env.XDG_CACHE_HOME = options.dataRoot;
   env.XDG_CONFIG_HOME = options.dataRoot;
-  env.GRAPHIFY_OUT = options.dataRoot;
+  /* graphify resolves its output directory as Path(out_root) / GRAPHIFY_OUT.
+   * When GRAPHIFY_OUT is absolute, pathlib drops out_root and writes directly
+   * into GRAPHIFY_OUT, so pin it to the exact out/graphify-out directory. */
+  env.GRAPHIFY_OUT = join(options.dataRoot, "out", "graphify-out");
   env.PYTHONIOENCODING = "utf-8";
   env.PYTHONUNBUFFERED = "1";
   env.PYTHONDONTWRITEBYTECODE = "1";

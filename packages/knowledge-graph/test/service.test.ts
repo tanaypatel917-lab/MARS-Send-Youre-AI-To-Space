@@ -9,6 +9,7 @@ import {
   type GraphBuildRecord,
   KNOWLEDGE_GRAPH_ARTIFACT_KIND,
   KnowledgeGraphArtifactSchema,
+  normalizeGraph,
 } from "../src";
 
 const FAKE = join(import.meta.dir, "fake-graphify.ts");
@@ -109,6 +110,17 @@ function rawGraph(root: string) {
       node("src/a.ts::helper", "helper", "src/a.ts", 0),
       node("src/b.py::parse", "parse", join(root, "src/b.py"), 1),
       node("leak", "leak", "/etc/passwd", 1),
+      {
+        id: `${root
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "_")
+          .replace(/^_+|_+$/g, "")}_sibling_helper`,
+        label: "slugified_host_path_leak",
+        _callable: false,
+        _origin: "ast",
+        community: 1,
+        file_type: "code",
+      },
     ],
     links: [
       {
@@ -173,7 +185,7 @@ describe("knowledge graph service", () => {
       nodes: 3,
       edges: 2,
       communities: 2,
-      dropped_nodes: 1,
+      dropped_nodes: 2,
       dropped_edges: 1,
     });
     expect(first.artifact.edges.map((e) => e.confidence)).toEqual([
@@ -219,7 +231,9 @@ describe("knowledge graph service", () => {
     expect(extract.args[4]?.startsWith(f.dataRoot)).toBe(true);
     expect(extract.cwd).toBe(f.workspace);
     expect(extract.env.HOME?.startsWith(f.dataRoot)).toBe(true);
-    expect(extract.env.GRAPHIFY_OUT?.startsWith(f.dataRoot)).toBe(true);
+    expect(extract.env.GRAPHIFY_OUT).toBe(
+      join(extract.args[4] ?? "", "graphify-out"),
+    );
     expect(extract.env.HTTPS_PROXY).toBe("http://127.0.0.1:9");
     expect(extract.env.OPENAI_API_KEY).toBeUndefined();
     expect(extract.env.SECRET_TOKEN).toBeUndefined();
@@ -476,5 +490,71 @@ describe("knowledge graph service", () => {
     });
     expect(outcome.status).toBe("refused");
     expect(await f.calls()).toEqual([]);
+  });
+
+  test("redacts Unicode host-path slugs without dropping workspace files containing ancestor slugs", () => {
+    const root = "/home/üser/repos/demo";
+    const dataRoot = "/home/üser/.mars/knowledge-graph";
+    const artifact = normalizeGraph({
+      raw: {
+        nodes: [
+          {
+            id: "home_üser_sibling_helper",
+            label: "../../sibling/helper",
+            file_type: "code",
+          },
+          {
+            id: "home_üser_repos_demo_src_leak",
+            label: "in_root_unremapped",
+            source_file: `${root}/src/leak.ts`,
+            file_type: "code",
+          },
+          {
+            id: "src_home_üser_notes",
+            label: "home_üser_notes",
+            source_file: `${root}/src/home_üser_notes.ts`,
+            file_type: "code",
+          },
+          {
+            id: "home_üser",
+            label: "home_üser",
+            source_file: `${root}/home_üser.ts`,
+            file_type: "code",
+          },
+        ],
+        links: [
+          {
+            source: "src_home_üser_notes",
+            target: "home_üser",
+            relation: "imports",
+            confidence: "EXTRACTED",
+            source_file: `${root}/src/home_üser_notes.ts`,
+          },
+          {
+            source: "src_home_üser_notes",
+            target: "home_üser_sibling_helper",
+            relation: "imports",
+            confidence: "EXTRACTED",
+            source_file: `${root}/src/home_üser_notes.ts`,
+          },
+        ],
+      },
+      analysis: {},
+      root,
+      dataRoot,
+      workspace: { workspace_id: "ws-unicode", revision: "rev-1" },
+      graphifyVersion: "0.9.101",
+      builtAt: "2026-11-21T00:00:00.000Z",
+      files: 2,
+      complete: true,
+    });
+
+    expect(artifact.nodes.map((n) => n.id)).toEqual([
+      "home_üser",
+      "src_home_üser_notes",
+    ]);
+    expect(artifact.edges).toHaveLength(1);
+    expect(artifact.stats.dropped_nodes).toBe(2);
+    expect(artifact.stats.dropped_edges).toBe(1);
   });
 });
