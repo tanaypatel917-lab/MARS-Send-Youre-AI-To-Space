@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@mars/contracts": "workspace:*",
+    "@mars/team-chat": "workspace:*",
+    "@mars/ui-core": "workspace:*",
     "zod": "3.25.76"
   },
   "devDependencies": {

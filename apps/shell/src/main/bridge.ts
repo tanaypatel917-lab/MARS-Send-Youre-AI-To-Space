@@ -1,12 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { ArtifactRef, EventEnvelope, Scope, Task } from "@mars/contracts";
+import type {
+  ArtifactRef,
+  EventEnvelope,
+  PatchExport,
+  Scope,
+  Task,
+} from "@mars/contracts";
 import {
   type ArtifactData,
   type BridgeError,
   type BridgeResult,
   bridgeError,
   bridgeFailure,
-  isReadMethod,
+  isBridgeMethod,
   type JournalResult,
 } from "../shared/methods";
 import { ParamsSchema, ResultSchema } from "./protocol";
@@ -84,7 +90,7 @@ export function createBridge(options: BridgeOptions): Bridge {
 
   return {
     async call(method, params) {
-      if (!isReadMethod(method)) return bridgeFailure("refused");
+      if (!isBridgeMethod(method)) return bridgeFailure("refused");
       if (!options.transport || !options.connectionScope)
         return {
           ok: false,
@@ -106,6 +112,10 @@ export function createBridge(options: BridgeOptions): Bridge {
       }
       const scope = describedScope;
       if (!scope) return bridgeFailure("protocol");
+      if (method === "tasks.create") {
+        const createdInput = (parsedParams.data as { task: Task }).task;
+        if (!scopeForTask(createdInput, scope)) return bridgeFailure("refused");
+      }
       const request = {
         method,
         params: parsedParams.data,
@@ -128,13 +138,33 @@ export function createBridge(options: BridgeOptions): Bridge {
               return bridgeFailure("protocol");
             ids.add(task.task_id);
           }
-        } else if (method === "tasks.inspect") {
+        } else if (
+          method === "tasks.inspect" ||
+          method === "tasks.start" ||
+          method === "tasks.resume"
+        ) {
           const task = result as Task;
           if (
             task.task_id !== requestParams.task_id ||
             !scopeForTask(task, scope)
           )
             return bridgeFailure("protocol");
+        } else if (method === "tasks.create") {
+          const task = result as Task;
+          const requested = requestParams.task as Task;
+          if (
+            task.task_id !== requested.task_id ||
+            task.session_id !== requested.session_id ||
+            !scopeForTask(task, scope)
+          )
+            return bridgeFailure("protocol");
+        } else if (method === "tasks.export") {
+          const exported = result as PatchExport;
+          if (
+            exported.patch_sha256 !== requestParams.expected_patch_sha256 ||
+            exported.artifact.sha256 !== requestParams.expected_patch_sha256
+          )
+            return bridgeFailure("hash_mismatch");
         } else if (method === "tasks.events") {
           const ids = new Set<string>();
           for (const event of result as EventEnvelope[]) {

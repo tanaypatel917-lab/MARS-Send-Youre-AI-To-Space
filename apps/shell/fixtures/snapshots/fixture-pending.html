@@ -78,13 +78,9 @@
           </li>
         </ul>
       </section>
-      <section class="workspace-placeholder">
-        <h2 class="section-title">Workspace tree</h2>
-        <p>arrives with @mars/ui-core</p>
-      </section>
       <section class="team-chat">
-        <button aria-disabled="true" disabled="" type="button">Team chat</button>
-        <p>reserved · not in this build</p>
+        <button aria-disabled="true" aria-pressed="false" class="team-chat-toggle" data-action="toggle-team-chat" data-focus-key="team-chat-toggle" disabled="" type="button">Team chat</button>
+        <p class="muted">team chat unavailable</p>
       </section>
     </nav>
     <main class="main">
@@ -95,15 +91,70 @@
             <span class="verification verification-unverified">Unverified</span>
             <span aria-label="pending" class="status status-pending">○ pending</span>
             <span class="meta-value">Candidate revision: not available</span>
-            <span class="meta-value">Mode: not reported by host</span>
             <span class="meta-value">Model · tier: not reported by host</span>
             <span class="meta-value">Task revision: 0</span>
           </div>
         </header>
         <button class="refresh" data-focus-key="refresh" type="button">Refresh</button>
       </div>
+      <section class="action-card" data-card="approval-card">
+        <h2 class="section-title">Approvals &amp; Launch Consent</h2>
+        <fieldset class="approvals-group">
+          <legend>Independent capability approvals</legend>
+          <label class="checkbox-label">
+            <input checked="" data-control="approval-read" type="checkbox">
+             Read workspace
+          </label>
+          <label class="checkbox-label">
+            <input checked="" data-control="approval-write" type="checkbox">
+             Write workspace
+          </label>
+          <label class="checkbox-label muted">
+            <input data-control="approval-execute" disabled="" type="checkbox">
+             Execute commands (disabled by host)
+          </label>
+        </fieldset>
+        <div class="model-row">
+          <label>
+            Model 
+            <select aria-label="Model selection" class="model-select" data-control="launch-model">
+              <option selected="" value="default">Host default model (no extra cost)</option>
+              <option value="paid">Paid frontier model (claude-sonnet-4-5)</option>
+            </select>
+          </label>
+        </div>
+        <div class="action-buttons">
+          <button class="primary-btn" data-action="start-task" type="button">Approve &amp; start task</button>
+          <button class="danger-btn" data-action="cancel-task" type="button">Cancel task</button>
+        </div>
+      </section>
       <section aria-live="polite" class="transcript" role="log">
-        <p>Transcript projection arrives with @mars/ui-core. 0 task events available via tasks.events (content not rendered in this build).</p>
+        <div class="transcript-entries">
+          <p class="muted transcript-meta">0 task events available</p>
+          <article class="transcript-entry transcript-user user-request">
+            <div class="entry-header">
+              <strong>Task request</strong>
+            </div>
+            <section class="untrusted" data-provenance="tasks.inspect.request" role="note">
+              <span class="provenance">untrusted · tasks.inspect.request</span>
+              <pre class="untrusted-text">Pending sample task.</pre>
+            </section>
+          </article>
+        </div>
+      </section>
+      <section class="composer-card" data-panel="prompt-composer">
+        <h2 class="section-title">New Task Composer</h2>
+        <textarea aria-label="Task prompt" class="composer-textarea" data-control="composer-request" data-focus-key="composer-request" placeholder="Describe a task for MARS workbench…" rows="3"></textarea>
+        <input aria-label="Acceptance criteria" class="composer-criteria" data-control="composer-criteria" placeholder="Optional acceptance criteria (comma-separated)" type="text" value="">
+        <div class="composer-options">
+          <label class="checkbox-label">
+            <input data-control="composer-start-now" type="checkbox">
+             Start immediately
+          </label>
+        </div>
+        <div class="action-buttons">
+          <button class="primary-btn" data-action="create-task" type="button">Create task</button>
+        </div>
       </section>
     </main>
     <aside aria-label="Task inspector" class="inspector">
@@ -148,7 +199,7 @@
       <span>Connected</span>
       <span>fixture-repo (fixture)</span>
       <span>loopback</span>
-      <span>read-only</span>
+      <span>interactive</span>
       <span>execute: off</span>
     </footer>
   </div>

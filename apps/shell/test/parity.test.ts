@@ -4,6 +4,7 @@ import {
   ArtifactRefSchema,
   EventEnvelopeSchema,
   JournalResultSchema,
+  PatchExportSchema,
   TaskSchema,
   VERIFICATION_STATE_LABEL,
   VerificationViewSchema,
@@ -18,7 +19,7 @@ import {
 } from "../../../packages/workbench/src/protocol";
 import { ParamsSchema, ResultSchema } from "../src/main/protocol";
 import { VERIFICATION_LABEL } from "../src/renderer/strings";
-import { READ_METHODS } from "../src/shared/methods";
+import { BRIDGE_METHODS } from "../src/shared/methods";
 import { loadFixtureData } from "./test-utils";
 
 test("fixture data validates against the server schemas", async () => {
@@ -64,7 +65,7 @@ test("bridge schemas reuse the server request and result schemas", async () => {
       option.shape.params,
     ]),
   );
-  for (const method of READ_METHODS) {
+  for (const method of BRIDGE_METHODS) {
     const serverSchema = requestParams.get(method);
     if (!serverSchema) throw new Error(`Missing server schema for ${method}.`);
     expect(ParamsSchema[method]).toBe(serverSchema);
@@ -78,7 +79,13 @@ test("bridge schemas reuse the server request and result schemas", async () => {
   expect(ResultSchema["tasks.verification"]).toBe(VerificationViewSchema);
   expect(ResultSchema["tasks.evidence"]).toBe(EvidenceResultSchema);
   expect(ResultSchema["tasks.journal"]).toBe(JournalResultSchema);
-  expect(Object.keys(ResultSchema).sort()).toEqual([...READ_METHODS].sort());
+  expect(ResultSchema["tasks.create"]).toBe(TaskSchema);
+  expect(ResultSchema["tasks.start"]).toBe(TaskSchema);
+  expect(ResultSchema["tasks.resume"]).toBe(TaskSchema);
+  expect(ResultSchema["tasks.steer"].safeParse(null).success).toBe(true);
+  expect(ResultSchema["tasks.cancel"].safeParse(null).success).toBe(true);
+  expect(ResultSchema["tasks.export"]).toBe(PatchExportSchema);
+  expect(Object.keys(ResultSchema).sort()).toEqual([...BRIDGE_METHODS].sort());
 
   const fixtureText = await readFile(
     new URL("../fixtures/workbench.json", import.meta.url),

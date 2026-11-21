@@ -102,7 +102,7 @@ test("a refused method does not resolve a connection", async () => {
     },
   });
 
-  expect(await bridge.call("tasks.start", {})).toMatchObject({
+  expect(await bridge.call("tasks.checkpoint", {})).toMatchObject({
     ok: false,
     error: { kind: "refused" },
   });
@@ -122,7 +122,7 @@ test("connection failures use the shared not_connected message", async () => {
   expect(await bridge.call("tasks.list", {})).toEqual(
     bridgeFailure("not_connected"),
   );
-  expect(await bridge.call("tasks.start", {})).toEqual(
+  expect(await bridge.call("tasks.checkpoint", {})).toEqual(
     bridgeFailure("refused"),
   );
 });

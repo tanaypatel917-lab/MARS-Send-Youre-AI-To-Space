@@ -5,14 +5,27 @@ import { registerBridge } from "../src/main/ipc";
 import {
   BRIDGE_CHANNEL,
   BRIDGE_GLOBAL,
+  BRIDGE_METHODS,
+  isBridgeMethod,
   isReadMethod,
   READ_METHODS,
 } from "../src/shared/methods";
+import {
+  isTeamChatMethod,
+  TEAM_CHAT_CHANNEL,
+  TEAM_CHAT_GLOBAL,
+  TEAM_CHAT_METHODS,
+} from "../src/shared/team-chat";
 
-test("isReadMethod accepts exactly the whitelisted method names", () => {
+test("isReadMethod and isBridgeMethod accept exactly the whitelisted method names", () => {
   for (const method of READ_METHODS) expect(isReadMethod(method)).toBe(true);
+  for (const method of BRIDGE_METHODS)
+    expect(isBridgeMethod(method)).toBe(true);
+  for (const method of TEAM_CHAT_METHODS)
+    expect(isTeamChatMethod(method)).toBe(true);
   for (const value of [
-    "tasks.start",
+    "tasks.checkpoint",
+    "tasks.restore",
     "workbench.describe ",
     "toString",
     "constructor",
@@ -25,11 +38,16 @@ test("isReadMethod accepts exactly the whitelisted method names", () => {
     {},
     ["tasks.list"],
     new String("tasks.list"),
-  ])
+  ]) {
     expect(isReadMethod(value)).toBe(false);
+    expect(isBridgeMethod(value)).toBe(false);
+    expect(isTeamChatMethod(value)).toBe(false);
+  }
+  expect(isReadMethod("tasks.start")).toBe(false);
+  expect(isBridgeMethod("tasks.start")).toBe(true);
 });
 
-test("the preload exposes exactly the frozen read-only bridge", async () => {
+test("the preload exposes exactly the frozen workbench and team chat bridges", async () => {
   const exposed: unknown[][] = [];
   const calls: unknown[][] = [];
   mock.module("electron", () => ({
@@ -44,16 +62,24 @@ test("the preload exposes exactly the frozen read-only bridge", async () => {
     },
   }));
   await import("../src/preload/preload");
-  expect(exposed).toHaveLength(1);
+  expect(exposed).toHaveLength(2);
   expect(exposed[0]?.[0]).toBe(BRIDGE_GLOBAL);
+  expect(exposed[1]?.[0]).toBe(TEAM_CHAT_GLOBAL);
   const api = exposed[0]?.[1] as Record<
     string,
     (params: unknown) => Promise<unknown>
   >;
+  const teamApi = exposed[1]?.[1] as Record<
+    string,
+    (params: unknown) => Promise<unknown>
+  >;
   expect(Object.isFrozen(api)).toBe(true);
-  expect(Object.keys(api).sort()).toEqual([...READ_METHODS].sort());
+  expect(Object.isFrozen(teamApi)).toBe(true);
+  expect(Object.keys(api).sort()).toEqual([...BRIDGE_METHODS].sort());
+  expect(Object.keys(teamApi).sort()).toEqual([...TEAM_CHAT_METHODS].sort());
   await api["tasks.list"]?.({});
   await api["tasks.journal"]?.({ task_id: "fixture", entry_ids: [] });
+  await teamApi["team.state"]?.({});
   expect(calls).toEqual([
     [BRIDGE_CHANNEL, { method: "tasks.list", params: {} }],
     [
@@ -63,6 +89,7 @@ test("the preload exposes exactly the frozen read-only bridge", async () => {
         params: { task_id: "fixture", entry_ids: [] },
       },
     ],
+    [TEAM_CHAT_CHANNEL, { method: "team.state", params: {} }],
   ]);
   mock.restore();
 });
@@ -83,13 +110,9 @@ test("only whitelisted methods reach transport and IPC refuses untrusted senders
     },
   });
   for (const method of [
-    "tasks.start",
-    "tasks.steer",
-    "tasks.cancel",
-    "tasks.create",
-    "tasks.resume",
     "tasks.checkpoint",
     "tasks.restore",
+    "tasks.delete",
     "__proto__",
     "constructor",
     12,

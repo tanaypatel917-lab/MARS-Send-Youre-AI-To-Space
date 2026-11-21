@@ -227,6 +227,7 @@
           "revision": "fixture-r5"
         },
         "state": "verified",
+        "patch_sha256": "1f9f57ffd522a9d42118168a9d4145567132e292b64d77cf933e543fe70adbf7",
         "record": {
           "schema_version": 1,
           "operation": "verification.verdict",
@@ -297,7 +298,7 @@
             "patch": "--- a/README.md\n+++ b/README.md\n-old sample\n+new sample"
           }
         ],
-        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "digest": "1f9f57ffd522a9d42118168a9d4145567132e292b64d77cf933e543fe70adbf7"
       },
       "evidence": {
         "task_revision": 5,
@@ -306,7 +307,7 @@
           "provider": "fixture",
           "revision": "fixture-r5"
         },
-        "diff_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "diff_sha256": "1f9f57ffd522a9d42118168a9d4145567132e292b64d77cf933e543fe70adbf7",
         "verify_records": [
           {
             "event_id": "fixture-evidence-verified",
@@ -316,7 +317,7 @@
             "recorded_at": "2026-03-01T12:01:00.000Z",
             "workspace_id": "fixture-workspace",
             "workspace_revision": "fixture-r5",
-            "diff_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diff_sha256": "1f9f57ffd522a9d42118168a9d4145567132e292b64d77cf933e543fe70adbf7",
             "stale": false
           }
         ]

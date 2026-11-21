@@ -12,9 +12,15 @@ export class MiniElement implements ShellElement {
   readonly tagName: string;
   readonly attributes = new Map<string, string>();
   readonly children: (MiniElement | MiniText)[] = [];
+  value = "";
+  checked = false;
+  disabled = false;
+  selectionStart: number | null = null;
+  selectionEnd: number | null = null;
+  selectionDirection: "forward" | "backward" | "none" | null = null;
   private readonly listeners = new Map<
     string,
-    ((event: { target?: unknown }) => void)[]
+    ((event: { target?: unknown; preventDefault?: () => void }) => void)[]
   >();
 
   constructor(
@@ -73,6 +79,16 @@ export class MiniElement implements ShellElement {
     );
   }
 
+  setSelectionRange(
+    start: number,
+    end: number,
+    direction?: "forward" | "backward" | "none",
+  ): void {
+    this.selectionStart = start;
+    this.selectionEnd = end;
+    this.selectionDirection = direction ?? "none";
+  }
+
   addEventListener(
     type: string,
     listener: (event: { target?: unknown }) => void,
@@ -99,8 +115,14 @@ export class MiniElement implements ShellElement {
   }
 
   click(): void {
+    if (this.disabled || this.attributes.has("disabled")) return;
     for (const listener of this.listeners.get("click") ?? [])
       listener({ target: this });
+  }
+
+  dispatch(type: string): void {
+    for (const listener of this.listeners.get(type) ?? [])
+      listener({ target: this, preventDefault: () => {} });
   }
 }
 
@@ -154,6 +176,8 @@ function escapeAttribute(value: string): string {
   return escapeText(value).replaceAll('"', "&quot;");
 }
 
+const VOID_ELEMENTS = new Set(["input", "br", "hr", "img", "meta", "link"]);
+
 export function serialize(node: MiniElement | MiniText, depth = 0): string {
   const indentation = " ".repeat(depth);
   if (node instanceof MiniText)
@@ -164,6 +188,7 @@ export function serialize(node: MiniElement | MiniText, depth = 0): string {
     .join("");
   const tag = node.tagName.toLowerCase();
   const open = `${indentation}<${tag}${attributes}>`;
+  if (VOID_ELEMENTS.has(tag) && node.children.length === 0) return open;
   if (!node.children.some((child) => child instanceof MiniElement))
     return `${open}${node.children.map(serialize).join("")}</${tag}>`;
   return `${open}\n${node.children

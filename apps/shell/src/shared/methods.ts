@@ -13,19 +13,46 @@ export const READ_METHODS = [
   "tasks.journal",
 ] as const;
 
+export const WRITE_METHODS = [
+  "tasks.create",
+  "tasks.start",
+  "tasks.resume",
+  "tasks.steer",
+  "tasks.cancel",
+  "tasks.export",
+] as const;
+
+export const BRIDGE_METHODS = [...READ_METHODS, ...WRITE_METHODS] as const;
+
 export type ReadMethod = (typeof READ_METHODS)[number];
+export type WriteMethod = (typeof WRITE_METHODS)[number];
+export type BridgeMethod = (typeof BRIDGE_METHODS)[number];
 
 const READ_METHOD_SET: ReadonlySet<string> = new Set(READ_METHODS);
+const WRITE_METHOD_SET: ReadonlySet<string> = new Set(WRITE_METHODS);
+const BRIDGE_METHOD_SET: ReadonlySet<string> = new Set(BRIDGE_METHODS);
 
 export function isReadMethod(value: unknown): value is ReadMethod {
   return typeof value === "string" && READ_METHOD_SET.has(value);
 }
 
+export function isWriteMethod(value: unknown): value is WriteMethod {
+  return typeof value === "string" && WRITE_METHOD_SET.has(value);
+}
+
+export function isBridgeMethod(value: unknown): value is BridgeMethod {
+  return typeof value === "string" && BRIDGE_METHOD_SET.has(value);
+}
+
 export const BRIDGE_CHANNEL = "mars-shell:rpc";
 export const BRIDGE_GLOBAL = "marsWorkbench";
 
-export type ParamsFor<M extends ReadMethod> = z.infer<(typeof ParamsSchema)[M]>;
-export type ResultFor<M extends ReadMethod> = z.infer<(typeof ResultSchema)[M]>;
+export type ParamsFor<M extends BridgeMethod> = z.infer<
+  (typeof ParamsSchema)[M]
+>;
+export type ResultFor<M extends BridgeMethod> = z.infer<
+  (typeof ResultSchema)[M]
+>;
 
 export type DescribeResult = ResultFor<"workbench.describe">;
 export type DiffResult = ResultFor<"tasks.diff">;
@@ -33,6 +60,7 @@ export type EvidenceResult = ResultFor<"tasks.evidence">;
 export type ArtifactData = ResultFor<"tasks.artifact">;
 export type InspectResult = ResultFor<"tasks.inspect">;
 export type JournalResult = ResultFor<"tasks.journal">;
+export type PatchExportResult = ResultFor<"tasks.export">;
 
 export type BridgeErrorKind =
   | "not_connected"
@@ -80,7 +108,7 @@ export function bridgeFailure(kind: BridgeErrorKind): {
 }
 
 export type ShellBridge = {
-  readonly [M in ReadMethod]: (
+  readonly [M in BridgeMethod]: (
     params: ParamsFor<M>,
   ) => Promise<BridgeResult<ResultFor<M>>>;
 };

@@ -1,9 +1,11 @@
 import type { ShellBridge } from "../shared/methods";
+import type { TeamChatBridgeApi } from "../shared/team-chat";
 import { createController } from "./controller";
 import type { ShellDocument, ShellElement } from "./dom";
 
 type ShellGlobal = typeof globalThis & {
   marsWorkbench?: ShellBridge;
+  marsTeamChat?: TeamChatBridgeApi;
   document?: ShellDocument;
 };
 
@@ -13,5 +15,10 @@ const root = shell.document?.getElementById("app") as
   | null
   | undefined;
 if (shell.marsWorkbench && shell.document && root) {
-  void createController(shell.marsWorkbench, shell.document, root).load();
+  void createController(
+    shell.marsWorkbench,
+    shell.document,
+    root,
+    shell.marsTeamChat,
+  ).load();
 }

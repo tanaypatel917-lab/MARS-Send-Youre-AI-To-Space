@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { app, BrowserWindow, ipcMain, Menu, protocol, session } from "electron";
 import { resolveConnection } from "./connection";
-import { registerBridge } from "./ipc";
+import { registerBridge, registerTeamChatBridge } from "./ipc";
 import {
   appResponseHeaders,
   resolveAppAsset,
@@ -10,6 +10,7 @@ import {
 } from "./security";
 import { createReconnectingBridge } from "./session";
 import { layoutPath, loadWindowLayout, saveWindowLayout } from "./settings";
+import { createTeamChatBridge } from "./team-chat-bridge";
 import { createLoopbackTransport } from "./transport";
 
 protocol.registerSchemesAsPrivileged([
@@ -72,6 +73,7 @@ app.on("ready", async () => {
     makeTransport: (connection) => createLoopbackTransport(connection),
   });
   registerBridge(ipcMain, bridge, { trustedOrigin });
+  registerTeamChatBridge(ipcMain, createTeamChatBridge(), { trustedOrigin });
 
   const filePath = layoutPath(app.getPath("home"));
   const saved = await loadWindowLayout(filePath);

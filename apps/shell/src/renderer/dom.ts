@@ -5,6 +5,17 @@ export interface ShellText {
 export interface ShellElement {
   readonly tagName: string;
   textContent: string | null;
+  value?: string;
+  checked?: boolean;
+  disabled?: boolean;
+  selectionStart?: number | null;
+  selectionEnd?: number | null;
+  selectionDirection?: "forward" | "backward" | "none" | null;
+  setSelectionRange?(
+    start: number,
+    end: number,
+    direction?: "forward" | "backward" | "none",
+  ): void;
   setAttribute(name: string, value: string): void;
   getAttribute(name: string): string | null;
   removeAttribute(name: string): void;
@@ -14,7 +25,10 @@ export interface ShellElement {
   focus(): void;
   addEventListener(
     type: string,
-    listener: (event: { target?: unknown }) => void,
+    listener: (event: {
+      target?: unknown;
+      preventDefault?: () => void;
+    }) => void,
   ): void;
 }
 
@@ -37,22 +51,30 @@ const TAGS = new Set([
   "div",
   "dl",
   "dt",
+  "fieldset",
   "footer",
+  "form",
   "header",
   "h1",
   "h2",
   "h3",
+  "input",
+  "label",
+  "legend",
   "li",
   "main",
   "nav",
   "ol",
+  "option",
   "p",
   "pre",
   "section",
+  "select",
   "small",
   "span",
   "strong",
   "summary",
+  "textarea",
   "time",
   "ul",
 ]);

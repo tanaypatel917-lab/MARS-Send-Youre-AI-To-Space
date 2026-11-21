@@ -4,14 +4,18 @@ import type {
   Task,
   VerificationView,
 } from "@mars/contracts";
+import type { TranscriptProjection } from "@mars/ui-core";
 import type {
   DescribeResult,
   DiffResult,
   EvidenceResult,
   InspectResult,
+  PatchExportResult,
 } from "../shared/methods";
 import { h, type ShellDocument, type ShellElement } from "./dom";
 import { STATUS_LABEL, VERIFICATION_LABEL } from "./strings";
+import { renderTeamChatPane, type TeamChatViewState } from "./team-chat-view";
+import { renderTranscript } from "./transcript";
 import { untrusted } from "./untrusted";
 
 export type ArtifactView = {
@@ -21,12 +25,50 @@ export type ArtifactView = {
   message?: string;
 };
 
+export type ApprovalsState = {
+  read: boolean;
+  write: boolean;
+  execute: boolean;
+};
+
+export type ComposerState = {
+  request: string;
+  criteria: string;
+  startNow: boolean;
+  approvals: ApprovalsState;
+  modelChoice: "default" | "paid";
+  paidModelId: string;
+  paidModelConsent: boolean;
+  submitting: boolean;
+  error?: string;
+};
+
+export type LaunchCardState = {
+  approvals: ApprovalsState;
+  modelChoice: "default" | "paid";
+  paidModelId: string;
+  paidModelConsent: boolean;
+  steerDraft: string;
+  busy: boolean;
+  actionNotice?: string;
+  actionError?: string;
+};
+
+export type ExportViewState = {
+  busy: boolean;
+  error?: string;
+  result?: PatchExportResult;
+  patchText?: string;
+  verifiedSha256?: boolean;
+};
+
 export type ShellState = {
   describe?: DescribeResult;
   tasks: Task[];
   selectedTask?: InspectResult;
   verification?: VerificationView;
   events: EventEnvelope[];
+  transcript?: TranscriptProjection;
   diff?: DiffResult;
   evidence?: EvidenceResult;
   artifacts: ArtifactView[];
@@ -34,9 +76,28 @@ export type ShellState = {
   diffError?: string;
   evidenceError?: string;
   eventsError?: string;
+  eventsCapped?: boolean;
   error?: string;
+  composer?: ComposerState;
+  launch?: LaunchCardState;
+  patchExport?: ExportViewState;
+  teamChat?: TeamChatViewState;
   onSelect?: (taskId: string) => void;
   onRefresh?: () => void;
+  onOpenTeamChat?: () => void;
+  onComposerChange?: (patch: Partial<ComposerState>) => void;
+  onComposerApprovalChange?: (
+    key: keyof ApprovalsState,
+    value: boolean,
+  ) => void;
+  onCreateTask?: () => void;
+  onLaunchApprovalChange?: (key: keyof ApprovalsState, value: boolean) => void;
+  onLaunchChange?: (patch: Partial<LaunchCardState>) => void;
+  onStartTask?: () => void;
+  onResumeTask?: () => void;
+  onSteerTask?: (instruction: string) => void;
+  onCancelTask?: () => void;
+  onExportPatch?: () => void;
 };
 
 export const HEADING_FOCUS_KEY = "heading";
@@ -72,6 +133,37 @@ function status(doc: ShellDocument, task: Task): ShellElement {
     "span",
     { class: `status status-${task.status}`, "aria-label": label.word },
     `${label.glyph} ${label.word}`,
+  );
+}
+
+function checkboxField(
+  doc: ShellDocument,
+  options: {
+    label: string;
+    checked: boolean;
+    disabled?: boolean;
+    dataKey: string;
+    onChange: (checked: boolean) => void;
+  },
+): ShellElement {
+  const input = h(doc, "input", {
+    type: "checkbox",
+    checked: options.checked,
+    disabled: Boolean(options.disabled),
+    "data-control": options.dataKey,
+  });
+  input.checked = options.checked;
+  input.disabled = Boolean(options.disabled);
+  input.addEventListener("change", (event) => {
+    const next = (event.target as { checked?: boolean } | undefined)?.checked;
+    options.onChange(Boolean(next));
+  });
+  return h(
+    doc,
+    "label",
+    { class: `checkbox-label${options.disabled ? " muted" : ""}` },
+    input,
+    ` ${options.label}`,
   );
 }
 
@@ -146,7 +238,12 @@ function taskHeader(
       "header",
       { class: "task-header" },
       h(doc, "h1", HEADING_ATTRS, "No task selected"),
-      h(doc, "p", {}, "Select a session to inspect its read-only details."),
+      h(
+        doc,
+        "p",
+        {},
+        "Select a session or compose a new task below to get started.",
+      ),
     );
   const candidateRevision =
     verification?.candidate?.revision ?? "not available";
@@ -173,7 +270,6 @@ function taskHeader(
         { class: "meta-value" },
         `Candidate revision: ${candidateRevision}`,
       ),
-      h(doc, "span", { class: "meta-value" }, "Mode: not reported by host"),
       h(
         doc,
         "span",
@@ -187,6 +283,495 @@ function taskHeader(
         `Task revision: ${task.revision}`,
       ),
     ),
+  );
+}
+
+function approvalAndLifecycleCard(
+  doc: ShellDocument,
+  state: ShellState,
+): ShellElement | null {
+  const task = state.selectedTask;
+  const launch = state.launch;
+  if (!task || !launch) return null;
+
+  const canExecute = Boolean(state.describe?.capabilities.execute);
+  const notice = launch.actionNotice
+    ? h(doc, "p", { class: "action-notice" }, launch.actionNotice)
+    : null;
+  const error = launch.actionError
+    ? h(doc, "p", { class: "error", role: "alert" }, launch.actionError)
+    : null;
+
+  if (task.status === "pending") {
+    const modelSelect = h(
+      doc,
+      "select",
+      {
+        class: "model-select",
+        "aria-label": "Model selection",
+        "data-control": "launch-model",
+      },
+      h(
+        doc,
+        "option",
+        { value: "default", selected: launch.modelChoice === "default" },
+        "Host default model (no extra cost)",
+      ),
+      h(
+        doc,
+        "option",
+        { value: "paid", selected: launch.modelChoice === "paid" },
+        `Paid frontier model (${launch.paidModelId})`,
+      ),
+    );
+    modelSelect.value = launch.modelChoice;
+    modelSelect.addEventListener("change", (event) => {
+      const value = (event.target as { value?: string } | undefined)?.value;
+      state.onLaunchChange?.({
+        modelChoice: value === "paid" ? "paid" : "default",
+        paidModelConsent: false,
+      });
+    });
+
+    const paidConsentNeeded = launch.modelChoice === "paid";
+    const paidModelInput = paidConsentNeeded
+      ? h(doc, "input", {
+          type: "text",
+          class: "paid-model-input",
+          value: launch.paidModelId,
+          placeholder: "Host-configured paid model ID",
+          disabled: launch.busy,
+          "aria-label": "Paid model ID",
+          "data-control": "launch-paid-model-id",
+          "data-focus-key": "launch-paid-model-id",
+        })
+      : null;
+    if (paidModelInput) {
+      paidModelInput.value = launch.paidModelId;
+      paidModelInput.disabled = launch.busy;
+      paidModelInput.addEventListener("input", (event) => {
+        const next =
+          (event.target as { value?: string } | undefined)?.value ?? "";
+        state.onLaunchChange?.({
+          paidModelId: next,
+          paidModelConsent: false,
+        });
+      });
+    }
+    const trimmedPaidModelId = launch.paidModelId.trim();
+    const paidConsentBox = paidConsentNeeded
+      ? h(
+          doc,
+          "div",
+          { class: "consent-card", "data-card": "paid-model-consent" },
+          h(doc, "strong", {}, "Paid-model consent required"),
+          h(
+            doc,
+            "label",
+            { class: "paid-model-label" },
+            "Model ID ",
+            paidModelInput,
+          ),
+          h(
+            doc,
+            "p",
+            { class: "muted" },
+            `Launching with ${trimmedPaidModelId || "a paid model"} may incur metered model charges within the task budget ($${task.budget.max_usd}).`,
+          ),
+          checkboxField(doc, {
+            label: "I consent to paid model usage for this task",
+            checked: launch.paidModelConsent,
+            disabled: launch.busy || trimmedPaidModelId.length === 0,
+            dataKey: "launch-paid-consent",
+            onChange: (checked) =>
+              state.onLaunchChange?.({ paidModelConsent: checked }),
+          }),
+        )
+      : null;
+
+    const startBlocked =
+      launch.busy ||
+      (paidConsentNeeded &&
+        (!launch.paidModelConsent || trimmedPaidModelId.length === 0));
+    const startBtn = h(
+      doc,
+      "button",
+      {
+        type: "button",
+        class: "primary-btn",
+        disabled: startBlocked,
+        "data-action": "start-task",
+      },
+      launch.busy ? "Starting…" : "Approve & start task",
+    );
+    startBtn.disabled = startBlocked;
+    startBtn.addEventListener("click", () => state.onStartTask?.());
+
+    const cancelBtn = h(
+      doc,
+      "button",
+      {
+        type: "button",
+        class: "danger-btn",
+        disabled: launch.busy,
+        "data-action": "cancel-task",
+      },
+      "Cancel task",
+    );
+    cancelBtn.disabled = launch.busy;
+    cancelBtn.addEventListener("click", () => state.onCancelTask?.());
+
+    return h(
+      doc,
+      "section",
+      { class: "action-card", "data-card": "approval-card" },
+      heading(doc, "Approvals & Launch Consent"),
+      h(
+        doc,
+        "fieldset",
+        { class: "approvals-group" },
+        h(doc, "legend", {}, "Independent capability approvals"),
+        checkboxField(doc, {
+          label: "Read workspace",
+          checked: launch.approvals.read,
+          dataKey: "approval-read",
+          onChange: (checked) =>
+            state.onLaunchApprovalChange?.("read", checked),
+        }),
+        checkboxField(doc, {
+          label: "Write workspace",
+          checked: launch.approvals.write,
+          dataKey: "approval-write",
+          onChange: (checked) =>
+            state.onLaunchApprovalChange?.("write", checked),
+        }),
+        checkboxField(doc, {
+          label: canExecute
+            ? "Execute commands"
+            : "Execute commands (disabled by host)",
+          checked: canExecute && launch.approvals.execute,
+          disabled: !canExecute,
+          dataKey: "approval-execute",
+          onChange: (checked) =>
+            state.onLaunchApprovalChange?.("execute", checked),
+        }),
+      ),
+      h(
+        doc,
+        "div",
+        { class: "model-row" },
+        h(doc, "label", {}, "Model ", modelSelect),
+      ),
+      paidConsentBox,
+      h(doc, "div", { class: "action-buttons" }, startBtn, cancelBtn),
+      notice,
+      error,
+    );
+  }
+
+  if (task.status === "paused") {
+    const resumeBtn = h(
+      doc,
+      "button",
+      {
+        type: "button",
+        class: "primary-btn",
+        disabled: launch.busy,
+        "data-action": "resume-task",
+      },
+      launch.busy ? "Resuming…" : "Resume task",
+    );
+    resumeBtn.disabled = launch.busy;
+    resumeBtn.addEventListener("click", () => state.onResumeTask?.());
+
+    const cancelBtn = h(
+      doc,
+      "button",
+      {
+        type: "button",
+        class: "danger-btn",
+        disabled: launch.busy,
+        "data-action": "cancel-task",
+      },
+      "Cancel task",
+    );
+    cancelBtn.disabled = launch.busy;
+    cancelBtn.addEventListener("click", () => state.onCancelTask?.());
+
+    return h(
+      doc,
+      "section",
+      { class: "action-card", "data-card": "lifecycle-card" },
+      heading(doc, "Task Controls"),
+      h(doc, "div", { class: "action-buttons" }, resumeBtn, cancelBtn),
+      notice,
+      error,
+    );
+  }
+
+  if (task.status === "running") {
+    const steerInput = h(doc, "input", {
+      type: "text",
+      class: "steer-input",
+      placeholder: "Send steering instruction to running task…",
+      value: launch.steerDraft,
+      "aria-label": "Steer instruction",
+      "data-control": "steer-input",
+    });
+    steerInput.value = launch.steerDraft;
+    steerInput.addEventListener("input", (event) => {
+      const next =
+        (event.target as { value?: string } | undefined)?.value ?? "";
+      state.onLaunchChange?.({ steerDraft: next });
+    });
+
+    const steerBtn = h(
+      doc,
+      "button",
+      {
+        type: "button",
+        class: "primary-btn",
+        disabled: launch.busy,
+        "data-action": "steer-task",
+      },
+      "Steer task",
+    );
+    steerBtn.disabled = launch.busy;
+    steerBtn.addEventListener("click", () => {
+      const text = (steerInput.value ?? launch.steerDraft).trim();
+      if (text) state.onSteerTask?.(text);
+    });
+
+    const cancelBtn = h(
+      doc,
+      "button",
+      {
+        type: "button",
+        class: "danger-btn",
+        disabled: launch.busy,
+        "data-action": "cancel-task",
+      },
+      "Cancel task",
+    );
+    cancelBtn.disabled = launch.busy;
+    cancelBtn.addEventListener("click", () => state.onCancelTask?.());
+
+    return h(
+      doc,
+      "section",
+      { class: "action-card", "data-card": "lifecycle-card" },
+      heading(doc, "Active Task Controls"),
+      h(doc, "div", { class: "steer-row" }, steerInput, steerBtn, cancelBtn),
+      notice,
+      error,
+    );
+  }
+
+  if (notice || error) {
+    return h(
+      doc,
+      "section",
+      { class: "action-card", "data-card": "lifecycle-notice" },
+      notice,
+      error,
+    );
+  }
+  return null;
+}
+
+function promptComposer(
+  doc: ShellDocument,
+  state: ShellState,
+): ShellElement | null {
+  const composer = state.composer;
+  if (!composer) return null;
+
+  const canExecute = Boolean(state.describe?.capabilities.execute);
+  const requestInput = h(doc, "textarea", {
+    class: "composer-textarea",
+    rows: "3",
+    placeholder: "Describe a task for MARS workbench…",
+    "aria-label": "Task prompt",
+    "data-control": "composer-request",
+    "data-focus-key": "composer-request",
+  });
+  requestInput.value = composer.request;
+  requestInput.addEventListener("input", (event) => {
+    const next = (event.target as { value?: string } | undefined)?.value ?? "";
+    state.onComposerChange?.({ request: next });
+  });
+
+  const criteriaInput = h(doc, "input", {
+    type: "text",
+    class: "composer-criteria",
+    placeholder: "Optional acceptance criteria (comma-separated)",
+    value: composer.criteria,
+    "aria-label": "Acceptance criteria",
+    "data-control": "composer-criteria",
+  });
+  criteriaInput.value = composer.criteria;
+  criteriaInput.addEventListener("input", (event) => {
+    const next = (event.target as { value?: string } | undefined)?.value ?? "";
+    state.onComposerChange?.({ criteria: next });
+  });
+
+  const modelSelect = h(
+    doc,
+    "select",
+    {
+      class: "model-select",
+      disabled: composer.submitting,
+      "aria-label": "Composer model",
+      "data-control": "composer-model",
+    },
+    h(
+      doc,
+      "option",
+      { value: "default", selected: composer.modelChoice === "default" },
+      "Host default model",
+    ),
+    h(
+      doc,
+      "option",
+      { value: "paid", selected: composer.modelChoice === "paid" },
+      `Paid model (${composer.paidModelId})`,
+    ),
+  );
+  modelSelect.value = composer.modelChoice;
+  modelSelect.disabled = composer.submitting;
+  modelSelect.addEventListener("change", (event) => {
+    const value = (event.target as { value?: string } | undefined)?.value;
+    state.onComposerChange?.({
+      modelChoice: value === "paid" ? "paid" : "default",
+      paidModelConsent: false,
+    });
+  });
+
+  const paidConsentNeeded =
+    composer.startNow && composer.modelChoice === "paid";
+  const composerPaidModelInput = paidConsentNeeded
+    ? h(doc, "input", {
+        type: "text",
+        class: "paid-model-input",
+        value: composer.paidModelId,
+        placeholder: "Host-configured paid model ID",
+        disabled: composer.submitting,
+        "aria-label": "Composer paid model ID",
+        "data-control": "composer-paid-model-id",
+        "data-focus-key": "composer-paid-model-id",
+      })
+    : null;
+  if (composerPaidModelInput) {
+    composerPaidModelInput.value = composer.paidModelId;
+    composerPaidModelInput.disabled = composer.submitting;
+    composerPaidModelInput.addEventListener("input", (event) => {
+      const next =
+        (event.target as { value?: string } | undefined)?.value ?? "";
+      state.onComposerChange?.({
+        paidModelId: next,
+        paidModelConsent: false,
+      });
+    });
+  }
+  const trimmedComposerPaidModelId = composer.paidModelId.trim();
+  const paidConsent = paidConsentNeeded
+    ? h(
+        doc,
+        "div",
+        { class: "consent-card", "data-card": "composer-paid-consent" },
+        h(
+          doc,
+          "label",
+          { class: "paid-model-label" },
+          "Model ID ",
+          composerPaidModelInput,
+        ),
+        checkboxField(doc, {
+          label: `I consent to paid model usage (${trimmedComposerPaidModelId || "paid model"})`,
+          checked: composer.paidModelConsent,
+          disabled:
+            composer.submitting || trimmedComposerPaidModelId.length === 0,
+          dataKey: "composer-paid-consent",
+          onChange: (checked) =>
+            state.onComposerChange?.({ paidModelConsent: checked }),
+        }),
+      )
+    : null;
+
+  const submitDisabled =
+    composer.submitting ||
+    (paidConsentNeeded &&
+      (!composer.paidModelConsent || trimmedComposerPaidModelId.length === 0));
+  const submitBtn = h(
+    doc,
+    "button",
+    {
+      type: "button",
+      class: "primary-btn",
+      disabled: submitDisabled,
+      "data-action": "create-task",
+    },
+    composer.submitting
+      ? "Submitting…"
+      : composer.startNow
+        ? "Create & launch task"
+        : "Create task",
+  );
+  submitBtn.disabled = submitDisabled;
+  submitBtn.addEventListener("click", () => state.onCreateTask?.());
+
+  return h(
+    doc,
+    "section",
+    { class: "composer-card", "data-panel": "prompt-composer" },
+    heading(doc, "New Task Composer"),
+    requestInput,
+    criteriaInput,
+    h(
+      doc,
+      "div",
+      { class: "composer-options" },
+      checkboxField(doc, {
+        label: "Start immediately",
+        checked: composer.startNow,
+        dataKey: "composer-start-now",
+        onChange: (checked) => state.onComposerChange?.({ startNow: checked }),
+      }),
+      composer.startNow
+        ? checkboxField(doc, {
+            label: "Read",
+            checked: composer.approvals.read,
+            dataKey: "composer-read",
+            onChange: (checked) =>
+              state.onComposerApprovalChange?.("read", checked),
+          })
+        : null,
+      composer.startNow
+        ? checkboxField(doc, {
+            label: "Write",
+            checked: composer.approvals.write,
+            dataKey: "composer-write",
+            onChange: (checked) =>
+              state.onComposerApprovalChange?.("write", checked),
+          })
+        : null,
+      composer.startNow
+        ? checkboxField(doc, {
+            label: canExecute ? "Execute" : "Execute (off)",
+            checked: canExecute && composer.approvals.execute,
+            disabled: !canExecute,
+            dataKey: "composer-execute",
+            onChange: (checked) =>
+              state.onComposerApprovalChange?.("execute", checked),
+          })
+        : null,
+      composer.startNow ? modelSelect : null,
+    ),
+    paidConsent,
+    h(doc, "div", { class: "action-buttons" }, submitBtn),
+    composer.error
+      ? h(doc, "p", { class: "error", role: "alert" }, composer.error)
+      : null,
   );
 }
 
@@ -285,11 +870,12 @@ function countPatch(patch: string): { added: number; removed: number } {
   return { added, removed };
 }
 
-function changesSection(
-  doc: ShellDocument,
-  diff: DiffResult | undefined,
-  error: string | undefined,
-): ShellElement {
+function changesSection(doc: ShellDocument, state: ShellState): ShellElement {
+  const diff = state.diff;
+  const error = state.diffError;
+  const verification = state.verification;
+  const exportState = state.patchExport;
+
   const files = (diff?.files ?? []).map((file) => {
     const counts = countPatch(file.patch);
     return h(
@@ -315,6 +901,86 @@ function changesSection(
       ),
     );
   });
+
+  const canExport =
+    verification?.state === "verified" &&
+    Boolean(verification.candidate?.revision) &&
+    Boolean(verification.patch_sha256) &&
+    (diff?.files.length ?? 0) > 0;
+
+  let exportBox: ShellElement | null = null;
+  if (state.selectedTask && !error && (diff?.files.length ?? 0) > 0) {
+    const exportBtn = h(
+      doc,
+      "button",
+      {
+        type: "button",
+        class: "primary-btn export-btn",
+        disabled: !canExport || Boolean(exportState?.busy),
+        "data-action": "export-patch",
+      },
+      exportState?.busy ? "Exporting…" : "Export verified patch",
+    );
+    exportBtn.disabled = !canExport || Boolean(exportState?.busy);
+    exportBtn.addEventListener("click", () => state.onExportPatch?.());
+
+    exportBox = h(
+      doc,
+      "div",
+      { class: "export-card", "data-card": "patch-export" },
+      h(doc, "strong", {}, "Verified Patch Export"),
+      canExport
+        ? h(
+            doc,
+            "p",
+            { class: "muted" },
+            `Revision ${verification?.candidate?.revision} · sha256 ${verification?.patch_sha256}`,
+          )
+        : h(
+            doc,
+            "p",
+            { class: "muted" },
+            "Host verification must be Verified before exporting a patch.",
+          ),
+      exportBtn,
+      exportState?.error
+        ? h(doc, "p", { class: "error", role: "alert" }, exportState.error)
+        : null,
+      exportState?.result
+        ? h(
+            doc,
+            "div",
+            { class: "export-result", "data-export-verified": "true" },
+            h(
+              doc,
+              "p",
+              { class: "action-notice" },
+              `Exported ${exportState.result.artifact.artifact_id} (${exportState.result.artifact.byte_length} bytes · sha256 verified)`,
+            ),
+            h(
+              doc,
+              "small",
+              { class: "digest" },
+              `sha256 ${exportState.result.patch_sha256}`,
+            ),
+            exportState.patchText
+              ? h(
+                  doc,
+                  "details",
+                  { class: "patch-details" },
+                  h(doc, "summary", {}, "Verified exported patch"),
+                  untrusted(
+                    doc,
+                    exportState.patchText,
+                    `exported patch · sha256 verified`,
+                  ),
+                )
+              : null,
+          )
+        : null,
+    );
+  }
+
   return h(
     doc,
     "section",
@@ -323,7 +989,7 @@ function changesSection(
     ...(error
       ? [unavailable(doc, error)]
       : files.length
-        ? files
+        ? [...files, exportBox]
         : [h(doc, "p", {}, "No diff files.")]),
   );
 }
@@ -432,6 +1098,29 @@ export function renderShell(
     "Refresh",
   );
   refresh.addEventListener("click", () => state.onRefresh?.());
+
+  const teamChatAvailable = Boolean(state.teamChat?.available);
+  const unreadTotal = (state.teamChat?.conversations ?? []).reduce(
+    (sum, conv) => sum + conv.unread_count,
+    0,
+  );
+  const teamChatBtn = h(
+    doc,
+    "button",
+    {
+      type: "button",
+      class: `team-chat-toggle${state.teamChat?.open ? " selected" : ""}`,
+      disabled: !teamChatAvailable,
+      "aria-disabled": teamChatAvailable ? "false" : "true",
+      "aria-pressed": state.teamChat?.open ? "true" : "false",
+      "data-action": "toggle-team-chat",
+      "data-focus-key": "team-chat-toggle",
+    },
+    unreadTotal > 0 ? `Team chat (${unreadTotal})` : "Team chat",
+  );
+  teamChatBtn.disabled = !teamChatAvailable;
+  teamChatBtn.addEventListener("click", () => state.onOpenTeamChat?.());
+
   const sidebar = h(
     doc,
     "nav",
@@ -442,48 +1131,60 @@ export function renderShell(
     h(
       doc,
       "section",
-      { class: "workspace-placeholder" },
-      h(doc, "h2", { class: "section-title" }, "Workspace tree"),
-      h(doc, "p", {}, "arrives with @mars/ui-core"),
-    ),
-    h(
-      doc,
-      "section",
       { class: "team-chat" },
+      teamChatBtn,
       h(
         doc,
-        "button",
-        { type: "button", disabled: true, "aria-disabled": "true" },
-        "Team chat",
+        "p",
+        { class: "muted" },
+        teamChatAvailable
+          ? `${state.teamChat?.label ?? "READY"} · ${state.teamChat?.conversations.length ?? 0} channel${state.teamChat?.conversations.length === 1 ? "" : "s"}`
+          : "team chat unavailable",
       ),
-      h(doc, "p", {}, "reserved · not in this build"),
     ),
   );
-  const main = h(
-    doc,
-    "main",
-    { class: "main" },
-    h(
-      doc,
-      "div",
-      { class: "main-toolbar" },
-      taskHeader(doc, task, state.verification, state.verificationError),
-      refresh,
-    ),
-    h(
-      doc,
-      "section",
-      { class: "transcript", role: "log", "aria-live": "polite" },
-      state.eventsError
-        ? unavailable(doc, state.eventsError)
-        : h(
+
+  const main =
+    state.teamChat?.open && state.teamChat.available
+      ? h(
+          doc,
+          "main",
+          { class: "main" },
+          renderTeamChatPane(doc, state.teamChat),
+        )
+      : h(
+          doc,
+          "main",
+          { class: "main" },
+          h(
             doc,
-            "p",
-            {},
-            `Transcript projection arrives with @mars/ui-core. ${state.events.length >= 1000 ? "1000+" : state.events.length} task event${state.events.length === 1 ? "" : "s"} available via tasks.events (content not rendered in this build).`,
+            "div",
+            { class: "main-toolbar" },
+            taskHeader(doc, task, state.verification, state.verificationError),
+            refresh,
           ),
-    ),
-  );
+          approvalAndLifecycleCard(doc, state),
+          h(
+            doc,
+            "section",
+            { class: "transcript", role: "log", "aria-live": "polite" },
+            state.eventsError
+              ? unavailable(doc, state.eventsError)
+              : h(
+                  doc,
+                  "div",
+                  { class: "transcript-entries" },
+                  ...renderTranscript(
+                    doc,
+                    state.transcript,
+                    state.events.length,
+                    state.eventsCapped,
+                  ),
+                ),
+          ),
+          promptComposer(doc, state),
+        );
+
   const inspector = h(
     doc,
     "aside",
@@ -498,10 +1199,11 @@ export function renderShell(
           h(doc, "p", {}, "Select a task."),
         ),
     verificationSection(doc, state.verification, state.verificationError),
-    changesSection(doc, state.diff, state.diffError),
+    changesSection(doc, state),
     evidenceSection(doc, state.evidence, state.evidenceError),
     artifactsSection(doc, state.artifacts),
   );
+
   const footer = h(
     doc,
     "footer",
@@ -509,14 +1211,18 @@ export function renderShell(
     h(doc, "span", {}, state.describe ? "Connected" : "Not connected"),
     h(doc, "span", {}, state.describe?.workspaceLabel ?? "No workspace"),
     h(doc, "span", {}, "loopback"),
-    h(doc, "span", {}, "read-only"),
+    h(doc, "span", {}, "interactive"),
     h(
       doc,
       "span",
       {},
       `execute: ${state.describe?.capabilities.execute ? "on" : "off"}`,
     ),
+    state.teamChat?.label
+      ? h(doc, "span", {}, `team chat: ${state.teamChat.label}`)
+      : null,
   );
+
   return h(
     doc,
     "div",

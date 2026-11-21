@@ -12,6 +12,16 @@ export async function buildShell(outdir: string): Promise<void> {
     target: "browser",
     format: "esm",
     minify: false,
+    plugins: [
+      {
+        name: "ui-core-browser-projection",
+        setup(build) {
+          build.onResolve({ filter: /^@mars\/ui-core$/ }, () => ({
+            path: resolve(root, "../../packages/ui-core/src/projection.ts"),
+          }));
+        },
+      },
+    ],
   });
   if (!renderer.success) throw new Error(renderer.logs.join("\n"));
   const main = await Bun.build({

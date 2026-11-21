@@ -381,6 +381,262 @@ button:disabled {
   padding: 32px;
 }
 
+.action-card,
+.composer-card,
+.export-card,
+.consent-card {
+  margin: 12px 0;
+  padding: 12px;
+  background: var(--cardBg);
+  border: 1px solid var(--borderMuted);
+  border-radius: 6px;
+}
+
+.consent-card {
+  background: var(--customMessageBg);
+  border-color: var(--warning);
+}
+
+.approvals-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--borderMuted);
+  border-radius: 4px;
+}
+
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.action-buttons,
+.steer-row,
+.composer-options,
+.model-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.composer-textarea,
+.composer-criteria,
+.steer-input,
+.model-select,
+.team-composer-input,
+.team-search-input,
+.team-viewer-select {
+  color: var(--fg);
+  background: var(--pageBg);
+  border: 1px solid var(--borderMuted);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.composer-textarea,
+.composer-criteria {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 6px;
+}
+
+.steer-input {
+  flex: 1 1 200px;
+}
+
+.primary-btn {
+  border-color: var(--border);
+  background: var(--selectedBg);
+}
+
+.danger-btn {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.action-notice {
+  color: var(--success);
+  margin: 6px 0 0;
+}
+
+.transcript-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.transcript-entry {
+  padding: 10px;
+  background: var(--cardBg);
+  border: 1px solid var(--borderMuted);
+  border-radius: 6px;
+}
+
+.transcript-user {
+  border-left: 3px solid var(--accent);
+}
+
+.transcript-assistant {
+  border-left: 3px solid var(--border);
+}
+
+.transcript-error {
+  border-left: 3px solid var(--error);
+}
+
+.entry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.entry-badge,
+.team-unread-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 11px;
+  border-radius: 999px;
+  background: var(--infoBg);
+  border: 1px solid var(--borderMuted);
+}
+
+.team-unread-badge {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.badge-verified {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.badge-unverified {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.team-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+}
+
+.team-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--borderMuted);
+  padding-bottom: 8px;
+}
+
+.team-header-title,
+.team-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.team-layout {
+  display: grid;
+  grid-template-columns: minmax(170px, 220px) minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+  flex: 1;
+}
+
+.team-conv-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.team-conv-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.team-conv-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  text-align: left;
+}
+
+.team-conv-btn.selected {
+  background: var(--selectedBg);
+  border-color: var(--border);
+}
+
+.team-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.team-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.team-message {
+  padding: 8px;
+  background: var(--cardBg);
+  border: 1px solid var(--borderMuted);
+  border-radius: 6px;
+}
+
+.team-message-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.team-reactions {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.team-reaction-btn.active {
+  border-color: var(--accent);
+  background: var(--selectedBg);
+}
+
+.team-composer,
+.team-search {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.team-composer-input,
+.team-search-input {
+  flex: 1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

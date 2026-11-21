@@ -1,5 +1,8 @@
+import { fail } from "@mars/team-chat";
 import { BRIDGE_CHANNEL, bridgeFailure } from "../shared/methods";
+import { TEAM_CHAT_CHANNEL } from "../shared/team-chat";
 import type { Bridge } from "./bridge";
+import type { TeamChatBridge } from "./team-chat-bridge";
 
 export type IpcEventLike = {
   senderFrame?: { url?: string } | null;
@@ -61,6 +64,24 @@ export function registerBridge(
       return await bridge.call(request.method, request.params);
     } catch {
       return bridgeFailure("protocol");
+    }
+  });
+}
+
+export function registerTeamChatBridge(
+  ipcMain: IpcMainLike,
+  teamChat: TeamChatBridge,
+  options: { trustedOrigin: string },
+): void {
+  ipcMain.handle(TEAM_CHAT_CHANNEL, async (event, payload) => {
+    try {
+      if (!trustedSender(event, options.trustedOrigin))
+        return fail("forbidden");
+      const request = requestPayload(payload);
+      if (!request) return fail("invalid");
+      return await teamChat.call(request.method, request.params);
+    } catch {
+      return fail("unavailable");
     }
   });
 }

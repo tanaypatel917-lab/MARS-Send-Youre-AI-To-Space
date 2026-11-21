@@ -6,7 +6,7 @@ import {
   type BridgeErrorKind,
   bridgeError,
   bridgeFailure,
-  isReadMethod,
+  isBridgeMethod,
 } from "../shared/methods";
 import { type Bridge, createBridge } from "./bridge";
 import type { RpcTransport } from "./transport";
@@ -28,7 +28,7 @@ export function createReconnectingBridge(options: {
 
   return {
     async call(method, params) {
-      if (!isReadMethod(method)) return refusalBridge.call(method, params);
+      if (!isBridgeMethod(method)) return refusalBridge.call(method, params);
       if (!activeBridge) {
         let connection: ConnectionResult;
         try {

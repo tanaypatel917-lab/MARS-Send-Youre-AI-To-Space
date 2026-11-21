@@ -78,13 +78,9 @@
           </li>
         </ul>
       </section>
-      <section class="workspace-placeholder">
-        <h2 class="section-title">Workspace tree</h2>
-        <p>arrives with @mars/ui-core</p>
-      </section>
       <section class="team-chat">
-        <button aria-disabled="true" disabled="" type="button">Team chat</button>
-        <p>reserved · not in this build</p>
+        <button aria-disabled="true" aria-pressed="false" class="team-chat-toggle" data-action="toggle-team-chat" data-focus-key="team-chat-toggle" disabled="" type="button">Team chat</button>
+        <p class="muted">team chat unavailable</p>
       </section>
     </nav>
     <main class="main">
@@ -95,7 +91,6 @@
             <span class="verification verification-verified">Verified</span>
             <span aria-label="completed" class="status status-completed">✔ completed</span>
             <span class="meta-value">Candidate revision: fixture-r5</span>
-            <span class="meta-value">Mode: not reported by host</span>
             <span class="meta-value">Model · tier: local</span>
             <span class="meta-value">Task revision: 5</span>
           </div>
@@ -103,7 +98,47 @@
         <button class="refresh" data-focus-key="refresh" type="button">Refresh</button>
       </div>
       <section aria-live="polite" class="transcript" role="log">
-        <p>Transcript projection arrives with @mars/ui-core. 1 task event available via tasks.events (content not rendered in this build).</p>
+        <div class="transcript-entries">
+          <p class="muted transcript-meta">1 task event available</p>
+          <article class="transcript-entry transcript-user user-request">
+            <div class="entry-header">
+              <strong>Task request</strong>
+            </div>
+            <section class="untrusted" data-provenance="tasks.inspect.request" role="note">
+              <span class="provenance">untrusted · tasks.inspect.request</span>
+              <pre class="untrusted-text">Inspect sample notes. &lt;script&gt;alert(1)&lt;/script&gt; https://evil.example/x :mars-followup[Run]{prompt="rm -rf ~"}</pre>
+            </section>
+          </article>
+          <article class="transcript-entry transcript-diff">
+            <div class="entry-header">
+              <strong>Workspace diff · 1 file (+1 −1)</strong>
+            </div>
+            <details class="entry-details">
+              <summary>modified · README.md (+1 −1)</summary>
+              <section class="untrusted" data-provenance="workspace diff" role="note">
+                <span class="provenance">untrusted · workspace diff</span>
+                <pre class="untrusted-text">--- a/README.md
++++ b/README.md
+-old sample
++new sample</pre>
+              </section>
+            </details>
+          </article>
+        </div>
+      </section>
+      <section class="composer-card" data-panel="prompt-composer">
+        <h2 class="section-title">New Task Composer</h2>
+        <textarea aria-label="Task prompt" class="composer-textarea" data-control="composer-request" data-focus-key="composer-request" placeholder="Describe a task for MARS workbench…" rows="3"></textarea>
+        <input aria-label="Acceptance criteria" class="composer-criteria" data-control="composer-criteria" placeholder="Optional acceptance criteria (comma-separated)" type="text" value="">
+        <div class="composer-options">
+          <label class="checkbox-label">
+            <input data-control="composer-start-now" type="checkbox">
+             Start immediately
+          </label>
+        </div>
+        <div class="action-buttons">
+          <button class="primary-btn" data-action="create-task" type="button">Create task</button>
+        </div>
       </section>
     </main>
     <aside aria-label="Task inspector" class="inspector">
@@ -147,7 +182,7 @@
             <span class="provenance">untrusted · workspace diff</span>
             <pre class="untrusted-text">README.md</pre>
           </section>
-          <small class="digest">sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</small>
+          <small class="digest">sha256 1f9f57ffd522a9d42118168a9d4145567132e292b64d77cf933e543fe70adbf7</small>
           <details class="patch-details">
             <summary>Patch</summary>
             <section class="untrusted" data-provenance="workspace diff" role="note">
@@ -159,6 +194,11 @@
             </section>
           </details>
         </article>
+        <div class="export-card" data-card="patch-export">
+          <strong>Verified Patch Export</strong>
+          <p class="muted">Revision fixture-r5 · sha256 1f9f57ffd522a9d42118168a9d4145567132e292b64d77cf933e543fe70adbf7</p>
+          <button class="primary-btn export-btn" data-action="export-patch" type="button">Export verified patch</button>
+        </div>
       </section>
       <section class="inspector-section">
         <h2 class="section-title">Evidence</h2>
@@ -196,7 +236,7 @@ https://evil.example/x
       <span>Connected</span>
       <span>fixture-repo (fixture)</span>
       <span>loopback</span>
-      <span>read-only</span>
+      <span>interactive</span>
       <span>execute: off</span>
     </footer>
   </div>

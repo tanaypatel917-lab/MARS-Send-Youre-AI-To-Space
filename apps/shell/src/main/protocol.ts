@@ -1,6 +1,7 @@
 import {
   EventEnvelopeSchema,
   JournalResultSchema,
+  PatchExportSchema,
   TaskSchema,
   VerificationViewSchema,
 } from "@mars/contracts";
@@ -13,11 +14,11 @@ import {
   InspectResultSchema,
   RpcRequestSchema,
 } from "../../../../packages/workbench/src/protocol";
-import type { ReadMethod } from "../shared/methods";
+import type { BridgeMethod } from "../shared/methods";
 
 type RpcRequest = z.infer<typeof RpcRequestSchema>;
 type ParamsByMethod = {
-  [M in ReadMethod]: z.ZodType<Extract<RpcRequest, { method: M }>["params"]>;
+  [M in BridgeMethod]: z.ZodType<Extract<RpcRequest, { method: M }>["params"]>;
 };
 
 const requestParams = new Map(
@@ -27,7 +28,7 @@ const requestParams = new Map(
   ]),
 );
 
-function paramsSchema<M extends ReadMethod>(method: M): ParamsByMethod[M] {
+function paramsSchema<M extends BridgeMethod>(method: M): ParamsByMethod[M] {
   const schema = requestParams.get(method);
   if (!schema) throw new Error(`Missing RPC params schema for ${method}.`);
   return schema as unknown as ParamsByMethod[M];
@@ -43,6 +44,12 @@ export const ParamsSchema = {
   "tasks.verification": paramsSchema("tasks.verification"),
   "tasks.evidence": paramsSchema("tasks.evidence"),
   "tasks.journal": paramsSchema("tasks.journal"),
+  "tasks.create": paramsSchema("tasks.create"),
+  "tasks.start": paramsSchema("tasks.start"),
+  "tasks.resume": paramsSchema("tasks.resume"),
+  "tasks.steer": paramsSchema("tasks.steer"),
+  "tasks.cancel": paramsSchema("tasks.cancel"),
+  "tasks.export": paramsSchema("tasks.export"),
 } satisfies ParamsByMethod;
 
 export const ResultSchema = {
@@ -55,11 +62,17 @@ export const ResultSchema = {
   "tasks.verification": VerificationViewSchema,
   "tasks.evidence": EvidenceResultSchema,
   "tasks.journal": JournalResultSchema,
-} satisfies Record<ReadMethod, z.ZodTypeAny>;
+  "tasks.create": TaskSchema,
+  "tasks.start": TaskSchema,
+  "tasks.resume": TaskSchema,
+  "tasks.steer": z.null(),
+  "tasks.cancel": z.null(),
+  "tasks.export": PatchExportSchema,
+} satisfies Record<BridgeMethod, z.ZodTypeAny>;
 
-export type ParsedParams<M extends ReadMethod> = z.infer<
+export type ParsedParams<M extends BridgeMethod> = z.infer<
   (typeof ParamsSchema)[M]
 >;
-export type ParsedResult<M extends ReadMethod> = z.infer<
+export type ParsedResult<M extends BridgeMethod> = z.infer<
   (typeof ResultSchema)[M]
 >;
