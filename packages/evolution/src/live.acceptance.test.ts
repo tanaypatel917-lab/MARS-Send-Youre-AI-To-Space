@@ -11,18 +11,26 @@ import {
 } from "@mars/evaluation";
 import { createHarborEvaluator } from "./evaluators";
 import { type LiveRunObservation, liveEvidenceRecord } from "./live-evidence";
-import { createScriptedProposer } from "./proposers";
-import { createProcessSandbox } from "./sandbox";
+import {
+  createModelProposer,
+  createOpenRouterProposerClient,
+  DEFAULT_FREE_PROPOSER_MODEL,
+} from "./proposers";
+import {
+  createEvolutionDockerSandbox,
+  DEFAULT_EVOLUTION_DOCKER_IMAGE,
+} from "./sandbox";
 import { EvolutionService } from "./service";
 
 /**
  * LIVE acceptance (never run in CI; BLOCKED without a model key, Harbor venv
- * and pinned Docker images). See HANDOFF.md for the exact command.
+ * and pinned Docker images). See documentation/EVOLUTION.md for the exact command.
  *
- * PARTIAL PATH: real Harbor evaluation, but a scripted proposer and
- * host-process builds. A pass does not establish model-driven proposing or
- * Docker-isolated builds; see LIVE_ACCEPTANCE_EVIDENCE. `live-evidence.json`
- * is written only after the run ends, with its status and what it observed.
+ * Uses a real model-driven proposer (`createModelProposer`, free-tier OpenRouter
+ * by default), Docker-isolated candidate builds (`createEvolutionDockerSandbox`,
+ * `--network=none`), and real Harbor evaluation; see LIVE_ACCEPTANCE_EVIDENCE.
+ * `live-evidence.json` is written only after the run ends, with its status and
+ * what it observed.
  */
 const live = process.env.MARS_EVOLUTION_LIVE === "1";
 
@@ -50,7 +58,7 @@ class Artifacts {
 }
 
 test.skipIf(!live)(
-  "live (partial: Harbor evaluation; scripted proposer, host-process builds): a harness candidate is compared and promoted or refused; rollback runs only on accept",
+  "live (model-driven proposer, Docker --network=none builds, Harbor evaluation): a harness candidate is compared and promoted or refused; rollback runs only on accept",
   async () => {
     const env = (name: string) => {
       const value = process.env[name];
@@ -100,23 +108,27 @@ test.skipIf(!live)(
         context,
         template,
       });
+      const proposerApiKey =
+        process.env.OPENROUTER_API_KEY ??
+        process.env.OPENAI_API_KEY ??
+        env("MARS_EVAL_API_KEY");
+      const proposerModel =
+        process.env.MARS_EVOLUTION_PROPOSER_MODEL ??
+        DEFAULT_FREE_PROPOSER_MODEL;
+      const dockerImage =
+        process.env.MARS_EVOLUTION_DOCKER_IMAGE ??
+        DEFAULT_EVOLUTION_DOCKER_IMAGE;
       const open = () =>
         EvolutionService.open({
           storeDir: join(root, "store"),
           workDir: join(root, "work"),
           evaluator,
-          proposer: createScriptedProposer(
-            "live-prompt-mutation",
-            (proposal) => ({
-              hypothesis:
-                "ask the agent to run the task's tests before finishing",
-              prompts: {
-                ...proposal.parent.manifest.prompts,
-                system_prompt: `${proposal.parent.manifest.prompts.system_prompt ?? ""}\nRun the tests before you finish.`,
-              },
-            }),
-          ),
-          sandbox: createProcessSandbox(),
+          proposer: createModelProposer({
+            client: createOpenRouterProposerClient({ apiKey: proposerApiKey }),
+            model: proposerModel,
+            allowPaid: false,
+          }),
+          sandbox: createEvolutionDockerSandbox({ image: dockerImage }),
         });
       const half = Math.max(1, Math.floor(template.tasks.length / 2));
       const service = await open();

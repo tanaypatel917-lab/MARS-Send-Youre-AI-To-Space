@@ -15,12 +15,14 @@ Only the mechanics were adapted (no upstream code copied); see
 | --- | --- |
 | Archive, lineage DAG, manifests, patch-chain replay | Implemented, offline tests |
 | DGM parent selection (`score_child_prop`, `score_prop`, `random`, `best`, `latest`) | Implemented, parity tests against the upstream formulas |
-| Isolated builds, protected paths, control-state digests | Implemented, offline tests (host-process sandbox) |
-| Final-holdout promotion gates, uncertainty, `no_improvement` | Implemented, offline tests with a FAKE evaluator |
-| Champion history, rollback, crash recovery | Implemented, reopen/restart tests |
+| Model-driven proposer (`createModelProposer`, selection-only archive/lineage/failure traces, free-tier enforcement) | Implemented, unit + service integration tests |
+| Docker-sandboxed candidate builds (`createEvolutionDockerSandbox`, `--network=none`, pinned digest) | Implemented, live Docker integration test + `live-smoke` CLI |
+| Isolated builds, protected paths, control-state digests | Implemented, offline + Docker tests |
+| Final-holdout promotion gates, uncertainty, `no_improvement` | Implemented, offline + Docker tests |
+| Champion history, rollback, crash recovery | Implemented, reopen/restart + Docker tests |
+| Live smoke (`mars evolution live-smoke`, OpenRouter `:free` + Docker `--network=none`) | Executed; honest verdict `no_improvement` (baseline built/evaluated in Docker `--network=none`; OpenRouter free-tier key hit `HTTP 429 free-models-per-day`, `$0.00` spent) — see `documentation/evidence/live-dgm-evolution-smoke.json` |
 | Harbor / mini-swe-agent evaluation adapter (`createHarborEvaluator`) | Implemented; **not run live** |
-| Live acceptance (real model, Harbor, Docker sandbox) | **BLOCKED** — no model key, GPU or remote server (see HANDOFF.md) |
-| Scope of the opt-in live test | **Partial path**: real Harbor evaluation, but `createScriptedProposer` and `createProcessSandbox`; a pass does not establish model-driven proposing or Docker-isolated builds (`LIVE_ACCEPTANCE_EVIDENCE`) |
+| Opt-in live acceptance (`live.acceptance.test.ts`) | Wired to `createModelProposer` + `createEvolutionDockerSandbox` + Harbor (`LIVE_ACCEPTANCE_EVIDENCE` v2); opt-in, not executed against live Harbor |
 
 ## Concepts
 
@@ -158,6 +160,7 @@ set and comparing `task_solving` blocks; this has **not** been done.
 
 ```
 mars evolution demo --state DIR                 # offline FAKE run (model_requests: 0)
+mars evolution live-smoke --state DIR [--model ID] [--image REF] [--generations N] [--children N]
 mars evolution status|lineage|metrics|verify --state DIR --run ID
 mars evolution champion|history --state DIR --scope KEY
 mars evolution rollback --state DIR --scope KEY --to SEQ --expect-version N
@@ -176,21 +179,21 @@ a candidate workspace, and reads a host-owned copy of the bundle.
 
 ## Not verified
 
-- No live model, Harbor run, Docker sandbox build or remote/GPU execution.
-  All evidence uses the FAKE fixture evaluator (`simulated: true`, recorded on
-  every decision) and host-process builds.
-- `createHarborEvaluator` is exercised only against fake Harbor. It passes
-  non-prompt settings as a `mars_agent_settings` component, but the agent
-  applies only `system_prompt` today, so the evaluator declares
-  `appliedComponents: ["system_prompt"]` and other mutations are refused as
-  `inert_mutation` under Harbor. Baseline-arm
+- `mars evolution live-smoke` ran with a real OpenRouter free-tier key and real
+  Docker `--network=none` builds (`documentation/evidence/live-dgm-evolution-smoke.json`),
+  but OpenRouter returned `HTTP 429` (`Rate limit exceeded: free-models-per-day`)
+  for all `:free` models on the configured free-tier key, so the honest smoke
+  verdict was `no_improvement` (`$0.00` spent). Re-running once the daily
+  free-tier quota resets exercises live model patch generation end-to-end.
+- No live Harbor run or GPU execution. `createHarborEvaluator` is exercised
+  only against fake Harbor. It passes non-prompt settings as a
+  `mars_agent_settings` component, but the agent applies only `system_prompt`
+  today, so the evaluator declares `appliedComponents: ["system_prompt"]` and
+  other mutations are refused as `inert_mutation` under Harbor. Baseline-arm
   spend is charged to the run ledger but excluded from the cost gate.
-- No real proposer (model-driven patch writer) ships; the interface and a
-  scripted proposer exist.
-- `live.acceptance.test.ts`, once unblocked, covers only part of the path: it
-  pairs Harbor evaluation with the scripted proposer and host-process builds.
-  Its evidence is labelled `scope: "partial"` (`LIVE_ACCEPTANCE_EVIDENCE`) and is
-  not evidence of model-driven proposing or Docker-isolated builds.
+- `live.acceptance.test.ts` is wired to `createModelProposer` (OpenRouter
+  `:free` by default), `createEvolutionDockerSandbox` (`--network=none`), and
+  Harbor (`LIVE_ACCEPTANCE_EVIDENCE` schema v2), and remains opt-in.
   `live-evidence.json` (run root) is written only after the run ends, records
   `status: passed|failed`, establishes nothing for a failed run, and claims
   rollback only when the verdict was `accepted` and rollback actually ran.
@@ -202,4 +205,7 @@ a candidate workspace, and reads a host-owned copy of the bundle.
 `packages/evolution/src/unit.test.ts` (selection parity, statistics, config,
 patch parser/policy), `packages/evolution/src/service.test.ts` (search, tamper,
 holdout, reproducibility, promotion gates, rollback/reopen, crash resume,
-leases, budgets, evaluator pinning) and `apps/cli/src/evolution-cli.test.ts`.
+leases, budgets, evaluator pinning), `packages/evolution/src/proposer-docker.test.ts`
+(model proposer free-tier enforcement, selection-only context isolation,
+protected-path rejection, and real Docker `--network=none` build + promotion +
+rollback), and `apps/cli/src/evolution-cli.test.ts`.

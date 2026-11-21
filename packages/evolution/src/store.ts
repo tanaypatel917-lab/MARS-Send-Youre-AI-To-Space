@@ -490,6 +490,29 @@ export class EvolutionStore {
     return row.outcome_json;
   }
 
+  listSelectionEvaluations(
+    runId: string,
+    candidateId: string,
+  ): { key: string; outcome_json: string }[] {
+    const rows = this.db
+      .query(
+        "SELECT key, outcome_json, outcome_sha256 FROM evaluations WHERE run_id = ? AND candidate_id = ? AND split = 'selection' ORDER BY key",
+      )
+      .all(runId, candidateId) as {
+      key: string;
+      outcome_json: string;
+      outcome_sha256: string;
+    }[];
+    return rows.map((row) => {
+      if (sha256(row.outcome_json) !== row.outcome_sha256)
+        fail(
+          "accounting_tampered",
+          `evaluation ${candidateId}/selection/${row.key} digest mismatch`,
+        );
+      return { key: row.key, outcome_json: row.outcome_json };
+    });
+  }
+
   evaluationSubjects(runId: string, split: string, key: string): string[] {
     return (
       this.db

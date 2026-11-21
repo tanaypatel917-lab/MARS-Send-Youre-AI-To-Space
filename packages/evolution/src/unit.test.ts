@@ -307,22 +307,24 @@ describe("patch policy", () => {
 });
 
 describe("live acceptance evidence label", () => {
-  test("labels the opt-in live test as partial: scripted proposer and host-process builds", () => {
-    expect(LIVE_ACCEPTANCE_EVIDENCE.scope).toBe("partial");
-    expect(LIVE_ACCEPTANCE_EVIDENCE.proposer).toBe("scripted");
-    expect(LIVE_ACCEPTANCE_EVIDENCE.build_isolation).toBe("host-process");
+  test("labels the opt-in live test as model-driven proposer with Docker --network=none builds", () => {
+    expect(LIVE_ACCEPTANCE_EVIDENCE.scope).toBe("model-proposer-docker-build");
+    expect(LIVE_ACCEPTANCE_EVIDENCE.proposer).toBe("model-driven");
+    expect(LIVE_ACCEPTANCE_EVIDENCE.build_isolation).toBe(
+      "docker-network-none",
+    );
     const gaps = LIVE_ACCEPTANCE_EVIDENCE.does_not_establish.join("\n");
-    expect(gaps).toContain("model-driven proposing");
-    expect(gaps).toContain("Docker-isolated builds");
+    expect(gaps).toContain("Harbor applies only system_prompt");
+    expect(gaps).toContain("matched-budget comparison");
     const source = readFileSync(
       join(import.meta.dir, "live.acceptance.test.ts"),
       "utf8",
     );
-    expect(source).toContain("createScriptedProposer(");
-    expect(source).toContain("createProcessSandbox()");
+    expect(source).toContain("createModelProposer(");
+    expect(source).toContain("createEvolutionDockerSandbox(");
     expect(source).toContain("LIVE_ACCEPTANCE_EVIDENCE");
     expect(source).toContain(
-      "live (partial: Harbor evaluation; scripted proposer, host-process builds)",
+      "live (model-driven proposer, Docker --network=none builds, Harbor evaluation)",
     );
     expect(source).not.toContain("rollback survives reopen");
     expect(source.lastIndexOf("live-evidence.json")).toBeGreaterThan(

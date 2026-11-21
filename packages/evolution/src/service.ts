@@ -14,7 +14,7 @@ import {
   digestControlPaths,
   verifyControlDigests,
 } from "./guard";
-import type { MutationProposer } from "./proposers";
+import type { MutationProposer, ProposalContext } from "./proposers";
 import {
   AGENT_MANIFEST_SCHEMA,
   type AgentManifest,
@@ -1045,11 +1045,122 @@ export class EvolutionService {
     const parentRecord = JSON.parse(
       parent.selection_json as string,
     ) as SelectionRecord;
+    const allCandidates = this.store.listCandidates(runId);
+    const byId = new Map(allCandidates.map((row) => [row.candidate_id, row]));
+    const archiveSummary = this.archive(runId, config).map((member) => {
+      const candidateRow = byId.get(member.candidate_id);
+      return {
+        candidate_id: member.candidate_id,
+        parent_id: member.parent_id,
+        generation: candidateRow?.generation ?? 0,
+        depth: candidateRow?.depth ?? 0,
+        selection_score: member.score,
+        eligible: member.eligible,
+        unresolved: [...member.unresolved],
+        unstable: [...member.unstable],
+      };
+    });
+    const lineage: NonNullable<ProposalContext["lineage"]> = [];
+    {
+      let cursor: CandidateRow | undefined = parent;
+      const seen = new Set<string>();
+      while (cursor && !seen.has(cursor.candidate_id)) {
+        seen.add(cursor.candidate_id);
+        let hypothesis = "";
+        try {
+          const parsed = JSON.parse(cursor.proposal_json) as {
+            hypothesis?: unknown;
+          };
+          if (typeof parsed.hypothesis === "string")
+            hypothesis = bounded(scrubSecrets(parsed.hypothesis), 400);
+        } catch {
+          // ignore malformed proposal JSON in lineage summary
+        }
+        let changedPaths: string[] = [];
+        if (cursor.selection_json) {
+          try {
+            const parsed = JSON.parse(
+              cursor.selection_json,
+            ) as Partial<SelectionRecord>;
+            if (Array.isArray(parsed.build?.changed_paths))
+              changedPaths = [...parsed.build.changed_paths];
+          } catch {
+            // ignore malformed selection JSON in lineage summary
+          }
+        }
+        lineage.push({
+          candidate_id: cursor.candidate_id,
+          parent_id: cursor.parent_id,
+          generation: cursor.generation,
+          depth: cursor.depth,
+          selection_score: cursor.score,
+          hypothesis,
+          changed_paths: changedPaths,
+        });
+        cursor = cursor.parent_id ? byId.get(cursor.parent_id) : undefined;
+      }
+      lineage.reverse();
+    }
+    const failureTraces: NonNullable<ProposalContext["failure_traces"]> = [];
+    const unresolvedSet = new Set(parentRecord.unresolved);
+    const unstableSet = new Set(parentRecord.unstable);
+    for (const evalRow of this.store.listSelectionEvaluations(
+      runId,
+      parentId,
+    )) {
+      const outcome = EvaluationOutcomeSchema.parse(
+        JSON.parse(evalRow.outcome_json),
+      );
+      const scrubbedNotes = outcome.notes
+        .slice(0, 8)
+        .map((note) => bounded(scrubSecrets(note), 400));
+      for (const task of outcome.per_task) {
+        if (unresolvedSet.has(task.task_id) || unstableSet.has(task.task_id)) {
+          failureTraces.push({
+            source: "selection_eval",
+            candidate_id: parentId,
+            stage: evalRow.key,
+            task_id: task.task_id,
+            rewards: [...task.rewards],
+            notes: scrubbedNotes,
+          });
+        }
+      }
+    }
+    const rejectedChildren = allCandidates
+      .filter(
+        (candidate) =>
+          candidate.parent_id === parentId &&
+          candidate.state === "rejected" &&
+          candidate.reason !== null,
+      )
+      .slice(-8);
+    for (const rejected of rejectedChildren) {
+      failureTraces.push({
+        source: "rejected_child",
+        candidate_id: rejected.candidate_id,
+        reason: bounded(scrubSecrets(rejected.reason ?? "rejected"), 400),
+        notes: [],
+      });
+    }
     const scratch = await this.scratch(runId, `${candidateId}-proposal`);
     let proposalJson: string;
     let manifest: AgentManifest = parentManifest;
     let reason: string | null = null;
     try {
+      this.store.verifyLedger(runId);
+      const spentBeforeProposal = this.spent(runId);
+      if (
+        spentBeforeProposal.tokens >= config.budget.max_tokens ||
+        spentBeforeProposal.usd > config.budget.max_usd + 1e-9 ||
+        spentBeforeProposal.ms >= config.budget.max_duration_ms
+      ) {
+        fail(
+          "budget_exhausted",
+          `run ${runId} exhausted its budget before proposal`,
+        );
+      }
+      await verifyControlDigests(control.control_digests, "before proposal");
       await materialize(
         scratch,
         this.entriesOf(parentManifest.harness.tree_sha256),
@@ -1072,11 +1183,67 @@ export class EvolutionService {
           entry,
           harness_dir: scratch,
           seed: digestOf([config.seed, "proposal", generation, index]),
+          archive: archiveSummary,
+          lineage,
+          failure_traces: failureTraces,
+          harness_policy: {
+            mutable_paths: [...config.harness.mutable_paths],
+            protected_paths: [...config.harness.protected_paths],
+            max_patch_bytes: config.harness.max_patch_bytes,
+          },
+          applied_components: this.options.evaluator.appliedComponents,
         },
         AbortSignal.timeout(config.evaluation_budget.max_duration_ms),
       );
+      await verifyControlDigests(control.control_digests, "after proposal");
       const proposal = MutationProposalSchema.parse(raw);
       proposal.hypothesis = bounded(scrubSecrets(proposal.hypothesis), 4000);
+      if (proposal.usage !== undefined) {
+        const usage = {
+          tokens: proposal.usage.tokens,
+          usd: proposal.usage.usd,
+          ms: proposal.usage.ms,
+        };
+        this.store.transaction(() => {
+          this.store.assertLease(runId, lease, this.now());
+          const prefix = `${candidateId}/proposal`;
+          const attempt = this.store
+            .ledger(runId)
+            .filter(
+              (row) =>
+                row.kind === "reserve" &&
+                (row.key === prefix || row.key.startsWith(`${prefix}#`)),
+            ).length;
+          const proposalLedgerKey =
+            attempt === 0 ? prefix : `${prefix}#${attempt}`;
+          const atProposal = nowIso(this.now());
+          this.store.appendLedger(
+            runId,
+            "reserve",
+            proposalLedgerKey,
+            usage,
+            atProposal,
+          );
+          this.store.appendLedger(
+            runId,
+            "settle",
+            proposalLedgerKey,
+            usage,
+            atProposal,
+          );
+        });
+        const spentAfterProposal = this.spent(runId);
+        if (
+          spentAfterProposal.tokens > config.budget.max_tokens ||
+          spentAfterProposal.usd > config.budget.max_usd + 1e-9 ||
+          spentAfterProposal.ms > config.budget.max_duration_ms
+        ) {
+          fail(
+            "budget_exhausted",
+            `run ${runId} exhausted its budget during proposal`,
+          );
+        }
+      }
       proposalJson = canonicalJson(proposal);
       const patches = [...parentManifest.harness.patches];
       let tree = parentManifest.harness.tree_sha256;
@@ -1143,6 +1310,18 @@ export class EvolutionService {
         this.options.evaluator.appliedComponents,
       );
     } catch (error) {
+      if (
+        error instanceof EvolutionError &&
+        [
+          "tamper_detected",
+          "budget_exhausted",
+          "deadline_exceeded",
+          "stale_lease",
+          "closed",
+          "accounting_tampered",
+        ].includes(error.code)
+      )
+        throw error;
       reason = reasonOf(error);
       proposalJson = canonicalJson({
         hypothesis: "proposal refused",

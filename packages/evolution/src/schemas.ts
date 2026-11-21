@@ -269,6 +269,15 @@ export const MutationProposalSchema = z
       .string()
       .max(4 * 1024 * 1024)
       .optional(),
+    /** Measured search-model usage attached by model-driven proposers for run accounting. */
+    usage: z
+      .object({
+        tokens: z.number().int().min(0),
+        usd: z.number().min(0),
+        ms: z.number().int().min(0),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type MutationProposal = z.infer<typeof MutationProposalSchema>;

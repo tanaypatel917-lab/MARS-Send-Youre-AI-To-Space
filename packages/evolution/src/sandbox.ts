@@ -1,8 +1,34 @@
-import type {
-  SandboxRunner,
-  SandboxRunRequest,
-  SandboxRunResult,
+import {
+  createDockerSandbox,
+  type DockerSandboxOptions,
+  type SandboxRunner,
+  type SandboxRunRequest,
+  type SandboxRunResult,
 } from "@mars/workspaces";
+
+/** Default pinned Bun image for Docker-isolated candidate builds (`--network=none`). */
+export const DEFAULT_EVOLUTION_DOCKER_IMAGE =
+  "oven/bun@sha256:5148f6742ac31fac28e6eab391ab1f11f6dfc0c8512c7a3679b374ec470f5982";
+
+export type EvolutionDockerSandboxOptions = Partial<DockerSandboxOptions>;
+
+/**
+ * Docker-isolated candidate build runner (`--network=none`, `--read-only`,
+ * `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--ipc=none`,
+ * non-root `--user`, memory/CPU/PIDs/tmpfs limits, and only the candidate
+ * workspace mounted at `/workspace`).
+ *
+ * Requires a pinned `image@sha256:...` digest present locally (defaults to
+ * `DEFAULT_EVOLUTION_DOCKER_IMAGE`).
+ */
+export function createEvolutionDockerSandbox(
+  options: EvolutionDockerSandboxOptions = {},
+): SandboxRunner {
+  return createDockerSandbox({
+    image: options.image ?? DEFAULT_EVOLUTION_DOCKER_IMAGE,
+    ...options,
+  });
+}
 
 export interface ProcessSandboxOptions {
   /** Absolute `setsid` used to give each build its own process group. */

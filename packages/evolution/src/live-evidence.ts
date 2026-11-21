@@ -1,20 +1,19 @@
 import { bounded, scrubSecrets } from "./util";
 
 /**
- * Static scope of `live.acceptance.test.ts`: it pairs real Harbor evaluation
- * with a scripted proposer and host-process builds, so no run of it is evidence
- * of model-driven proposing or Docker-isolated builds. What a particular run
- * established is computed from what it observed by `liveEvidenceRecord`.
+ * Static scope of `live.acceptance.test.ts`: it pairs a real model-driven
+ * proposer (`createModelProposer`), Docker-isolated candidate builds
+ * (`createEvolutionDockerSandbox`, `--network=none`), and real Harbor
+ * evaluation. What a particular run established is computed from what it
+ * observed by `liveEvidenceRecord`.
  */
 export const LIVE_ACCEPTANCE_EVIDENCE = Object.freeze({
-  schema: "mars.evolution-live-evidence/v1",
-  scope: "partial",
-  proposer: "scripted",
-  build_isolation: "host-process",
+  schema: "mars.evolution-live-evidence/v2",
+  scope: "model-proposer-docker-build",
+  proposer: "model-driven",
+  build_isolation: "docker-network-none",
   evaluation: "harbor",
   does_not_establish: Object.freeze([
-    "model-driven proposing (the proposer is createScriptedProposer)",
-    "Docker-isolated builds (the sandbox is createProcessSandbox, not an OS boundary)",
     "tool, skill or retrieval mutations (Harbor applies only system_prompt)",
     "a matched-budget comparison against upstream DGM",
   ]),
@@ -49,7 +48,9 @@ export function liveEvidenceRecord(
   const establishes: string[] = [];
   if (passed) {
     establishes.push(
-      "Harbor/mini-swe-agent evaluation of a system_prompt mutation against the baseline",
+      "model-driven proposing via createModelProposer",
+      "Docker-isolated candidate build (--network=none) via createEvolutionDockerSandbox",
+      "Harbor/mini-swe-agent evaluation of a candidate against the baseline",
     );
     if (observed.verdict)
       establishes.push(`final-holdout promotion verdict: ${observed.verdict}`);

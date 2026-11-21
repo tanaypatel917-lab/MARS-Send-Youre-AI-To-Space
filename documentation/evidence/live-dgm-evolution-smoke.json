@@ -1,0 +1,87 @@
+{
+  "schema": "mars.evolution-live-smoke-evidence/v1",
+  "recorded_at": "2026-11-21T18:55:00Z",
+  "command": "bun apps/cli/src/main.ts evolution live-smoke --state /tmp/mars-live-smoke --model openrouter/free --generations 1 --children 2",
+  "budget_usd": 0,
+  "provider_policy": "free_tier_only (openrouter/free or :free)",
+  "docker": {
+    "build_isolation": "docker-network-none",
+    "image": "oven/bun@sha256:5148f6742ac31fac28e6eab391ab1f11f6dfc0c8512c7a3679b374ec470f5982",
+    "flags": [
+      "--network=none",
+      "--read-only",
+      "--cap-drop=ALL",
+      "--security-opt=no-new-privileges",
+      "--ipc=none",
+      "--pull=never"
+    ]
+  },
+  "openrouter_key_telemetry": {
+    "auth_status": 200,
+    "is_free_tier": true,
+    "usage_usd": 0,
+    "usage_daily_usd": 0,
+    "observed_http_status": 429,
+    "observed_error": "Rate limit exceeded: free-models-per-day"
+  },
+  "live_smoke_output": {
+    "schema": "mars.evolution-live-smoke/v1",
+    "run_id": "live-smoke",
+    "proposer_model_requested": "openrouter/free",
+    "proposer_model_routed": null,
+    "proposer_requests": 2,
+    "build_isolation": "docker-network-none",
+    "docker_image": "oven/bun@sha256:5148f6742ac31fac28e6eab391ab1f11f6dfc0c8512c7a3679b374ec470f5982",
+    "status": "completed",
+    "candidates": [
+      {
+        "candidate_id": "initial",
+        "parent_id": null,
+        "state": "evaluated",
+        "score": 0,
+        "reason": null
+      },
+      {
+        "candidate_id": "g1-c0",
+        "parent_id": "initial",
+        "state": "rejected",
+        "score": null,
+        "reason": "NoModelAvailableError: No model available (openrouter/free: Provider attempt failed: Provider returned HTTP 429.)"
+      },
+      {
+        "candidate_id": "g1-c1",
+        "parent_id": "initial",
+        "state": "rejected",
+        "score": null,
+        "reason": "NoModelAvailableError: No model available (openrouter/free: Provider is cooling down for 29994ms.)"
+      }
+    ],
+    "held_out_gate": {
+      "verdict": "no_improvement",
+      "honest_result": "no_improvement",
+      "simulated": false,
+      "candidate_id": null,
+      "quality": null,
+      "gates": [],
+      "notes": [
+        "No evaluated child candidate reached the held-out gate; see candidate rejection reasons."
+      ]
+    },
+    "rolled_back": false,
+    "verified_before_reopen": true,
+    "verified_after_reopen": true,
+    "champion_after_reopen": "initial"
+  },
+  "companion_docker_integration_test": {
+    "test_file": "packages/evolution/src/proposer-docker.test.ts",
+    "test_name": "Docker-sandboxed candidate build (--network=none) runs end-to-end with promotion and rollback",
+    "status": "passed",
+    "verifies": [
+      "real Docker --network=none build with pinned oven/bun digest",
+      "model proposer receiving selection-only archive, lineage, and failure traces (excluding final-test tasks and protected files)",
+      "held-out promotion gate verdict accepted",
+      "durable rollback to baseline champion entry",
+      "hash-chained ledger verification"
+    ]
+  }
+}
