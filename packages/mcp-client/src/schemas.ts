@@ -41,6 +41,30 @@ export const StdioTransportConfigSchema = z
     type: z.literal("stdio"),
     command: z.string().min(1),
     args: z.array(z.string()).default([]),
+    /** Absent on pre-package registrations. Never infer argument roles from the filesystem. */
+    launch: z
+      .object({
+        version: z.literal(1),
+        command_root: z.string().min(1).optional(),
+        pin_cwd: z.boolean().optional(),
+        arguments: z.array(
+          z.union([
+            z.literal("text"),
+            z.literal("data"),
+            z
+              .object({
+                code: z.string().min(1).nullable(),
+                sha256: z
+                  .string()
+                  .regex(/^[a-f0-9]{64}$/)
+                  .optional(),
+              })
+              .strict(),
+          ]),
+        ),
+      })
+      .strict()
+      .optional(),
     cwd: z.string().min(1).optional(),
     /** Explicit allowlist of environment variable names forwarded to the server process. */
     env_allowlist: z.array(EnvKeySchema).default([]),
@@ -108,6 +132,8 @@ export const McpServerConfigSchema = z
     permissions: z.array(PermissionSchema).default([]),
     credential_bindings: z.array(CredentialBindingSchema).default([]),
     registered_at: z.string().datetime(),
+    legacy_notice_grant: z.string().optional(),
+    migration_review_id: z.string().uuid().optional(),
   })
   .strict();
 

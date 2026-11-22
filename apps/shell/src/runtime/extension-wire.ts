@@ -26,6 +26,7 @@ export const CatalogStatus = z
   .object({
     installed: ids,
     expired: ids,
+    paused: ids.optional(),
     conflicts: ids,
     revision: revision.optional(),
   })

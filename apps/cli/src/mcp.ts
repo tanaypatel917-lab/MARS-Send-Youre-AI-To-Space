@@ -2,6 +2,7 @@ import { parseArgs } from "node:util";
 import type { Scope } from "@mars/contracts";
 import {
   type CredentialBinding,
+  type Grant,
   normalizePermission,
   type Permission,
   PermissionSchema,
@@ -13,11 +14,21 @@ import {
   type McpServerConfig,
   McpServerConfigSchema,
   normalizeOrigin,
+  reapprovalMessage,
 } from "@mars/mcp-client";
 import { CliUsageError } from "./cli-errors";
+import {
+  type Ask,
+  confirmMigrationRefresh,
+  LAUNCH_WARNING,
+  layout,
+  migrationLayout,
+} from "./mcp-launch";
 
 const MCP_USAGE = [
-  "Usage: mars mcp <list|review|approve|revoke|test> [options]",
+  "Usage: mars mcp <list|review|reapprove|approve|revoke|test> [options]",
+  "  mars mcp reapprove <server-id>   Restore an existing local server; guides you through its files.",
+  "  For local review: --arg-kind <text|data|file|folder:path> for each --arg; optional --command-root <folder> and --pin-cwd.",
   "  mars mcp list [--state-dir <dir>] [--owner <id>] [--project <id>] [--json]",
   "  mars mcp review <server-id> (--command <cmd> --allow-stdio-probe [--arg <arg>]... | --url <url>) [--permission <cap>:<res>]... [--credential <ref>@<origin>]... [--json]",
   "  mars mcp approve <review-id> [--ttl-ms <ms>] [--approved-by <name>] [--json]",
@@ -28,8 +39,28 @@ const MCP_USAGE = [
 ].join("\n");
 
 export interface RunMcpOptions {
+  ask?: Ask;
   stdout?: (line: string) => void;
   workspaceRoots?: string[];
+}
+
+function scopeFlags(stateDir?: string, owner?: string, project?: string) {
+  return [
+    ["--state-dir", stateDir],
+    ["--owner", owner],
+    ["--project", project],
+  ]
+    .map(([k, v]) =>
+      v === undefined ? "" : ` ${k} '${v.replaceAll("'", "'\"'\"'")}'`,
+    )
+    .join("");
+}
+
+function activeGrant(grants: Grant[], now = Date.now()) {
+  const latest = grants.findLast((g) => g.state !== "superseded");
+  return latest?.state === "approved" && Date.parse(latest.expires_at) > now
+    ? latest
+    : undefined;
 }
 
 function parsePermissionFlag(raw: string): Permission {
@@ -127,7 +158,7 @@ export async function openRuntimeMcp(
   workspaceRoots: string[],
   scope: Scope,
 ) {
-  const { loader, registry } = await openControlPlane(
+  const { loader, registry, admin } = await openControlPlane(
     stateDir,
     workspaceRoots,
     scope,
@@ -135,7 +166,28 @@ export async function openRuntimeMcp(
   return {
     loader,
     async listServerIds() {
-      return (await registry.list()).map(({ id }) => id);
+      const servers = await registry.list();
+      for (const s of servers) {
+        if (s.transport.type !== "stdio" || s.transport.launch) continue;
+        const { grants } = await admin.inspect(
+          { schema_version: 1, scope, request_id: "mcp-upgrade-notice" },
+          { kind: "mcp", integration_id: s.id },
+        );
+        const grant = activeGrant(grants);
+        if (
+          grant &&
+          s.legacy_notice_grant !== grant.grant_id &&
+          (await registry.markLegacyNotice(s.id, grant.grant_id))
+        ) {
+          console.warn(
+            reapprovalMessage(s.id).replace(
+              `mcp reapprove ${s.id}`,
+              `mcp reapprove ${s.id}${scopeFlags(stateDir, scope.owner_id, scope.project_id)}`,
+            ),
+          );
+        }
+      }
+      return servers.map(({ id }) => id);
     },
   };
 }
@@ -172,6 +224,15 @@ async function handleList(
       });
       return {
         id: server.id,
+        notice:
+          server.transport.type === "stdio" &&
+          !server.transport.launch &&
+          activeGrant(inspected.grants, nowMs)
+            ? reapprovalMessage(server.id).replace(
+                `mcp reapprove ${server.id}`,
+                `mcp reapprove ${server.id}${scopeFlags(values["state-dir"], values.owner, values.project)}`,
+              )
+            : null,
         transport: server.transport.type,
         target:
           server.transport.type === "stdio"
@@ -218,7 +279,9 @@ async function handleList(
       : pendingReview
         ? `pending_review (review=${pendingReview.review_id})`
         : "unapproved";
-    out(`${item.id} [${item.transport}] ${item.target} — ${status}`);
+    out(
+      `${item.id} [${item.transport}] ${item.target} — ${item.notice ?? status}`,
+    );
   }
 }
 
@@ -235,6 +298,9 @@ async function handleReview(
       project: { type: "string" },
       command: { type: "string" },
       arg: { type: "string", multiple: true },
+      "arg-kind": { type: "string", multiple: true },
+      "command-root": { type: "string" },
+      "pin-cwd": { type: "boolean" },
       cwd: { type: "string" },
       "env-allow": { type: "string", multiple: true },
       entrypoint: { type: "string" },
@@ -300,6 +366,15 @@ async function handleReview(
       "Reviewing a stdio MCP server spawns the configured executable to discover its tools. Pass --allow-stdio-probe to explicitly authorize running this unapproved command during review.",
     );
   }
+  if (config.transport.type === "stdio") {
+    config.transport.launch = layout(
+      config.transport,
+      values["arg-kind"] ?? [],
+      values["command-root"],
+      values["pin-cwd"],
+    );
+    if (!values.json) out(LAUNCH_WARNING);
+  }
 
   const ctx = defaultRequestContext(values.owner, values.project);
   const cp = await openControlPlane(
@@ -355,7 +430,19 @@ async function handleReview(
   });
 
   if (values.json) {
-    out(JSON.stringify({ review, tools: evidence.tools }, null, 2));
+    out(
+      JSON.stringify(
+        {
+          review,
+          tools: evidence.tools,
+          ...(config.transport.type === "stdio"
+            ? { launch_warning: LAUNCH_WARNING }
+            : {}),
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
   out(`Review created: ${review.review_id}`);
@@ -368,6 +455,96 @@ async function handleReview(
     `Permissions (${review.permissions.length}): ${review.permissions.map((p) => `${p.capability}:${p.resource}`).join(", ") || "(none)"}`,
   );
   out(`Next: mars mcp approve ${review.review_id}`);
+}
+
+async function handleReapprove(
+  args: string[],
+  out: (s: string) => void,
+  options: RunMcpOptions,
+) {
+  const { positionals, values } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      "state-dir": { type: "string" },
+      owner: { type: "string" },
+      project: { type: "string" },
+    },
+  });
+  if (positionals.length !== 1 || !positionals[0])
+    throw new CliUsageError("Usage: mars mcp reapprove <server-id>");
+  const id = positionals[0];
+  const ctx = defaultRequestContext(values.owner, values.project);
+  const cp = await openControlPlane(
+    values["state-dir"],
+    options.workspaceRoots,
+    ctx.scope,
+  );
+  const config = await cp.registry.get(id);
+  if (config?.transport.type !== "stdio")
+    throw new CliUsageError("No local server with that name in this project.");
+  const { grants, reviews } = await cp.admin.inspect(ctx, {
+    kind: "mcp",
+    integration_id: id,
+  });
+  const next = (reviewId: string) =>
+    out(
+      `To turn it on: mars mcp approve ${reviewId}${scopeFlags(values["state-dir"], values.owner, values.project)}`,
+    );
+  let authorization:
+    | Pick<Grant, "permissions" | "credential_bindings">
+    | undefined;
+  if (config.transport.launch) {
+    const migration = reviews.find(
+      (r) => r.review_id === config.migration_review_id,
+    );
+    const drifted =
+      migration?.state === "superseded" &&
+      reviews.at(-1)?.state === "pending" &&
+      !activeGrant(grants);
+    if (!migration || (migration.state !== "pending" && !drifted)) {
+      out(
+        "This server already uses protected launch settings. Use mars mcp list to see its approval status.",
+      );
+      return;
+    }
+    if (!drifted && Date.parse(migration.expires_at) > Date.now())
+      return next(migration.review_id);
+    out(
+      `${drifted ? "The server changed before approval" : "Your review expired"}, but your file choices are saved. ${LAUNCH_WARNING}`,
+    );
+    await confirmMigrationRefresh(options.ask);
+    authorization = migration;
+  } else {
+    authorization = activeGrant(grants);
+    if (!authorization)
+      throw new CliUsageError(
+        "No active old approval. Use mars mcp review to register this server again.",
+      );
+    config.transport.launch = await migrationLayout(
+      config.transport,
+      out,
+      options.ask,
+    );
+  }
+  const evidence = await cp.probe.observeServer(ctx, config, {
+    allowUnapprovedStdioProbe: true,
+  });
+  const review = await cp.admin.submitCandidate(ctx, {
+    evidence,
+    permissions: authorization.permissions,
+    credential_bindings: authorization.credential_bindings,
+  });
+  await cp.registry.upsert({
+    ...config,
+    migration_review_id: review.review_id,
+    permissions: authorization.permissions,
+    credential_bindings: authorization.credential_bindings,
+  });
+  out(
+    `Tools: ${evidence.tools.map((t) => t.name).join(", ")}. Your previous permissions are unchanged.`,
+  );
+  next(review.review_id);
 }
 
 async function handleApprove(
@@ -618,6 +795,10 @@ export async function runMcp(
   }
   if (subcommand === "approve") {
     await handleApprove(rest, out, options.workspaceRoots);
+    return;
+  }
+  if (subcommand === "reapprove") {
+    await handleReapprove(rest, out, options);
     return;
   }
   if (subcommand === "revoke") {

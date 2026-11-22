@@ -244,6 +244,51 @@ test("an expired tool notifies the operator once and can be re-approved and invo
   }
 }, 30000);
 
+test("a pre-layout desktop registration pauses once and adding it again restores the tool", async () => {
+  await open().install(mcp);
+  const cp = await createHostMcpControlPlane({
+    stateDir: join(state, "extension-trust"),
+    workspaceRoots: [source],
+    scope,
+  });
+  const old = await cp.registry.get(mcp);
+  if (old?.transport.type !== "stdio")
+    throw new Error("Missing local extension");
+  delete old.transport.launch;
+  await cp.registry.upsert(old);
+  const notices: string[] = [];
+  const reopen = () =>
+    projectExtensions(source, state, scope, dir, {
+      onExpired: (id) => notices.push(id),
+    });
+  expect((await reopen().status()).paused).toEqual([mcp]);
+  for (let i = 0; i < 2; i++) {
+    const runtime = await reopen().runtime(source, scope);
+    try {
+      expect(await runtime.listServerIds()).toEqual([]);
+    } finally {
+      await runtime.loader.closeAll();
+    }
+  }
+  expect(notices).toEqual([mcp]);
+  await reopen().install(mcp);
+  const runtime = await reopen().runtime(source, scope);
+  try {
+    expect(await runtime.listServerIds()).toEqual([mcp]);
+    expect(
+      (
+        await runtime.loader.invokeTool(ctx, {
+          server_id: mcp,
+          tool: "utc_now",
+          input: {},
+        })
+      ).is_error,
+    ).toBe(false);
+  } finally {
+    await runtime.loader.closeAll();
+  }
+}, 30000);
+
 test("supplied JSON and unified patches are processed offline by independently approved tools", async () => {
   const ext = open();
   const runtime = await ext.runtime(source, scope);

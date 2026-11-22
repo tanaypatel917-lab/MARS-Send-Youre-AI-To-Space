@@ -84,6 +84,14 @@ export function projectExtensions(
         type: "stdio",
         command: process.execPath,
         args: ["--no-env-file", script, ...entry.args],
+        launch: {
+          version: 1,
+          arguments: [
+            "text",
+            { code: null, sha256: artifact.sha256 },
+            ...entry.args.map(() => "text" as const),
+          ],
+        },
         cwd: dir,
         entrypoint: script,
         env_allowlist: [],
@@ -93,16 +101,20 @@ export function projectExtensions(
     };
   }
 
-  async function mcpStatus(cp: HostMcpControlPlane, entry: CatalogEntry) {
+  async function mcpStatus(
+    cp: HostMcpControlPlane,
+    entry: CatalogEntry,
+    notify = false,
+  ) {
     const registered = await cp.registry.get(entry.id);
-    if (
-      !registered ||
-      !isDeepStrictEqual(registered, {
-        ...config(entry),
-        registered_at: registered.registered_at,
-      })
-    )
-      return "unavailable";
+    if (registered?.transport.type !== "stdio") return "unavailable";
+    const expected = config(entry);
+    const legacy = !registered.transport.launch;
+    if (legacy && expected.transport.type === "stdio")
+      delete expected.transport.launch;
+    expected.registered_at = registered.registered_at;
+    const { legacy_notice_grant: _, ...registration } = registered;
+    if (!isDeepStrictEqual(registration, expected)) return "unavailable";
     const { grants } = await cp.admin.inspect(context(), {
       kind: "mcp",
       integration_id: entry.id,
@@ -114,9 +126,23 @@ export function projectExtensions(
       (options.clock?.().getTime() ?? Date.now())
     )
       return "expired";
+    if (legacy) {
+      if (
+        notify &&
+        options.onExpired &&
+        (await cp.registry.markLegacyNotice(entry.id, grant.grant_id))
+      )
+        options.onExpired(entry.id);
+      return "paused";
+    }
     try {
       await artifacts(entry);
-      await verifyMcpConfig(registered, grant.evidence);
+      await verifyMcpConfig(
+        registered,
+        grant.evidence,
+        undefined,
+        cp.packageStore,
+      );
       return "installed";
     } catch {
       return "unavailable";
@@ -130,7 +156,10 @@ export function projectExtensions(
     for (const entry of CATALOG) {
       if (entry.kind === "mcp") {
         const state = await mcpStatus(await plane(), entry);
-        if (state !== "unavailable") result[state].push(entry.id);
+        if (state === "paused") {
+          result.paused ??= [];
+          result.paused.push(entry.id);
+        } else if (state !== "unavailable") result[state].push(entry.id);
       } else if (
         entry.assets.every((asset) =>
           skills.some(
@@ -247,7 +276,7 @@ export function projectExtensions(
           const ids = [];
           for (const entry of CATALOG) {
             if (entry.kind !== "mcp") continue;
-            const status = await mcpStatus(cp, entry);
+            const status = await mcpStatus(cp, entry, true);
             if (status === "installed") ids.push(entry.id);
             else if (status === "expired") notifyExpired(entry.id);
           }

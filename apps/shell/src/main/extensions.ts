@@ -31,20 +31,23 @@ export function extensionController(
       const active = project();
       if (!active)
         throw new Error("Open a local project to manage extensions.");
-      const { installed, expired, conflicts } = await active.extensionAction({
-        action: "list",
-      });
+      const { installed, expired, paused, conflicts } =
+        await active.extensionAction({
+          action: "list",
+        });
       return CATALOG.map(
         ({ id, name, kind, version, description, permissions }) => ({
           id,
           name,
           kind,
           version,
-          description: expired.includes(id)
-            ? `Approval expired. Add again to renew. ${description}`
-            : conflicts.includes(id)
-              ? `Add again to review restoring customized instructions. ${description}`
-              : description,
+          description: paused?.includes(id)
+            ? `Paused for a security update. Choose Add to approve a protected copy. ${description}`
+            : expired.includes(id)
+              ? `Approval expired. Add again to renew. ${description}`
+              : conflicts.includes(id)
+                ? `Add again to review restoring customized instructions. ${description}`
+                : description,
           permissions,
           installed: installed.includes(id),
         }),

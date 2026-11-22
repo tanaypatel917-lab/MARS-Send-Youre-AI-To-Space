@@ -19,6 +19,7 @@ import {
   type TrustState,
 } from "@mars/integration-trust";
 import { createTrustedMcpLoader, type TrustedMcpLoader } from "./loader";
+import { McpPackageStore } from "./package-store";
 import { McpEvidenceProbe } from "./probe";
 import { FileMcpRegistry } from "./registry";
 import type { McpCredentialResolver } from "./schemas";
@@ -45,6 +46,7 @@ export interface HostMcpControlPlaneOptions {
 }
 
 export interface HostMcpControlPlane {
+  readonly packageStore: McpPackageStore;
   readonly stateDir: string;
   readonly registry: FileMcpRegistry;
   readonly store: FileTrustStore;
@@ -176,6 +178,10 @@ export async function createHostMcpControlPlane(
   const keyDir = resolve(stateDir, "keys");
 
   const registry = new FileMcpRegistry({ dir: registryDir, workspaceRoots });
+  const packageStore = new McpPackageStore({
+    directory: resolve(registryDir, "packages-v1"),
+    workspaceRoots,
+  });
   const store = new FileTrustStore({ directory: trustDir, workspaceRoots });
   // Validate store location before creating key directory.
   await store.load();
@@ -197,6 +203,7 @@ export async function createHostMcpControlPlane(
   // call — after verifying the signed host proof — may probe its target review.
   const approvalProbeContext = new AsyncLocalStorage<string>();
   const probe = new McpEvidenceProbe({
+    packageStore,
     registry,
     scope,
     ...(options.clock ? { clock: options.clock } : {}),
@@ -261,6 +268,7 @@ export async function createHostMcpControlPlane(
 
   const createLoader = () =>
     createTrustedMcpLoader({
+      packageStore,
       gate,
       registry,
       ...(options.credentialResolver
@@ -279,6 +287,7 @@ export async function createHostMcpControlPlane(
 
   return {
     stateDir,
+    packageStore,
     registry,
     store,
     probe,

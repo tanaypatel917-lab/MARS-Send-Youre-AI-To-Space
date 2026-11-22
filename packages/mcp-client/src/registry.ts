@@ -226,6 +226,25 @@ export class FileMcpRegistry implements McpServerRegistry {
     }
   }
 
+  /** Deduplicate unsolicited upgrade notices across concurrent host sessions. */
+  async markLegacyNotice(id: string, grantId: string) {
+    return this.withLock(async () => {
+      const state = await this.readState();
+      const server = Object.hasOwn(state.servers, id)
+        ? state.servers[id]
+        : undefined;
+      if (
+        server?.transport.type !== "stdio" ||
+        server.transport.launch ||
+        server.legacy_notice_grant === grantId
+      )
+        return false;
+      server.legacy_notice_grant = grantId;
+      await this.writeState(state);
+      return true;
+    });
+  }
+
   async list(): Promise<McpServerConfig[]> {
     const state = await this.readState();
     return Object.values(state.servers).sort((a, b) =>
