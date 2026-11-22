@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
+  chmod,
   copyFile,
   mkdir,
   mkdtemp,
@@ -8,6 +9,7 @@ import {
   realpath,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -568,6 +570,7 @@ describe("@mars/mcp-client end-to-end trust enforcement", () => {
       `writeFileSync("paths.json", JSON.stringify([process.execPath, import.meta.path, ...process.argv.slice(2)]));\n${fixture}`,
     );
     await writeFile(data, "original");
+    await chmod(script, 0o700);
     const cp = await createControlPlane();
     const ctx = makeCtx();
     const config = makeConfig({
@@ -600,6 +603,10 @@ describe("@mars/mcp-client end-to-end trust enforcement", () => {
       (await realpath(command)).startsWith((await realpath(cp.stateDir)) + sep),
     ).toBe(true);
     expect(entrypoint).not.toBe(script);
+    if (process.platform !== "win32") {
+      expect((await stat(entrypoint)).mode & 0o777).toBe(0o500);
+      expect((await stat(input)).mode & 0o777).toBe(0o400);
+    }
     expect(input).not.toBe(data);
     expect(literal).toBe("--literal");
     await writeFile(data, "updated");

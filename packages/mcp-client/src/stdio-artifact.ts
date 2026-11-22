@@ -41,7 +41,13 @@ export async function readStdioArtifact(
     if (cached) return cached;
     let path = key;
     if (directory) {
-      if (executable) await access(key, constants.X_OK);
+      const canExecute = await access(key, constants.X_OK).then(
+        () => true,
+        (error: unknown) => {
+          if (executable) throw error;
+          return false;
+        },
+      );
       const dir = join(directory, String(files.size));
       await mkdir(dir, { mode: 0o700 });
       path = join(dir, basename(key));
@@ -50,7 +56,7 @@ export async function readStdioArtifact(
         path,
         constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL,
       );
-      await chmod(path, executable ? 0o500 : 0o400);
+      await chmod(path, canExecute ? 0o500 : 0o400);
     }
     const file = { path, digest: await hashFile(path, signal) };
     files.set(key, file);
