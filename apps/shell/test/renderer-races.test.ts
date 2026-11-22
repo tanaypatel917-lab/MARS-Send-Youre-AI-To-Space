@@ -404,6 +404,7 @@ test("refresh retains sidebar, transcript and visible inspector scroll after foc
   for (const [i, name] of [
     "sidebar",
     "sidebar-history",
+    "workspace-panels",
     "transcript",
     "inspector",
   ].entries()) {
@@ -418,6 +419,7 @@ test("refresh retains sidebar, transcript and visible inspector scroll after foc
   for (const [i, name] of [
     "sidebar",
     "sidebar-history",
+    "workspace-panels",
     "transcript",
     "inspector",
   ].entries()) {
