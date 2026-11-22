@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import { loadModelRegistry } from "@mars/providers";
 import { createWorkbenchService } from "@mars/workbench";
 import { z } from "zod";
+import { isLocalDockerHost } from "../../../../packages/workspaces/src/docker-host";
 import {
   type CatalogStatus,
   EXPIRED_PREFIX,
@@ -19,6 +20,11 @@ const StartSchema = z
     image: z.string().min(1).optional(),
     checksFile: z.string().min(1).optional(),
     dockerPath: z.string().min(1).optional(),
+    dockerHost: z
+      .string()
+      .min(1)
+      .refine((host) => isLocalDockerHost(host))
+      .optional(),
     verificationUnavailableReason: z.string().min(1).max(1024).optional(),
   })
   .strict();
@@ -45,6 +51,7 @@ async function serve(): Promise<void> {
       image,
       checksFile,
       dockerPath,
+      dockerHost,
       verificationUnavailableReason,
     } = StartSchema.parse(JSON.parse(line));
     const scope = { owner_id: "local", project_id: basename(state) };
@@ -61,6 +68,7 @@ async function serve(): Promise<void> {
         ? { verificationUnavailableReason }
         : {}),
       sandboxDockerPath: dockerPath ?? Bun.which("docker") ?? "/usr/bin/docker",
+      ...(dockerHost ? { sandboxDockerHost: dockerHost } : {}),
       allowUnavailableSandbox: true,
       verifiedExportsOnly: Boolean(image),
       stateRoot: state,

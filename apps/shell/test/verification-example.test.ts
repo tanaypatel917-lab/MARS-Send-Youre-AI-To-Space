@@ -37,19 +37,30 @@ test("verification example preserves user data and rewrites private protected ch
 });
 
 test.each([
-  { dockerPath: undefined, verificationUnavailableReason: undefined },
+  {
+    dockerPath: undefined,
+    dockerHost: undefined,
+    verificationUnavailableReason: undefined,
+  },
   {
     dockerPath: "/missing-mars-docker",
+    dockerHost: undefined,
     verificationUnavailableReason: undefined,
   },
   {
     dockerPath: undefined,
+    dockerHost: undefined,
     verificationUnavailableReason:
       "Verification needs a private workspace path without spaces or special characters.",
   },
+  {
+    dockerPath: undefined,
+    dockerHost: "unix:///missing-mars-docker.sock",
+    verificationUnavailableReason: undefined,
+  },
 ])(
   "runtime stdin start preserves checks and reports prerequisite readiness: %o",
-  async ({ dockerPath, verificationUnavailableReason }) => {
+  async ({ dockerPath, dockerHost, verificationUnavailableReason }) => {
     const root = await mkdtemp(join(tmpdir(), "mars-example-runtime-"));
     const seeded = await seedVerificationExample(root);
     const state = join(root, "state");
@@ -67,7 +78,7 @@ test.each([
     );
     try {
       child.stdin.write(
-        `${JSON.stringify({ source: seeded.source, state, checksFile: seeded.checksFile, dockerPath, verificationUnavailableReason, ...(!verificationUnavailableReason ? { image: `mirror.gcr.io/library/busybox@sha256:${"0".repeat(64)}` } : {}) })}\n`,
+        `${JSON.stringify({ source: seeded.source, state, checksFile: seeded.checksFile, dockerPath, dockerHost, verificationUnavailableReason, ...(!verificationUnavailableReason ? { image: `mirror.gcr.io/library/busybox@sha256:${"0".repeat(64)}` } : {}) })}\n`,
       );
       const reader = child.stdout.getReader();
       let output = "";
@@ -106,6 +117,10 @@ test.each([
       if (verificationUnavailableReason)
         expect(described.verification_readiness?.reason).toBe(
           verificationUnavailableReason,
+        );
+      if (dockerHost)
+        expect(described.verification_readiness?.reason).toBe(
+          "Docker is not running or access is denied",
         );
     } finally {
       child.stdin.end();

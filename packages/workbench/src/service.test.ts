@@ -150,6 +150,7 @@ async function fixture(contextWindow = 32000, verification = false) {
       checksFile?: string;
       allowUnavailableSandbox?: boolean;
       verifiedExportsOnly?: boolean;
+      sandboxDockerHost?: string;
     } = {},
   ) {
     const service = await createWorkbenchService({
@@ -1286,7 +1287,13 @@ test.skipIf(process.env.MARS_WORKSPACES_DOCKER_TEST !== "1")(
       },
       VERIFICATION_IMAGE,
       undefined,
-      { checksFile: seeded.checksFile, verifiedExportsOnly: true },
+      {
+        checksFile: seeded.checksFile,
+        verifiedExportsOnly: true,
+        sandboxDockerHost:
+          process.env.MARS_WORKSPACES_DOCKER_HOST ??
+          "unix:///var/run/docker.sock",
+      },
     );
     expect((await client.describe()).verification_readiness?.status).toBe(
       "ready",

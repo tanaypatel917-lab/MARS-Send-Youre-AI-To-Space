@@ -72,6 +72,8 @@ Commands are argv arrays; shell interpretation only occurs when an explicitly ap
 
 `createDockerSandbox({ image, ... })` requires a digest-pinned image and uses only fixed Docker hardening options. `buildDockerRunArgs(resolved, request, name)` is exported as a pure helper for inspection and testing. The injected `SandboxRunner` interface is intended for controlled tests and specialized local deployments; a stub runner is not isolation evidence.
 
+Docker CLI invocations receive only a fixed `PATH`, `HOME=/nonexistent`, and an optional validated `DOCKER_HOST` from `dockerHost`. Only absolute `unix://` socket endpoints (or `npipe://` named pipes on Windows) are accepted; network endpoints and the rest of the host environment are not forwarded. Desktop resolves this endpoint from the user's `DOCKER_HOST` or active Docker context before starting the workbench.
+
 ## Limits
 
 Default `WorkspaceLimits`:

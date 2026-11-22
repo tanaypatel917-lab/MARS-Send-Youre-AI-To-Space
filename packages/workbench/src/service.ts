@@ -209,6 +209,7 @@ export interface WorkbenchServiceOptions {
   port?: number;
   image?: string;
   sandboxDockerPath?: string;
+  sandboxDockerHost?: string;
   allowUnavailableSandbox?: boolean;
   verifiedExportsOnly?: boolean;
   verificationUnavailableReason?: string;
@@ -583,6 +584,9 @@ export async function createWorkbenchService(
     let sandbox = options.image
       ? createDockerSandbox({
           image: options.image,
+          ...(options.sandboxDockerHost
+            ? { dockerHost: options.sandboxDockerHost }
+            : {}),
           ...(options.sandboxDockerPath
             ? { dockerPath: options.sandboxDockerPath }
             : {}),

@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { isAbsolute } from "node:path";
+import { isLocalDockerHost } from "./docker-host";
 import {
   DockerSandboxPrerequisiteError,
   DockerSandboxRootUserError,
@@ -15,6 +16,7 @@ import type {
 } from "./types";
 
 export interface ResolvedDockerConfig {
+  dockerHost?: string;
   image: string;
   dockerPath: string;
   uid: number;
@@ -52,6 +54,9 @@ export function resolveDockerConfig(
   const config: ResolvedDockerConfig = {
     image: options.image,
     dockerPath: options.dockerPath ?? "/usr/bin/docker",
+    ...(options.dockerHost !== undefined
+      ? { dockerHost: options.dockerHost }
+      : {}),
     uid: options.user?.uid ?? process.getuid?.() ?? 1000,
     gid: options.user?.gid ?? process.getgid?.() ?? 1000,
     memoryBytes: options.memoryBytes ?? 512 * 1024 * 1024,
@@ -141,6 +146,10 @@ export function buildDockerRunArgs(
 }
 
 function validateResolvedConfig(config: ResolvedDockerConfig): void {
+  if (config.dockerHost !== undefined && !isLocalDockerHost(config.dockerHost))
+    throw new TypeError(
+      "dockerHost must be a local unix socket or Windows named pipe",
+    );
   if (!PINNED_IMAGE_PATTERN.test(config.image)) {
     throw new TypeError("Docker image must be pinned to a sha256 digest");
   }
@@ -274,7 +283,7 @@ export function createDockerSandbox(
           stdin: "ignore",
           stdout: "pipe",
           stderr: "pipe",
-          env: sandboxEnvironment(),
+          env: sandboxEnvironment(resolved),
         });
       } catch (error) {
         throw new SandboxUnavailableError("Unable to start Docker", {
@@ -375,8 +384,18 @@ export function createDockerSandbox(
   };
 }
 
-function sandboxEnvironment(): Record<string, string> {
-  return { PATH: "/usr/bin:/bin", HOME: "/nonexistent" };
+export function sandboxEnvironment(
+  config: Pick<ResolvedDockerConfig, "dockerHost">,
+): Record<string, string> {
+  if (config.dockerHost !== undefined && !isLocalDockerHost(config.dockerHost))
+    throw new TypeError(
+      "dockerHost must be a local unix socket or Windows named pipe",
+    );
+  return {
+    PATH: "/usr/bin:/bin",
+    HOME: "/nonexistent",
+    ...(config.dockerHost ? { DOCKER_HOST: config.dockerHost } : {}),
+  };
 }
 
 interface LimitedOutput {
@@ -427,7 +446,7 @@ async function invoke(
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
-      env: sandboxEnvironment(),
+      env: sandboxEnvironment(resolved),
     });
   } catch (error) {
     throw new SandboxUnavailableError("Unable to start Docker CLI", {

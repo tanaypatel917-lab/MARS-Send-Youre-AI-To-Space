@@ -21,6 +21,7 @@ import {
   shell,
 } from "electron";
 import { DESKTOP_MODEL_CHANNEL } from "../shared/desktop-model";
+import { resolveDockerHost } from "./docker-host";
 import { resolveDockerPath } from "./docker-path";
 import { desktopExtensionsMenu } from "./extensions";
 import { startLocalWorkbench } from "./local-workbench";
@@ -68,6 +69,7 @@ export async function createDesktop(
     app.getPath("home"),
   );
   let dockerPath = resolveDockerPath();
+  let dockerHost = await resolveDockerHost(dockerPath);
   await writeFile(
     join(demo, "README.md"),
     "# MARS demo project\n\nThis is a sample project you can give to the MARS agent. Try: summarize the README and suggest a next step.\n",
@@ -237,6 +239,7 @@ export async function createDesktop(
             ? verificationState.state
             : join(root, "projects"),
         ...(dockerPath ? { dockerPath } : {}),
+        ...(dockerHost ? { dockerHost } : {}),
         ...(source === verification.source
           ? {
               ...(verificationState.reason
@@ -291,6 +294,7 @@ export async function createDesktop(
         click: () => {
           void (async () => {
             dockerPath = resolveDockerPath();
+            dockerHost = await resolveDockerHost(dockerPath);
             const run = (args: string[]) =>
               new Promise<boolean>((resolve) => {
                 if (!dockerPath) return resolve(false);
