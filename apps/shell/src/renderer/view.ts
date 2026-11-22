@@ -13,7 +13,7 @@ import type {
   PatchExportResult,
 } from "../shared/methods";
 import { type AssistantViewState, renderAssistant } from "./assistant-view";
-import { h, type ShellDocument, type ShellElement } from "./dom";
+import { disclosure, h, type ShellDocument, type ShellElement } from "./dom";
 import { type ExtensionState, renderExtensions } from "./extensions-view";
 import { renderSettings } from "./settings-view";
 import { STATUS_LABEL, VERIFICATION_LABEL } from "./strings";
@@ -1038,11 +1038,11 @@ function changesSection(doc: ShellDocument, state: ShellState): ShellElement {
       diff?.digest
         ? h(doc, "small", { class: "digest" }, `sha256 ${diff.digest}`)
         : null,
-      h(
+      disclosure(
         doc,
-        "details",
-        { class: "patch-details" },
-        h(doc, "summary", {}, "Patch"),
+        "patch-details",
+        `patch:${file.path}`,
+        "Patch",
         untrusted(doc, file.patch, "workspace diff"),
       ),
     );
@@ -1110,11 +1110,11 @@ function changesSection(doc: ShellDocument, state: ShellState): ShellElement {
               `sha256 ${exportState.result.patch_sha256}`,
             ),
             exportState.patchText
-              ? h(
+              ? disclosure(
                   doc,
-                  "details",
-                  { class: "patch-details" },
-                  h(doc, "summary", {}, "Verified exported patch"),
+                  "patch-details",
+                  `export:${exportState.result.patch_sha256}`,
+                  "Verified exported patch",
                   untrusted(
                     doc,
                     exportState.patchText,

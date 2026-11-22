@@ -238,6 +238,41 @@ function clock() {
   };
 }
 
+test("a poll keeps the expanded file open when new diff files appear before it", async () => {
+  const data = await loadFixtureData();
+  const running = data.details["fixture-running"];
+  const diff = data.details["fixture-completed-verified"]?.diff;
+  const file = diff?.files[0];
+  if (!running || !diff || !file) throw new Error("Missing fixture diff");
+  running.diff = { ...diff, files: [file] };
+  const timer = clock();
+  const doc = new MiniDocument();
+  const ctl = createController(
+    fakeBridge(data),
+    doc,
+    doc.root,
+    undefined,
+    undefined,
+    undefined,
+    timer.schedule,
+  );
+  await ctl.load();
+  const detailFor = (path: string) =>
+    findAll(
+      doc.root,
+      (el) =>
+        el.tagName === "DETAILS" && el.children[0]?.textContent.includes(path),
+    )[0];
+  const opened = detailFor(file.path);
+  if (!opened) throw new Error("Missing transcript file");
+  opened.setAttribute("open", "");
+  running.diff.files.unshift({ ...file, path: "new-file.md" });
+  timer.tick();
+  await ctl.settled();
+  expect(detailFor(file.path)?.getAttribute("open")).toBe("");
+  expect(detailFor("new-file.md")?.getAttribute("open")).toBeNull();
+});
+
 test("running task refresh backs off on failure, recovers and stops on completion", async () => {
   const timer = clock();
   const data = await loadFixtureData();

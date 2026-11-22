@@ -209,15 +209,18 @@ export function createController(
   let composer: ComposerState = createInitialComposer();
   // Each async action retains its own task's form, even after navigation.
   const launchForms = new Map<string, LaunchCardState>();
-  const launchFor = (task: Task): LaunchCardState => {
+  const taskKey = (task: Task): string => {
     const { owner_id, project_id, workspace_id } = task.scope;
-    const key = JSON.stringify([
+    return JSON.stringify([
       owner_id,
       project_id,
       workspace_id,
       task.session_id,
       task.task_id,
     ]);
+  };
+  const launchFor = (task: Task): LaunchCardState => {
+    const key = taskKey(task);
     const existing = launchForms.get(key);
     if (existing) return existing;
     const form = createInitialLaunch();
@@ -263,6 +266,7 @@ export function createController(
     Array.from(root.querySelectorAll("[data-extension-id]"))
       .find((el) => el.getAttribute("data-extension-id") === extensionAnchorId)
       ?.getBoundingClientRect?.().top;
+  let renderedTaskKey: string | undefined;
   const render = () => {
     if (disposed) return;
     const oldLibraryOffset = libraryScroller()?.scrollTop;
@@ -457,6 +461,17 @@ export function createController(
         [el.scrollLeft, el.scrollTop] as const,
       ]),
     );
+    const nextTaskKey = state.selectedTask && taskKey(state.selectedTask);
+    const details = () =>
+      Array.from(root.querySelectorAll("[data-disclosure-key]"));
+    const expanded = new Set(
+      nextTaskKey && nextTaskKey === renderedTaskKey
+        ? details()
+            .filter((el) => el.getAttribute("open") !== null)
+            .map((el) => el.getAttribute("data-disclosure-key"))
+        : [],
+    );
+    renderedTaskKey = nextTaskKey;
     root.replaceChildren(renderShell(doc, state));
     const library = libraryScroller();
     if (library && oldLibraryOffset !== undefined) {
@@ -464,6 +479,12 @@ export function createController(
       const top = anchorTop();
       if (oldAnchorTop !== undefined && top !== undefined)
         library.scrollTop += top - oldAnchorTop;
+    }
+    if (expanded.size) {
+      for (const detail of details()) {
+        if (expanded.has(detail.getAttribute("data-disclosure-key")))
+          detail.setAttribute("open", "");
+      }
     }
     for (const pane of scrollPanes()) {
       const position = scroll.get(pane.getAttribute("data-scroll-key"));
@@ -1690,7 +1711,7 @@ export function createController(
       if (
         selected &&
         state.selectedTask &&
-        launchFor(selected) !== launchFor(state.selectedTask)
+        taskKey(selected) !== taskKey(state.selectedTask)
       )
         patchExport = { busy: false };
       if (!selected) {

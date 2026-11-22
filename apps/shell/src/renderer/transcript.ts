@@ -1,5 +1,5 @@
 import type { Entry, ToolEntry, TranscriptProjection } from "@mars/ui-core";
-import { h, type ShellDocument, type ShellElement } from "./dom";
+import { disclosure, h, type ShellDocument, type ShellElement } from "./dom";
 import { untrusted } from "./untrusted";
 
 function provenanceLabel(source: string, eventId: string | null): string {
@@ -22,11 +22,11 @@ function renderToolEntry(doc: ShellDocument, entry: ToolEntry): ShellElement {
       h(doc, "span", { class: "entry-badge" }, entry.status),
     ),
     entry.output
-      ? h(
+      ? disclosure(
           doc,
-          "details",
-          { class: "entry-details" },
-          h(doc, "summary", {}, "Tool output"),
+          "entry-details",
+          `tool:${entry.id}`,
+          "Tool output",
           untrusted(
             doc,
             entry.output,
@@ -113,18 +113,13 @@ function renderEntry(doc: ShellDocument, entry: Entry): ShellElement {
         doc,
         "article",
         { class: "transcript-entry transcript-thinking" },
-        h(
+        disclosure(
           doc,
-          "details",
-          { class: "entry-details" },
-          h(
-            doc,
-            "summary",
-            {},
-            entry.tokens !== null
-              ? `Reasoning (${entry.tokens} tokens)`
-              : "Reasoning",
-          ),
+          "entry-details",
+          `thinking:${entry.id}`,
+          entry.tokens !== null
+            ? `Reasoning (${entry.tokens} tokens)`
+            : "Reasoning",
           untrusted(
             doc,
             entry.text,
@@ -142,11 +137,11 @@ function renderEntry(doc: ShellDocument, entry: Entry): ShellElement {
         doc,
         "article",
         { class: "transcript-entry transcript-explored" },
-        h(
+        disclosure(
           doc,
-          "details",
-          { class: "entry-details" },
-          h(doc, "summary", {}, `Explored · ${summaryText}`),
+          "entry-details",
+          `explored:${entry.id}`,
+          `Explored · ${summaryText}`,
           ...entry.tools.map((tool) => renderToolEntry(doc, tool)),
         ),
       );
@@ -174,11 +169,11 @@ function renderEntry(doc: ShellDocument, entry: Entry): ShellElement {
         ),
         entry.reason ? h(doc, "p", { class: "muted" }, entry.reason) : null,
         entry.output
-          ? h(
+          ? disclosure(
               doc,
-              "details",
-              { class: "entry-details" },
-              h(doc, "summary", {}, "Hook output"),
+              "entry-details",
+              `hook:${entry.id}`,
+              "Hook output",
               untrusted(
                 doc,
                 entry.output,
@@ -207,16 +202,11 @@ function renderEntry(doc: ShellDocument, entry: Entry): ShellElement {
           ),
         ),
         ...entry.files.map((file) =>
-          h(
+          disclosure(
             doc,
-            "details",
-            { class: "entry-details" },
-            h(
-              doc,
-              "summary",
-              {},
-              `${file.status} · ${file.path} (+${file.added} −${file.removed})`,
-            ),
+            "entry-details",
+            JSON.stringify(["diff", entry.id, file.path]),
+            `${file.status} · ${file.path} (+${file.added} −${file.removed})`,
             untrusted(doc, file.patch, "workspace diff"),
           ),
         ),

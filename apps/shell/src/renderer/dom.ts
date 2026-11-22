@@ -86,6 +86,22 @@ const TAGS = new Set([
 const FORBIDDEN_ATTRIBUTES =
   /^(?:on.*|style|srcdoc|href|src|action|formaction)$/i;
 
+export function disclosure(
+  doc: ShellDocument,
+  className: string,
+  key: string,
+  label: string,
+  ...children: ShellElement[]
+): ShellElement {
+  return h(
+    doc,
+    "details",
+    { class: className, "data-disclosure-key": key },
+    h(doc, "summary", { "data-focus-key": `summary:${key}` }, label),
+    ...children,
+  );
+}
+
 export function h(
   doc: ShellDocument,
   tag: string,
