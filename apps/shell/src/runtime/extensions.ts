@@ -10,9 +10,10 @@ import {
   type TrustedMcpLoader,
   verifyMcpConfig,
 } from "@mars/mcp-client";
-import { type Operation, SkillStore } from "@mars/skills";
+import { type Operation, SkillStore, withDirectoryLock } from "@mars/skills";
+import { catalogSkills, skillRemoval } from "./catalog-skills";
 import { CATALOG, type CatalogEntry, findExtension } from "./extension-catalog";
-import type { CatalogStatus } from "./extension-wire";
+import type { CatalogStatus, Removal } from "./extension-wire";
 import { projectRootIdentity, requireProjectRoot } from "./project-root";
 
 const hash = (data: string | Buffer) =>
@@ -102,8 +103,22 @@ export function projectExtensions(
     };
   }
 
-  async function mcpStatus(cp: HostMcpControlPlane, entry: CatalogEntry) {
-    const registered = await cp.registry.get(entry.id);
+  async function registration(cp: HostMcpControlPlane, id: string) {
+    const registered = await cp.registry.get(id);
+    const { grants } = await cp.admin.inspect(context(), {
+      kind: "mcp",
+      integration_id: id,
+    });
+    const grant = grants.findLast((g) => g.state !== "superseded");
+    return { registered, grant };
+  }
+  type Registration = Awaited<ReturnType<typeof registration>>;
+  async function mcpStatus(
+    cp: HostMcpControlPlane,
+    entry: CatalogEntry,
+    record?: Registration,
+  ) {
+    const { registered, grant } = record ?? (await registration(cp, entry.id));
     if (
       entry.kind === "mcp" &&
       entry.projectRootArg &&
@@ -118,11 +133,6 @@ export function projectExtensions(
       })
     )
       return "unavailable";
-    const { grants } = await cp.admin.inspect(context(), {
-      kind: "mcp",
-      integration_id: entry.id,
-    });
-    const grant = grants.findLast((g) => g.state !== "superseded");
     if (grant?.state !== "approved") return "unavailable";
     if (
       Date.parse(grant.expires_at) <=
@@ -139,14 +149,23 @@ export function projectExtensions(
   }
 
   async function status(): Promise<CatalogStatus> {
-    const revision = await store.getRevision();
-    const skills = await store.list();
-    const result: CatalogStatus = { installed: [], expired: [], conflicts: [] };
+    const { revision, skills, ownership } = await catalogSkills(store);
+    const removable = [...ownership.added];
+    const result: CatalogStatus = {
+      installed: [],
+      expired: [],
+      conflicts: [],
+      removable,
+    };
     for (const entry of CATALOG) {
       if (entry.kind === "mcp") {
-        const state = await mcpStatus(await plane(), entry);
+        const cp = await plane();
+        const record = await registration(cp, entry.id);
+        if (record.registered) removable.push(entry.id);
+        const state = await mcpStatus(cp, entry, record);
         if (state !== "unavailable") result[state].push(entry.id);
       } else if (
+        (entry.kind !== "plugin" || ownership.added.includes(entry.id)) &&
         entry.assets.every((asset) =>
           skills.some(
             (skill) =>
@@ -178,8 +197,8 @@ export function projectExtensions(
     if (!entry) throw new Error("Not in the bundled catalog.");
     const contents = await artifacts(entry);
     if (entry.kind !== "mcp") {
-      const expectedRevision = restoreRevision ?? (await store.getRevision());
-      const skills = await store.list();
+      const { skills, revision, ownership } = await catalogSkills(store);
+      const expectedRevision = restoreRevision ?? revision;
       const ops: Operation[] = [];
       for (const { name, content } of contents) {
         const existing = skills.find((skill) => skill.name === name);
@@ -195,12 +214,21 @@ export function projectExtensions(
             "A different skill already uses that name. Confirm restoration first.",
           );
       }
-      if (ops.length)
-        await store.applyBatch(ops, {
-          actor: "desktop-operator",
-          source: `catalog:${id}@${entry.version}`,
-          expectedRevision,
-        });
+      if (ops.length || !ownership.added.includes(id)) {
+        if (!ownership.added.includes(id)) ownership.added.push(id);
+        for (const op of ops)
+          if (op.op === "create" && !ownership.managed.includes(op.name))
+            ownership.managed.push(op.name);
+        await store.applyCatalogBatch(
+          ops,
+          {
+            actor: "desktop-operator",
+            source: `catalog:${id}@${entry.version}`,
+            expectedRevision,
+          },
+          ownership,
+        );
+      }
       return;
     }
     const cp = await plane();
@@ -232,10 +260,89 @@ export function projectExtensions(
     notified.delete(id);
   }
 
+  function mcpRemoval(
+    id: string,
+    { registered, grant }: Registration,
+  ): Removal {
+    if (!registered) throw new Error("Server not registered.");
+    return {
+      id,
+      revision: hash(
+        JSON.stringify([id, registered, grant?.grant_id, grant?.revision]),
+      ),
+      archive: [],
+      keep: [],
+    };
+  }
+  async function previewRemoval(id: string): Promise<Removal> {
+    const entry = findExtension(id);
+    if (!entry) throw new Error("Not in the bundled catalog.");
+    return entry.kind === "mcp"
+      ? mcpRemoval(id, await registration(await plane(), id))
+      : skillRemoval(entry, await catalogSkills(store));
+  }
+  async function remove(id: string, revision: string) {
+    const entry = findExtension(id);
+    if (!entry) throw new Error("Not in the bundled catalog.");
+    if (entry.kind === "mcp") {
+      const cp = await plane();
+      const record = await registration(cp, id);
+      if (mcpRemoval(id, record).revision !== revision)
+        throw new Error("Approval changed.");
+      const { grant } = record;
+      if (
+        grant?.state === "approved" &&
+        Date.parse(grant.expires_at) >
+          (options.clock?.().getTime() ?? Date.now())
+      ) {
+        await cp.admin.revoke(context(), {
+          grant_id: grant.grant_id,
+          expected_revision: grant.revision,
+          proof: cp.signHostProof({
+            scope,
+            review_id: grant.review_id,
+            review_revision: grant.revision,
+            binding_sha256: grant.binding_sha256,
+            decision: "revoke",
+            expires_at: grant.expires_at,
+          }),
+        });
+      }
+      await cp.registry.remove(id);
+      notified.delete(id);
+    } else {
+      const snapshot = await catalogSkills(store);
+      const plan = skillRemoval(entry, snapshot);
+      if (plan.revision !== revision) throw new Error("Skills changed.");
+      await store.applyCatalogBatch(
+        plan.archive.map((name) => ({ op: "archive", name })),
+        {
+          actor: "desktop-operator",
+          source: `catalog-remove:${id}`,
+          expectedRevision: revision,
+        },
+        {
+          ...snapshot.ownership,
+          added: snapshot.ownership.added.filter((owner) => owner !== id),
+        },
+      );
+    }
+  }
+
+  // Trust revocation and deregistration are separate stores. Serialize desktop
+  // MCP mutations across workbenches so a concurrent re-add cannot interleave.
+  const mutate = (id: string, action: () => Promise<void>) =>
+    findExtension(id)?.kind === "mcp"
+      ? withDirectoryLock(join(state, "catalog-mutations"), action)
+      : action();
   return {
     status,
     list: async () => (await status()).installed,
-    install,
+    install: (id: string, revision?: string) =>
+      mutate(id, () => install(id, revision)),
+    previewRemoval,
+    remove: (id: string, revision: string) =>
+      mutate(id, () => remove(id, revision)),
     async runtime(_cwd: string, taskScope: Scope) {
       if (!isDeepStrictEqual(scope, taskScope))
         throw new Error("Project scope mismatch.");
@@ -260,7 +367,8 @@ export function projectExtensions(
             if (
               error instanceof Error &&
               "code" in error &&
-              error.code === "expired"
+              error.code === "expired" &&
+              (await cp.registry.get(request.server_id))
             )
               notifyExpired(request.server_id);
             throw error;

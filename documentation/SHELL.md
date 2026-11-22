@@ -31,6 +31,14 @@ An expired MCP stays in the catalog with a renewal notice; adding it again requi
 
 Here, **verified** means the payload matches a SHA-256 pin in the catalog shipped with MARS. It is not third-party certification. There are no remote downloads or custom URLs/commands. Adding any MCP requires explicit approval; the workbench checks the grant and artifact on use. In attach-only mode the external workbench, not the shell, manages its own extensions.
 
+## Remove a project extension
+
+Choose **Project → Remove Project Extension…**, select an added item, and review the confirmation. Cancel makes no changes. Removal applies only to the open project; the bundled catalog stays available to add from again.
+
+- **MCP server:** revokes any live approval and removes the project registration, including if approval has expired. Later calls are denied. The approval history and other projects’ grants stay.
+- **Skill or plugin:** archives unchanged instructions supplied only by this item. The dialog names any skills that stay active because they are shared, customized, pinned, or predate the install. Removing a kit does not delete skill history or undo instructions already given to a running task.
+- **Older installs:** previous versions did not record a separate Add when a skill already existed. Members of an older kit are kept as individual skills rather than guessed to be unused. You can remove those skills individually.
+
 ## No second agent loop
 
 MARS Shell owns no model loop, tools, shell, task history store, MCP/LSP, or permission logic. Oh My Pi inside the workbench is the only agent runtime. The installed Shell starts one bundled Bun workbench on an ephemeral loopback port and stops it on teardown; development Shell can still attach to `mars serve`. The renderer never receives the RPC bearer token and cannot spawn processes or access the file system. `tasks.checkpoint` and `tasks.restore` remain refused by the shell bridge.

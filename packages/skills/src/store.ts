@@ -69,7 +69,15 @@ export interface Change {
   draftsBefore?: Draft[];
   draftsAfter?: Draft[];
 }
+const CatalogOwnershipSchema = z
+  .object({
+    added: z.array(z.string()),
+    managed: z.array(z.string()),
+  })
+  .strict();
+export type CatalogOwnership = z.infer<typeof CatalogOwnershipSchema>;
 interface State {
+  catalog?: CatalogOwnership | undefined;
   skills: Record<string, Skill>;
   versions: Record<string, Version[]>;
   drafts: Draft[];
@@ -229,6 +237,7 @@ const stateShape = <S extends z.ZodTypeAny>(skill: S) =>
   z
     .object({
       skills: recordOf(skill),
+      catalog: CatalogOwnershipSchema.optional(),
       versions: recordOf(
         z.array(
           z
@@ -322,6 +331,7 @@ const revision = (state: State) =>
     versions: state.versions,
     drafts: state.drafts,
     undone: state.undone,
+    ...(state.catalog ? { catalog: state.catalog } : {}),
   });
 const contentRevision = (skill?: Skill) => digest(skill?.content ?? null);
 const fresh = (): State => ({
@@ -642,12 +652,47 @@ export class SkillStore implements SkillLifecycleService {
       structuredClone(Object.values(state.skills)),
     );
   }
+  catalogSnapshot() {
+    return this.locked(async (state) => ({
+      skills: Object.values(state.skills),
+      revision: revision(state),
+      ownership: state.catalog,
+      legacy: state.catalog
+        ? []
+        : (await this.readJournal()).changes
+            .filter(
+              (c) =>
+                c.actor === "desktop-operator" &&
+                c.skill &&
+                c.source.startsWith("catalog:"),
+            )
+            .map(({ source, skill, op }) => ({ source, skill, op })),
+    }));
+  }
   applyBatch(ops: Operation[], options: MutationOptions) {
+    return this.applyOperations(ops, options);
+  }
+  applyCatalogBatch(
+    ops: Operation[],
+    options: MutationOptions & { expectedRevision: string },
+    ownership: CatalogOwnership,
+  ) {
+    return this.applyOperations(
+      ops,
+      options,
+      CatalogOwnershipSchema.parse(ownership),
+    );
+  }
+  private applyOperations(
+    ops: Operation[],
+    options: MutationOptions,
+    ownership?: CatalogOwnership,
+  ) {
     const copied = structuredClone(ops),
       metadata = { ...options };
     return this.locked(async (state) => {
       this.check(state, metadata);
-      if (!Array.isArray(copied) || !copied.length)
+      if (!Array.isArray(copied) || (!copied.length && !ownership))
         fail("empty", "Batch must not be empty");
       for (const op of copied) {
         validateName(op.name);
@@ -660,6 +705,13 @@ export class SkillStore implements SkillLifecycleService {
           fail("exists", "Unmanaged skill directory already exists");
       }
       const changes = copied.map((op) => this.perform(state, op, metadata));
+      if (ownership) {
+        const before = revision(state);
+        state.catalog = ownership;
+        changes.push(
+          this.log(state, metadata, "catalog-ownership", null, before),
+        );
+      }
       return this.commit(state, changes);
     });
   }

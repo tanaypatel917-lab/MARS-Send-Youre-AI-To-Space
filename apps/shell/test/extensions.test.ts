@@ -571,6 +571,7 @@ test("the catalog IPC rejects other windows, non-main frames and renderer-suppli
       }),
     }),
     () => source,
+    () => {},
   );
   if (!listener) throw new Error("Missing handler");
   const event = { sender: contents, senderFrame: frame };
@@ -588,6 +589,12 @@ test("the catalog IPC rejects other windows, non-main frames and renderer-suppli
     }),
   ).toThrow();
   const catalog = await listener(event as never, { action: "list" });
+  for (const payload of [
+    { action: "remove", id: "not-in-catalog" },
+    { action: "remove", id: skill, revision: "0".repeat(64) },
+    { action: "preview-remove", id: skill },
+  ])
+    expect(() => listener?.(event as never, payload)).toThrow();
   expect(
     catalog.find((entry: { id: string }) => entry.id === mcp).description,
   ).toContain("renew");
@@ -604,4 +611,179 @@ test("the catalog IPC rejects other windows, non-main frames and renderer-suppli
   expect(catalog.map((entry: { kind: string }) => entry.kind)).toEqual(
     CATALOG.map((entry) => entry.kind),
   );
+});
+
+test("removing a kit archives only its unshared skills and preserves independent adds across restart", async () => {
+  const ext = open(),
+    store = new SkillStore(join(state, "skills"));
+  await ext.install(plugin);
+  await ext.install(skill); // This Add needs a receipt even though the kit already supplied the content.
+  const plan = await open().previewRemoval(plugin);
+  expect(plan.archive).toEqual(["mars-test-handoff"]);
+  expect(plan.keep).toEqual([{ name: skill, reason: "shared" }]);
+  await open().remove(plugin, plan.revision);
+  expect(await open().list()).toEqual([skill]);
+  expect((await open().status()).removable).toEqual([skill]);
+  expect((await store.listVersions("mars-test-handoff"))[0]?.skill.status).toBe(
+    "active",
+  );
+  const last = await ext.previewRemoval(skill);
+  await ext.remove(skill, last.revision);
+  expect(await open().list()).toEqual([]);
+  await ext.install(plugin);
+  expect(await open().list()).toContain(plugin);
+});
+
+test("overlapping kits, edits, pins and pre-existing skills survive removal; stale plans cannot archive", async () => {
+  const ext = open(),
+    store = new SkillStore(join(state, "skills"));
+  const manual = { actor: "tester", source: "manual" };
+  const preexisting = "mars-bug-triage",
+    shared = "mars-test-plan";
+  await store.create(
+    preexisting,
+    await Bun.file(join(dir, `${preexisting}.md`)).text(),
+    manual,
+  );
+  await ext.install("mars-debug-kit");
+  await ext.install("mars-pr-kit");
+  const debug = await ext.previewRemoval("mars-debug-kit");
+  expect(debug.keep).toEqual([
+    { name: preexisting, reason: "pre-existing" },
+    { name: shared, reason: "shared" },
+  ]);
+  await ext.remove("mars-debug-kit", debug.revision);
+  const before = await ext.previewRemoval("mars-pr-kit");
+  const review = "mars-code-review",
+    handoff = "mars-test-handoff";
+  await store.update(
+    review,
+    `${(await store.get(review))?.content}\nMy own notes\n`,
+    manual,
+  );
+  await store.pin(handoff, true, manual);
+  await expect(ext.remove("mars-pr-kit", before.revision)).rejects.toThrow(
+    "changed",
+  );
+  const after = await ext.previewRemoval("mars-pr-kit");
+  expect(after.keep).toEqual([
+    { name: review, reason: "customized" },
+    { name: handoff, reason: "pinned" },
+  ]);
+  expect(after.archive).toEqual([shared]);
+  await ext.remove("mars-pr-kit", after.revision);
+  expect((await store.get(review))?.content).toContain("My own notes");
+  for (const name of [preexisting, review, handoff])
+    expect((await store.get(name))?.status).toBe("active");
+  expect((await store.get(shared))?.status).toBe("archived");
+  expect((await open().status()).removable).toEqual([]);
+});
+
+test("legacy kit members with ambiguous prior ownership stay active and can be removed individually", async () => {
+  const store = new SkillStore(join(state, "skills"));
+  const names = [skill, "mars-test-handoff"];
+  await store.applyBatch(
+    await Promise.all(
+      names.map(async (name) => ({
+        op: "create" as const,
+        name,
+        content: await Bun.file(join(dir, `${name}.md`)).text(),
+      })),
+    ),
+    { actor: "desktop-operator", source: `catalog:${plugin}@1.0.0` },
+  );
+  const ext = open(),
+    plan = await ext.previewRemoval(plugin);
+  expect(plan.archive).toEqual([]);
+  expect(plan.keep.map((k) => k.name)).toEqual(names);
+  await ext.remove(plugin, plan.revision);
+  expect(await open().list()).toEqual(names);
+  await ext.remove(skill, (await ext.previewRemoval(skill)).revision);
+  expect(await open().list()).toEqual(["mars-test-handoff"]);
+});
+
+test("removing an MCP revokes its grant, denies established callers, and does not affect another project", async () => {
+  const ext = open();
+  const otherState = join(root, "other-state");
+  await mkdir(join(otherState, "workspaces"), { recursive: true, mode: 0o700 });
+  const other = projectExtensions(
+    source,
+    otherState,
+    { ...scope, project_id: "other" },
+    dir,
+  );
+  await ext.install(mcp);
+  await other.install(mcp);
+  const rt = await ext.runtime(source, scope);
+  const call = () =>
+    rt.loader.invokeTool(ctx, { server_id: mcp, tool: "utc_now", input: {} });
+  try {
+    expect((await call()).is_error).not.toBe(true);
+    const plan = await ext.previewRemoval(mcp);
+    await ext.remove(mcp, plan.revision);
+    expect((await open().status()).removable).not.toContain(mcp);
+    expect(await rt.listServerIds()).toEqual([]);
+    await expect(call()).rejects.toThrow();
+    const cp = await createHostMcpControlPlane({
+      scope,
+      stateDir: join(state, "extension-trust"),
+      workspaceRoots: [source],
+      approvers: [
+        {
+          approver_id: "desktop-operator",
+          owner_id: scope.owner_id,
+          project_ids: [scope.project_id],
+        },
+      ],
+    });
+    const { grants } = await cp.admin.inspect(ctx, {
+      kind: "mcp",
+      integration_id: mcp,
+    });
+    expect(grants.at(-1)?.state).toBe("revoked");
+    expect(await other.list()).toEqual([mcp]);
+    await ext.install(mcp);
+    await expect(ext.remove(mcp, plan.revision)).rejects.toThrow("changed");
+    expect((await call()).is_error).not.toBe(true);
+  } finally {
+    await rt.loader.closeAll();
+  }
+}, 30000);
+
+test("native removal requires consent on the same project and passes the reviewed revision only", async () => {
+  const ext = open();
+  await ext.install(skill);
+  const host = {
+    extensionAction: async (a: OperatorAction) => {
+      if (a.action === "preview-remove")
+        return {
+          ...(await ext.status()),
+          removal: await ext.previewRemoval(a.id),
+        };
+      if (a.action === "remove") await ext.remove(a.id, a.revision);
+      return ext.status();
+    },
+  };
+  let active: typeof host | undefined = host;
+  const api = (confirm: () => Promise<boolean>) =>
+    extensionController(
+      () => active,
+      async () => false,
+      async (entry, plan) => {
+        expect(entry.id).toBe(skill);
+        expect(plan.archive).toEqual([skill]);
+        return confirm();
+      },
+    );
+  expect(await api(async () => false).remove(skill)).toBe("cancelled");
+  expect(
+    await api(async () => {
+      active = undefined;
+      return true;
+    }).remove(skill),
+  ).toBe("unavailable");
+  expect(await ext.list()).toEqual([skill]);
+  active = host;
+  expect(await api(async () => true).remove(skill)).toBe("removed");
+  expect(await ext.list()).toEqual([]);
 });

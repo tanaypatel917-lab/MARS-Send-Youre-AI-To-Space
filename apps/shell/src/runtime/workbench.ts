@@ -77,20 +77,32 @@ async function serve(): Promise<void> {
         reply(null);
         return;
       }
-      pending = (
-        request.action === "list"
-          ? extensions.status()
-          : extensions
-              .install(
-                request.id,
-                request.action === "restore" ? request.revision : undefined,
-              )
-              .then(() => ({
-                installed: [request.id],
-                expired: [],
-                conflicts: [],
-              }))
-      )
+      const run = async (): Promise<CatalogStatus> => {
+        const result: CatalogStatus = {
+          installed: [],
+          expired: [],
+          conflicts: [],
+        };
+        switch (request.action) {
+          case "list":
+            return extensions.status();
+          case "preview-remove":
+            return {
+              ...result,
+              removal: await extensions.previewRemoval(request.id),
+            };
+          case "remove":
+            await extensions.remove(request.id, request.revision);
+            return result;
+          default:
+            await extensions.install(
+              request.id,
+              request.action === "restore" ? request.revision : undefined,
+            );
+            return { ...result, installed: [request.id] };
+        }
+      };
+      pending = run()
         .then(reply, () => reply(null))
         .finally(() => {
           pending = undefined;

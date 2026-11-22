@@ -211,11 +211,12 @@ export async function createDesktop(window: BrowserWindow, reload: () => void) {
       },
       { type: "separator" },
       { label: "Model Settings…", click: showModelSettings },
-      desktopExtensionsMenu(
+      ...desktopExtensionsMenu(
         { dialog, ipcMain },
         window,
         activeWorkbench,
         () => source,
+        (items) => Menu.buildFromTemplate(items).popup({ window }),
       ),
       { type: "separator" },
       { role: "close" },

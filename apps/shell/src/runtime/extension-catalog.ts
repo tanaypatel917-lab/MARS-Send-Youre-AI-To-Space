@@ -220,10 +220,14 @@ export const CATALOG: CatalogEntry[] = [
   ),
 ];
 
-export type ExtensionView = Extension & { installed: boolean };
+export type ExtensionView = Extension & {
+  installed: boolean;
+  removable: boolean;
+};
 export interface DesktopExtensions {
   list(): Promise<ExtensionView[]>;
   install(id: string): Promise<"installed" | "cancelled" | "unavailable">;
+  remove(id: string): Promise<"removed" | "cancelled" | "unavailable">;
 }
 export function findExtension(id: unknown) {
   return CATALOG.find((entry) => entry.id === id);
