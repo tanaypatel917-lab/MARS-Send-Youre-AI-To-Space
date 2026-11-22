@@ -84,7 +84,7 @@ export function renderExtensions(
       doc,
       "section",
       { class: "extensions-content" },
-      h(doc, "p", { class: "eyebrow" }, "MAKE MARS YOURS"),
+      h(doc, "p", { class: "eyebrow" }, "03 / MAKE MARS YOURS"),
       h(doc, "h1", {}, "More capable. Still in your control."),
       h(
         doc,

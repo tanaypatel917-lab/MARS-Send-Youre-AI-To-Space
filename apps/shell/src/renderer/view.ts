@@ -317,12 +317,13 @@ function taskHeader(
       doc,
       "header",
       { class: "task-header" },
-      h(doc, "h1", HEADING_ATTRS, "No task selected"),
+      h(doc, "p", { class: "eyebrow" }, "02 / FROM IDEA TO EXECUTION"),
+      h(doc, "h1", HEADING_ATTRS, "Make room for the work."),
       h(
         doc,
         "p",
         {},
-        "Select a session or compose a new task below to get started.",
+        "Give MARS a clear goal. Follow every step, review every change.",
       ),
     );
   const candidateRevision =
@@ -1293,7 +1294,7 @@ export function renderShell(
       { class: "brand-row" },
       h(doc, "span", { class: "brand-orbit", "aria-hidden": "true" }),
       h(doc, "h1", { class: "brand" }, "MARS"),
-      h(doc, "span", { class: "brand-tag" }, "DESKTOP"),
+      h(doc, "span", { class: "brand-tag" }, "DESKTOP / 01"),
     ),
     h(
       doc,

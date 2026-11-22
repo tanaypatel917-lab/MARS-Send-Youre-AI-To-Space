@@ -48,6 +48,7 @@ export function renderSettings(
       doc,
       "div",
       { class: "settings-content" },
+      h(doc, "p", { class: "eyebrow" }, "04 / YOUR WORKSPACE, YOUR RULES"),
       h(doc, "h1", {}, "Settings"),
       h(
         doc,

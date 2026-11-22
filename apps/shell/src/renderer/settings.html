@@ -9,20 +9,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MARS Model Settings</title>
     <link rel="stylesheet" href="./shell.css" />
+    <link rel="stylesheet" href="./site-theme.css" />
   </head>
   <body class="model-settings">
     <header class="masthead"><span class="masthead-dots" aria-hidden="true"></span>MARS / model settings</header>
     <main>
-      <div class="setup-step">MODEL CONNECTION / OPENROUTER</div>
+      <div class="setup-step">MARS / MODEL CONNECTION</div>
       <h1>Connect your model</h1>
       <p>Use one OpenRouter key for chat and agent tasks. MARS uses it to sign in to OpenRouter, not as part of your prompts.</p>
       <div class="key-help">
-        <p><strong>1. Create your key</strong></p>
+        <p><strong>01 / Create your key</strong></p>
         <p>Sign in to OpenRouter, choose Create API key, and copy it.</p>
         <button id="get-key" type="button">Open OpenRouter key settings ↗</button>
       </div>
       <form>
-        <label for="model-key">2. Paste your OpenRouter API key</label>
+        <label for="model-key">02 / Paste your OpenRouter API key</label>
         <input id="model-key" type="password" maxlength="512" placeholder="sk-or-v1-…" autocomplete="off" spellcheck="false" required aria-describedby="key-privacy" />
         <div class="model-actions">
           <button type="submit">Save &amp; connect</button>

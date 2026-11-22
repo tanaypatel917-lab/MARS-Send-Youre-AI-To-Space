@@ -73,6 +73,10 @@ export async function buildShell(outdir: string): Promise<void> {
     resolve(root, "src/renderer/shell.css"),
     resolve(rendererDir, "shell.css"),
   );
+  await copyFile(
+    resolve(root, "src/renderer/site-theme.css"),
+    resolve(rendererDir, "site-theme.css"),
+  );
   for (const icon of ["orbit.svg", "navigation.svg"])
     await copyFile(resolve(root, "assets", icon), resolve(rendererDir, icon));
   await copyFile(

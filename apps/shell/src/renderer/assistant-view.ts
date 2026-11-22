@@ -88,14 +88,17 @@ export function renderAssistant(
     [
       "Explore an idea",
       "Help me think through an idea for a new feature. Ask me a few questions to get started.",
+      "Find the shape of something new.",
     ],
     [
       "Plan a build",
       "Help me break down a coding project into a clear implementation plan.",
+      "Turn a big goal into clear next steps.",
     ],
     [
       "Talk through code",
       "I want to understand some code. What should I share so we can walk through it together?",
+      "Make the complicated feel simple.",
     ],
   ];
   const form = h(
@@ -164,23 +167,51 @@ export function renderAssistant(
                 { class: "orbit-mark", "aria-hidden": "true" },
                 "✳",
               ),
-              h(doc, "p", { class: "eyebrow" }, "MARS  /  ASSISTANT"),
-              h(doc, "h1", {}, "Start a", h(doc, "span", {}, "conversation.")),
+              h(doc, "p", { class: "eyebrow" }, "01 / A SPACE TO THINK"),
+              h(
+                doc,
+                "h1",
+                {},
+                "Good ideas.",
+                h(doc, "span", {}, "New frontiers."),
+              ),
               h(
                 doc,
                 "p",
                 { class: "welcome-subtitle" },
-                "Think through an idea, then turn your plan into a task.",
+                "A thought partner for what comes next. Explore an idea with MARS, then give your agent a task.",
               ),
               h(
                 doc,
                 "div",
                 { class: "suggestion-grid" },
-                ...suggestions.map(([title, prompt]) =>
-                  action(doc, `${title}  ↗`, "suggestion", () => {
+                ...suggestions.map(([title, prompt, description], index) => {
+                  const button = action(doc, "", "suggestion", () => {
                     state.onDraft?.(prompt ?? "");
-                  }),
-                ),
+                  });
+                  button.append(
+                    h(
+                      doc,
+                      "span",
+                      { class: "suggestion-number" },
+                      `0${index + 1} /`,
+                    ),
+                    h(
+                      doc,
+                      "strong",
+                      {},
+                      title ?? "",
+                      h(doc, "span", { "aria-hidden": "true" }, "↗"),
+                    ),
+                    h(
+                      doc,
+                      "span",
+                      { class: "suggestion-description" },
+                      description ?? "",
+                    ),
+                  );
+                  return button;
+                }),
               ),
             ),
           ]
