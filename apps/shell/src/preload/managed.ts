@@ -11,5 +11,7 @@ contextBridge.exposeInMainWorld(
     list: () => ipcRenderer.invoke(EXTENSION_CHANNEL, { action: "list" }),
     install: (id: string) =>
       ipcRenderer.invoke(EXTENSION_CHANNEL, { action: "install", id }),
+    remove: (id: string) =>
+      ipcRenderer.invoke(EXTENSION_CHANNEL, { action: "remove", id }),
   } satisfies DesktopExtensions),
 );

@@ -254,10 +254,15 @@ export async function createDesktop(
       },
       { type: "separator" },
       { label: "Model Settings…", click: showModelSettings },
-      desktopExtensionsMenu({ dialog, ipcMain }, window, activeWorkbench, () =>
-        source === demo
-          ? "demo-project"
-          : `${basename(source) || source}\nFolder: ${source}`,
+      ...desktopExtensionsMenu(
+        { dialog, ipcMain },
+        window,
+        activeWorkbench,
+        () =>
+          source === demo
+            ? "demo-project"
+            : `${basename(source) || source}\nFolder: ${source}`,
+        (items) => Menu.buildFromTemplate(items).popup({ window }),
       ),
       { type: "separator" },
       { role: "close" },
