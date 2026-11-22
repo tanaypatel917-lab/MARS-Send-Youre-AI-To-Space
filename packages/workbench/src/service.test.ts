@@ -151,6 +151,7 @@ async function fixture(contextWindow = 32000, verification = false) {
       allowUnavailableSandbox?: boolean;
       verifiedExportsOnly?: boolean;
       sandboxDockerHost?: string;
+      verificationUnavailableReason?: string;
     } = {},
   ) {
     const service = await createWorkbenchService({
@@ -1221,6 +1222,52 @@ test.skipIf(process.env.MARS_WORKSPACES_DOCKER_TEST !== "1")(
     expect(await Bun.file(join(f.source, "greet.txt")).exists()).toBe(false);
   },
   30000,
+);
+
+test.each([true, false])(
+  "mount-unsafe desktop example without an image enforces explicit verified-only export=%s",
+  async (verifiedExportsOnly) => {
+    const f = await fixture(32000, true);
+    const seeded = await seedVerificationExample(f.base);
+    const reason =
+      "Verification needs a private workspace path without spaces or special characters.";
+    const { client } = await f.start(
+      async () => sse({ content: "No changes." }),
+      undefined,
+      undefined,
+      {
+        checksFile: seeded.checksFile,
+        verificationUnavailableReason: reason,
+        verifiedExportsOnly,
+      },
+    );
+    expect(await client.describe()).toMatchObject({
+      capabilities: { execute: false },
+      verification_readiness: { status: "unavailable", reason },
+    });
+    const created = await client.create(task());
+    await client.start(created.task_id, {
+      expectedRevision: 0,
+      approvals: { read: true, write: false, execute: false },
+    });
+    await eventually(
+      () => client.inspect(created.task_id),
+      (value) => value.status === "completed",
+    );
+    const view = await client.verification(created.task_id);
+    expect(view.state).toBe("unverified");
+    if (!view.candidate || !view.patch_sha256)
+      throw new Error("Missing candidate patch");
+    const exporting = client.exportPatch(created.task_id, {
+      revision: view.candidate.revision,
+      patchSha256: view.patch_sha256,
+    });
+    if (verifiedExportsOnly) {
+      await expect(exporting).rejects.toMatchObject({ code: "conflict" });
+    } else {
+      expect((await exporting).verified).toBe(false);
+    }
+  },
 );
 
 test("desktop verification starts degraded when the pinned image is absent", async () => {

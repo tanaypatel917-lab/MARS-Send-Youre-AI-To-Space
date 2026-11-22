@@ -26,6 +26,7 @@ type WorkbenchOptions = {
   dockerPath?: string;
   dockerHost?: string;
   verificationUnavailableReason?: string;
+  verifiedExportsOnly?: boolean;
   onExpired?: (name: string) => void;
   extensionTimeoutMs?: number;
 };
@@ -100,7 +101,7 @@ export function startLocalWorkbench(options: WorkbenchOptions) {
       const id = createHash("sha256").update(source).digest("hex").slice(0, 24);
       const state = join(options.state, `desktop-${id}`);
       child.stdin.write(
-        `${JSON.stringify({ source, state, openRouterKey: options.openRouterKey, image: options.image, checksFile: options.checksFile, dockerPath: options.dockerPath, dockerHost: options.dockerHost, verificationUnavailableReason: options.verificationUnavailableReason })}\n`,
+        `${JSON.stringify({ source, state, openRouterKey: options.openRouterKey, image: options.image, checksFile: options.checksFile, dockerPath: options.dockerPath, dockerHost: options.dockerHost, verificationUnavailableReason: options.verificationUnavailableReason, verifiedExportsOnly: options.verifiedExportsOnly })}\n`,
       );
       return join(state, "connection.json");
     } catch {

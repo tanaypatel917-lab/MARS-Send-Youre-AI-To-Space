@@ -26,6 +26,7 @@ const StartSchema = z
       .refine((host) => isLocalDockerHost(host))
       .optional(),
     verificationUnavailableReason: z.string().min(1).max(1024).optional(),
+    verifiedExportsOnly: z.boolean().optional(),
   })
   .strict();
 
@@ -53,6 +54,7 @@ async function serve(): Promise<void> {
       dockerPath,
       dockerHost,
       verificationUnavailableReason,
+      verifiedExportsOnly,
     } = StartSchema.parse(JSON.parse(line));
     const scope = { owner_id: "local", project_id: basename(state) };
     const extensions = projectExtensions(source, state, scope, undefined, {
@@ -70,7 +72,7 @@ async function serve(): Promise<void> {
       sandboxDockerPath: dockerPath ?? Bun.which("docker") ?? "/usr/bin/docker",
       ...(dockerHost ? { sandboxDockerHost: dockerHost } : {}),
       allowUnavailableSandbox: true,
-      verifiedExportsOnly: Boolean(image),
+      ...(verifiedExportsOnly !== undefined ? { verifiedExportsOnly } : {}),
       stateRoot: state,
       scope,
       mcp: extensions.runtime,

@@ -78,7 +78,7 @@ test.each([
     );
     try {
       child.stdin.write(
-        `${JSON.stringify({ source: seeded.source, state, checksFile: seeded.checksFile, dockerPath, dockerHost, verificationUnavailableReason, ...(!verificationUnavailableReason ? { image: `mirror.gcr.io/library/busybox@sha256:${"0".repeat(64)}` } : {}) })}\n`,
+        `${JSON.stringify({ source: seeded.source, state, checksFile: seeded.checksFile, dockerPath, dockerHost, verificationUnavailableReason, verifiedExportsOnly: true, ...(!verificationUnavailableReason ? { image: `mirror.gcr.io/library/busybox@sha256:${"0".repeat(64)}` } : {}) })}\n`,
       );
       const reader = child.stdout.getReader();
       let output = "";

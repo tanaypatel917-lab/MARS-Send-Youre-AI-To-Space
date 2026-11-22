@@ -246,6 +246,7 @@ export async function createDesktop(
                 ? { verificationUnavailableReason: verificationState.reason }
                 : { image: VERIFICATION_IMAGE }),
               checksFile: verification.checksFile,
+              verifiedExportsOnly: true,
             }
           : {}),
         ...(openRouterKey ? { openRouterKey } : {}),
