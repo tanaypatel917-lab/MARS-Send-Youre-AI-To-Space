@@ -11,6 +11,7 @@ import {
 import { type McpAuthentication, selectMcpAuthentication } from "./credentials";
 import {
   buildDescriptorHash,
+  createVerifiedMcpTransport,
   matchesMcpToolEvidence,
   verifyMcpConfig,
 } from "./probe";
@@ -24,7 +25,6 @@ import {
   type UntrustedToolOutput,
 } from "./schemas";
 import {
-  createMcpTransport,
   McpConnectionLostError,
   type McpTransportConnection,
   StdioMcpTransport,
@@ -142,8 +142,6 @@ export function createTrustedMcpLoader(
     authentication?: McpAuthentication,
   ): Promise<ActiveConnection> {
     signal.throwIfAborted();
-    const executable = await verifyMcpConfig(server, artifact.evidence, signal);
-    signal.throwIfAborted();
     let current = connections.get(server.id);
     if (
       current &&
@@ -177,21 +175,26 @@ export function createTrustedMcpLoader(
       if (
         !(active.transport instanceof StdioMcpTransport) ||
         active.transport.isRunning
-      )
+      ) {
+        await verifyMcpConfig(server, artifact.evidence, signal);
+        signal.throwIfAborted();
         return active;
+      }
       await active.evict();
       if (connections.get(server.id) !== current) {
         throw new McpConnectionLostError("MCP connection was closed");
       }
     }
     signal.throwIfAborted();
-    const transport = createMcpTransport(
-      server.transport.type === "stdio" && executable
-        ? { ...server.transport, command: executable }
-        : server.transport,
-    );
     const pending = (async (): Promise<ActiveConnection> => {
+      let prepared: McpTransportConnection | undefined;
       try {
+        const transport = await createVerifiedMcpTransport(
+          server,
+          artifact.evidence,
+          signal,
+        );
+        prepared = transport;
         const descriptor = await transport.initialize({
           timeoutMs,
           signal,
@@ -218,7 +221,7 @@ export function createTrustedMcpLoader(
         return active;
       } catch (error) {
         contexts.delete(key);
-        await transport.close().catch(() => {});
+        await prepared?.close().catch(() => {});
         throw error;
       }
     })();

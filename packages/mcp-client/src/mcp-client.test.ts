@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type { RequestContext } from "@mars/contracts";
 import {
   type AuditEvent,
@@ -16,6 +24,7 @@ import {
   defaultRequestContext,
   type HostMcpControlPlane,
   type McpCredentialResolver,
+  McpEvidenceProbe,
   type McpServerConfig,
   StreamableHttpMcpTransport,
 } from "./index";
@@ -506,6 +515,92 @@ describe("@mars/mcp-client end-to-end trust enforcement", () => {
       code: "drift",
     });
     expect(await Bun.file(marker).exists()).toBe(false);
+  });
+
+  it("probes verified bytes even if the original command and relative script are no longer present", async () => {
+    const dir = await makeTempDir("mars-stdio-probe-capture-");
+    const source = join(dir, "source");
+    await mkdir(source);
+    const command = join(source, basename(BUN_BIN));
+    await copyFile(BUN_BIN, command);
+    await copyFile(STDIO_FIXTURE, join(source, "server.ts"));
+    const cp = await createControlPlane();
+    const ctx = makeCtx();
+    const config = makeConfig({
+      id: "probe-capture",
+      transport: {
+        type: "stdio",
+        command,
+        cwd: dir,
+        args: ["run", "source/server.ts"],
+        env_allowlist: [],
+      },
+      permissions: [],
+      credential_bindings: [],
+    });
+    const evidence = await cp.probe.observeServer(ctx, config, {
+      allowUnapprovedStdioProbe: true,
+    });
+    const probe = new McpEvidenceProbe({
+      registry: cp.registry,
+      getTrustedBaseline: async () => {
+        await rename(source, join(dir, "archived"));
+        return { evidence };
+      },
+    });
+    expect(await probe.observeServer(ctx, config)).toMatchObject({
+      source: evidence.source,
+      config_sha256: evidence.config_sha256,
+      tools: evidence.tools,
+    });
+  });
+
+  it("keeps private file arguments for the live child and removes them when the loader closes", async () => {
+    const dir = await makeTempDir("mars-stdio-loader-capture-");
+    const script = join(dir, "server.ts");
+    const data = join(dir, "input.txt");
+    const fixture = await readFile(STDIO_FIXTURE, "utf8");
+    await writeFile(
+      script,
+      `writeFileSync("paths.json", JSON.stringify([process.execPath, import.meta.path, ...process.argv.slice(2)]));\n${fixture}`,
+    );
+    await writeFile(data, "original");
+    const cp = await createControlPlane();
+    const ctx = makeCtx();
+    const config = makeConfig({
+      id: "loader-capture",
+      transport: {
+        type: "stdio",
+        command: BUN_BIN,
+        cwd: dir,
+        args: ["run", "server.ts", "input.txt", "--literal"],
+        entrypoint: script,
+        env_allowlist: [],
+      },
+      permissions: [{ capability: "tool.invoke", resource: "echo" }],
+      credential_bindings: [],
+    });
+    const readPaths = async () =>
+      JSON.parse(await readFile(join(dir, "paths.json"), "utf8")) as [
+        string,
+        string,
+        string,
+        string,
+      ];
+    await registerReviewApprove(cp, ctx, config);
+    const [probeCommand] = await readPaths();
+    expect(await Bun.file(probeCommand).exists()).toBe(false);
+    await cp.loader.admitServer(ctx, config.id);
+    const [command, entrypoint, input, literal] = await readPaths();
+    expect(command).not.toBe(BUN_BIN);
+    expect(entrypoint).not.toBe(script);
+    expect(input).not.toBe(data);
+    expect(literal).toBe("--literal");
+    await writeFile(data, "updated");
+    expect(await readFile(input, "utf8")).toBe("original");
+    await cp.loader.closeServer(config.id);
+    for (const path of [command, entrypoint, input])
+      expect(await Bun.file(path).exists()).toBe(false);
   });
 
   it("detects an edited script passed as an argument without spawning it or requiring an entrypoint", async () => {

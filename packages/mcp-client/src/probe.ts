@@ -1,6 +1,3 @@
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
-import { resolve } from "node:path";
 import type { RequestContext, Scope } from "@mars/contracts";
 import {
   type AuthorizedArtifact,
@@ -21,7 +18,12 @@ import {
   normalizeOrigin,
   type StdioTransportConfig,
 } from "./schemas";
-import { createMcpTransport, resolveStdioExecutable } from "./transports";
+import {
+  captureStdioArtifact,
+  hashFile,
+  readStdioArtifact,
+} from "./stdio-artifact";
+import { createMcpTransport, type McpTransportConnection } from "./transports";
 
 export interface TrustedStdioBaseline {
   evidence: SourceEvidence;
@@ -67,22 +69,6 @@ export interface ObserveServerOptions {
   >;
 }
 
-async function hashFileOrSpec(
-  filePath: string | undefined,
-  fallbackSpec: unknown,
-  signal?: AbortSignal,
-): Promise<string> {
-  signal?.throwIfAborted();
-  if (filePath) {
-    const abs = resolve(filePath);
-    const hasher = new Bun.CryptoHasher("sha256");
-    for await (const chunk of createReadStream(abs, { signal }))
-      hasher.update(chunk);
-    return hasher.digest("hex");
-  }
-  return sha256(canonicalJSON(fallbackSpec));
-}
-
 function buildConfigHash(
   server: McpServerConfig,
   artifactSha?: string,
@@ -110,49 +96,20 @@ function buildConfigHash(
   );
 }
 
-async function readStdioArtifact(
-  config: StdioTransportConfig,
+async function checkConfig(
+  server: McpServerConfig,
+  expected: SourceEvidence,
+  artifactSha?: string,
   signal?: AbortSignal,
 ) {
-  signal?.throwIfAborted();
-  const executable = resolveStdioExecutable(config);
-  const executableSha = await hashFileOrSpec(executable, null, signal);
-  const entrypointSha = config.entrypoint
-    ? await hashFileOrSpec(config.entrypoint, null, signal)
-    : null;
-  const argFiles = await hashArgumentFiles(config, signal);
-  return {
-    executable,
-    sha: sha256(
-      canonicalJSON({
-        executable,
-        executableSha,
-        entrypointSha,
-        ...(argFiles.length > 0 ? { argFiles } : {}),
-      }),
-    ),
-  };
-}
-
-/**
- * Hashes every argument that names an existing regular file (resolved against
- * the server's cwd) so interpreter-launched scripts such as
- * `bun run server.ts` are fingerprinted even without an explicit entrypoint.
- */
-async function hashArgumentFiles(
-  config: StdioTransportConfig,
-  signal?: AbortSignal,
-): Promise<Array<{ index: number; sha256: string }>> {
-  const cwd = config.cwd ?? process.cwd();
-  const hashes: Array<{ index: number; sha256: string }> = [];
-  for (const [index, arg] of config.args.entries()) {
-    signal?.throwIfAborted();
-    const path = resolve(cwd, arg);
-    const info = await stat(path).catch(() => undefined);
-    if (!info?.isFile()) continue;
-    hashes.push({ index, sha256: await hashFileOrSpec(path, null, signal) });
+  if (
+    buildConfigHash(server, artifactSha) !== expected.config_sha256 ||
+    (server.transport.type === "stdio" &&
+      (await stdioDependencyHash(server.transport, signal)) !==
+        expected.dependency_sha256)
+  ) {
+    throw new IntegrationTrustError("drift");
   }
-  return hashes;
 }
 
 export async function verifyMcpConfig(
@@ -164,31 +121,36 @@ export async function verifyMcpConfig(
     server.transport.type === "stdio"
       ? await readStdioArtifact(server.transport, signal)
       : undefined;
-  if (buildConfigHash(server, artifact?.sha) !== expected.config_sha256) {
-    throw new IntegrationTrustError("drift");
-  }
-  if (
-    server.transport.type === "stdio" &&
-    (await stdioDependencyHash(server.transport, signal)) !==
-      expected.dependency_sha256
-  ) {
-    throw new IntegrationTrustError("drift");
-  }
+  await checkConfig(server, expected, artifact?.sha, signal);
   return artifact?.executable;
+}
+
+export async function createVerifiedMcpTransport(
+  server: McpServerConfig,
+  expected: SourceEvidence,
+  signal?: AbortSignal,
+): Promise<McpTransportConnection> {
+  if (server.transport.type !== "stdio") {
+    await checkConfig(server, expected);
+    return createMcpTransport(server.transport);
+  }
+  const captured = await captureStdioArtifact(server.transport, signal);
+  try {
+    await checkConfig(server, expected, captured.sha, signal);
+    return captured.transport;
+  } catch (error) {
+    await captured.transport.close();
+    throw error;
+  }
 }
 
 function stdioDependencyHash(
   config: StdioTransportConfig,
   signal?: AbortSignal,
 ) {
-  return hashFileOrSpec(
-    config.dependency_manifest,
-    {
-      command: config.command,
-      args: config.args,
-    },
-    signal,
-  );
+  return config.dependency_manifest
+    ? hashFile(config.dependency_manifest, signal)
+    : sha256(canonicalJSON({ command: config.command, args: config.args }));
 }
 
 function buildToolEvidence(descriptor: McpServerDescriptor) {
@@ -247,7 +209,10 @@ export async function probeMcpServerDescriptor(
   signal?: AbortSignal,
 ): Promise<McpServerDescriptor> {
   signal?.throwIfAborted();
-  const transport = createMcpTransport(server.transport);
+  const transport =
+    server.transport.type === "stdio"
+      ? (await captureStdioArtifact(server.transport, signal)).transport
+      : createMcpTransport(server.transport);
   try {
     return await transport.initialize({
       timeoutMs,
@@ -376,13 +341,32 @@ export class McpEvidenceProbe implements EvidenceProbe {
       };
     }
 
-    const stdio: StdioTransportConfig = server.transport;
-    // Hash static local artifacts BEFORE spawning the stdio process so
-    // tampered or unapproved executables are never launched before trust checks.
-    const { executable, sha: artifactSha } = await readStdioArtifact(
-      stdio,
-      signal,
-    );
+    const stdio = server.transport;
+    const captured = await captureStdioArtifact(stdio, signal);
+    try {
+      return await this.observeStdioServer(
+        ctx,
+        server,
+        stdio,
+        captured,
+        observedAt,
+        options,
+      );
+    } finally {
+      await captured.transport.close();
+    }
+  }
+
+  private async observeStdioServer(
+    ctx: RequestContext,
+    server: McpServerConfig,
+    stdio: StdioTransportConfig,
+    captured: Awaited<ReturnType<typeof captureStdioArtifact>>,
+    observedAt: string,
+    options?: ObserveServerOptions,
+  ): Promise<SourceEvidence> {
+    const signal = options?.signal;
+    const { executable, sha: artifactSha } = captured;
     const configSha = buildConfigHash(server, artifactSha);
     const dependencySha = await stdioDependencyHash(stdio, signal);
 
@@ -441,12 +425,10 @@ export class McpEvidenceProbe implements EvidenceProbe {
       }
     }
 
-    const descriptor = await probeMcpServerDescriptor(
-      { ...server, transport: { ...stdio, command: executable } },
-      this.probeTimeoutMs,
-      undefined,
-      signal,
-    );
+    const descriptor = await captured.transport.initialize({
+      timeoutMs: this.probeTimeoutMs,
+      ...(signal ? { signal } : {}),
+    });
     const tools = buildToolEvidence(descriptor);
     const descriptorSha = buildDescriptorHash(descriptor);
     // Mix descriptorSha into content_sha256 so even if entrypoint bytes didn't
