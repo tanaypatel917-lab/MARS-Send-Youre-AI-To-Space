@@ -12,6 +12,18 @@ const save = document.querySelector<HTMLButtonElement>("[type=submit]");
 const clear = document.querySelector<HTMLButtonElement>("#clear-key");
 const status = document.querySelector("#model-status");
 
+const closeSettings = () => window.close();
+document
+  .querySelector("#close-settings")
+  ?.addEventListener("click", closeSettings);
+document.addEventListener("keydown", (event) => {
+  if (event.isComposing) return;
+  if (event.key === "Escape" || (event.metaKey && event.key === "w")) {
+    event.preventDefault();
+    closeSettings();
+  }
+});
+
 if (settings && form && input && save && clear && status) {
   const { apply, openKeyPage, initialize } = settingsActions(settings, {
     input,
