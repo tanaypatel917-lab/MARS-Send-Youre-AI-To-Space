@@ -3,15 +3,19 @@ import type {
   MessageView,
   ReactionEmoji,
   ReferencePreview,
+  TeamResult,
 } from "@mars/team-chat";
 import { type ProjectionEvent, projectTranscript } from "@mars/ui-core";
-import type { BridgeResult, ShellBridge } from "../shared/methods";
+import type { AssistantApi } from "../shared/assistant";
+import type { BridgeError, BridgeResult, ShellBridge } from "../shared/methods";
 import {
   TEAM_CHAT_MAX_MESSAGE_CHARS,
   TEAM_CHAT_MAX_SEARCH_CHARS,
   type TeamChatBridgeApi,
 } from "../shared/team-chat";
+import type { AssistantViewState } from "./assistant-view";
 import type { ShellDocument, ShellElement } from "./dom";
+import type { ExtensionState, ExtensionsApi } from "./extensions-view";
 import type { TeamChatViewState } from "./team-chat-view";
 import { verifyArtifact } from "./verify";
 import {
@@ -24,6 +28,7 @@ import {
   MAX_REQUIRED_CHECKS,
   renderShell,
   type ShellState,
+  type WorkspacePage,
 } from "./view";
 
 const TEXT_MEDIA_TYPES = new Set(["application/json", "application/x-ndjson"]);
@@ -36,9 +41,29 @@ export const MAX_HYDRATED_EVENT_PAYLOADS = 300;
 const PAYLOAD_FETCH_CONCURRENCY = 6;
 const MAX_PAYLOAD_CACHE_ENTRIES = 5000;
 const FOCUS_KEY = "data-focus-key";
+const TASK_REFRESH_MS = 2_000;
+const MAX_REFRESH_MS = 30_000;
 const DEFAULT_PAID_MODEL_ID = "claude-sonnet-4-5";
 
-type OptionalValue<T> = { ok: true; value: T } | { ok: false; error: string };
+type OptionalValue<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: string; kind?: BridgeError["kind"] };
+
+async function teamAction<T>(
+  invoke: () => Promise<TeamResult<T>>,
+): Promise<TeamResult<T>> {
+  try {
+    return await invoke();
+  } catch {
+    return { ok: false, code: "unavailable" };
+  }
+}
+
+class WorkbenchFailure extends Error {
+  constructor(readonly detail: BridgeError) {
+    super(detail.message);
+  }
+}
 
 function textLike(mediaType: string): boolean {
   return mediaType.startsWith("text/") || TEXT_MEDIA_TYPES.has(mediaType);
@@ -67,7 +92,7 @@ function createInitialComposer(): ComposerState {
 
 function createInitialLaunch(): LaunchCardState {
   return {
-    approvals: { read: true, write: true, execute: false },
+    approvals: { read: true, write: false, execute: false },
     modelChoice: "default",
     paidModelId: DEFAULT_PAID_MODEL_ID,
     paidModelConsent: false,
@@ -75,6 +100,13 @@ function createInitialLaunch(): LaunchCardState {
     steerDraft: "",
     busy: false,
   };
+}
+
+function beginLaunchAction(launch: LaunchCardState) {
+  launch.busy = true;
+  delete launch.actionError;
+  delete launch.actionNotice;
+  delete launch.modelUnavailable;
 }
 
 function toggleId(ids: readonly string[], id: string, on: boolean): string[] {
@@ -107,10 +139,65 @@ export function createController(
   doc: ShellDocument,
   root: ShellElement,
   teamChat?: TeamChatBridgeApi,
+  assistant?: AssistantApi,
+  extensions?: ExtensionsApi,
+  scheduleRefresh?: (tick: () => void, delay: number) => () => void,
 ) {
+  let extensionState: ExtensionState = {
+    items: [],
+    busy: false,
+    notice: extensions
+      ? ""
+      : "The verified installer is not available in this build.",
+    available: Boolean(extensions),
+  };
+  let page: WorkspacePage = assistant ? "chat" : "tasks";
+  let settingsError: string | undefined;
+  let inspectorOpen = false;
+  const emptyAssistant = (): AssistantViewState => ({
+    sessions: [],
+    activeId: globalThis.crypto.randomUUID(),
+    draft: "",
+    configured: false,
+    consent: false,
+    busy: false,
+    loading: Boolean(assistant),
+  });
+  let assistantState = emptyAssistant();
+  // Only shelved drafts live here. No draft is written to disk or sent to the model.
+  const assistantDrafts = new Map<string, string>();
+  let draftWorkspace: string | undefined;
+  const selectChat = (id: string) => {
+    if (assistantState.busy || assistantState.loading) return;
+    if (assistantState.draft)
+      assistantDrafts.set(assistantState.activeId, assistantState.draft);
+    const draft = assistantDrafts.get(id) ?? "";
+    assistantDrafts.delete(id);
+    page = "chat";
+    closeTeamChat();
+    assistantState = {
+      ...assistantState,
+      activeId: id,
+      draft,
+      consent: false,
+      validation: undefined,
+      error: undefined,
+    };
+    render();
+  };
+  let assistantWorkspace: string | undefined;
+  let suspendedDraft:
+    | { workspace: string; activeId: string; draft: string }
+    | undefined;
+  let scopeGeneration = 0;
+  let historyVersion = 0;
+  let assistantLoaded = false;
   let selectedId: string | undefined;
   let loadRequested = false;
   let loadPromise: Promise<void> | undefined;
+  let disposed = false;
+  let cancelRefresh: (() => void) | undefined;
+  let refreshDelay = TASK_REFRESH_MS;
   let clientSeq = 1;
   // Per-load prefix: the host keeps sent client_message_ids across renderer
   // reloads, so a bare counter would replay or conflict with earlier sends.
@@ -120,8 +207,33 @@ export function createController(
   ).join("");
 
   let composer: ComposerState = createInitialComposer();
-  let launch: LaunchCardState = createInitialLaunch();
+  // Each async action retains its own task's form, even after navigation.
+  const launchForms = new Map<string, LaunchCardState>();
+  const taskKey = (task: Task): string => {
+    const { owner_id, project_id, workspace_id } = task.scope;
+    return JSON.stringify([
+      owner_id,
+      project_id,
+      workspace_id,
+      task.session_id,
+      task.task_id,
+    ]);
+  };
+  const launchFor = (task: Task): LaunchCardState => {
+    const key = taskKey(task);
+    const existing = launchForms.get(key);
+    if (existing) return existing;
+    const form = createInitialLaunch();
+    launchForms.set(key, form);
+    return form;
+  };
   let patchExport: ExportViewState = { busy: false };
+  const selectTask = (id: string | undefined) => {
+    if (id !== selectedId) {
+      selectedId = id;
+      patchExport = { busy: false };
+    }
+  };
 
   let teamState: TeamChatViewState = {
     available: Boolean(teamChat),
@@ -132,12 +244,42 @@ export function createController(
     searchQuery: "",
     resolvedRefs: {},
   };
+  const teamDrafts = new Map<string, { text: string }>();
+  const teamKey = (
+    viewer = teamState.viewer,
+    id = teamState.activeConversationId,
+  ) => JSON.stringify([viewer, id]);
 
   let state: ShellState = { tasks: [], events: [], artifacts: [] };
+  let teamContext = 0;
+  let searchVersion = 0;
+  const closeTeamChat = () => {
+    teamContext++;
+    teamState = { ...teamState, open: false };
+    delete teamState.searchHits;
+  };
 
+  let extensionAnchorId: string | undefined;
+  const libraryScroller = () =>
+    root.querySelectorAll("[data-library-scroll]")[0];
+  const anchorTop = () =>
+    Array.from(root.querySelectorAll("[data-extension-id]"))
+      .find((el) => el.getAttribute("data-extension-id") === extensionAnchorId)
+      ?.getBoundingClientRect?.().top;
+  let renderedTaskKey: string | undefined;
   const render = () => {
+    if (disposed) return;
+    const oldLibraryOffset = libraryScroller()?.scrollTop;
+    const oldAnchorTop =
+      oldLibraryOffset === undefined ? undefined : anchorTop();
+    const launch = state.selectedTask
+      ? launchFor(state.selectedTask)
+      : createInitialLaunch();
     const active = doc.activeElement;
-    const focusKey = active?.getAttribute(FOCUS_KEY) ?? null;
+    const focusAttr = [FOCUS_KEY, "data-control", "data-action"].find(
+      (attr) => active?.getAttribute(attr) != null,
+    );
+    const focusKey = focusAttr ? active?.getAttribute(focusAttr) : undefined;
     const selectionStart =
       typeof active?.selectionStart === "number" ? active.selectionStart : null;
     const selectionEnd =
@@ -145,18 +287,96 @@ export function createController(
     const selectionDirection = active?.selectionDirection ?? undefined;
     state = {
       ...state,
+      page,
+      settingsError,
+      inspectorOpen,
+      onToggleInspector: () => {
+        inspectorOpen = !inspectorOpen;
+        render();
+        if (
+          inspectorOpen &&
+          globalThis.matchMedia?.("(max-width: 900px)").matches
+        )
+          root.querySelectorAll("[data-inspector-heading]")[0]?.focus();
+      },
+      onPage: (next) => {
+        page = next;
+        closeTeamChat();
+        if (next === "extensions") void refreshExtensions();
+        render();
+        if (next === "extensions") libraryScroller()?.focus();
+      },
+      extensions: {
+        ...extensionState,
+        onRefresh: () => void refreshExtensions(),
+        onInstall: (id) => void refreshExtensions(id),
+        hasTaskDraft: Boolean(composer.request || composer.criteria),
+        onDraftTask: (example) => {
+          if (!composer.request && !composer.criteria)
+            composer = { ...createInitialComposer(), request: example };
+          page = "tasks";
+          render();
+          Array.from(root.querySelectorAll("[data-focus-key]"))
+            .find(
+              (el) => el.getAttribute("data-focus-key") === "composer-request",
+            )
+            ?.focus();
+        },
+      },
+      ...(assistant
+        ? {
+            assistant: {
+              ...assistantState,
+              unsentIds: assistantWorkspace
+                ? Array.from(assistantDrafts.keys()).filter(
+                    (id) => !assistantState.sessions.some((s) => s.id === id),
+                  )
+                : [],
+              ...(!assistantLoaded && !assistantState.loading && !state.error
+                ? { onRetryLoad: () => void load() }
+                : {}),
+              onDraft: (draft) => {
+                assistantState = { ...assistantState, draft };
+                if (
+                  doc.activeElement?.getAttribute(FOCUS_KEY) !==
+                  "assistant-input"
+                )
+                  render();
+              },
+              onConsent: (consent) => {
+                assistantState = {
+                  ...assistantState,
+                  consent,
+                  validation: undefined,
+                };
+                render();
+              },
+              onSend: () => void sendAssistant(),
+              onSettings: () => void assistantSettings(),
+              onNew: () => selectChat(globalThis.crypto.randomUUID()),
+              onSelect: selectChat,
+              onTask: (text) => {
+                composer = { ...composer, request: text };
+                page = "tasks";
+                render();
+              },
+            },
+          }
+        : {}),
       composer,
       launch,
       patchExport,
       teamChat: {
         ...teamState,
         onClose: () => {
-          teamState = { ...teamState, open: false };
+          closeTeamChat();
           render();
         },
         onSelectConversation: (conversationId) =>
           void openTeamConversation(conversationId),
         onDraftChange: (text) => {
+          if (text) teamDrafts.set(teamKey(), { text });
+          else teamDrafts.delete(teamKey());
           teamState = { ...teamState, draft: text };
         },
         onSend: (text) => void sendTeamMessage(text),
@@ -167,11 +387,26 @@ export function createController(
         onResolveReference: (messageId, referenceId) =>
           void resolveTeamReference(messageId, referenceId),
         onSearch: (query) => void searchTeamMessages(query),
+        onSearchChange: (searchQuery) => {
+          teamState = { ...teamState, searchQuery };
+        },
         onSwitchViewer: (viewer) => void switchTeamViewer(viewer),
         onLoadOlder: () => void loadOlderTeamMessages(),
       },
       onOpenTeamChat: () => void openTeamChatPane(),
       onComposerChange: (patch) => {
+        const submitButton = () =>
+          Array.from(root.querySelectorAll("[data-action]")).find(
+            (el) => el.getAttribute("data-action") === "create-task",
+          );
+        const previousSubmit =
+          patch.startNow === true
+            ? submitButton()?.getBoundingClientRect?.()
+            : undefined;
+        const keepSubmitVisible =
+          previousSubmit &&
+          previousSubmit.top >= 0 &&
+          previousSubmit.bottom <= globalThis.innerHeight;
         composer = { ...composer, ...patch };
         if (
           "startNow" in patch ||
@@ -181,6 +416,8 @@ export function createController(
           "submitting" in patch
         ) {
           render();
+          if (keepSubmitVisible)
+            submitButton()?.scrollIntoView?.({ block: "nearest" });
         }
       },
       onComposerApprovalChange: (key, val) => {
@@ -199,23 +436,21 @@ export function createController(
         render();
       },
       onLaunchCheckChange: (checkId, selected) => {
-        launch = {
-          ...launch,
+        Object.assign(launch, {
           checkIds: toggleId(launch.checkIds, checkId, selected),
-        };
+        });
         render();
       },
       onCreateTask: () => void handleCreateTask(),
       onLaunchApprovalChange: (key, val) => {
-        launch = {
-          ...launch,
+        Object.assign(launch, {
           approvals: { ...launch.approvals, [key]: val },
           ...(key === "execute" && !val ? { checkIds: [] } : {}),
-        };
+        });
         render();
       },
       onLaunchChange: (patch) => {
-        launch = { ...launch, ...patch };
+        Object.assign(launch, patch);
         if (
           "modelChoice" in patch ||
           "paidModelConsent" in patch ||
@@ -232,14 +467,58 @@ export function createController(
       onCancelTask: () => void handleCancelTask(),
       onExportPatch: () => void handleExportPatch(),
     };
+    const scrollPanes = () =>
+      Array.from(root.querySelectorAll("[data-scroll-key]"));
+    const scroll = new Map(
+      scrollPanes().map((el) => [
+        el.getAttribute("data-scroll-key"),
+        [el.scrollLeft, el.scrollTop] as const,
+      ]),
+    );
+    const nextTaskKey = state.selectedTask && taskKey(state.selectedTask);
+    const details = () =>
+      Array.from(root.querySelectorAll("[data-disclosure-key]"));
+    const expanded = new Set(
+      nextTaskKey && nextTaskKey === renderedTaskKey
+        ? details()
+            .filter((el) => el.getAttribute("open") !== null)
+            .map((el) => el.getAttribute("data-disclosure-key"))
+        : [],
+    );
+    renderedTaskKey = nextTaskKey;
     root.replaceChildren(renderShell(doc, state));
-    if (focusKey === null) return;
-    const targets = Array.from(root.querySelectorAll(`[${FOCUS_KEY}]`));
+    const library = libraryScroller();
+    if (library && oldLibraryOffset !== undefined) {
+      library.scrollTop = oldLibraryOffset;
+      const top = anchorTop();
+      if (oldAnchorTop !== undefined && top !== undefined)
+        library.scrollTop += top - oldAnchorTop;
+    }
+    if (expanded.size) {
+      for (const detail of details()) {
+        if (expanded.has(detail.getAttribute("data-disclosure-key")))
+          detail.setAttribute("open", "");
+      }
+    }
+    for (const pane of scrollPanes()) {
+      const position = scroll.get(pane.getAttribute("data-scroll-key"));
+      if (position) [pane.scrollLeft, pane.scrollTop] = position;
+    }
+    if (!focusKey || !focusAttr) return;
+    const targets = Array.from(root.querySelectorAll(`[${focusAttr}]`));
     const keyed = (key: string) =>
-      targets.find((element) => element.getAttribute(FOCUS_KEY) === key);
+      targets.find((element) => element.getAttribute(focusAttr) === key);
     const matched = keyed(focusKey);
-    const target = matched ?? keyed(HEADING_FOCUS_KEY);
-    target?.focus();
+    const target =
+      matched ??
+      (focusKey === "workbench-retry"
+        ? (keyed("refresh") ?? keyed("assistant-input"))
+        : undefined) ??
+      (focusKey === "connect-model" ? keyed("assistant-input") : undefined) ??
+      Array.from(root.querySelectorAll(`[${FOCUS_KEY}]`)).find(
+        (el) => el.getAttribute(FOCUS_KEY) === HEADING_FOCUS_KEY,
+      );
+    target?.focus({ preventScroll: true });
     if (
       matched &&
       selectionStart !== null &&
@@ -258,7 +537,215 @@ export function createController(
     }
   };
 
+  const loadAssistant = async () => {
+    if (!assistant) return;
+    const version = historyVersion;
+    assistantState = { ...assistantState, loading: true };
+    try {
+      const result = await assistant.request({ action: "load" });
+      assistantLoaded = result.ok;
+      if (!result.ok) throw new Error(result.error);
+      const changed = assistantWorkspace !== result.workspace;
+      if (changed) {
+        scopeGeneration++;
+        if (result.workspace !== draftWorkspace) assistantDrafts.clear();
+        draftWorkspace = result.workspace;
+        assistantState = emptyAssistant();
+        if (suspendedDraft?.workspace === result.workspace)
+          assistantState = {
+            ...assistantState,
+            draft: suspendedDraft.draft,
+            activeId: suspendedDraft.activeId,
+          };
+        assistantWorkspace = result.workspace;
+        settingsError = undefined;
+      }
+      if (!changed && !assistantState.configured && result.configured) {
+        for (const launch of launchForms.values()) {
+          if (launch.modelUnavailable) {
+            delete launch.modelUnavailable;
+            delete launch.actionError;
+          }
+        }
+      }
+      assistantState = {
+        ...assistantState,
+        sessions:
+          changed || version === historyVersion
+            ? result.sessions
+            : assistantState.sessions,
+        ...(assistantState.configured !== result.configured
+          ? { validation: undefined }
+          : {}),
+        configured: result.configured,
+        canConfigure: result.canConfigure,
+        loading: false,
+        ...(changed
+          ? {
+              activeId:
+                suspendedDraft?.workspace === result.workspace
+                  ? suspendedDraft.activeId
+                  : (result.sessions[0]?.id ?? assistantState.activeId),
+              error: undefined,
+            }
+          : {}),
+      };
+      suspendedDraft = undefined;
+    } catch (error) {
+      if (assistantWorkspace && assistantState.draft)
+        suspendedDraft = {
+          workspace: assistantWorkspace,
+          activeId: assistantState.activeId,
+          draft: assistantState.draft,
+        };
+      assistantWorkspace = undefined;
+      assistantLoaded = false;
+      scopeGeneration++;
+      assistantState = {
+        ...emptyAssistant(),
+        loading: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Could not load your conversations.",
+      };
+    }
+    render();
+  };
+
+  const assistantSettings = async () => {
+    if (!assistant) return;
+    settingsError = undefined;
+    try {
+      const result = await assistant.request({ action: "settings" });
+      if (!result.ok) settingsError = result.error;
+    } catch {
+      settingsError = "Could not open model settings.";
+    }
+    if (page === "chat" && settingsError)
+      assistantState = { ...assistantState, error: settingsError };
+    render();
+  };
+
+  const refreshExtensions = async (installId?: string) => {
+    if (!extensions || extensionState.busy) return;
+    extensionAnchorId = installId;
+    extensionState = {
+      ...extensionState,
+      busy: true,
+      notice: installId
+        ? "Review this addition in the confirmation window."
+        : "Loading verified library…",
+    };
+    render();
+    try {
+      const outcome = installId
+        ? await extensions.install(installId)
+        : undefined;
+      const items = await extensions.list();
+      const notice =
+        outcome === "cancelled"
+          ? "Nothing changed."
+          : outcome === "unavailable"
+            ? "Could not add this extension. Review the project and retry."
+            : outcome === "installed"
+              ? "Added to this project."
+              : items.length
+                ? "Review the permissions, then choose Add to project."
+                : "No verified extensions are available for this project.";
+      extensionState = { items, notice, busy: false, available: true };
+    } catch {
+      extensionState = {
+        ...extensionState,
+        items: [],
+        busy: false,
+        notice:
+          "The verified library is unavailable. Open a local project and try again.",
+      };
+    }
+    render();
+    if (
+      installId &&
+      page === "extensions" &&
+      doc.activeElement?.getAttribute(FOCUS_KEY) === `extension-${installId}`
+    )
+      doc.activeElement.scrollIntoView?.({ block: "nearest" });
+  };
+
+  const sendAssistant = async () => {
+    if (!assistant || assistantState.busy || assistantState.loading) return;
+    const text = assistantState.draft.trim();
+    if (!text) return;
+    if (!assistantState.configured || !assistantState.consent) {
+      assistantState = {
+        ...assistantState,
+        error: undefined,
+        validation: !assistantState.configured ? "key" : "consent",
+      };
+      render();
+      return;
+    }
+    const activeId = assistantState.activeId;
+    if (!assistantWorkspace) return;
+    const generation = scopeGeneration;
+    assistantState = {
+      ...assistantState,
+      busy: true,
+      pending: { id: activeId, text },
+      validation: undefined,
+      error: undefined,
+    };
+    render();
+    try {
+      const result = await assistant.request({
+        action: "send",
+        workspace: assistantWorkspace,
+        seenMessages:
+          assistantState.sessions.find((s) => s.id === activeId)?.messages
+            .length ?? 0,
+        id: activeId,
+        text,
+        consent: true,
+      });
+      if (scopeGeneration !== generation) return;
+      if (!result.ok && result.reloadHistory) {
+        await load();
+        if (generation === scopeGeneration) {
+          assistantState = {
+            ...assistantState,
+            busy: false,
+            pending: undefined,
+            error: result.error,
+          };
+          render();
+        }
+        return;
+      }
+      if (result.ok) historyVersion++;
+      assistantState = result.ok
+        ? {
+            ...assistantState,
+            sessions: result.sessions,
+            configured: result.configured,
+            draft:
+              assistantState.activeId === activeId ? "" : assistantState.draft,
+            busy: false,
+          }
+        : { ...assistantState, busy: false, error: result.error };
+    } catch {
+      if (scopeGeneration !== generation) return;
+      assistantState = {
+        ...assistantState,
+        busy: false,
+        error: "Could not send your message. Your draft is kept.",
+      };
+    }
+    assistantState = { ...assistantState, pending: undefined };
+    render();
+  };
+
   const displayError = (message: string) => {
+    patchExport = { busy: false };
     state = {
       tasks: [],
       events: [],
@@ -271,7 +758,7 @@ export function createController(
 
   const value = async <T>(pending: Promise<BridgeResult<T>>): Promise<T> => {
     const result = await pending;
-    if (!result.ok) throw new Error(result.error.message);
+    if (!result.ok) throw new WorkbenchFailure(result.error);
     return result.result;
   };
 
@@ -283,6 +770,9 @@ export function createController(
     } catch (error) {
       return {
         ok: false,
+        ...(error instanceof WorkbenchFailure
+          ? { kind: error.detail.kind }
+          : {}),
         error:
           error instanceof Error ? error.message : "Workbench is unavailable.",
       };
@@ -291,8 +781,10 @@ export function createController(
 
   const loadTeamBootstrap = async () => {
     if (!teamChat) return;
+    const context = teamContext;
     try {
       const res = await teamChat["team.state"]({});
+      if (context !== teamContext) return;
       if (!res.ok) {
         teamState = {
           ...teamState,
@@ -318,9 +810,23 @@ export function createController(
         conversations: res.value.conversations,
       };
       delete nextTeamState.error;
+      if (
+        teamState.viewer !== res.value.viewer ||
+        teamState.activeConversationId !== nextConvId
+      ) {
+        teamContext++;
+        delete nextTeamState.activeView;
+        delete nextTeamState.searchHits;
+        delete nextTeamState.activeConversationId;
+        nextTeamState.searchQuery = "";
+        nextTeamState.draft =
+          teamDrafts.get(teamKey(res.value.viewer, nextConvId))?.text ?? "";
+        nextTeamState.resolvedRefs = {};
+      }
       if (nextConvId) nextTeamState.activeConversationId = nextConvId;
       teamState = nextTeamState;
     } catch {
+      if (context !== teamContext) return;
       teamState = {
         ...teamState,
         available: false,
@@ -337,13 +843,24 @@ export function createController(
     const preserveHistory = options?.preserveHistory === true;
     const switchedConversation =
       teamState.activeConversationId !== conversationId;
+    if (switchedConversation) teamContext++;
+    const context = teamContext;
+    if (!preserveHistory) searchVersion++;
     const loadingState: TeamChatViewState = {
       ...teamState,
       activeConversationId: conversationId,
       loading: true,
-      ...(switchedConversation ? { draft: "" } : {}),
+      ...(switchedConversation
+        ? {
+            searchQuery: "",
+            draft:
+              teamDrafts.get(teamKey(teamState.viewer, conversationId))?.text ??
+              "",
+          }
+        : {}),
     };
-    delete loadingState.searchHits;
+    if (!preserveHistory) delete loadingState.searchHits;
+    if (switchedConversation) delete loadingState.activeView;
     delete loadingState.error;
     if (switchedConversation) delete loadingState.notice;
     teamState = loadingState;
@@ -352,6 +869,7 @@ export function createController(
       const res = await teamChat["team.open"]({
         conversation_id: conversationId,
       });
+      if (context !== teamContext) return;
       if (!res.ok) {
         teamState = {
           ...teamState,
@@ -361,9 +879,6 @@ export function createController(
         render();
         return;
       }
-      if (teamState.activeConversationId !== conversationId) {
-        return;
-      }
       const lastSeq = res.value.messages.at(-1)?.sequence;
       if (lastSeq !== undefined && lastSeq > 0) {
         await teamChat["team.markRead"]({
@@ -371,8 +886,9 @@ export function createController(
           sequence: lastSeq,
         });
       }
+      if (context !== teamContext) return;
       await loadTeamBootstrap();
-      if (teamState.activeConversationId !== conversationId) {
+      if (context !== teamContext) {
         return;
       }
       const previousView =
@@ -404,6 +920,7 @@ export function createController(
       };
       render();
     } catch {
+      if (context !== teamContext) return;
       teamState = {
         ...teamState,
         loading: false,
@@ -420,6 +937,7 @@ export function createController(
     if (!teamChat || !convId || !currentView || !cursor || teamState.loading) {
       return;
     }
+    const context = teamContext;
     teamState = { ...teamState, loading: true };
     render();
     try {
@@ -427,6 +945,7 @@ export function createController(
         conversation_id: convId,
         before: cursor,
       });
+      if (context !== teamContext) return;
       if (!res.ok) {
         teamState = {
           ...teamState,
@@ -434,9 +953,6 @@ export function createController(
           notice: `Unable to load older messages (${res.code}).`,
         };
         render();
-        return;
-      }
-      if (teamState.activeConversationId !== convId) {
         return;
       }
       const existingIds = new Set(
@@ -456,6 +972,7 @@ export function createController(
       };
       render();
     } catch {
+      if (context !== teamContext) return;
       teamState = {
         ...teamState,
         loading: false,
@@ -470,8 +987,11 @@ export function createController(
     teamState = { ...teamState, open: true };
     render();
     await loadTeamBootstrap();
+    if (!teamState.open) return;
     if (teamState.activeConversationId) {
-      await openTeamConversation(teamState.activeConversationId);
+      await openTeamConversation(teamState.activeConversationId, {
+        preserveHistory: true,
+      });
     } else {
       render();
     }
@@ -480,10 +1000,13 @@ export function createController(
   const sendTeamMessage = async (body: string) => {
     if (!teamChat || !teamState.activeConversationId) return;
     const convId = teamState.activeConversationId;
+    const key = teamKey();
+    const context = teamContext;
+    const draft = teamDrafts.get(key);
     const keepDraft = (notice: string) => {
+      if (context !== teamContext) return;
       teamState = {
         ...teamState,
-        draft: teamState.draft.trim() === body ? teamState.draft : body,
         notice,
       };
       render();
@@ -510,10 +1033,19 @@ export function createController(
         );
         return;
       }
-      const sent: TeamChatViewState = { ...teamState, draft: "" };
+      if (context !== teamContext && teamKey() === key) return;
+      if (teamDrafts.get(key) === draft) teamDrafts.delete(key);
+      if (context !== teamContext) return;
+      const sent = { ...teamState, draft: teamDrafts.get(key)?.text ?? "" };
       delete sent.notice;
       teamState = sent;
       await openTeamConversation(convId, { preserveHistory: true });
+      if (teamState.open && context === teamContext)
+        Array.from(root.querySelectorAll("[data-message-id]"))
+          .find(
+            (el) => el.getAttribute("data-message-id") === res.value.message_id,
+          )
+          ?.scrollIntoView?.({ block: "nearest" });
     } catch {
       keepDraft("Unable to send message. Edit it and send again.");
     }
@@ -521,10 +1053,14 @@ export function createController(
 
   const toggleTeamPin = async (conversationId: string, pinned: boolean) => {
     if (!teamChat) return;
-    const res = await teamChat["team.setPinned"]({
-      conversation_id: conversationId,
-      pinned,
-    });
+    const context = teamContext;
+    const res = await teamAction(() =>
+      teamChat["team.setPinned"]({
+        conversation_id: conversationId,
+        pinned,
+      }),
+    );
+    if (context !== teamContext) return;
     if (!res.ok) {
       teamState = { ...teamState, notice: `Team chat error: ${res.code}` };
       render();
@@ -541,11 +1077,15 @@ export function createController(
   ) => {
     const convId = teamState.activeConversationId;
     if (!teamChat || !convId) return;
-    const res = await teamChat["team.setReaction"]({
-      message_id: messageId,
-      emoji,
-      on,
-    });
+    const context = teamContext;
+    const res = await teamAction(() =>
+      teamChat["team.setReaction"]({
+        message_id: messageId,
+        emoji,
+        on,
+      }),
+    );
+    if (context !== teamContext) return;
     if (!res.ok) {
       teamState = { ...teamState, notice: `Team chat error: ${res.code}` };
       render();
@@ -583,10 +1123,14 @@ export function createController(
     referenceId: string,
   ) => {
     if (!teamChat) return;
-    const res = await teamChat["team.resolveReference"]({
-      message_id: messageId,
-      reference_id: referenceId,
-    });
+    const context = teamContext;
+    const res = await teamAction(() =>
+      teamChat["team.resolveReference"]({
+        message_id: messageId,
+        reference_id: referenceId,
+      }),
+    );
+    if (context !== teamContext) return;
     if (!res.ok) {
       teamState = { ...teamState, notice: `Team chat error: ${res.code}` };
       render();
@@ -603,6 +1147,9 @@ export function createController(
 
   const searchTeamMessages = async (query: string) => {
     if (!teamChat) return;
+    const context = teamContext;
+    const version = ++searchVersion;
+    teamState = { ...teamState, searchQuery: query };
     const trimmed = query.trim();
     if (!trimmed) {
       const next = { ...teamState, searchQuery: "" };
@@ -620,11 +1167,13 @@ export function createController(
       render();
       return;
     }
-    const res = await teamChat["team.search"]({ query: trimmed });
+    const res = await teamAction(() =>
+      teamChat["team.search"]({ query: trimmed }),
+    );
+    if (context !== teamContext || version !== searchVersion) return;
     if (!res.ok) {
       teamState = {
         ...teamState,
-        searchQuery: trimmed,
         notice: `Team chat error: ${res.code}`,
       };
       render();
@@ -632,7 +1181,6 @@ export function createController(
     }
     const found: TeamChatViewState = {
       ...teamState,
-      searchQuery: trimmed,
       searchHits: res.value.hits,
     };
     delete found.notice;
@@ -642,23 +1190,30 @@ export function createController(
 
   const switchTeamViewer = async (viewer: string) => {
     if (!teamChat) return;
-    const res = await teamChat["team.switchViewer"]({ viewer });
+    const context = ++teamContext;
+    const res = await teamAction(() =>
+      teamChat["team.switchViewer"]({ viewer }),
+    );
+    if (context !== teamContext) return;
     if (!res.ok) {
       teamState = { ...teamState, notice: `Team chat error: ${res.code}` };
       render();
       return;
     }
     const nextConvId = res.value.conversations[0]?.conversation_id;
+    teamContext++;
     const nextTeamState: TeamChatViewState = {
       ...teamState,
       viewer: res.value.viewer,
       users: res.value.users,
       conversations: res.value.conversations,
-      draft: "",
+      draft: teamDrafts.get(teamKey(res.value.viewer, nextConvId))?.text ?? "",
+      searchQuery: "",
       resolvedRefs: {},
     };
     delete nextTeamState.searchHits;
     delete nextTeamState.activeView;
+    delete nextTeamState.activeConversationId;
     if (nextConvId) nextTeamState.activeConversationId = nextConvId;
     teamState = nextTeamState;
     if (nextConvId) {
@@ -759,22 +1314,20 @@ export function createController(
       return;
     }
 
-    selectedId = created.task_id;
+    selectTask(created.task_id);
     composer = createInitialComposer();
-    patchExport = { busy: false };
-    launch = createInitialLaunch();
+    const launch = launchFor(created);
 
     if (snapshot.startNow) {
       if (snapshot.modelChoice === "paid" && !snapshot.paidModelConsent) {
-        launch = {
-          ...launch,
+        Object.assign(launch, {
           approvals: { ...snapshot.approvals },
           checkIds: [...snapshot.checkIds],
           modelChoice: "paid",
           paidModelId: snapshot.paidModelId || DEFAULT_PAID_MODEL_ID,
           paidModelConsent: false,
           actionError: "Paid-model consent is required before starting.",
-        };
+        });
         await load();
         return;
       }
@@ -801,18 +1354,20 @@ export function createController(
       try {
         await value(bridge["tasks.start"](startParams));
       } catch (error) {
-        launch = {
-          ...launch,
+        Object.assign(launch, {
           approvals: { ...snapshot.approvals },
           checkIds: [...snapshot.checkIds],
           modelChoice: snapshot.modelChoice,
           paidModelId: snapshot.paidModelId || DEFAULT_PAID_MODEL_ID,
           paidModelConsent: snapshot.paidModelConsent,
+          modelUnavailable:
+            error instanceof WorkbenchFailure &&
+            error.detail.kind === "model_unavailable",
           actionError:
             error instanceof Error
               ? `Task created, but failed to start: ${error.message}`
               : "Task created, but failed to start.",
-        };
+        });
       }
     }
     await load();
@@ -821,29 +1376,25 @@ export function createController(
   const handleStartTask = async () => {
     const task = state.selectedTask;
     if (!task) return;
+    const launch = launchFor(task);
     const paidModelId = launch.paidModelId.trim();
     if (launch.modelChoice === "paid") {
       if (!paidModelId) {
-        launch = {
-          ...launch,
+        Object.assign(launch, {
           actionError: "Enter a paid model ID before starting.",
-        };
+        });
         render();
         return;
       }
       if (!launch.paidModelConsent) {
-        launch = {
-          ...launch,
+        Object.assign(launch, {
           actionError: "Paid-model consent is required before starting.",
-        };
+        });
         render();
         return;
       }
     }
-    const nextLaunch: LaunchCardState = { ...launch, busy: true };
-    delete nextLaunch.actionError;
-    delete nextLaunch.actionNotice;
-    launch = nextLaunch;
+    beginLaunchAction(launch);
     render();
     try {
       const startParams: StartParams = {
@@ -867,19 +1418,20 @@ export function createController(
       );
       if (launchChecks.length > 0) startParams.required_checks = launchChecks;
       await value(bridge["tasks.start"](startParams));
-      launch = {
-        ...launch,
+      Object.assign(launch, {
         busy: false,
         actionNotice: "Task started.",
-      };
+      });
       await load();
     } catch (error) {
-      launch = {
-        ...launch,
+      Object.assign(launch, {
         busy: false,
         actionError:
           error instanceof Error ? error.message : "Failed to start task.",
-      };
+        modelUnavailable:
+          error instanceof WorkbenchFailure &&
+          error.detail.kind === "model_unavailable",
+      });
       render();
     }
   };
@@ -887,10 +1439,8 @@ export function createController(
   const handleResumeTask = async () => {
     const task = state.selectedTask;
     if (!task) return;
-    const nextLaunch: LaunchCardState = { ...launch, busy: true };
-    delete nextLaunch.actionError;
-    delete nextLaunch.actionNotice;
-    launch = nextLaunch;
+    const launch = launchFor(task);
+    beginLaunchAction(launch);
     render();
     try {
       await value(
@@ -899,15 +1449,14 @@ export function createController(
           expected_revision: task.revision,
         }),
       );
-      launch = { ...launch, busy: false, actionNotice: "Task resumed." };
+      Object.assign(launch, { busy: false, actionNotice: "Task resumed." });
       await load();
     } catch (error) {
-      launch = {
-        ...launch,
+      Object.assign(launch, {
         busy: false,
         actionError:
           error instanceof Error ? error.message : "Failed to resume task.",
-      };
+      });
       render();
     }
   };
@@ -915,10 +1464,8 @@ export function createController(
   const handleSteerTask = async (instruction: string) => {
     const task = state.selectedTask;
     if (!task) return;
-    const nextLaunch: LaunchCardState = { ...launch, busy: true };
-    delete nextLaunch.actionError;
-    delete nextLaunch.actionNotice;
-    launch = nextLaunch;
+    const launch = launchFor(task);
+    beginLaunchAction(launch);
     render();
     try {
       await value(
@@ -927,20 +1474,18 @@ export function createController(
           instruction,
         }),
       );
-      launch = {
-        ...launch,
+      Object.assign(launch, {
         busy: false,
         steerDraft: "",
         actionNotice: "Steering instruction sent.",
-      };
+      });
       await load();
     } catch (error) {
-      launch = {
-        ...launch,
+      Object.assign(launch, {
         busy: false,
         actionError:
           error instanceof Error ? error.message : "Failed to steer task.",
-      };
+      });
       render();
     }
   };
@@ -948,22 +1493,19 @@ export function createController(
   const handleCancelTask = async () => {
     const task = state.selectedTask;
     if (!task) return;
-    const nextLaunch: LaunchCardState = { ...launch, busy: true };
-    delete nextLaunch.actionError;
-    delete nextLaunch.actionNotice;
-    launch = nextLaunch;
+    const launch = launchFor(task);
+    beginLaunchAction(launch);
     render();
     try {
       await value(bridge["tasks.cancel"]({ task_id: task.task_id }));
-      launch = { ...launch, busy: false, actionNotice: "Task cancelled." };
+      Object.assign(launch, { busy: false, actionNotice: "Task cancelled." });
       await load();
     } catch (error) {
-      launch = {
-        ...launch,
+      Object.assign(launch, {
         busy: false,
         actionError:
           error instanceof Error ? error.message : "Failed to cancel task.",
-      };
+      });
       render();
     }
   };
@@ -972,7 +1514,14 @@ export function createController(
     const task = state.selectedTask;
     const verification = state.verification;
     const diff = state.diff;
-    if (!task || !verification || !diff) return;
+    if (
+      !task ||
+      selectedId !== task.task_id ||
+      !verification ||
+      !diff ||
+      patchExport.busy
+    )
+      return;
     const expectedPatchSha = verification.patch_sha256 ?? null;
     if (
       verification.state !== "verified" ||
@@ -986,7 +1535,8 @@ export function createController(
       render();
       return;
     }
-    patchExport = { busy: true };
+    const pending = { busy: true };
+    patchExport = pending;
     render();
     try {
       const exported = await value(
@@ -996,6 +1546,7 @@ export function createController(
           expected_patch_sha256: expectedPatchSha,
         }),
       );
+      if (patchExport !== pending) return;
       if (!exported.verified) {
         patchExport = {
           busy: false,
@@ -1019,6 +1570,7 @@ export function createController(
         task_id: task.task_id,
         artifact: exported.artifact,
       });
+      if (patchExport !== pending) return;
       if (!fetched.ok) {
         patchExport = {
           busy: false,
@@ -1033,6 +1585,7 @@ export function createController(
         fetched.result,
         globalThis.crypto.subtle,
       );
+      if (patchExport !== pending) return;
       if (!verifiedSha256) {
         patchExport = {
           busy: false,
@@ -1051,6 +1604,7 @@ export function createController(
       patchExport = nextExport;
       render();
     } catch (error) {
+      if (patchExport !== pending) return;
       patchExport = {
         busy: false,
         error: error instanceof Error ? error.message : "Patch export failed.",
@@ -1159,14 +1713,21 @@ export function createController(
     return payloads;
   };
 
-  const loadOnce = async () => {
+  const loadOnce = async (background: boolean) => {
     try {
       const described = await value(bridge["workbench.describe"]({}));
       const tasks = await value(bridge["tasks.list"]({}));
-      await loadTeamBootstrap();
+      if (!background) await loadTeamBootstrap();
+      if (disposed || loadRequested) return;
       const selected =
         tasks.find((task) => task.task_id === selectedId) ?? tasks[0];
-      selectedId = selected?.task_id;
+      selectTask(selected?.task_id);
+      if (
+        selected &&
+        state.selectedTask &&
+        taskKey(selected) !== taskKey(state.selectedTask)
+      )
+        patchExport = { busy: false };
       if (!selected) {
         state = {
           describe: described,
@@ -1181,6 +1742,7 @@ export function createController(
       const inspected = await value(
         bridge["tasks.inspect"]({ task_id: selected.task_id }),
       );
+      if (disposed || loadRequested) return;
       const [verification, diff, evidence, events] = await Promise.all([
         optionalValue(() =>
           value(bridge["tasks.verification"]({ task_id: selected.task_id })),
@@ -1332,41 +1894,62 @@ export function createController(
         transcript,
         artifacts,
         onSelect: (taskId) => {
-          selectedId = taskId;
-          patchExport = { busy: false };
-          launch = createInitialLaunch();
-          teamState = { ...teamState, open: false };
+          page = "tasks";
+          selectTask(taskId);
+          closeTeamChat();
           void load();
         },
         onRefresh: () => void load(),
       };
       if (verification.ok) nextState.verification = verification.value;
       else nextState.verificationError = verification.error;
+      const mayHaveNoOutput =
+        inspected.status === "pending" || inspected.status === "cancelled";
       if (diff.ok) nextState.diff = diff.value;
-      else nextState.diffError = diff.error;
+      else if (!mayHaveNoOutput || diff.kind !== "not_found")
+        nextState.diffError = diff.error;
       if (evidence.ok) nextState.evidence = evidence.value;
-      else nextState.evidenceError = evidence.error;
+      else if (!mayHaveNoOutput || evidence.kind !== "not_found")
+        nextState.evidenceError = evidence.error;
       if (!events.ok) nextState.eventsError = events.error;
+      if (disposed || loadRequested || selectedId !== selected.task_id) return;
       state = nextState;
-      render();
+      refreshDelay = TASK_REFRESH_MS;
+      if (!background || (page === "tasks" && !teamState.open)) render();
     } catch (error) {
+      if (disposed || loadRequested) return;
+      if (background) {
+        // Keep the last task and editable controls usable during a transient outage.
+        refreshDelay = Math.min(MAX_REFRESH_MS, refreshDelay * 2);
+        return;
+      }
       displayError(
         error instanceof Error ? error.message : "Workbench is unavailable.",
       );
     }
   };
 
-  const load = () => {
-    loadRequested = true;
+  const load = (background = false) => {
+    if (disposed) return Promise.resolve();
+    cancelRefresh?.();
+    cancelRefresh = undefined;
+    if (!background) loadRequested = true;
     if (!loadPromise) {
       loadPromise = (async () => {
+        if (background) await loadOnce(true);
         while (loadRequested) {
           loadRequested = false;
-          await loadOnce();
+          await Promise.all([loadAssistant(), loadOnce(false)]);
         }
       })().finally(() => {
         loadPromise = undefined;
+        if (disposed) return;
         if (loadRequested) void load();
+        else if (state.selectedTask?.status === "running")
+          cancelRefresh = scheduleRefresh?.(
+            () => void load(true),
+            refreshDelay,
+          );
       });
     }
     return loadPromise;
@@ -1376,5 +1959,12 @@ export function createController(
     while (loadPromise) await loadPromise;
   };
 
-  return { load, settled };
+  const dispose = () => {
+    disposed = true;
+    loadRequested = false;
+    cancelRefresh?.();
+    cancelRefresh = undefined;
+  };
+
+  return { load, settled, dispose };
 }

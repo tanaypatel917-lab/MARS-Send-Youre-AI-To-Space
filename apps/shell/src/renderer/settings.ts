@@ -1,7 +1,5 @@
-import type {
-  DesktopModelSettings,
-  ModelSettingsResult,
-} from "../shared/desktop-model";
+import type { DesktopModelSettings } from "../shared/desktop-model";
+import { settingsActions } from "./settings-actions";
 
 const settings = (
   globalThis as typeof globalThis & {
@@ -13,27 +11,50 @@ const input = document.querySelector<HTMLInputElement>("#model-key");
 const save = document.querySelector<HTMLButtonElement>("[type=submit]");
 const clear = document.querySelector<HTMLButtonElement>("#clear-key");
 const status = document.querySelector("#model-status");
-const messages: Record<ModelSettingsResult, string> = {
-  saved: "Key saved in your system’s secure storage.",
-  session:
-    "Secure storage is unavailable. The key will be used only until MARS quits.",
-  cleared: "Saved key cleared.",
-  invalid: "Enter a valid OpenRouter API key.",
-  refused: "Model settings are unavailable.",
-  unavailable: "Could not update the key.",
-};
+
+const closeSettings = () => window.close();
+document
+  .querySelector("#close-settings")
+  ?.addEventListener("click", closeSettings);
+document.addEventListener("keydown", (event) => {
+  if (event.isComposing) return;
+  if (event.key === "Escape" || (event.metaKey && event.key === "w")) {
+    event.preventDefault();
+    closeSettings();
+  }
+});
 
 if (settings && form && input && save && clear && status) {
-  const apply = async (key: string | null) => {
-    input.value = "";
-    status.textContent = "Updating model settings…";
-    save.disabled = clear.disabled = true;
-    const result = await settings
-      .setKey(key)
-      .catch(() => "unavailable" as const);
-    status.textContent = messages[result];
-    save.disabled = clear.disabled = false;
-  };
+  const { apply, openKeyPage, initialize } = settingsActions(settings, {
+    input,
+    save,
+    clear,
+    status,
+    showKeyMode: (present) => {
+      const labels = [
+        [
+          "#key-heading",
+          present ? "Manage your API key" : "Connect your model",
+        ],
+        ["#key-step", present ? "Get a replacement key" : "1. Create your key"],
+        [
+          "#key-label",
+          present
+            ? "Paste a replacement OpenRouter API key"
+            : "2. Paste your OpenRouter API key",
+        ],
+        ["[type=submit]", present ? "Replace key" : "Save & connect"],
+      ] as const;
+      for (const [selector, label] of labels) {
+        const el = document.querySelector(selector);
+        if (el) el.textContent = label;
+      }
+    },
+  });
+  void initialize();
+  document
+    .querySelector("#get-key")
+    ?.addEventListener("click", () => void openKeyPage());
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     void apply(input.value.trim());

@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
   chmod,
+  copyFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -30,6 +31,42 @@ const CAN_RUN_ELECTRON_XVFB = HAS_ELECTRON && HAS_XVFB;
 /** CI sets this so a missing Electron binary or Xvfb fails instead of skipping. */
 const REQUIRE_ELECTRON_XVFB = process.env.MARS_REQUIRE_ELECTRON_XVFB === "1";
 const PACKAGED_ELECTRON = process.env.MARS_PACKAGED_ELECTRON;
+
+test.skipIf(!CAN_RUN_ELECTRON_XVFB)(
+  "a crashed renderer recovers in the same window and a crash loop stops on a static page",
+  async () => {
+    const home = await mkdtemp(join(tmpdir(), "mars-shell-crash-"));
+    try {
+      const dist = join(home, "dist");
+      const entry = join(dist, "crash-renderer.cjs");
+      await buildShell(dist);
+      await copyFile(
+        new URL("./fixtures/crash-renderer.cjs", import.meta.url),
+        entry,
+      );
+      const child = Bun.spawn(
+        ["xvfb-run", "-a", ELECTRON_BIN, entry, "--disable-gpu"],
+        {
+          env: {
+            ...process.env,
+            HOME: home,
+            ELECTRON_ENABLE_LOGGING: "1",
+            MARS_SHELL_CONNECTION: join(home, "not-connected"),
+          },
+          stderr: "pipe",
+        },
+      );
+      const [exit, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stderr).text(),
+      ]);
+      if (exit !== 0) throw new Error(`Electron exited ${exit}: ${stderr}`);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  },
+  30_000,
+);
 
 test.skipIf(!REQUIRE_ELECTRON_XVFB)(
   "Electron binary and xvfb-run are present when required",
@@ -287,7 +324,7 @@ test.skipIf(!PACKAGED_ELECTRON)(
       cdp = await CdpClient.connect(await waitForPageTarget(port));
       await waitForCondition(
         cdp,
-        "document.querySelector('.status-bar > span')?.textContent === 'Connected'",
+        "document.querySelector('.status-bar > span')?.textContent === 'Workbench online'",
         "the bundled workbench to connect",
         20_000,
       );
@@ -302,11 +339,18 @@ test.skipIf(!PACKAGED_ELECTRON)(
           "window.marsExtensions.list().then(entries => Object.fromEntries(['mcp','skill','plugin'].map(kind => [kind, entries.filter(e => e.kind === kind && !e.installed).length])))",
         ),
       ).toEqual({ mcp: 5, skill: 5, plugin: 3 });
-      expect(
-        await cdp.evaluate(
-          "document.fonts.load('12px \"Commit Mono\"').then(fonts => fonts.length)",
-        ),
-      ).toBe(1);
+      for (const spec of [
+        '12px "Commit Mono"',
+        '14px "Inter"',
+        '600 17px "Barlow Condensed"',
+        "500 32px Manrope",
+      ]) {
+        expect(
+          await cdp.evaluate(
+            `document.fonts.load(${JSON.stringify(spec)}, "0123").then(fonts => fonts.length)`,
+          ),
+        ).toBe(1);
+      }
       await cdp.evaluate(
         "document.querySelector('[data-action=toggle-team-chat]').click()",
       );
@@ -392,12 +436,35 @@ test.skipIf(!CAN_RUN_ELECTRON_XVFB)(
       cdp = await CdpClient.connect(wsUrl);
       await cdp.send("Runtime.enable");
 
+      // Chat starts with conversation history; task sessions belong under Tasks.
+      await waitForCondition(
+        cdp,
+        "Boolean(document.querySelector('[data-page=tasks]'))",
+        "Tasks navigation",
+      );
+      await cdp.send("Emulation.setDeviceMetricsOverride", {
+        width: 1280,
+        height: 600,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      const reachable = (selector: string) =>
+        cdp?.evaluate<boolean>(`(() => {
+        const button = document.querySelector(${JSON.stringify(selector)});
+        button.scrollIntoView({block: "nearest"});
+        const r = button.getBoundingClientRect();
+        return button.contains(document.elementFromPoint(r.x + r.width/2, r.y + r.height/2));
+      })()`);
+      expect(await reachable(".new-conversation")).toBe(true);
+      await cdp.evaluate("document.querySelector('[data-page=tasks]').click()");
       // Wait for initial task list load
       await waitForCondition(
         cdp,
         "document.querySelectorAll('[data-task-id]').length >= 5",
         "sidebar tasks to render",
       );
+      expect(await reachable('[data-task-id="fixture-pending"]')).toBe(true);
+      await cdp.send("Emulation.clearDeviceMetricsOverride");
 
       // 1. Verify runtime Electron security & CSP invariants
       const securityCheck = await cdp.evaluate<{
@@ -451,7 +518,13 @@ test.skipIf(!CAN_RUN_ELECTRON_XVFB)(
       })()`);
       await waitForCondition(
         cdp,
-        "Boolean(document.querySelector('[data-action=\"export-patch\"]'))",
+        "!!document.querySelector('.details-toggle')",
+        "task workspace to open",
+      );
+      await cdp.evaluate("document.querySelector('.details-toggle').click()");
+      await waitForCondition(
+        cdp,
+        "Boolean(document.querySelector('[data-action=\"export-patch\"]')?.getBoundingClientRect().height)",
         "export-patch button on verified task",
       );
       await cdp.evaluate(`(() => {

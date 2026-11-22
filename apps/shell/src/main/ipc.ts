@@ -1,11 +1,19 @@
 import { fail } from "@mars/team-chat";
+import { ASSISTANT_CHANNEL } from "../shared/assistant";
 import { BRIDGE_CHANNEL, bridgeFailure } from "../shared/methods";
 import { TEAM_CHAT_CHANNEL } from "../shared/team-chat";
+import type { createAssistant } from "./assistant";
 import type { Bridge } from "./bridge";
 import type { TeamChatBridge } from "./team-chat-bridge";
 
 export type IpcEventLike = {
-  senderFrame?: { url?: string } | null;
+  sender: object;
+  senderFrame: { url: string } | null;
+};
+
+type SenderPolicy = {
+  trustedOrigin: string;
+  trustedContents: { readonly mainFrame: { url: string } };
 };
 
 export type IpcMainLike = {
@@ -15,19 +23,43 @@ export type IpcMainLike = {
   ): void;
 };
 
-function trustedSender(event: IpcEventLike, trustedOrigin: string): boolean {
+function trustedSender(event: IpcEventLike, policy: SenderPolicy): boolean {
   try {
-    const trusted = new URL(trustedOrigin);
-    const sender = new URL(event.senderFrame?.url ?? "");
+    const frame = event.senderFrame;
+    if (
+      !frame ||
+      event.sender !== policy.trustedContents ||
+      frame !== policy.trustedContents.mainFrame
+    )
+      return false;
+    const trusted = new URL(policy.trustedOrigin);
+    const sender = new URL(frame.url);
     return (
       sender.protocol === trusted.protocol &&
       sender.host === trusted.host &&
+      sender.pathname === "/index.html" &&
       sender.username === "" &&
       sender.password === ""
     );
   } catch {
     return false;
   }
+}
+
+export function registerAssistantBridge(
+  ipcMain: IpcMainLike,
+  assistant: ReturnType<typeof createAssistant>,
+  options: SenderPolicy,
+): void {
+  ipcMain.handle(ASSISTANT_CHANNEL, async (event, payload) => {
+    if (!trustedSender(event, options))
+      return { ok: false, error: "Chat request refused." };
+    try {
+      return await assistant.call(payload);
+    } catch {
+      return { ok: false, error: "Chat is unavailable. Please try again." };
+    }
+  });
 }
 
 function requestPayload(
@@ -53,12 +85,11 @@ function requestPayload(
 export function registerBridge(
   ipcMain: IpcMainLike,
   bridge: Bridge,
-  options: { trustedOrigin: string },
+  options: SenderPolicy,
 ): void {
   ipcMain.handle(BRIDGE_CHANNEL, async (event, payload) => {
     try {
-      if (!trustedSender(event, options.trustedOrigin))
-        return bridgeFailure("refused");
+      if (!trustedSender(event, options)) return bridgeFailure("refused");
       const request = requestPayload(payload);
       if (!request) return bridgeFailure("refused");
       return await bridge.call(request.method, request.params);
@@ -71,12 +102,11 @@ export function registerBridge(
 export function registerTeamChatBridge(
   ipcMain: IpcMainLike,
   teamChat: TeamChatBridge,
-  options: { trustedOrigin: string },
+  options: SenderPolicy,
 ): void {
   ipcMain.handle(TEAM_CHAT_CHANNEL, async (event, payload) => {
     try {
-      if (!trustedSender(event, options.trustedOrigin))
-        return fail("forbidden");
+      if (!trustedSender(event, options)) return fail("forbidden");
       const request = requestPayload(payload);
       if (!request) return fail("invalid");
       return await teamChat.call(request.method, request.params);

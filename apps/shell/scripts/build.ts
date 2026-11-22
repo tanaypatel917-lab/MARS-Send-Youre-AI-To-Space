@@ -75,14 +75,25 @@ export async function buildShell(outdir: string): Promise<void> {
     resolve(root, "src/renderer/shell.css"),
     resolve(rendererDir, "shell.css"),
   );
-  await copyFile(
-    resolve(root, "assets/CommitMono-Regular.woff2"),
-    resolve(rendererDir, "CommitMono-Regular.woff2"),
-  );
-  await copyFile(
-    resolve(root, "assets/CommitMono-OFL.txt"),
-    resolve(outdir, "CommitMono-OFL.txt"),
-  );
+  for (const icon of ["orbit.svg", "navigation.svg"])
+    await copyFile(resolve(root, "assets", icon), resolve(rendererDir, icon));
+  for (const face of [
+    "Manrope-Variable",
+    "Inter-Variable",
+    "CommitMono-Regular",
+    "BarlowCondensed-SemiBold",
+  ]) {
+    await copyFile(
+      resolve(root, "assets", face + ".woff2"),
+      resolve(rendererDir, face + ".woff2"),
+    );
+  }
+  for (const family of ["Manrope", "Inter", "CommitMono", "BarlowCondensed"]) {
+    await copyFile(
+      resolve(root, "assets", family + "-OFL.txt"),
+      resolve(outdir, family + "-OFL.txt"),
+    );
+  }
 }
 
 if (import.meta.main) {

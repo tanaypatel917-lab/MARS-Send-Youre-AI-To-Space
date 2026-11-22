@@ -1,200 +1,219 @@
 <div id="app">
-  <div class="app-shell">
+  <div class="app-shell clean-chrome inspector-hidden">
     <header class="masthead">
       <span aria-hidden="true" class="masthead-dots"></span>
-      MARS / workbench
+      <span class="masthead-title">MARS</span>
+      <span class="masthead-subtitle">Your mission control</span>
     </header>
-    <nav aria-label="Sidebar" class="sidebar">
-      <h1 class="brand">MARS</h1>
-      <h2 class="section-title">Sessions</h2>
-      <section aria-label="running" class="session-group">
-        <h3 class="group-title">running</h3>
-        <ul class="session-list">
-          <li class="session-item">
-            <button aria-pressed="false" class="session" data-focus-key="task:fixture-running" data-task-id="fixture-running" title="fixture-running" type="button">
-              <span aria-label="running" class="status status-running">● running</span>
-              <span class="provenance" data-provenance="task request">untrusted · task request</span>
-              <span class="session-request">Review current work and report observations.</span>
-              <span class="session-runtime">
-                <span class="runtime-label">oh-my-pi</span>
-                <span class="session-id" title="fixture-running">fixture-running</span>
-              </span>
-            </button>
-          </li>
-        </ul>
-      </section>
-      <section aria-label="pending" class="session-group">
-        <h3 class="group-title">pending</h3>
-        <ul class="session-list">
-          <li class="session-item">
-            <button aria-pressed="false" class="session" data-focus-key="task:fixture-pending" data-task-id="fixture-pending" title="fixture-pending" type="button">
-              <span aria-label="pending" class="status status-pending">○ pending</span>
-              <span class="provenance" data-provenance="task request">untrusted · task request</span>
-              <span class="session-request">Pending sample task.</span>
-              <span class="session-runtime">
-                <span class="runtime-label">oh-my-pi</span>
-                <span class="session-id" title="fixture-pending">fixture-pending</span>
-              </span>
-            </button>
-          </li>
-        </ul>
-      </section>
-      <section aria-label="completed" class="session-group">
-        <h3 class="group-title">completed</h3>
-        <ul class="session-list">
-          <li class="session-item">
-            <button aria-pressed="false" class="session" data-focus-key="task:fixture-completed-verified" data-task-id="fixture-completed-verified" title="fixture-completed-verified" type="button">
-              <span aria-label="completed" class="status status-completed">✔ completed</span>
-              <span class="provenance" data-provenance="task request">untrusted · task request</span>
-              <span class="session-request">Inspect sample notes. &lt;script&gt;alert(1)&lt;/script&gt; https://evil.example/x :mars-fo…</span>
-              <span class="session-runtime">
-                <span class="runtime-label">oh-my-pi</span>
-                <span class="session-id" title="fixture-completed-verified">fixture-completed-verified</span>
-              </span>
-            </button>
-          </li>
-          <li class="session-item">
-            <button aria-pressed="false" class="session" data-focus-key="task:fixture-completed-unverified" data-task-id="fixture-completed-unverified" title="fixture-completed-unverified" type="button">
-              <span aria-label="completed" class="status status-completed">✔ completed</span>
-              <span class="provenance" data-provenance="task request">untrusted · task request</span>
-              <span class="session-request">Show a completed task without a verification verdict.</span>
-              <span class="session-runtime">
-                <span class="runtime-label">oh-my-pi</span>
-                <span class="session-id" title="fixture-completed-unverified">fixture-completed-unverified</span>
-              </span>
-            </button>
-          </li>
-        </ul>
-      </section>
-      <section aria-label="failed" class="session-group">
-        <h3 class="group-title">failed</h3>
-        <ul class="session-list">
-          <li class="session-item">
-            <button aria-pressed="true" class="session selected" data-focus-key="task:fixture-failed" data-task-id="fixture-failed" title="fixture-failed" type="button">
-              <span aria-label="failed" class="status status-failed">✗ failed</span>
-              <span class="provenance" data-provenance="task request">untrusted · task request</span>
-              <span class="session-request">Observe a task with a failed verification verdict.</span>
-              <span class="session-runtime">
-                <span class="runtime-label">oh-my-pi</span>
-                <span class="session-id" title="fixture-failed">fixture-failed</span>
-              </span>
-            </button>
-          </li>
-        </ul>
-      </section>
-      <section class="team-chat">
+    <nav aria-label="Sidebar" class="sidebar" data-scroll-key="sidebar">
+      <div class="brand-row">
+        <span aria-hidden="true" class="brand-orbit"></span>
+        <h1 class="brand">MARS</h1>
+        <span class="brand-tag">YOUR IDEAS. IN ORBIT.</span>
+      </div>
+      <div class="workspace-switcher">
+        <span class="workspace-label">WORKSPACE</span>
+        <strong>fixture-repo (fixture)</strong>
+      </div>
+      <button aria-pressed="true" class="nav-item selected" data-focus-key="nav-tasks" data-page="tasks" type="button">Tasks</button>
+      <div class="sidebar-history" data-scroll-key="sidebar-history">
+        <h2 class="sidebar-label">Agent sessions</h2>
+        <section aria-label="running" class="session-group">
+          <h3 class="group-title">running</h3>
+          <ul class="session-list">
+            <li class="session-item">
+              <button aria-pressed="false" class="session" data-focus-key="task:fixture-running" data-task-id="fixture-running" title="fixture-running" type="button">
+                <span aria-label="running" class="status status-running">● running</span>
+                <span class="provenance" data-provenance="task request">untrusted · task request</span>
+                <span class="session-request">Review current work and report observations.</span>
+                <span class="session-runtime">
+                  <span class="runtime-label">oh-my-pi</span>
+                  <span class="session-id" title="fixture-running">fixture-running</span>
+                </span>
+              </button>
+            </li>
+          </ul>
+        </section>
+        <section aria-label="pending" class="session-group">
+          <h3 class="group-title">pending</h3>
+          <ul class="session-list">
+            <li class="session-item">
+              <button aria-pressed="false" class="session" data-focus-key="task:fixture-pending" data-task-id="fixture-pending" title="fixture-pending" type="button">
+                <span aria-label="pending" class="status status-pending">○ pending</span>
+                <span class="provenance" data-provenance="task request">untrusted · task request</span>
+                <span class="session-request">Pending sample task.</span>
+                <span class="session-runtime">
+                  <span class="runtime-label">oh-my-pi</span>
+                  <span class="session-id" title="fixture-pending">fixture-pending</span>
+                </span>
+              </button>
+            </li>
+          </ul>
+        </section>
+        <section aria-label="completed" class="session-group">
+          <h3 class="group-title">completed</h3>
+          <ul class="session-list">
+            <li class="session-item">
+              <button aria-pressed="false" class="session" data-focus-key="task:fixture-completed-verified" data-task-id="fixture-completed-verified" title="fixture-completed-verified" type="button">
+                <span aria-label="completed" class="status status-completed">✔ completed</span>
+                <span class="provenance" data-provenance="task request">untrusted · task request</span>
+                <span class="session-request">Inspect sample notes. &lt;script&gt;alert(1)&lt;/script&gt; https://evil.example/x :mars-fo…</span>
+                <span class="session-runtime">
+                  <span class="runtime-label">oh-my-pi</span>
+                  <span class="session-id" title="fixture-completed-verified">fixture-completed-verified</span>
+                </span>
+              </button>
+            </li>
+            <li class="session-item">
+              <button aria-pressed="false" class="session" data-focus-key="task:fixture-completed-unverified" data-task-id="fixture-completed-unverified" title="fixture-completed-unverified" type="button">
+                <span aria-label="completed" class="status status-completed">✔ completed</span>
+                <span class="provenance" data-provenance="task request">untrusted · task request</span>
+                <span class="session-request">Show a completed task without a verification verdict.</span>
+                <span class="session-runtime">
+                  <span class="runtime-label">oh-my-pi</span>
+                  <span class="session-id" title="fixture-completed-unverified">fixture-completed-unverified</span>
+                </span>
+              </button>
+            </li>
+          </ul>
+        </section>
+        <section aria-label="failed" class="session-group">
+          <h3 class="group-title">failed</h3>
+          <ul class="session-list">
+            <li class="session-item">
+              <button aria-pressed="true" class="session selected" data-focus-key="task:fixture-failed" data-task-id="fixture-failed" title="fixture-failed" type="button">
+                <span aria-label="failed" class="status status-failed">✗ failed</span>
+                <span class="provenance" data-provenance="task request">untrusted · task request</span>
+                <span class="session-request">Observe a task with a failed verification verdict.</span>
+                <span class="session-runtime">
+                  <span class="runtime-label">oh-my-pi</span>
+                  <span class="session-id" title="fixture-failed">fixture-failed</span>
+                </span>
+              </button>
+            </li>
+          </ul>
+        </section>
+      </div>
+      <section class="team-chat sidebar-bottom">
+        <span class="sidebar-label">BETTER TOGETHER</span>
         <button aria-disabled="true" aria-pressed="false" class="team-chat-toggle" data-action="toggle-team-chat" data-focus-key="team-chat-toggle" disabled="" type="button">Team chat</button>
         <p class="muted">team chat unavailable</p>
       </section>
     </nav>
-    <main class="main">
-      <div class="main-toolbar">
-        <header class="task-header">
-          <h1 data-focus-key="heading" tabindex="-1">Task fixture-failed</h1>
-          <div class="task-meta">
-            <span class="verification verification-failed">Verification failed</span>
-            <span aria-label="failed" class="status status-failed">✗ failed</span>
-            <span class="meta-value">Candidate revision: fixture-r4</span>
-            <span class="meta-value">Model · tier: not reported by host</span>
-            <span class="meta-value">Task revision: 4</span>
-          </div>
-        </header>
-        <button class="refresh" data-focus-key="refresh" type="button">Refresh</button>
-      </div>
-      <section aria-live="polite" class="transcript" role="log">
-        <div class="transcript-entries">
-          <p class="muted transcript-meta">0 task events available</p>
-          <article class="transcript-entry transcript-user user-request">
-            <div class="entry-header">
-              <strong>Task request</strong>
+    <div class="workspace-panels" data-scroll-key="workspace">
+      <main class="main" data-scroll-key="main:fixture-failed">
+        <div class="main-toolbar">
+          <header class="task-header">
+            <p class="eyebrow">02 / WORKSPACE</p>
+            <h1 data-focus-key="heading" tabindex="-1">Task overview</h1>
+            <p class="task-identifier">Task fixture-failed</p>
+            <div class="task-meta">
+              <span class="verification verification-failed">Verification failed</span>
+              <span aria-label="failed" class="status status-failed">✗ failed</span>
+              <span class="meta-value">Candidate revision: fixture-r4</span>
+              <span class="meta-value">Model · tier: not reported by host</span>
+              <span class="meta-value">Task revision: 4</span>
             </div>
-            <section class="untrusted" data-provenance="tasks.inspect.request" role="note">
-              <span class="provenance">untrusted · tasks.inspect.request</span>
-              <pre class="untrusted-text">Observe a task with a failed verification verdict.</pre>
-            </section>
-          </article>
+          </header>
+          <button class="refresh" data-focus-key="refresh" type="button">Refresh</button>
+          <button aria-pressed="false" class="details-toggle" data-focus-key="task-details" type="button">Task details</button>
         </div>
-      </section>
-      <section class="composer-card" data-panel="prompt-composer">
-        <h2 class="section-title">New Task Composer</h2>
-        <textarea aria-label="Task prompt" class="composer-textarea" data-control="composer-request" data-focus-key="composer-request" placeholder="Describe a task for MARS workbench…" rows="3"></textarea>
-        <input aria-label="Acceptance criteria" class="composer-criteria" data-control="composer-criteria" placeholder="Optional acceptance criteria (comma-separated)" type="text" value="">
-        <div class="composer-options">
-          <label class="checkbox-label">
-            <input data-control="composer-start-now" type="checkbox">
-             Start immediately
-          </label>
-        </div>
-        <div class="action-buttons">
-          <button class="primary-btn" data-action="create-task" type="button">Create task</button>
-        </div>
-      </section>
-    </main>
-    <aside aria-label="Task inspector" class="inspector">
-      <section class="inspector-section">
-        <h2 class="section-title">Task</h2>
-        <h3 class="minor-title">Request</h3>
-        <section class="untrusted" data-provenance="task request" role="note">
-          <span class="provenance">untrusted · task request</span>
-          <pre class="untrusted-text">Observe a task with a failed verification verdict.</pre>
+        <section aria-live="polite" class="transcript" data-scroll-key="transcript:fixture-failed" role="log">
+          <div class="transcript-entries">
+            <p class="muted transcript-meta">1 transcript entry · 0 task events recorded</p>
+            <article class="transcript-entry transcript-user user-request">
+              <div class="entry-header">
+                <strong>Task request</strong>
+              </div>
+              <section class="untrusted" data-provenance="tasks.inspect.request" role="note">
+                <span class="provenance">untrusted · tasks.inspect.request</span>
+                <pre class="untrusted-text">Observe a task with a failed verification verdict.</pre>
+              </section>
+            </article>
+          </div>
         </section>
-        <h3 class="minor-title">Acceptance criteria</h3>
-        <div class="criteria-list">
-          <section class="untrusted" data-provenance="acceptance criterion" role="note">
-            <span class="provenance">untrusted · acceptance criterion</span>
-            <pre class="untrusted-text">Show the host verdict separately from status.</pre>
+        <section class="composer-card" data-panel="prompt-composer">
+          <p class="eyebrow">NEW TASK</p>
+          <h2 class="section-title">Give your agent a task</h2>
+          <textarea aria-label="Task prompt" class="composer-textarea" data-control="composer-request" data-focus-key="composer-request" placeholder="What would you like the agent to do?" rows="3"></textarea>
+          <input aria-label="Acceptance criteria" class="composer-criteria" data-control="composer-criteria" placeholder="Optional acceptance criteria (comma-separated)" type="text" value="">
+          <div class="composer-options">
+            <label class="checkbox-label">
+              <input data-control="composer-start-now" type="checkbox">
+               Start immediately
+            </label>
+          </div>
+          <div class="action-buttons">
+            <button class="primary-btn" data-action="create-task" type="button">Create task</button>
+          </div>
+        </section>
+      </main>
+      <aside aria-label="Task inspector" class="inspector" data-scroll-key="inspector:fixture-failed">
+        <section class="inspector-section">
+          <h2 data-focus-key="inspector-heading" data-inspector-heading="true" tabindex="-1">Task</h2>
+          <h3 class="minor-title">Request</h3>
+          <section class="untrusted" data-provenance="task request" role="note">
+            <span class="provenance">untrusted · task request</span>
+            <pre class="untrusted-text">Observe a task with a failed verification verdict.</pre>
           </section>
-        </div>
-        <dl class="budget">
-          <dt>Budget</dt>
-          <dd>4000 tokens · $0 · 60000 ms · depth 0 · concurrency 1</dd>
-        </dl>
-      </section>
-      <section class="inspector-section">
-        <h2 class="section-title">Verification</h2>
-        <p class="verification verification-failed">Verification failed</p>
-        <section class="untrusted" data-provenance="host verdict reason" role="note">
-          <span class="provenance">untrusted · host verdict reason</span>
-          <pre class="untrusted-text">Expected output did not match.</pre>
+          <h3 class="minor-title">Acceptance criteria</h3>
+          <div class="criteria-list">
+            <section class="untrusted" data-provenance="acceptance criterion" role="note">
+              <span class="provenance">untrusted · acceptance criterion</span>
+              <pre class="untrusted-text">Show the host verdict separately from status.</pre>
+            </section>
+          </div>
+          <dl class="budget">
+            <dt>Budget</dt>
+            <dd>4000 tokens · $0 · 60000 ms · depth 0 · concurrency 1</dd>
+          </dl>
         </section>
-        <div class="records">
+        <section class="inspector-section">
+          <h2 class="section-title">Verification</h2>
+          <p class="verification verification-failed">Verification failed</p>
+          <section class="untrusted" data-provenance="host verdict reason" role="note">
+            <span class="provenance">untrusted · host verdict reason</span>
+            <pre class="untrusted-text">Expected output did not match.</pre>
+          </section>
+          <div class="records">
+            <article class="record">
+              <p>failed · fixture-r4 · 2026-03-01T12:02:00.000Z</p>
+              <section class="untrusted" data-provenance="host verdict reason" role="note">
+                <span class="provenance">untrusted · host verdict reason</span>
+                <pre class="untrusted-text">Expected output did not match.</pre>
+              </section>
+            </article>
+          </div>
+        </section>
+        <section class="inspector-section">
+          <h2 class="section-title">Changes</h2>
+          <p>No diff files.</p>
+        </section>
+        <section class="inspector-section">
+          <h2 class="section-title">Evidence</h2>
           <article class="record">
-            <p>failed · fixture-r4 · 2026-03-01T12:02:00.000Z</p>
-            <section class="untrusted" data-provenance="host verdict reason" role="note">
-              <span class="provenance">untrusted · host verdict reason</span>
-              <pre class="untrusted-text">Expected output did not match.</pre>
+            <section class="untrusted" data-provenance="evidence id" role="note">
+              <span class="provenance">untrusted · evidence id</span>
+              <pre class="untrusted-text">fixture-evidence-failed</pre>
             </section>
+            <p>fail · not verified · current · 2026-03-01T12:02:00.000Z</p>
           </article>
-        </div>
-      </section>
-      <section class="inspector-section">
-        <h2 class="section-title">Changes</h2>
-        <p>No diff files.</p>
-      </section>
-      <section class="inspector-section">
-        <h2 class="section-title">Evidence</h2>
-        <article class="record">
-          <section class="untrusted" data-provenance="evidence id" role="note">
-            <span class="provenance">untrusted · evidence id</span>
-            <pre class="untrusted-text">fixture-evidence-failed</pre>
-          </section>
-          <p>fail · not verified · current · 2026-03-01T12:02:00.000Z</p>
-        </article>
-        <article class="record">
-          <section class="untrusted" data-provenance="evidence id" role="note">
-            <span class="provenance">untrusted · evidence id</span>
-            <pre class="untrusted-text">fixture-evidence-unbound</pre>
-          </section>
-          <p>pass · verified · stale · binding unavailable (WorkspaceModifiedError) · 2026-03-01T12:03:00.000Z</p>
-        </article>
-      </section>
-      <section class="inspector-section">
-        <h2 class="section-title">Artifacts</h2>
-        <p>No artifacts.</p>
-      </section>
-    </aside>
+          <article class="record">
+            <section class="untrusted" data-provenance="evidence id" role="note">
+              <span class="provenance">untrusted · evidence id</span>
+              <pre class="untrusted-text">fixture-evidence-unbound</pre>
+            </section>
+            <p>pass · verified · stale · binding unavailable (WorkspaceModifiedError) · 2026-03-01T12:03:00.000Z</p>
+          </article>
+        </section>
+        <section class="inspector-section">
+          <h2 class="section-title">Artifacts</h2>
+          <p>No artifacts.</p>
+        </section>
+      </aside>
+    </div>
     <footer class="status-bar">
-      <span>Connected</span>
+      <span>Workbench online</span>
       <span>fixture-repo (fixture)</span>
       <span>loopback</span>
       <span>interactive</span>

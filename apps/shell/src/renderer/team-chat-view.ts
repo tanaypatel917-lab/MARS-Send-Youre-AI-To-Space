@@ -41,6 +41,7 @@ export interface TeamChatViewState {
   ) => void;
   onResolveReference?: (messageId: string, referenceId: string) => void;
   onSearch?: (query: string) => void;
+  onSearchChange?: (query: string) => void;
   onSwitchViewer?: (viewer: string) => void;
   onLoadOlder?: () => void;
 }
@@ -59,6 +60,17 @@ function conversationTitle(
     if (other) return `@${other.display_name}`;
   }
   return conv.conversation_id;
+}
+
+const messageClock = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+function formatMessageTime(value: string): string {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? messageClock.format(date) : value;
 }
 
 function renderMessage(
@@ -148,14 +160,17 @@ function renderMessage(
       "div",
       { class: "team-message-header" },
       h(doc, "strong", {}, author),
-      h(
-        doc,
-        "span",
-        { class: "muted" },
-        `#${message.sequence} · ${message.created_at}`,
-      ),
+      h(doc, "span", { class: "muted" }, formatMessageTime(message.created_at)),
     ),
-    untrusted(doc, message.body, `team chat · ${author}`),
+    h(
+      doc,
+      "pre",
+      {
+        class: "team-message-body",
+        "data-provenance": `Team message from ${author}`,
+      },
+      message.body,
+    ),
     ...(refNodes.length > 0 ? refNodes : []),
     reactionBar,
   );
@@ -228,7 +243,12 @@ export function renderTeamChatPane(
         "Team Chat",
       ),
       state.label
-        ? h(doc, "span", { class: "entry-badge" }, state.label)
+        ? h(
+            doc,
+            "span",
+            { class: "entry-badge" },
+            state.label === "FIXTURE" ? "Local demo" : state.label,
+          )
         : null,
     ),
     h(doc, "div", { class: "team-header-actions" }, viewerControl, closeBtn),
@@ -254,6 +274,7 @@ export function renderTeamChatPane(
         type: "button",
         class: `team-conv-btn${selected ? " selected" : ""}`,
         "data-conversation-id": conv.conversation_id,
+        "data-focus-key": `team-conversation-${conv.conversation_id}`,
         "aria-pressed": selected ? "true" : "false",
       },
       h(doc, "span", { class: "team-conv-name" }, title),
@@ -277,6 +298,8 @@ export function renderTeamChatPane(
         type: "button",
         class: "team-pin-btn",
         "data-pin-conversation": conv.conversation_id,
+        "data-focus-key": `team-pin-${conv.conversation_id}`,
+        "aria-label": `${conv.pinned ? "Unpin" : "Pin"} ${title}`,
       },
       conv.pinned ? "Unpin" : "Pin",
     );
@@ -291,20 +314,37 @@ export function renderTeamChatPane(
     const searchInput = h(doc, "input", {
       type: "text",
       class: "team-search-input",
+      "data-focus-key": "team-search",
       placeholder: "Search messages…",
       value: state.searchQuery,
       "aria-label": "Search team chat messages",
     });
     searchInput.value = state.searchQuery;
+    searchInput.addEventListener("input", () =>
+      state.onSearchChange?.(searchInput.value ?? ""),
+    );
     const searchBtn = h(
       doc,
       "button",
-      { type: "button", class: "team-search-btn" },
+      {
+        type: "button",
+        class: "team-search-btn",
+        "data-focus-key": "team-search-submit",
+      },
       "Search",
     );
-    searchBtn.addEventListener("click", () =>
-      state.onSearch?.(searchInput.value ?? ""),
-    );
+    const search = () => state.onSearch?.(searchInput.value ?? "");
+    searchBtn.addEventListener("click", search);
+    searchInput.addEventListener("keydown", (event) => {
+      const key = event as typeof event & {
+        key?: string;
+        isComposing?: boolean;
+      };
+      if (key.key === "Enter" && !key.isComposing) {
+        event.preventDefault?.();
+        search();
+      }
+    });
     searchSection = h(
       doc,
       "div",
@@ -337,7 +377,17 @@ export function renderTeamChatPane(
   const messageFeed = h(
     doc,
     "div",
-    { class: "team-messages", role: "log", "aria-live": "polite" },
+    {
+      class: "team-messages",
+      role: "log",
+      "aria-live": "polite",
+      "data-scroll-key": JSON.stringify([
+        "team-feed",
+        state.viewer,
+        state.activeConversationId,
+        Boolean(state.searchHits),
+      ]),
+    },
     ...(state.searchHits
       ? [
           h(
@@ -370,6 +420,7 @@ export function renderTeamChatPane(
     rows: "2",
     placeholder: "Message team chat…",
     "aria-label": "Team chat message",
+    "aria-describedby": "team-keyboard-hint",
     "data-focus-key": "team-composer",
   });
   composerInput.value = state.draft;
@@ -388,10 +439,27 @@ export function renderTeamChatPane(
     },
     "Send message",
   );
-  sendBtn.addEventListener("click", () => {
+  const sendMessage = () => {
     const body = (composerInput.value ?? state.draft).trim();
     if (!body) return;
     state.onSend?.(body);
+  };
+  sendBtn.addEventListener("click", sendMessage);
+  composerInput.addEventListener("keydown", (event) => {
+    const key = event as typeof event & {
+      key?: string;
+      ctrlKey?: boolean;
+      metaKey?: boolean;
+      isComposing?: boolean;
+    };
+    if (
+      key.key === "Enter" &&
+      (key.ctrlKey || key.metaKey) &&
+      !key.isComposing
+    ) {
+      event.preventDefault?.();
+      sendMessage();
+    }
   });
 
   const composer = h(
@@ -423,9 +491,32 @@ export function renderTeamChatPane(
     h(
       doc,
       "div",
-      { class: "team-layout" },
-      h(doc, "ul", { class: "team-conv-list" }, ...convItems),
-      h(doc, "div", { class: "team-thread" }, messageFeed, notice, composer),
+      { class: "team-layout", "data-scroll-key": "team-layout" },
+      h(
+        doc,
+        "nav",
+        {
+          class: "team-conversations",
+          "data-scroll-key": "team-conversations",
+          "aria-label": "Team conversations",
+        },
+        h(doc, "h2", { class: "eyebrow" }, "Conversations"),
+        h(doc, "ul", { class: "team-conv-list" }, ...convItems),
+      ),
+      h(
+        doc,
+        "div",
+        { class: "team-thread" },
+        messageFeed,
+        notice,
+        composer,
+        h(
+          doc,
+          "p",
+          { id: "team-keyboard-hint", class: "composer-footnote" },
+          "Enter for a new line · Ctrl or ⌘ + Enter to send",
+        ),
+      ),
     ),
   );
 }

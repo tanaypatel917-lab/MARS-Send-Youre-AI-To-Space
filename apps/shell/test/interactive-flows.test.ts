@@ -20,7 +20,7 @@ import {
   sha256Hex,
 } from "../scripts/fixture-workbench";
 import { type Bridge, createBridge } from "../src/main/bridge";
-import { registerTeamChatBridge } from "../src/main/ipc";
+import { type IpcEventLike, registerTeamChatBridge } from "../src/main/ipc";
 import {
   createTeamChatBridge,
   type TeamChatBridge,
@@ -41,6 +41,7 @@ import {
   TEAM_CHAT_METHODS,
   type TeamChatBridgeApi,
 } from "../src/shared/team-chat";
+import { ipcFixture } from "./ipc-fixture";
 import { findAll, MiniDocument, type MiniElement } from "./mini-dom";
 import { loadFixtureData } from "./test-utils";
 
@@ -327,48 +328,48 @@ describe("interactive workbench bridge and fixture lifecycle", () => {
 describe("Team Chat IPC bridge security and operations", () => {
   test("enforces sender origin, allowlist, messaging, reactions, pins, and search", async () => {
     const teamBridge = createTeamChatBridge();
+    const { options, owner, otherWindow, childFrame } = ipcFixture();
     const handlers = new Map<
       string,
-      (
-        event: { senderFrame: { url: string } | null },
-        payload: unknown,
-      ) => Promise<unknown>
+      (event: IpcEventLike, payload: unknown) => unknown
     >();
     registerTeamChatBridge(
       {
         handle: (channel, listener) => {
-          handlers.set(channel, listener as never);
+          handlers.set(channel, listener);
         },
       },
       teamBridge,
-      { trustedOrigin: "mars-shell://app" },
+      options,
     );
     const handler = handlers.get(TEAM_CHAT_CHANNEL);
     expect(handler).toBeDefined();
     if (!handler) return;
 
-    const untrusted = await handler(
-      { senderFrame: { url: "https://evil.example/app" } },
-      { method: "team.state", params: {} },
-    );
-    expect(untrusted).toEqual({
-      ok: false,
-      code: "forbidden",
-    });
+    owner.senderFrame.url = "https://evil.example/app";
+    for (const event of [owner, otherWindow, childFrame]) {
+      expect(
+        await handler(event, { method: "team.state", params: {} }),
+      ).toEqual({
+        ok: false,
+        code: "forbidden",
+      });
+    }
+    owner.senderFrame.url = "mars-shell://app/index.html";
 
-    const unknownMethod = await handler(
-      { senderFrame: { url: "mars-shell://app/index.html" } },
-      { method: "team.deleteEverything", params: {} },
-    );
+    const unknownMethod = await handler(owner, {
+      method: "team.deleteEverything",
+      params: {},
+    });
     expect(unknownMethod).toEqual({
       ok: false,
       code: "forbidden",
     });
 
-    const stateRes = (await handler(
-      { senderFrame: { url: "mars-shell://app/index.html" } },
-      { method: "team.state", params: {} },
-    )) as {
+    const stateRes = (await handler(owner, {
+      method: "team.state",
+      params: {},
+    })) as {
       ok: boolean;
       value?: {
         conversations: { conversation_id: string }[];
@@ -381,27 +382,24 @@ describe("Team Chat IPC bridge security and operations", () => {
     expect(convId).toBeTruthy();
     if (!convId) return;
 
-    const opened = (await handler(
-      { senderFrame: { url: "mars-shell://app/index.html" } },
-      { method: "team.open", params: { conversation_id: convId } },
-    )) as { ok: boolean; value?: { messages: { message_id: string }[] } };
+    const opened = (await handler(owner, {
+      method: "team.open",
+      params: { conversation_id: convId },
+    })) as { ok: boolean; value?: { messages: { message_id: string }[] } };
     expect(opened.ok).toBe(true);
 
-    const sent = (await handler(
-      { senderFrame: { url: "mars-shell://app/index.html" } },
-      {
-        method: "team.send",
-        params: {
-          input: {
-            conversation_id: convId,
-            body: "Hello from shell test <img src=x onerror=alert(1)>",
-            client_message_id: "test-msg-1",
-            reply_to: null,
-            references: [],
-          },
+    const sent = (await handler(owner, {
+      method: "team.send",
+      params: {
+        input: {
+          conversation_id: convId,
+          body: "Hello from shell test <img src=x onerror=alert(1)>",
+          client_message_id: "test-msg-1",
+          reply_to: null,
+          references: [],
         },
       },
-    )) as {
+    })) as {
       ok: boolean;
       value?: { message_id: string; sequence: number; duplicate: boolean };
     };
@@ -410,35 +408,29 @@ describe("Team Chat IPC bridge security and operations", () => {
     expect(sent.value.message_id).toBeTruthy();
     expect(sent.value.duplicate).toBe(false);
 
-    const reacted = (await handler(
-      { senderFrame: { url: "mars-shell://app/index.html" } },
-      {
-        method: "team.setReaction",
-        params: {
-          message_id: sent.value.message_id,
-          emoji: "👍",
-          on: true,
-        },
+    const reacted = (await handler(owner, {
+      method: "team.setReaction",
+      params: {
+        message_id: sent.value.message_id,
+        emoji: "👍",
+        on: true,
       },
-    )) as { ok: boolean };
+    })) as { ok: boolean };
     expect(reacted.ok).toBe(true);
 
-    const pinned = (await handler(
-      { senderFrame: { url: "mars-shell://app/index.html" } },
-      {
-        method: "team.setPinned",
-        params: {
-          conversation_id: convId,
-          pinned: true,
-        },
+    const pinned = (await handler(owner, {
+      method: "team.setPinned",
+      params: {
+        conversation_id: convId,
+        pinned: true,
       },
-    )) as { ok: boolean };
+    })) as { ok: boolean };
     expect(pinned.ok).toBe(true);
 
-    const searched = (await handler(
-      { senderFrame: { url: "mars-shell://app/index.html" } },
-      { method: "team.search", params: { query: "Hello from shell test" } },
-    )) as { ok: boolean; value?: { hits: unknown[] } };
+    const searched = (await handler(owner, {
+      method: "team.search",
+      params: { query: "Hello from shell test" },
+    })) as { ok: boolean; value?: { hits: unknown[] } };
     expect(searched.ok).toBe(true);
     expect((searched.value?.hits.length ?? 0) > 0).toBe(true);
   });
@@ -1191,7 +1183,7 @@ describe("interactive renderer controller flows", () => {
       );
       expect(renderedIds(doc)).toEqual(all);
 
-      // Switching conversations clears the draft.
+      // Never show one conversation's draft in another; restore it on return.
       const draftBox = findByAttr(doc.root, "data-focus-key", "team-composer");
       if (draftBox) {
         draftBox.value = "Sensitive draft for thread A";
@@ -1210,6 +1202,12 @@ describe("interactive renderer controller flows", () => {
         () =>
           (findByAttr(doc.root, "data-focus-key", "team-composer")?.value ??
             "") === "",
+      );
+      findByAttr(doc.root, "data-conversation-id", convId)?.click();
+      await waitFor(
+        () =>
+          findByAttr(doc.root, "data-focus-key", "team-composer")?.value ===
+          "Sensitive draft for thread A",
       );
     } finally {
       close();

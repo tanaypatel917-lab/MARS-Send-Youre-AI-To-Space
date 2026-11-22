@@ -12,7 +12,10 @@ import type {
   InspectResult,
   PatchExportResult,
 } from "../shared/methods";
-import { h, type ShellDocument, type ShellElement } from "./dom";
+import { type AssistantViewState, renderAssistant } from "./assistant-view";
+import { disclosure, h, type ShellDocument, type ShellElement } from "./dom";
+import { type ExtensionState, renderExtensions } from "./extensions-view";
+import { renderSettings } from "./settings-view";
 import { STATUS_LABEL, VERIFICATION_LABEL } from "./strings";
 import { renderTeamChatPane, type TeamChatViewState } from "./team-chat-view";
 import { renderTranscript } from "./transcript";
@@ -54,6 +57,7 @@ export type LaunchCardState = {
   steerDraft: string;
   busy: boolean;
   actionNotice?: string;
+  modelUnavailable?: boolean;
   actionError?: string;
 };
 
@@ -65,7 +69,15 @@ export type ExportViewState = {
   verifiedSha256?: boolean;
 };
 
+export type WorkspacePage = "chat" | "tasks" | "extensions" | "settings";
 export type ShellState = {
+  page?: WorkspacePage;
+  settingsError?: string | undefined;
+  assistant?: AssistantViewState;
+  extensions?: ExtensionState;
+  inspectorOpen?: boolean;
+  onPage?: (page: WorkspacePage) => void;
+  onToggleInspector?: () => void;
   describe?: DescribeResult;
   tasks: Task[];
   selectedTask?: InspectResult;
@@ -326,7 +338,9 @@ function taskHeader(
     doc,
     "header",
     { class: "task-header" },
-    h(doc, "h1", HEADING_ATTRS, `Task ${task.task_id}`),
+    h(doc, "p", { class: "eyebrow" }, "02 / WORKSPACE"),
+    h(doc, "h1", HEADING_ATTRS, "Task overview"),
+    h(doc, "p", { class: "task-identifier" }, `Task ${task.task_id}`),
     h(
       doc,
       "div",
@@ -372,6 +386,24 @@ function approvalAndLifecycleCard(
     : null;
 
   if (task.status === "pending") {
+    const keyMissing =
+      state.assistant?.canConfigure && !state.assistant.configured;
+    const modelHelp =
+      launch.modelUnavailable && keyMissing
+        ? h(
+            doc,
+            "button",
+            {
+              type: "button",
+              class: "connect-action",
+              "data-focus-key": "task-add-key",
+            },
+            "Add OpenRouter API key",
+          )
+        : null;
+    modelHelp?.addEventListener("click", () => {
+      state.assistant?.onSettings?.();
+    });
     const modelSelect = h(
       doc,
       "select",
@@ -537,12 +569,29 @@ function approvalAndLifecycleCard(
         doc,
         "div",
         { class: "model-row" },
-        h(doc, "label", {}, "Model ", modelSelect),
+        h(doc, "label", {}, h(doc, "span", {}, "Model"), modelSelect),
       ),
       paidConsentBox,
       h(doc, "div", { class: "action-buttons" }, startBtn, cancelBtn),
       notice,
-      error,
+      modelHelp ? null : error,
+      modelHelp
+        ? h(
+            doc,
+            "div",
+            { class: "connect-notice", role: "alert" },
+            h(
+              doc,
+              "p",
+              {},
+              "No OpenRouter key is configured. Add a key to start this task.",
+            ),
+            modelHelp,
+            state.settingsError
+              ? h(doc, "p", { class: "error" }, state.settingsError)
+              : null,
+          )
+        : null,
     );
   }
 
@@ -667,7 +716,7 @@ function promptComposer(
   const requestInput = h(doc, "textarea", {
     class: "composer-textarea",
     rows: "3",
-    placeholder: "Describe a task for MARS workbench…",
+    placeholder: "What would you like the agent to do?",
     "aria-label": "Task prompt",
     "data-control": "composer-request",
     "data-focus-key": "composer-request",
@@ -801,7 +850,8 @@ function promptComposer(
     doc,
     "section",
     { class: "composer-card", "data-panel": "prompt-composer" },
-    heading(doc, "New Task Composer"),
+    h(doc, "p", { class: "eyebrow" }, "NEW TASK"),
+    heading(doc, "Give your agent a task"),
     requestInput,
     criteriaInput,
     h(
@@ -870,7 +920,16 @@ function taskInspector(doc: ShellDocument, task: Task): ShellElement {
     doc,
     "section",
     { class: "inspector-section" },
-    heading(doc, "Task"),
+    h(
+      doc,
+      "h2",
+      {
+        tabindex: "-1",
+        "data-inspector-heading": "true",
+        "data-focus-key": "inspector-heading",
+      },
+      "Task",
+    ),
     h(doc, "h3", { class: "minor-title" }, "Request"),
     untrusted(doc, task.request, "task request"),
     h(doc, "h3", { class: "minor-title" }, "Acceptance criteria"),
@@ -979,11 +1038,11 @@ function changesSection(doc: ShellDocument, state: ShellState): ShellElement {
       diff?.digest
         ? h(doc, "small", { class: "digest" }, `sha256 ${diff.digest}`)
         : null,
-      h(
+      disclosure(
         doc,
-        "details",
-        { class: "patch-details" },
-        h(doc, "summary", {}, "Patch"),
+        "patch-details",
+        `patch:${file.path}`,
+        "Patch",
         untrusted(doc, file.patch, "workspace diff"),
       ),
     );
@@ -1051,11 +1110,11 @@ function changesSection(doc: ShellDocument, state: ShellState): ShellElement {
               `sha256 ${exportState.result.patch_sha256}`,
             ),
             exportState.patchText
-              ? h(
+              ? disclosure(
                   doc,
-                  "details",
-                  { class: "patch-details" },
-                  h(doc, "summary", {}, "Verified exported patch"),
+                  "patch-details",
+                  `export:${exportState.result.patch_sha256}`,
+                  "Verified exported patch",
                   untrusted(
                     doc,
                     exportState.patchText,
@@ -1165,9 +1224,10 @@ export function renderShell(
     "header",
     { class: "masthead" },
     h(doc, "span", { class: "masthead-dots", "aria-hidden": "true" }),
-    "MARS / workbench",
+    h(doc, "span", { class: "masthead-title" }, "MARS"),
+    h(doc, "span", { class: "masthead-subtitle" }, "Your mission control"),
   );
-  if (state.error) {
+  if (state.error && !state.assistant) {
     const retry = h(
       doc,
       "button",
@@ -1190,7 +1250,50 @@ export function renderShell(
       ),
     );
   }
+  if (state.error) {
+    const retry = h(
+      doc,
+      "button",
+      { type: "button", class: "retry", "data-focus-key": "workbench-retry" },
+      "Retry",
+    );
+    retry.addEventListener("click", () => state.onRefresh?.());
+    masthead.append(
+      h(
+        doc,
+        "span",
+        { class: "workspace-alert", role: "alert" },
+        `Workbench unavailable: ${state.error}`,
+      ),
+      retry,
+    );
+  }
   const task = state.selectedTask;
+  const navButton = (
+    text: string,
+    selected: boolean,
+    callback: () => void,
+    className = "nav-item",
+    disabled = false,
+  ) => {
+    const button = h(
+      doc,
+      "button",
+      {
+        type: "button",
+        class: `${className}${selected ? " selected" : ""}`,
+        ...(className === "details-toggle"
+          ? { "data-focus-key": "task-details" }
+          : {}),
+        "aria-pressed": String(selected),
+        disabled,
+      },
+      text,
+    );
+    button.addEventListener("click", callback);
+    return button;
+  };
+  const isChat = state.page === "chat" && !state.teamChat?.open;
   const refresh = h(
     doc,
     "button",
@@ -1221,24 +1324,91 @@ export function renderShell(
   teamChatBtn.disabled = !teamChatAvailable;
   teamChatBtn.addEventListener("click", () => state.onOpenTeamChat?.());
 
+  const destination = (id: WorkspacePage, label: string) => {
+    const el = navButton(
+      label,
+      (state.page ?? "tasks") === id && !state.teamChat?.open,
+      () => state.onPage?.(id),
+    );
+    el.setAttribute("data-focus-key", `nav-${id}`);
+    el.setAttribute("data-page", id);
+    return el;
+  };
   const sidebar = h(
     doc,
     "nav",
-    { class: "sidebar", "aria-label": "Sidebar" },
-    h(doc, "h1", { class: "brand" }, "MARS"),
-    h(doc, "h2", { class: "section-title" }, "Sessions"),
-    ...taskList(doc, state.tasks, task?.task_id, state.onSelect),
+    { class: "sidebar", "aria-label": "Sidebar", "data-scroll-key": "sidebar" },
+    h(
+      doc,
+      "div",
+      { class: "brand-row" },
+      h(doc, "span", { class: "brand-orbit", "aria-hidden": "true" }),
+      h(doc, "h1", { class: "brand" }, "MARS"),
+      h(doc, "span", { class: "brand-tag" }, "YOUR IDEAS. IN ORBIT."),
+    ),
+    h(
+      doc,
+      "div",
+      { class: "workspace-switcher" },
+      h(doc, "span", { class: "workspace-label" }, "WORKSPACE"),
+      h(doc, "strong", {}, state.describe?.workspaceLabel ?? "Local workspace"),
+    ),
+    state.assistant ? destination("chat", "Chat") : null,
+    destination("tasks", "Tasks"),
+    state.assistant ? destination("extensions", "Extensions") : null,
+    state.assistant ? destination("settings", "Settings") : null,
+    h(
+      doc,
+      "div",
+      { class: "sidebar-history", "data-scroll-key": "sidebar-history" },
+      ...(isChat && state.assistant
+        ? [
+            h(doc, "h2", { class: "sidebar-label" }, "Conversations"),
+            navButton(
+              "+  New conversation",
+              false,
+              () => state.assistant?.onNew?.(),
+              "new-conversation",
+              state.assistant.busy,
+            ),
+            ...state.assistant.sessions.map((session) =>
+              navButton(
+                session.title,
+                session.id === state.assistant?.activeId,
+                () => state.assistant?.onSelect?.(session.id),
+                "conversation-item",
+                state.assistant?.busy,
+              ),
+            ),
+            ...(state.assistant.unsentIds ?? []).map((id, index) =>
+              navButton(
+                `Unsent draft ${index + 1}`,
+                false,
+                () => state.assistant?.onSelect?.(id),
+                "conversation-item",
+                state.assistant?.busy,
+              ),
+            ),
+          ]
+        : (!state.page || state.page === "tasks") && !state.teamChat?.open
+          ? [
+              h(doc, "h2", { class: "sidebar-label" }, "Agent sessions"),
+              ...taskList(doc, state.tasks, task?.task_id, state.onSelect),
+            ]
+          : []),
+    ),
     h(
       doc,
       "section",
-      { class: "team-chat" },
+      { class: "team-chat sidebar-bottom" },
+      h(doc, "span", { class: "sidebar-label" }, "BETTER TOGETHER"),
       teamChatBtn,
       h(
         doc,
         "p",
         { class: "muted" },
         teamChatAvailable
-          ? `${state.teamChat?.label ?? "READY"} · ${state.teamChat?.conversations.length ?? 0} channel${state.teamChat?.conversations.length === 1 ? "" : "s"}`
+          ? `${state.teamChat?.label === "FIXTURE" ? "Local demo" : "Team workspace"} · ${state.teamChat?.conversations.length ?? 0} conversation${state.teamChat?.conversations.length === 1 ? "" : "s"}`
           : "team chat unavailable",
       ),
     ),
@@ -1249,46 +1419,81 @@ export function renderShell(
       ? h(
           doc,
           "main",
-          { class: "main" },
+          { class: "main", "data-scroll-key": "team-main" },
           renderTeamChatPane(doc, state.teamChat),
         )
-      : h(
-          doc,
-          "main",
-          { class: "main" },
-          h(
+      : state.page === "settings" && state.assistant
+        ? renderSettings(
             doc,
-            "div",
-            { class: "main-toolbar" },
-            taskHeader(doc, task, state.verification, state.verificationError),
-            refresh,
-          ),
-          approvalAndLifecycleCard(doc, state),
-          h(
-            doc,
-            "section",
-            { class: "transcript", role: "log", "aria-live": "polite" },
-            state.eventsError
-              ? unavailable(doc, state.eventsError)
-              : h(
+            state.assistant,
+            state.settingsError,
+            () => state.onPage?.("extensions"),
+            () => state.onRefresh?.(),
+          )
+        : state.page === "extensions"
+          ? renderExtensions(doc, state.extensions)
+          : isChat && state.assistant
+            ? renderAssistant(doc, state.assistant)
+            : h(
+                doc,
+                "main",
+                {
+                  class: "main",
+                  "data-scroll-key": `main:${task?.task_id ?? ""}`,
+                },
+                h(
                   doc,
                   "div",
-                  { class: "transcript-entries" },
-                  ...renderTranscript(
+                  { class: "main-toolbar" },
+                  taskHeader(
                     doc,
-                    state.transcript,
-                    state.events.length,
-                    state.eventsCapped,
+                    task,
+                    state.verification,
+                    state.verificationError,
+                  ),
+                  refresh,
+                  navButton(
+                    state.inspectorOpen ? "Hide details" : "Task details",
+                    Boolean(state.inspectorOpen),
+                    () => state.onToggleInspector?.(),
+                    "details-toggle",
                   ),
                 ),
-          ),
-          promptComposer(doc, state),
-        );
+                approvalAndLifecycleCard(doc, state),
+                h(
+                  doc,
+                  "section",
+                  {
+                    class: "transcript",
+                    "data-scroll-key": `transcript:${task?.task_id ?? ""}`,
+                    role: "log",
+                    "aria-live": "polite",
+                  },
+                  state.eventsError
+                    ? unavailable(doc, state.eventsError)
+                    : h(
+                        doc,
+                        "div",
+                        { class: "transcript-entries" },
+                        ...renderTranscript(
+                          doc,
+                          state.transcript,
+                          state.events.length,
+                          state.eventsCapped,
+                        ),
+                      ),
+                ),
+                promptComposer(doc, state),
+              );
 
   const inspector = h(
     doc,
     "aside",
-    { class: "inspector", "aria-label": "Task inspector" },
+    {
+      class: "inspector",
+      "aria-label": "Task inspector",
+      "data-scroll-key": `inspector:${task?.task_id ?? ""}`,
+    },
     task
       ? taskInspector(doc, task)
       : h(
@@ -1308,7 +1513,12 @@ export function renderShell(
     doc,
     "footer",
     { class: "status-bar" },
-    h(doc, "span", {}, state.describe ? "Connected" : "Not connected"),
+    h(
+      doc,
+      "span",
+      {},
+      state.describe ? "Workbench online" : "Workbench offline",
+    ),
     h(doc, "span", {}, state.describe?.workspaceLabel ?? "No workspace"),
     h(doc, "span", {}, "loopback"),
     h(doc, "span", {}, "interactive"),
@@ -1326,11 +1536,18 @@ export function renderShell(
   return h(
     doc,
     "div",
-    { class: "app-shell" },
+    {
+      class: `app-shell${!state.error ? " clean-chrome" : ""}${isChat || state.page === "extensions" || state.page === "settings" || state.teamChat?.open || !state.inspectorOpen ? " inspector-hidden" : ""}`,
+    },
     masthead,
     sidebar,
-    main,
-    inspector,
+    h(
+      doc,
+      "div",
+      { class: "workspace-panels", "data-scroll-key": "workspace" },
+      main,
+      inspector,
+    ),
     footer,
   );
 }

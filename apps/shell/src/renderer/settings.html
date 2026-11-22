@@ -11,20 +11,30 @@
     <link rel="stylesheet" href="./shell.css" />
   </head>
   <body class="model-settings">
-    <header class="masthead"><span class="masthead-dots" aria-hidden="true"></span>MARS / model settings</header>
+    <header class="masthead">
+      <span class="masthead-dots" aria-hidden="true"></span>MARS / model settings
+      <button id="close-settings" type="button" aria-label="Close model settings">Close</button>
+    </header>
     <main>
-      <h1>Model settings</h1>
-      <p>Add an OpenRouter API key to run the agent with the default free model route. You can browse the workbench and demo Team Chat without a key.</p>
+      <div class="setup-step">MODEL CONNECTION / OPENROUTER</div>
+      <h1 id="key-heading">Connect your model</h1>
+      <p>Use one OpenRouter key for chat and agent tasks. MARS uses it to sign in to OpenRouter, not as part of your prompts.</p>
+      <div class="key-help">
+        <p><strong id="key-step">1. Create your key</strong></p>
+        <p>Visit <strong>openrouter.ai/settings/keys</strong>, choose Create API key, and copy it.</p>
+        <button id="get-key" type="button">Open OpenRouter key settings ↗</button>
+      </div>
       <form>
-        <label for="model-key">OpenRouter API key</label>
-        <input id="model-key" type="password" maxlength="512" autocomplete="off" spellcheck="false" required />
+        <label id="key-label" for="model-key">2. Paste your OpenRouter API key</label>
+        <input id="model-key" type="password" maxlength="512" placeholder="sk-or-v1-…" autocomplete="off" spellcheck="false" required aria-describedby="model-status key-privacy" />
+        <p id="model-status" role="status" aria-live="polite"></p>
         <div class="model-actions">
-          <button type="submit">Save key</button>
-          <button id="clear-key" type="button">Clear saved key</button>
+          <button type="submit">Save &amp; connect</button>
+          <button id="clear-key" type="button" disabled>Remove from MARS</button>
         </div>
       </form>
-      <p>Changing the key restarts the local workbench.</p>
-      <p id="model-status" role="status"></p>
+      <p id="key-privacy">Stored in your system’s secure storage when available; otherwise used only until MARS quits. Saving checks the format only. Removing a key from MARS does not revoke it at OpenRouter.</p>
+      <p>Chat uses OpenRouter’s free route. Agent tasks use the host’s default model unless you explicitly choose a paid one.</p>
     </main>
     <script type="module" src="./settings.js"></script>
   </body>

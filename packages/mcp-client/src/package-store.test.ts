@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 import {
   chmod,
@@ -56,6 +57,37 @@ test("installs the same private revision once and preserves layout and modes", a
     a.sha,
   );
   expect(await readdir(directory)).toEqual([a.sha]);
+});
+
+test("live SQLite journals next to a data file do not change the program revision", async () => {
+  const { src, store } = await fixture();
+  const path = join(src, "user.db");
+  const inspect = () => store.inspect({ path: src, exclude: [path] });
+  const program = join(src, "user.db-wal.js");
+  await writeFile(program, "v1");
+  const before = await inspect();
+  const db = new Database(path, { create: true });
+  try {
+    db.exec("PRAGMA journal_mode=WAL; CREATE TABLE notes(body);");
+    expect(await readdir(src)).toEqual(
+      expect.arrayContaining(["user.db-wal", "user.db-shm"]),
+    );
+    const active = await inspect();
+    expect(active.sha).toBe(before.sha);
+    await active.install();
+    expect(await readdir(active.directory)).toEqual(["user.db-wal.js"]);
+    db.exec("INSERT INTO notes VALUES (1)");
+    expect((await inspect()).sha).toBe(before.sha);
+    db.exec("PRAGMA journal_mode=DELETE; BEGIN; INSERT INTO notes VALUES (2);");
+    expect(await readdir(src)).toContain("user.db-journal");
+    expect((await inspect()).sha).toBe(before.sha);
+    db.exec("COMMIT");
+  } finally {
+    db.close();
+  }
+  expect((await inspect()).sha).toBe(before.sha);
+  await writeFile(program, "v2");
+  expect((await inspect()).sha).not.toBe(before.sha);
 });
 
 test("a link into an excluded folder cannot publish a broken package", async () => {

@@ -159,7 +159,7 @@ export const CATALOG: CatalogEntry[] = [
     name: "UTC clock",
     version: "1.0.0",
     description:
-      "Give the assistant a local tool to read the current UTC time.",
+      "Let an agent task read the current UTC time without a network connection.",
     permissions: [
       "Run the bundled clock process",
       "Call utc_now (no arguments)",

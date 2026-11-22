@@ -8,6 +8,8 @@ export interface ShellElement {
   value?: string;
   checked?: boolean;
   disabled?: boolean;
+  scrollTop: number;
+  scrollLeft: number;
   selectionStart?: number | null;
   selectionEnd?: number | null;
   selectionDirection?: "forward" | "backward" | "none" | null;
@@ -22,7 +24,9 @@ export interface ShellElement {
   append(...nodes: (ShellElement | ShellText)[]): void;
   replaceChildren(...nodes: (ShellElement | ShellText)[]): void;
   querySelectorAll(selectors: string): ArrayLike<ShellElement>;
-  focus(): void;
+  scrollIntoView?(options: { block: "nearest" }): void;
+  getBoundingClientRect?(): { top: number; bottom: number };
+  focus(options?: { preventScroll?: boolean }): void;
   addEventListener(
     type: string,
     listener: (event: {
@@ -81,6 +85,22 @@ const TAGS = new Set([
 
 const FORBIDDEN_ATTRIBUTES =
   /^(?:on.*|style|srcdoc|href|src|action|formaction)$/i;
+
+export function disclosure(
+  doc: ShellDocument,
+  className: string,
+  key: string,
+  label: string,
+  ...children: ShellElement[]
+): ShellElement {
+  return h(
+    doc,
+    "details",
+    { class: className, "data-disclosure-key": key },
+    h(doc, "summary", { "data-focus-key": `summary:${key}` }, label),
+    ...children,
+  );
+}
 
 export function h(
   doc: ShellDocument,

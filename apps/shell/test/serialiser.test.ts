@@ -125,13 +125,12 @@ test("pending task details stay visible when workspace sections are unavailable"
   const snapshot = serialize(document.root);
   expect(snapshot).toContain('data-task-id="fixture-pending"');
   expect(snapshot).toContain(
-    '<h1 data-focus-key="heading" tabindex="-1">Task fixture-pending</h1>',
+    '<h1 data-focus-key="heading" tabindex="-1">Task overview</h1>',
   );
   expect(snapshot).toContain("Pending sample task.");
-  expect(snapshot).toContain("unavailable · Workbench resource was not found.");
-  expect(
-    snapshot.match(/unavailable · Workbench resource was not found\./g),
-  ).toHaveLength(2);
+  expect(snapshot).toContain("No diff files.");
+  expect(snapshot).toContain("No evidence records.");
+  expect(snapshot).not.toContain("Workbench resource was not found.");
 });
 
 test("verification and event failures are section-local", async () => {
@@ -272,7 +271,7 @@ test("task event paging stops when the cursor does not advance", async () => {
     findAll(document.root, (element) => element.tagName === "P")
       .map((element) => element.textContent)
       .join(" "),
-  ).toContain("1 task event available");
+  ).toContain("1 task event recorded");
 });
 
 test("task event paging stops at 1,000 entries", async () => {
@@ -408,7 +407,7 @@ test("connection error view retries the controller load", async () => {
   await controller.settled();
 
   expect(describeCalls).toBe(2);
-  expect(serialize(document.root)).toContain("Connected");
+  expect(serialize(document.root)).toContain("Workbench online");
 });
 
 test("a session click during an in-flight load queues the selected task", async () => {
@@ -455,8 +454,10 @@ test("a session click during an in-flight load queues the selected task", async 
   );
   await controller.settled();
   expect(
-    findAll(document.root, (element) => element.tagName === "H1")[1]
-      ?.textContent,
+    findAll(
+      document.root,
+      (element) => element.getAttribute("class") === "task-identifier",
+    )[0]?.textContent,
   ).toContain("fixture-completed-verified");
 });
 

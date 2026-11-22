@@ -74,14 +74,20 @@ To expose approved tools in agent sessions, start `mars serve --mcp-state-dir <d
 
 `mars mcp` provides a host-owned CLI backed by `createHostMcpControlPlane` (storing the trust store, server registry, and 32-byte HMAC approval key in a host-owned state directory outside workspaces, defaulting to `$XDG_STATE_HOME/mars/integration-trust` or `~/.local/state/mars/integration-trust`):
 
-Server registrations are isolated by scope. If upgrading from a build with a shared registry, run review and approval again in each intended scope; unscoped registrations are not imported automatically. New stdio reviews bind the resolved executable, the optional entrypoint, and the contents of every argument that names an existing file (resolved against the server's `cwd`), so editing a script launched as `bun run server.ts` requires re-approval even without `--entrypoint`. Approved servers whose arguments name files drift once after upgrading and need to be reviewed and approved again.
+Server registrations are isolated by scope. If upgrading from a build with a shared registry, run review and approval again in each intended scope; unscoped registrations are not imported automatically.
+
+**Already approved a local server?** It pauses on upgrade: MARS cannot tell from the old settings which arguments are programs and which are your data. Run the `mars mcp reapprove <server-id>` command shown in the notice, answer the file questions, then use the printed approval command. Your previous permissions are retained. For a bundled desktop extension choose **Project → Add Verified Extension** and add it again. HTTP servers are unaffected.
+
+Local reviews and launches use host-private package revisions on POSIX. Select a program folder to keep sibling imports or a virtual environment together, or protect a working folder for locally installed npx dependencies. Each argument must be classified explicitly: `text` passes it unchanged, `data` keeps it writable outside the package, `file` pins one code file, and `folder:<path>` pins its package. A dependency manifest is checked for drift; it does not pin all the code it references. System libraries, shebang interpreters, startup downloads and code resolved outside selected folders are not protected. This is not a sandbox against the account running MARS.
+
+A writable data file also reserves its SQLite companion names (`-wal`, `-shm`, and `-journal`) outside the package, even if those files do not yet exist. Keep program files under other names.
 
 ```sh
 # List registered servers, pending reviews, and active grants (empty by default)
 mars mcp list [--state-dir <dir>] [--owner <id>] [--project <id>] [--json]
 
 # Register + live-probe an MCP server and open a pending trust review
-mars mcp review <server-id> (--command <cmd> --allow-stdio-probe [--arg <arg>]... | --url <url>) \
+mars mcp review <server-id> (--command <cmd> --allow-stdio-probe [--arg <arg> --arg-kind <kind>]... [--command-root <folder>] [--cwd <folder> --pin-cwd] | --url <url>) \
   [--permission <cap>:<res>]... [--credential <ref>@<origin>]... [--json]
 
 # Approve a pending review using the host-held HMAC key (remote CLI default and maximum: 24h)

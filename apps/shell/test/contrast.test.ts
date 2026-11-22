@@ -44,13 +44,9 @@ function contrast(a: string, b: string): number {
   return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
 }
 
-test("the MARS website palette maintains WCAG 1.4.3 contrast in the desktop", async () => {
+test("the MARS desktop palette maintains WCAG 1.4.3 contrast", async () => {
   const css = await readFile(CSS_PATH, "utf8");
   const palette = tokens(css.match(/^:root\s*\{([\s\S]*?)^\}/m)?.[1] ?? "");
-  expect(palette.get("pageBg")).toBe("#050407");
-  expect(palette.get("cardBg")).toBe("#0a090c");
-  expect(palette.get("infoBg")).toBe("#141214");
-  expect(palette.get("fg")).toBe("#ece6dc");
   const failures: string[] = [];
   for (const text of TEXT_TOKENS) {
     for (const background of BACKGROUND_TOKENS) {

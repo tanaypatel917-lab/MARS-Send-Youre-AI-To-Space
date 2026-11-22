@@ -79,6 +79,8 @@ export function projectExtensions(
     if (!artifact || entry.kind !== "mcp")
       throw new Error("Missing MCP entrypoint.");
     const script = join(dir, artifact.file);
+    const projectArgs =
+      entry.projectRootArg && openedRoot ? [source, openedRoot] : [];
     return {
       schema_version: 1,
       id: entry.id,
@@ -86,12 +88,16 @@ export function projectExtensions(
       transport: {
         type: "stdio",
         command: process.execPath,
-        args: [
-          "--no-env-file",
-          script,
-          ...entry.args,
-          ...(entry.projectRootArg && openedRoot ? [source, openedRoot] : []),
-        ],
+        args: ["--no-env-file", script, ...entry.args, ...projectArgs],
+        launch: {
+          version: 1,
+          arguments: [
+            "text",
+            { code: null, sha256: artifact.sha256 },
+            ...entry.args.map(() => "text" as const),
+            ...(projectArgs.length ? (["data", "text"] as const) : []),
+          ],
+        },
         cwd: dir,
         entrypoint: script,
         env_allowlist: [],
@@ -116,6 +122,7 @@ export function projectExtensions(
   async function mcpStatus(
     cp: HostMcpControlPlane,
     entry: CatalogEntry,
+    notify = false,
     record?: Registration,
   ) {
     const { registered, grant } = record ?? (await registration(cp, entry.id));
@@ -125,23 +132,37 @@ export function projectExtensions(
       (!openedRoot || projectRootIdentity(source) !== openedRoot)
     )
       return "unavailable";
-    if (
-      !registered ||
-      !isDeepStrictEqual(registered, {
-        ...config(entry),
-        registered_at: registered.registered_at,
-      })
-    )
-      return "unavailable";
+    if (registered?.transport.type !== "stdio") return "unavailable";
+    const expected = config(entry);
+    const legacy = !registered.transport.launch;
+    if (legacy && expected.transport.type === "stdio")
+      delete expected.transport.launch;
+    expected.registered_at = registered.registered_at;
+    const { legacy_notice_grant: _, ...installedConfig } = registered;
+    if (!isDeepStrictEqual(installedConfig, expected)) return "unavailable";
     if (grant?.state !== "approved") return "unavailable";
     if (
       Date.parse(grant.expires_at) <=
       (options.clock?.().getTime() ?? Date.now())
     )
       return "expired";
+    if (legacy) {
+      if (
+        notify &&
+        options.onExpired &&
+        (await cp.registry.markLegacyNotice(entry.id, grant.grant_id))
+      )
+        options.onExpired(entry.id);
+      return "paused";
+    }
     try {
       await artifacts(entry);
-      await verifyMcpConfig(registered, grant.evidence);
+      await verifyMcpConfig(
+        registered,
+        grant.evidence,
+        undefined,
+        cp.packageStore,
+      );
       return "installed";
     } catch {
       return "unavailable";
@@ -162,8 +183,11 @@ export function projectExtensions(
         const cp = await plane();
         const record = await registration(cp, entry.id);
         if (record.registered) removable.push(entry.id);
-        const state = await mcpStatus(cp, entry, record);
-        if (state !== "unavailable") result[state].push(entry.id);
+        const state = await mcpStatus(cp, entry, false, record);
+        if (state === "paused") {
+          result.paused ??= [];
+          result.paused.push(entry.id);
+        } else if (state !== "unavailable") result[state].push(entry.id);
       } else if (
         (entry.kind !== "plugin" || ownership.added.includes(entry.id)) &&
         entry.assets.every((asset) =>
@@ -381,7 +405,7 @@ export function projectExtensions(
           const ids = [];
           for (const entry of CATALOG) {
             if (entry.kind !== "mcp") continue;
-            const status = await mcpStatus(cp, entry);
+            const status = await mcpStatus(cp, entry, true);
             if (status === "installed") ids.push(entry.id);
             else if (status === "expired") notifyExpired(entry.id);
           }

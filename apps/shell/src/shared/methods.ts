@@ -71,6 +71,7 @@ export type BridgeErrorKind =
   | "conflict"
   | "timeout"
   | "unavailable"
+  | "model_unavailable"
   | "protocol"
   | "invalid_response"
   | "hash_mismatch";
@@ -91,6 +92,8 @@ export const BRIDGE_ERROR_MESSAGES: Readonly<Record<BridgeErrorKind, string>> =
     conflict: "Workbench request conflicts with the current state.",
     timeout: "Workbench did not respond in time.",
     unavailable: "Workbench is unavailable.",
+    model_unavailable:
+      "No available model matches this task. Check model setup or choose another model.",
     protocol: "Workbench returned an invalid response.",
     invalid_response: "Workbench returned an invalid response.",
     hash_mismatch: "Workbench artifact failed integrity verification.",

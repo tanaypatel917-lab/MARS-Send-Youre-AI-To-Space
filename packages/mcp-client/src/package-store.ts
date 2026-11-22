@@ -60,7 +60,7 @@ export interface PackageSource {
   path: string;
   /** A venv can have file aliases to its explicitly selected host executable. */
   externalExecutable?: string;
-  /** Absolute paths for mutable data, not copied into the package. */
+  /** Mutable paths; files also reserve their SQLite journal companion names. */
   exclude?: readonly string[];
 }
 
@@ -105,15 +105,22 @@ export class McpPackageStore {
       throw new IntegrationTrustError("store_location_unsafe");
     const external =
       source.externalExecutable && (await realpath(source.externalExecutable));
-    const excluded = new Set(
-      await Promise.all(
-        (source.exclude ?? []).map((p) => {
-          if (!isAbsolute(p))
-            throw new Error("Data exclusions must be absolute paths.");
-          return physical(p);
-        }),
-      ),
-    );
+    const excluded = new Set<string>();
+    for (const p of source.exclude ?? []) {
+      if (!isAbsolute(p))
+        throw new Error("Data exclusions must be absolute paths.");
+      const data = await physical(p);
+      excluded.add(data);
+      const meta = await stat(data).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+        return undefined;
+      });
+      if (!meta || meta.isFile()) {
+        // Reserve exact sibling names before SQLite creates them, not symlink targets.
+        for (const suffix of ["-wal", "-shm", "-journal"])
+          excluded.add(data + suffix);
+      }
+    }
     const entries: Entry[] = [];
     let count = 0;
     let bytes = 0;

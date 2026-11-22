@@ -14,6 +14,7 @@ export type ErrorCode =
   | "drift"
   | "stale_evidence"
   | "evidence_unavailable"
+  | "reapproval_required"
   | "scanner_unavailable"
   | "permission_denied"
   | "credential_denied"

@@ -221,6 +221,11 @@ export function createIntegrationTrust(options: IntegrationTrustOptions): {
       );
     } catch (error) {
       signal?.throwIfAborted();
+      if (
+        error instanceof IntegrationTrustError &&
+        error.code === "reapproval_required"
+      )
+        throw error;
       fail("evidence_unavailable", error);
     } finally {
       clearTimeout(timer);

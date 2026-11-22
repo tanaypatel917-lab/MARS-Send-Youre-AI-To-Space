@@ -9,9 +9,15 @@ import {
   protocol,
   session,
 } from "electron";
+import { MODEL_CHANGED } from "../shared/desktop-model";
+import { createAssistant } from "./assistant";
 import { explicitConnection, resolveConnection } from "./connection";
 import { createDesktop } from "./desktop";
-import { registerBridge, registerTeamChatBridge } from "./ipc";
+import {
+  registerAssistantBridge,
+  registerBridge,
+  registerTeamChatBridge,
+} from "./ipc";
 import {
   appResponseHeaders,
   resolveAppAsset,
@@ -31,6 +37,8 @@ protocol.registerSchemesAsPrivileged([
 app.enableSandbox();
 
 const trustedOrigin = "mars-shell://app";
+const indexPage = `${trustedOrigin}/index.html`;
+const recoveryPage = `${trustedOrigin}/recovery.html`;
 const managed = app.isPackaged && !explicitConnection();
 const primary = !managed || app.requestSingleInstanceLock();
 if (!primary) app.quit();
@@ -64,6 +72,19 @@ app.on("ready", async () => {
   );
   Menu.setApplicationMenu(null);
   protocol.handle("mars-shell", async (request) => {
+    if (request.url === recoveryPage) {
+      return new Response(
+        `<!doctype html><html lang="en"><meta charset="utf-8"><title>MARS recovery</title>
+        <link rel="stylesheet" href="./shell.css"><main><h1>MARS could not restore this window</h1>
+        <p>Quit and reopen MARS to try again.</p></main></html>`,
+        {
+          headers: {
+            ...appResponseHeaders(),
+            "Content-Type": "text/html; charset=utf-8",
+          },
+        },
+      );
+    }
     const rendererDir = join(app.getAppPath(), "renderer");
     const asset = resolveAppAsset(request.url, rendererDir);
     if (!asset)
@@ -93,13 +114,15 @@ app.on("ready", async () => {
     title: managed ? "MARS" : "MARS Shell",
     width: saved.width,
     height: saved.height,
-    backgroundColor: "#050407",
+    backgroundColor: "#101216",
     webPreferences: {
       ...SHELL_WEB_PREFERENCES,
       preload: join(app.getAppPath(), managed ? "managed.cjs" : "preload.cjs"),
     },
   });
   mainWindow = window;
+  const openRenderer = installRendererRecovery(window);
+  const senderPolicy = { trustedOrigin, trustedContents: window.webContents };
   const newBridge = () =>
     createReconnectingBridge({
       resolve: () => (desktop ? desktop.resolve() : resolveConnection()),
@@ -109,14 +132,31 @@ app.on("ready", async () => {
   registerBridge(
     ipcMain,
     { call: (method, params) => bridge.call(method, params) },
-    { trustedOrigin },
+    senderPolicy,
   );
-  registerTeamChatBridge(ipcMain, createTeamChatBridge(), { trustedOrigin });
+  registerTeamChatBridge(ipcMain, createTeamChatBridge(), senderPolicy);
+  registerAssistantBridge(
+    ipcMain,
+    createAssistant({
+      directory: join(app.getPath("userData"), "assistant-history"),
+      context: async () => {
+        if (desktop) return desktop.chatContext();
+        const connection = await resolveConnection();
+        if (!connection.ok) throw new Error("Workbench unavailable");
+        return {
+          workspace: JSON.stringify(connection.connection.scope),
+          key: process.env.OPENROUTER_API_KEY,
+        };
+      },
+    }),
+    senderPolicy,
+  );
   if (managed) {
     try {
-      desktop = await createDesktop(window, () => {
+      desktop = await createDesktop(window, (kind) => {
         bridge = newBridge();
-        window.webContents.reload();
+        if (kind === "project") window.webContents.reload();
+        else window.webContents.send(MODEL_CHANGED);
       });
     } catch {
       showDesktopStartupError();
@@ -127,8 +167,72 @@ app.on("ready", async () => {
     const { width, height } = window.getBounds();
     void saveWindowLayout(filePath, { width, height }).catch(() => {});
   });
-  await window.loadURL(`${trustedOrigin}/index.html`);
+  openRenderer();
 });
+
+function installRendererRecovery(window: BrowserWindow) {
+  const contents = window.webContents;
+  let closing = false;
+  let stopped = false;
+  let reloads: number[] = [];
+  let hangPrompt: AbortController | undefined;
+  const isClosing = () => closing || shuttingDown || window.isDestroyed();
+  const dismissPrompt = () => {
+    hangPrompt?.abort();
+    hangPrompt = undefined;
+  };
+  window.on("close", () => {
+    closing = true;
+    dismissPrompt();
+  });
+  window.on("responsive", dismissPrompt);
+  window.on("unresponsive", async () => {
+    if (isClosing() || stopped || hangPrompt) return;
+    const prompt = new AbortController();
+    hangPrompt = prompt;
+    try {
+      const { response } = await dialog.showMessageBox(window, {
+        message: "The MARS window is not responding.",
+        detail: "Reloading may discard unsent text.",
+        buttons: ["Keep waiting", "Reload window"],
+        defaultId: 0,
+        cancelId: 0,
+        signal: prompt.signal,
+      });
+      if (response === 1 && !prompt.signal.aborted && !isClosing())
+        contents.forcefullyCrashRenderer();
+    } catch {
+      // If the native prompt is unavailable, leave the renderer alone.
+    } finally {
+      if (hangPrompt === prompt) hangPrompt = undefined;
+    }
+  });
+
+  const load = (url: string) => {
+    if (isClosing()) return;
+    void window.loadURL(url).catch((error: NodeJS.ErrnoException) => {
+      if (!isClosing() && error.code !== "ERR_ABORTED" && !contents.isCrashed())
+        dialog.showErrorBox(
+          "MARS could not load its window",
+          "Quit and reopen MARS to try again.",
+        );
+    });
+  };
+  contents.on("render-process-gone", (_event, { reason }) => {
+    dismissPrompt();
+    if (isClosing() || reason === "clean-exit" || stopped) return;
+    const now = performance.now();
+    reloads = reloads.filter((time) => now - time < 60_000);
+    if (reloads.length >= 2) {
+      stopped = true;
+      load(recoveryPage);
+    } else {
+      reloads.push(now);
+      load(indexPage);
+    }
+  });
+  return () => load(indexPage);
+}
 
 function showDesktopStartupError() {
   dialog.showErrorBox(

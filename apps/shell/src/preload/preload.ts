@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { ASSISTANT_CHANNEL, type AssistantApi } from "../shared/assistant";
+import { MODEL_CHANGED } from "../shared/desktop-model";
 import {
   BRIDGE_CHANNEL,
   BRIDGE_GLOBAL,
@@ -38,6 +40,16 @@ if (typeof contextBridge?.exposeInMainWorld === "function") {
   const invoke: Invoke = (channel, payload) =>
     ipcRenderer.invoke(channel, payload);
   contextBridge.exposeInMainWorld(BRIDGE_GLOBAL, createPreloadApi(invoke));
+  contextBridge.exposeInMainWorld(
+    "marsAssistant",
+    Object.freeze({
+      onModelChanged: (refresh: () => void) => {
+        ipcRenderer.on(MODEL_CHANGED, () => refresh());
+      },
+      request: (payload: Parameters<AssistantApi["request"]>[0]) =>
+        invoke(ASSISTANT_CHANNEL, payload),
+    }),
+  );
   contextBridge.exposeInMainWorld(
     TEAM_CHAT_GLOBAL,
     createTeamChatPreloadApi(invoke),

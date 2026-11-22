@@ -1,7 +1,7 @@
 import { expect, mock, test } from "bun:test";
 import { RpcRequestSchema } from "../../../packages/workbench/src/protocol";
 import { createBridge } from "../src/main/bridge";
-import { registerBridge } from "../src/main/ipc";
+import { type IpcEventLike, registerBridge } from "../src/main/ipc";
 import {
   BRIDGE_CHANNEL,
   BRIDGE_GLOBAL,
@@ -16,6 +16,7 @@ import {
   TEAM_CHAT_GLOBAL,
   TEAM_CHAT_METHODS,
 } from "../src/shared/team-chat";
+import { ipcFixture } from "./ipc-fixture";
 
 test("isReadMethod and isBridgeMethod accept exactly the whitelisted method names", () => {
   for (const method of READ_METHODS) expect(isReadMethod(method)).toBe(true);
@@ -62,14 +63,15 @@ test("the preload exposes exactly the frozen workbench and team chat bridges", a
     },
   }));
   await import("../src/preload/preload");
-  expect(exposed).toHaveLength(2);
+  expect(exposed).toHaveLength(3);
   expect(exposed[0]?.[0]).toBe(BRIDGE_GLOBAL);
-  expect(exposed[1]?.[0]).toBe(TEAM_CHAT_GLOBAL);
+  expect(exposed[1]?.[0]).toBe("marsAssistant");
+  expect(exposed[2]?.[0]).toBe(TEAM_CHAT_GLOBAL);
   const api = exposed[0]?.[1] as Record<
     string,
     (params: unknown) => Promise<unknown>
   >;
-  const teamApi = exposed[1]?.[1] as Record<
+  const teamApi = exposed[2]?.[1] as Record<
     string,
     (params: unknown) => Promise<unknown>
   >;
@@ -125,8 +127,9 @@ test("only whitelisted methods reach transport and IPC refuses untrusted senders
   }
   expect(transportCalls).toBe(0);
 
+  const { options, owner, otherWindow, childFrame } = ipcFixture();
   let listener:
-    | ((event: { senderFrame?: { url?: string } }, payload: unknown) => unknown)
+    | ((event: IpcEventLike, payload: unknown) => unknown)
     | undefined;
   const ipcBridge = {
     call: async (method: unknown, params: unknown) =>
@@ -140,17 +143,25 @@ test("only whitelisted methods reach transport and IPC refuses untrusted senders
       },
     },
     ipcBridge,
-    { trustedOrigin: "mars-shell://app" },
+    options,
   );
-  const refused = await listener?.(
-    { senderFrame: { url: "https://evil.example/index.html" } },
-    { method: "tasks.list", params: {} },
-  );
+  for (const event of [otherWindow, childFrame]) {
+    expect(
+      await listener?.(event, { method: "tasks.list", params: {} }),
+    ).toMatchObject({
+      ok: false,
+      error: { kind: "refused" },
+    });
+  }
+  owner.senderFrame.url = "https://evil.example/index.html";
+  const refused = await listener?.(owner, { method: "tasks.list", params: {} });
   expect(refused).toMatchObject({ ok: false, error: { kind: "refused" } });
-  const malformed = await listener?.(
-    { senderFrame: { url: "file:///tmp/index.html" } },
-    { method: "tasks.list", params: {}, extra: true },
-  );
+  owner.senderFrame.url = "mars-shell://app/index.html";
+  const malformed = await listener?.(owner, {
+    method: "tasks.list",
+    params: {},
+    extra: true,
+  });
   expect(malformed).toMatchObject({ ok: false, error: { kind: "refused" } });
   expect(transportCalls).toBe(0);
 });
