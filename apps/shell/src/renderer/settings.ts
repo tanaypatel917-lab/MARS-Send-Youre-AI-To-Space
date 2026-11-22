@@ -13,12 +13,13 @@ const clear = document.querySelector<HTMLButtonElement>("#clear-key");
 const status = document.querySelector("#model-status");
 
 if (settings && form && input && save && clear && status) {
-  const { apply, openKeyPage } = settingsActions(settings, {
+  const { apply, openKeyPage, initialize } = settingsActions(settings, {
     input,
     save,
     clear,
     status,
   });
+  void initialize();
   document
     .querySelector("#get-key")
     ?.addEventListener("click", () => void openKeyPage());

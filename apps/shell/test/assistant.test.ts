@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,11 @@ import { registerAssistantBridge } from "../src/main/ipc";
 import { renderAssistant } from "../src/renderer/assistant-view";
 import { ASSISTANT_CHANNEL } from "../src/shared/assistant";
 import { findAll, MiniDocument } from "./mini-dom";
+
+const observed = (project: string, seenMessages = 0) => ({
+  workspace: createHash("sha256").update(project).digest("hex"),
+  seenMessages,
+});
 
 test("chat remembers multiple turns privately, survives restart, and isolates projects", async () => {
   const directory = await mkdtemp(join(tmpdir(), "mars-chat-"));
@@ -28,6 +33,7 @@ test("chat remembers multiple turns privately, survives restart, and isolates pr
       (
         await chat.call({
           action: "send",
+          ...observed(workspace),
           id,
           text: "First question",
           consent: true,
@@ -38,6 +44,7 @@ test("chat remembers multiple turns privately, survives restart, and isolates pr
       (
         await chat.call({
           action: "send",
+          ...observed(workspace, 2),
           id,
           text: "And a follow-up?",
           consent: true,
@@ -78,10 +85,34 @@ test("missing keys, missing consent, invalid actions, and oversized prompts neve
     },
   });
   for (const payload of [
-    { action: "send", id: randomUUID(), text: "hello", consent: true },
-    { action: "send", id: randomUUID(), text: "hello", consent: false },
-    { action: "send", id: "../../escape", text: "hello", consent: true },
-    { action: "send", id: randomUUID(), text: "x".repeat(8001), consent: true },
+    {
+      action: "send",
+      ...observed("project"),
+      id: randomUUID(),
+      text: "hello",
+      consent: true,
+    },
+    {
+      action: "send",
+      ...observed("project"),
+      id: randomUUID(),
+      text: "hello",
+      consent: false,
+    },
+    {
+      action: "send",
+      ...observed("project"),
+      id: "../../escape",
+      text: "hello",
+      consent: true,
+    },
+    {
+      action: "send",
+      ...observed("project"),
+      id: randomUUID(),
+      text: "x".repeat(8001),
+      consent: true,
+    },
     { action: "execute", command: "anything" },
   ])
     expect((await chat.call(payload)).ok).toBe(false);
@@ -102,6 +133,7 @@ test("provider failures do not save partial turns or leak errors, and retries wo
   try {
     const request = {
       action: "send",
+      ...observed("a"),
       id: randomUUID(),
       text: "hello",
       consent: true,
@@ -141,6 +173,7 @@ test("two attached instances preserve distinct conversations and reject a stale 
       });
       const request = {
         action: "send",
+        ...observed("shared"),
         consent: true,
         id: randomUUID(),
         text: "one",
@@ -166,6 +199,48 @@ test("two attached instances preserve distinct conversations and reject a stale 
   }
 });
 
+test("send rejects changed project and unseen turns before inference", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "chat-scope-"));
+  let workspace = "first";
+  let calls = 0;
+  const chat = createAssistant({
+    directory,
+    context: () => ({ workspace, key: "fixture" }),
+    complete: async () => {
+      calls++;
+      return "answer";
+    },
+  });
+  const request = {
+    action: "send",
+    id: randomUUID(),
+    text: "first message",
+    consent: true,
+    ...observed(workspace),
+  };
+  try {
+    expect((await chat.call(request)).ok).toBe(true);
+    expect(await chat.call({ ...request, text: "stale answer" })).toMatchObject(
+      { ok: false, reloadHistory: true },
+    );
+    workspace = "second";
+    expect(
+      await chat.call({
+        ...request,
+        seenMessages: 2,
+        text: "first project only",
+      }),
+    ).toMatchObject({ ok: false, reloadHistory: true });
+    expect(await chat.call({ action: "load" })).toMatchObject({
+      ok: true,
+      sessions: [],
+    });
+    expect(calls).toBe(1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("only one model request can be in flight", async () => {
   const directory = await mkdtemp(join(tmpdir(), "mars-chat-busy-"));
   const pending = Promise.withResolvers<string>();
@@ -181,6 +256,7 @@ test("only one model request can be in flight", async () => {
   try {
     const first = chat.call({
       action: "send",
+      ...observed("a"),
       id: randomUUID(),
       text: "first",
       consent: true,
@@ -188,6 +264,7 @@ test("only one model request can be in flight", async () => {
     await started.promise;
     const second = await chat.call({
       action: "send",
+      ...observed("a"),
       id: randomUUID(),
       text: "second",
       consent: true,
@@ -218,6 +295,7 @@ test("assistant IPC denies foreign senders before invoking the service", async (
         return {
           ok: true,
           sessions: [],
+          workspace: "scope",
           configured: false,
           canConfigure: false,
         };

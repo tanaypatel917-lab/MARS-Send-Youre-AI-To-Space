@@ -109,6 +109,13 @@ export function createAssistant(options: Options) {
         context.settings();
       }
       const id = createHash("sha256").update(context.workspace).digest("hex");
+      if (request.action === "send" && request.workspace !== id)
+        return {
+          ok: false,
+          reloadHistory: true,
+          error:
+            "Your project changed. Review this project's chat before sending.",
+        };
       const path = join(options.directory, `${id}.sqlite`);
       let sessions: AssistantSession[];
       try {
@@ -136,6 +143,13 @@ export function createAssistant(options: Options) {
             error: "Connect your OpenRouter API key to start chatting.",
           };
         const existing = sessions.find((session) => session.id === request.id);
+        if ((existing?.messages.length ?? 0) !== request.seenMessages)
+          return {
+            ok: false,
+            reloadHistory: true,
+            error:
+              "A reply was added in another window. Review the conversation before sending your draft.",
+          };
         if (!existing && sessions.length >= 50)
           return {
             ok: false,
@@ -183,6 +197,7 @@ export function createAssistant(options: Options) {
               ok: false,
               error:
                 "History changed in another window. Your draft is kept; retry to use the latest conversation.",
+              reloadHistory: true,
             };
           sessions = saved;
         } catch {
@@ -197,6 +212,7 @@ export function createAssistant(options: Options) {
       }
       return {
         ok: true,
+        workspace: id,
         sessions,
         configured: Boolean(context.key),
         canConfigure: Boolean(context.settings),

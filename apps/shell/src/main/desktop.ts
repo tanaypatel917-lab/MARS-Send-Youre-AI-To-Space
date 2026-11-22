@@ -43,7 +43,10 @@ function canStoreKey(): boolean {
   );
 }
 
-export async function createDesktop(window: BrowserWindow, reload: () => void) {
+export async function createDesktop(
+  window: BrowserWindow,
+  reload: (change: "project" | "model") => void,
+) {
   const root = join(app.getPath("userData"), "local-workbench");
   const demo = join(root, "demo-project");
   const projectFile = join(root, "project.txt");
@@ -73,14 +76,17 @@ export async function createDesktop(window: BrowserWindow, reload: () => void) {
   let closing = false;
   let chatLifetime = new AbortController();
 
-  const change = async (save: () => Promise<void>) => {
+  const change = async (
+    save: () => Promise<void>,
+    kind: "project" | "model" = "project",
+  ) => {
     if (changing || closing) return false;
     changing = true;
     chatLifetime.abort();
     try {
       await save();
       await workbench?.stop();
-      if (!closing && !window.isDestroyed()) reload();
+      if (!closing && !window.isDestroyed()) reload(kind);
       return true;
     } catch {
       return false;
@@ -140,6 +146,16 @@ export async function createDesktop(window: BrowserWindow, reload: () => void) {
     return true;
   });
 
+  ipcMain.handle(
+    `${DESKTOP_MODEL_CHANNEL}:has-key`,
+    (event) =>
+      !!modelWindow &&
+      !modelWindow.isDestroyed() &&
+      event.sender === modelWindow.webContents &&
+      event.senderFrame?.url === settingsPage &&
+      Boolean(openRouterKey),
+  );
+
   ipcMain.handle(DESKTOP_MODEL_CHANNEL, async (event, key: unknown) => {
     if (
       !modelWindow ||
@@ -156,12 +172,21 @@ export async function createDesktop(window: BrowserWindow, reload: () => void) {
     )
       return "invalid";
     const persist = key !== null && canStoreKey();
+    if (key === null && !openRouterKey) {
+      // An unreadable credential from an earlier login may still exist.
+      try {
+        await rm(keyFile, { force: true });
+        return "cleared";
+      } catch {
+        return "unavailable";
+      }
+    }
     const saved = await change(async () => {
       if (key === null) await rm(keyFile, { force: true });
       else if (persist)
         await replacePrivate(keyFile, safeStorage.encryptString(key));
       openRouterKey = key ?? undefined;
-    });
+    }, "model");
     return !saved
       ? "unavailable"
       : key === null

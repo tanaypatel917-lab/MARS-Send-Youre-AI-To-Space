@@ -19,12 +19,14 @@ const root = shell.document?.getElementById("app") as
   | null
   | undefined;
 if (shell.marsWorkbench && shell.document && root) {
-  void createController(
+  const controller = createController(
     shell.marsWorkbench,
     shell.document,
     root,
     shell.marsTeamChat,
     shell.marsAssistant,
     shell.marsExtensions,
-  ).load();
+  );
+  shell.marsAssistant?.onModelChanged?.(() => void controller.load());
+  void controller.load();
 }

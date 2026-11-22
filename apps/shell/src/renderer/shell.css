@@ -1620,11 +1620,16 @@ input[type="checkbox"] {
   .assistant-welcome {
     padding-top: 0;
   }
-  .orbit-mark {
-    width: 48px;
-    height: 48px;
-    font-size: 30px;
-    margin-bottom: 18px;
+  .assistant-welcome .orbit-mark {
+    display: none;
+  }
+  .assistant-welcome h1,
+  .assistant-welcome .welcome-subtitle {
+    max-width: 100%;
+  }
+  .assistant-welcome .suggestion-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin-top: 16px;
   }
 }
 @media (max-height: 760px) {
@@ -1640,5 +1645,30 @@ input[type="checkbox"] {
   }
   .welcome-subtitle {
     margin: 13px 0 20px;
+  }
+}
+@media (max-height: 610px) {
+  .assistant-welcome {
+    flex-shrink: 0;
+  }
+  .assistant-welcome .orbit-mark {
+    display: none;
+  }
+  .assistant-welcome h1 {
+    max-width: none;
+    font-size: 34px;
+  }
+  .assistant-welcome h1 span {
+    display: inline;
+  }
+  .assistant-welcome .welcome-subtitle {
+    max-width: none;
+    margin: 8px 0;
+  }
+  .assistant-welcome .suggestion-grid {
+    margin-top: 12px;
+  }
+  .assistant-welcome .eyebrow {
+    margin-bottom: 9px;
   }
 }

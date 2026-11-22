@@ -125,7 +125,7 @@ export function createController(
   let page: WorkspacePage = assistant ? "chat" : "tasks";
   let settingsError: string | undefined;
   let inspectorOpen = false;
-  let assistantState: AssistantViewState = {
+  const emptyAssistant = (): AssistantViewState => ({
     sessions: [],
     activeId: globalThis.crypto.randomUUID(),
     draft: "",
@@ -133,7 +133,14 @@ export function createController(
     consent: false,
     busy: false,
     loading: Boolean(assistant),
-  };
+  });
+  let assistantState = emptyAssistant();
+  let assistantWorkspace: string | undefined;
+  let suspendedDraft:
+    | { workspace: string; activeId: string; draft: string }
+    | undefined;
+  let scopeGeneration = 0;
+  let historyVersion = 0;
   let assistantLoaded = false;
   let selectedId: string | undefined;
   let loadRequested = false;
@@ -360,27 +367,63 @@ export function createController(
   };
 
   const loadAssistant = async () => {
-    if (!assistant || assistantLoaded) return;
+    if (!assistant) return;
+    const version = historyVersion;
     assistantState = { ...assistantState, loading: true };
     try {
       const result = await assistant.request({ action: "load" });
       assistantLoaded = result.ok;
-      assistantState = result.ok
-        ? {
+      if (!result.ok) throw new Error(result.error);
+      const changed = assistantWorkspace !== result.workspace;
+      if (changed) {
+        scopeGeneration++;
+        assistantState = emptyAssistant();
+        if (suspendedDraft?.workspace === result.workspace)
+          assistantState = {
             ...assistantState,
-            sessions: result.sessions,
-            configured: result.configured,
-            canConfigure: result.canConfigure,
-            loading: false,
-            error: undefined,
-            activeId: result.sessions[0]?.id ?? assistantState.activeId,
-          }
-        : { ...assistantState, loading: false, error: result.error };
-    } catch {
+            draft: suspendedDraft.draft,
+            activeId: suspendedDraft.activeId,
+          };
+        assistantWorkspace = result.workspace;
+        settingsError = undefined;
+      }
       assistantState = {
         ...assistantState,
+        sessions:
+          changed || version === historyVersion
+            ? result.sessions
+            : assistantState.sessions,
+        configured: result.configured,
+        canConfigure: result.canConfigure,
         loading: false,
-        error: "Could not load your conversations.",
+        ...(changed
+          ? {
+              activeId:
+                suspendedDraft?.workspace === result.workspace
+                  ? suspendedDraft.activeId
+                  : (result.sessions[0]?.id ?? assistantState.activeId),
+              error: undefined,
+            }
+          : {}),
+      };
+      suspendedDraft = undefined;
+    } catch (error) {
+      if (assistantWorkspace && assistantState.draft)
+        suspendedDraft = {
+          workspace: assistantWorkspace,
+          activeId: assistantState.activeId,
+          draft: assistantState.draft,
+        };
+      assistantWorkspace = undefined;
+      assistantLoaded = false;
+      scopeGeneration++;
+      assistantState = {
+        ...emptyAssistant(),
+        loading: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Could not load your conversations.",
       };
     }
     render();
@@ -455,6 +498,8 @@ export function createController(
       return;
     }
     const activeId = assistantState.activeId;
+    if (!assistantWorkspace) return;
+    const generation = scopeGeneration;
     assistantState = {
       ...assistantState,
       busy: true,
@@ -465,10 +510,29 @@ export function createController(
     try {
       const result = await assistant.request({
         action: "send",
+        workspace: assistantWorkspace,
+        seenMessages:
+          assistantState.sessions.find((s) => s.id === activeId)?.messages
+            .length ?? 0,
         id: activeId,
         text,
         consent: true,
       });
+      if (scopeGeneration !== generation) return;
+      if (!result.ok && result.reloadHistory) {
+        await load();
+        if (generation === scopeGeneration) {
+          assistantState = {
+            ...assistantState,
+            busy: false,
+            pending: undefined,
+            error: result.error,
+          };
+          render();
+        }
+        return;
+      }
+      if (result.ok) historyVersion++;
       assistantState = result.ok
         ? {
             ...assistantState,
@@ -480,6 +544,7 @@ export function createController(
           }
         : { ...assistantState, busy: false, error: result.error };
     } catch {
+      if (scopeGeneration !== generation) return;
       assistantState = {
         ...assistantState,
         busy: false,

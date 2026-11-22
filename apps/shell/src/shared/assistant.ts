@@ -21,6 +21,8 @@ export const AssistantRequestSchema = z.discriminatedUnion("action", [
   z
     .object({
       action: z.literal("send"),
+      workspace: z.string().regex(/^[a-f0-9]{64}$/),
+      seenMessages: z.number().int().min(0).max(100),
       id: z.string().uuid(),
       text: z.string().trim().min(1).max(8000),
       consent: z.literal(true),
@@ -31,11 +33,13 @@ export type AssistantRequest = z.infer<typeof AssistantRequestSchema>;
 export type AssistantResult =
   | {
       ok: true;
+      workspace: string;
       sessions: AssistantSession[];
       configured: boolean;
       canConfigure: boolean;
     }
-  | { ok: false; error: string };
+  | { ok: false; error: string; reloadHistory?: boolean };
 export type AssistantApi = {
+  onModelChanged?(refresh: () => void): void;
   request(payload: AssistantRequest): Promise<AssistantResult>;
 };

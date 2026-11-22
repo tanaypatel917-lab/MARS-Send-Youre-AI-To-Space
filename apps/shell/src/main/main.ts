@@ -9,6 +9,7 @@ import {
   protocol,
   session,
 } from "electron";
+import { MODEL_CHANGED } from "../shared/desktop-model";
 import { createAssistant } from "./assistant";
 import { explicitConnection, resolveConnection } from "./connection";
 import { createDesktop } from "./desktop";
@@ -135,9 +136,10 @@ app.on("ready", async () => {
   );
   if (managed) {
     try {
-      desktop = await createDesktop(window, () => {
+      desktop = await createDesktop(window, (kind) => {
         bridge = newBridge();
-        window.webContents.reload();
+        if (kind === "project") window.webContents.reload();
+        else window.webContents.send(MODEL_CHANGED);
       });
     } catch {
       showDesktopStartupError();

@@ -99,6 +99,7 @@ test("task Refresh keeps keyboard focus while a separate offline banner offers R
       request: async () => ({
         ok: true,
         configured: false,
+        workspace: "scope",
         canConfigure: false,
         sessions: [],
       }),
@@ -124,7 +125,13 @@ test("chat exposes a disconnected workbench with Retry and recovers its configur
     request: async () => {
       attempts++;
       return online
-        ? { ok: true, sessions: [], configured: true, canConfigure: false }
+        ? {
+            ok: true,
+            sessions: [],
+            configured: true,
+            workspace: "scope",
+            canConfigure: false,
+          }
         : { ok: false, error: "Connect to a workbench." };
     },
   };
@@ -170,6 +177,7 @@ test("a failed chat load retries even when the workbench itself is available", a
           ok: true,
           sessions: [],
           configured: true,
+          workspace: "scope",
           canConfigure: false,
         };
       },
@@ -180,6 +188,43 @@ test("a failed chat load retries even when the workbench itself is available", a
   await ctl.settled();
   expect(attempts).toBe(2);
   expect(doc.root.textContent).toContain("OpenRouter’s free model route");
+});
+
+test("model refresh preserves drafts while a workspace switch resets chat and consent", async () => {
+  const doc = new MiniDocument();
+  let workspace = "a";
+  let configured = false;
+  const first = { id: randomUUID(), title: "First project chat", messages: [] };
+  const ctl = createController(
+    fakeBridge(await loadFixtureData()),
+    doc,
+    doc.root,
+    undefined,
+    {
+      request: async () => ({
+        ok: true,
+        workspace,
+        configured,
+        canConfigure: true,
+        sessions: workspace === "a" ? [first] : [],
+      }),
+    },
+  );
+  const field = (key: string) =>
+    findAll(doc.root, (el) => el.getAttribute("data-focus-key") === key)[0]!;
+  await ctl.load();
+  field("assistant-input").value = "unsent first project draft";
+  field("assistant-input").dispatch("input");
+  configured = true;
+  await ctl.load();
+  expect(field("assistant-input").value).toBe("unsent first project draft");
+  field("chat-consent").checked = true;
+  field("chat-consent").dispatch("change");
+  workspace = "b";
+  await ctl.load();
+  expect(doc.root.textContent).not.toContain(first.title);
+  expect(field("assistant-input").value).toBe("");
+  expect(field("chat-consent").checked).toBeFalsy();
 });
 
 test("switching conversations cannot misplace a failed in-flight draft", async () => {
@@ -199,7 +244,13 @@ test("switching conversations cannot misplace a failed in-flight draft", async (
       request: async (payload) =>
         payload.action === "send"
           ? pending.promise
-          : { ok: true, configured: true, canConfigure: true, sessions },
+          : {
+              ok: true,
+              configured: true,
+              workspace: "scope",
+              canConfigure: true,
+              sessions,
+            },
     },
   );
   await ctl.load();
