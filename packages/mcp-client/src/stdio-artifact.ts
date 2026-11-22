@@ -9,7 +9,7 @@ import {
   stat,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import {
   canonicalJSON,
   IntegrationTrustError,
@@ -36,7 +36,7 @@ export async function readStdioArtifact(
   const files = new Map<string, { path: string; digest: string }>();
   async function read(source: string, executable = false) {
     signal?.throwIfAborted();
-    const key = resolve(source);
+    const key = source;
     const cached = files.get(key);
     if (cached) return cached;
     let path = key;
@@ -69,7 +69,14 @@ export async function readStdioArtifact(
   const argFiles: Array<{ index: number; sha256: string }> = [];
   for (const [index, arg] of config.args.entries()) {
     signal?.throwIfAborted();
-    const path = resolve(config.cwd ?? process.cwd(), arg);
+    // POSIX follows symlinks before interpreting a subsequent "..".
+    const cwd = config.cwd ?? process.cwd();
+    const path =
+      process.platform === "win32"
+        ? resolve(cwd, arg)
+        : isAbsolute(arg)
+          ? arg
+          : `${cwd}/${arg}`;
     if (!(await stat(path).catch(() => undefined))?.isFile()) continue;
     const file = await read(path);
     args[index] = file.path;

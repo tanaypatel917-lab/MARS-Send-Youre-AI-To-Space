@@ -10,6 +10,7 @@ import {
   rename,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -33,6 +34,7 @@ import {
   MemoryMcpRegistry,
   StreamableHttpMcpTransport,
 } from "./index";
+import { readStdioArtifact } from "./stdio-artifact";
 
 const STDIO_FIXTURE = resolve(import.meta.dir, "__fixtures__/stdio-server.ts");
 const BUN_BIN = process.execPath;
@@ -615,6 +617,32 @@ describe("@mars/mcp-client end-to-end trust enforcement", () => {
     for (const path of [command, entrypoint, input])
       expect(await Bun.file(path).exists()).toBe(false);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "captures the file selected by POSIX symlink/.. traversal",
+    async () => {
+      const root = await makeTempDir("mars-stdio-links-");
+      const launch = join(root, "launch");
+      await mkdir(launch);
+      await mkdir(join(root, "assets/sub"), { recursive: true });
+      await symlink("assets/sub", join(root, "link"));
+      await writeFile(join(root, "input"), "lexical");
+      await writeFile(join(root, "assets/input"), "physical");
+      const artifact = await readStdioArtifact(
+        {
+          type: "stdio",
+          command: BUN_BIN,
+          cwd: root,
+          args: ["link/../input"],
+          env_allowlist: [],
+        },
+        undefined,
+        launch,
+      );
+      const [input] = artifact.config.args;
+      expect(await readFile(input ?? "", "utf8")).toBe("physical");
+    },
+  );
 
   it("rejects an implicit entrypoint and cleans its partial snapshot", async () => {
     const root = await makeTempDir("mars-stdio-private-");
