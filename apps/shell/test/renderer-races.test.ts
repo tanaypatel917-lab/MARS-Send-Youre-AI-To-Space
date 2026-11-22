@@ -261,7 +261,8 @@ test("a poll keeps the expanded file open when new diff files appear before it",
     findAll(
       doc.root,
       (el) =>
-        el.tagName === "DETAILS" && el.children[0]?.textContent.includes(path),
+        el.tagName === "DETAILS" &&
+        el.children[0]?.textContent.includes(path) === true,
     )[0];
   const opened = detailFor(file.path);
   if (!opened) throw new Error("Missing transcript file");
