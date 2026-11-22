@@ -97,7 +97,7 @@ test("export failure from an earlier visit cannot overwrite the current export p
   expect(doc.root.textContent).not.toContain("obsolete export failure");
 });
 
-for (const result of ["success", "failure", "switch"] as const) {
+for (const result of ["success", "failure", "switch", "same text"] as const) {
   test(`late Team Chat send: ${result} preserves the current composer`, async () => {
     const doc = new MiniDocument();
     const pending = gate();
@@ -124,14 +124,16 @@ for (const result of ["success", "failure", "switch"] as const) {
     ui.send();
     expect(started).toBe(true);
     const id = result === "switch" ? await ui.switchConversation() : undefined;
-    type(ui.draft(), "newer draft");
+    const nextDraft = result === "same text" ? "sent body" : "newer draft";
+    type(ui.draft(), "");
+    type(ui.draft(), nextDraft);
     pending.release();
     await flush();
     if (id)
       expect(
         node(doc, "data-conversation-id", id).getAttribute("aria-pressed"),
       ).toBe("true");
-    expect(ui.draft().value).toBe("newer draft");
+    expect(ui.draft().value).toBe(nextDraft);
   });
 }
 
