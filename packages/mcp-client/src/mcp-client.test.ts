@@ -628,12 +628,14 @@ describe("@mars/mcp-client end-to-end trust enforcement", () => {
       await symlink("assets/sub", join(root, "link"));
       await writeFile(join(root, "input"), "lexical");
       await writeFile(join(root, "assets/input"), "physical");
+      await symlink("assets/input", join(root, "declared-input"));
       const artifact = await readStdioArtifact(
         {
           type: "stdio",
           command: BUN_BIN,
           cwd: root,
           args: ["link/../input"],
+          entrypoint: join(root, "declared-input"),
           env_allowlist: [],
         },
         undefined,

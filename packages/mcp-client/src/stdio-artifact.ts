@@ -5,6 +5,7 @@ import {
   copyFile,
   mkdir,
   mkdtemp,
+  realpath,
   rm,
   stat,
 } from "node:fs/promises";
@@ -33,15 +34,18 @@ export async function readStdioArtifact(
   signal?: AbortSignal,
   directory?: string,
 ) {
-  const files = new Map<string, { path: string; digest: string }>();
+  const files = new Map<
+    string,
+    { target: string; path: string; digest: string }
+  >();
   async function read(source: string, executable = false) {
     signal?.throwIfAborted();
-    const key = source;
-    const cached = files.get(key);
+    const cached = files.get(source);
     if (cached) return cached;
-    let path = key;
+    const target = await realpath(source);
+    let path = target;
     if (directory) {
-      const canExecute = await access(key, constants.X_OK).then(
+      const canExecute = await access(target, constants.X_OK).then(
         () => true,
         (error: unknown) => {
           if (executable) throw error;
@@ -50,16 +54,16 @@ export async function readStdioArtifact(
       );
       const dir = join(directory, String(files.size));
       await mkdir(dir, { mode: 0o700 });
-      path = join(dir, basename(key));
+      path = join(dir, basename(source));
       await copyFile(
-        key,
+        target,
         path,
         constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL,
       );
       await chmod(path, canExecute ? 0o500 : 0o400);
     }
-    const file = { path, digest: await hashFile(path, signal) };
-    files.set(key, file);
+    const file = { target, path, digest: await hashFile(path, signal) };
+    files.set(source, file);
     return file;
   }
 
@@ -83,8 +87,9 @@ export async function readStdioArtifact(
     argFiles.push({ index, sha256: file.digest });
   }
   // An implicitly loaded entrypoint cannot be redirected to verified bytes.
-  const entrypoint = config.entrypoint && resolve(config.entrypoint);
-  if (directory && entrypoint && !files.has(entrypoint)) {
+  const entrypoint = config.entrypoint && (await realpath(config.entrypoint));
+  const bound = [...files.values()].find((file) => file.target === entrypoint);
+  if (directory && entrypoint && !bound) {
     throw new IntegrationTrustError("evidence_unavailable", {
       cause: new Error(
         "The stdio entrypoint must be the command or a file argument",
@@ -95,7 +100,9 @@ export async function readStdioArtifact(
     canonicalJSON({
       executable,
       executableSha: command.digest,
-      entrypointSha: entrypoint ? (await read(entrypoint)).digest : null,
+      entrypointSha: entrypoint
+        ? (bound ?? (await read(entrypoint))).digest
+        : null,
       ...(argFiles.length ? { argFiles } : {}),
     }),
   );
