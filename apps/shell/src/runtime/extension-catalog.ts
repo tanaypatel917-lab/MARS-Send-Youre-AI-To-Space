@@ -1,4 +1,5 @@
 export const EXTENSION_CHANNEL = "mars-shell:extensions";
+export const EXTENSIONS_CHANGED = "mars-shell:extensions-changed";
 
 export interface Extension {
   id: string;
@@ -225,6 +226,7 @@ export type ExtensionView = Extension & {
   removable: boolean;
 };
 export interface DesktopExtensions {
+  onChanged?(refresh: () => void): () => void;
   list(): Promise<ExtensionView[]>;
   install(id: string): Promise<"installed" | "cancelled" | "unavailable">;
   remove(id: string): Promise<"removed" | "cancelled" | "unavailable">;

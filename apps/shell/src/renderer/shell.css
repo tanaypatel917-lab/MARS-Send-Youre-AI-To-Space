@@ -1144,6 +1144,13 @@ p {
   margin: 9px 0;
   font: 500 19px / 1.2 var(--display);
 }
+.library-actions {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
 .library-item p,
 .library-item small {
   font-size: 11px;
