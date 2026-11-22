@@ -193,7 +193,7 @@ function hostChecksField(
         doc,
         "p",
         { class: "muted" },
-        "No host checks configured · the host records no verdict, so the result cannot be exported.",
+        "No host checks configured · the host records no verdict, so the result cannot be exported. Try Project → Open Verification Example to see a protected check.",
       ),
     );
   }

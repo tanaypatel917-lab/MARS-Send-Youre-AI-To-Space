@@ -1720,6 +1720,23 @@ describe("interactive renderer controller flows", () => {
     }
   });
 
+  test("projects without host checks point to the verification example", async () => {
+    const { bridge, close } = await startTestWorkbench();
+    const doc = new MiniDocument();
+    const controller = createController(bridge, doc, doc.root);
+    try {
+      await controller.load();
+      findByAttr(doc.root, "data-task-id", "fixture-pending")?.click();
+      await controller.settled();
+      expect(doc.root.textContent).toContain(
+        "No host checks configured · the host records no verdict, so the result cannot be exported. Try Project → Open Verification Example to see a protected check.",
+      );
+    } finally {
+      controller.dispose();
+      await close();
+    }
+  });
+
   test.each(["ready", "unavailable"] as const)(
     "composer shows verification readiness before starting: %s",
     async (status) => {

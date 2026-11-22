@@ -36,56 +36,68 @@ test("verification example preserves user data and rewrites private protected ch
   }
 });
 
-test("runtime stdin start preserves checks and reports unavailable for an absent image", async () => {
-  const root = await mkdtemp(join(tmpdir(), "mars-example-runtime-"));
-  const seeded = await seedVerificationExample(root);
-  const state = join(root, "state");
-  const child = Bun.spawn(
-    [process.execPath, "--no-env-file", "apps/shell/src/runtime/workbench.ts"],
-    {
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
-  try {
-    child.stdin.write(
-      `${JSON.stringify({ source: seeded.source, state, checksFile: seeded.checksFile, image: `mirror.gcr.io/library/busybox@sha256:${"0".repeat(64)}` })}\n`,
-    );
-    const reader = child.stdout.getReader();
-    let output = "";
-    while (!output.includes("MARS_WORKBENCH_READY")) {
-      const result = await reader.read();
-      if (result.done)
-        throw new Error(
-          `Runtime exited: ${await new Response(child.stderr).text()}`,
-        );
-      output += new TextDecoder().decode(result.value);
-    }
-    reader.releaseLock();
-    const connection = JSON.parse(
-      await readFile(join(state, "connection.json"), "utf8"),
-    );
-    const response = await fetch(`${connection.url}/v1/rpc`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${connection.token}`,
-        "content-type": "application/json",
+test.each([undefined, "/missing-mars-docker"])(
+  "runtime stdin start preserves checks and degrades with dockerPath=%s",
+  async (dockerPath) => {
+    const root = await mkdtemp(join(tmpdir(), "mars-example-runtime-"));
+    const seeded = await seedVerificationExample(root);
+    const state = join(root, "state");
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "--no-env-file",
+        "apps/shell/src/runtime/workbench.ts",
+      ],
+      {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
       },
-      body: JSON.stringify({
-        method: "workbench.describe",
-        params: {},
-      }),
-    });
-    const body = (await response.json()) as { result: unknown };
-    const described = ResultSchema["workbench.describe"].parse(body.result);
-    expect(described.capabilities.execute).toBe(false);
-    expect(described.checks?.[0]?.id).toBe("amount-totals");
-    expect(described.verification_readiness?.status).toBe("unavailable");
-  } finally {
-    child.stdin.end();
-    child.kill();
-    await child.exited;
-    await rm(root, { recursive: true, force: true });
-  }
-}, 20000);
+    );
+    try {
+      child.stdin.write(
+        `${JSON.stringify({ source: seeded.source, state, checksFile: seeded.checksFile, dockerPath, image: `mirror.gcr.io/library/busybox@sha256:${"0".repeat(64)}` })}\n`,
+      );
+      const reader = child.stdout.getReader();
+      let output = "";
+      while (!output.includes("MARS_WORKBENCH_READY")) {
+        const result = await reader.read();
+        if (result.done)
+          throw new Error(
+            `Runtime exited: ${await new Response(child.stderr).text()}`,
+          );
+        output += new TextDecoder().decode(result.value);
+      }
+      reader.releaseLock();
+      const connection = JSON.parse(
+        await readFile(join(state, "connection.json"), "utf8"),
+      );
+      const response = await fetch(`${connection.url}/v1/rpc`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${connection.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          method: "workbench.describe",
+          params: {},
+        }),
+      });
+      const body = (await response.json()) as { result: unknown };
+      const described = ResultSchema["workbench.describe"].parse(body.result);
+      expect(described.capabilities.execute).toBe(false);
+      expect(described.checks?.[0]?.id).toBe("amount-totals");
+      expect(described.verification_readiness?.status).toBe("unavailable");
+      if (dockerPath)
+        expect(described.verification_readiness?.reason).toBe(
+          "Docker CLI is not installed or executable",
+        );
+    } finally {
+      child.stdin.end();
+      child.kill();
+      await child.exited;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  20000,
+);

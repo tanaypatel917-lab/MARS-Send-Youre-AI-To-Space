@@ -21,6 +21,7 @@ import {
   shell,
 } from "electron";
 import { DESKTOP_MODEL_CHANNEL } from "../shared/desktop-model";
+import { resolveDockerPath } from "./docker-path";
 import { desktopExtensionsMenu } from "./extensions";
 import { startLocalWorkbench } from "./local-workbench";
 import { hasRemovableKey } from "./model-key";
@@ -61,6 +62,7 @@ export async function createDesktop(
   await mkdir(demo, { recursive: true, mode: 0o700 });
   await chmod(root, 0o700);
   const verification = await seedVerificationExample(root);
+  let dockerPath = resolveDockerPath();
   await writeFile(
     join(demo, "README.md"),
     "# MARS demo project\n\nThis is a sample project you can give to the MARS agent. Try: summarize the README and suggest a next step.\n",
@@ -226,6 +228,7 @@ export async function createDesktop(
         },
         source,
         state: join(root, "projects"),
+        ...(dockerPath ? { dockerPath } : {}),
         ...(source === verification.source
           ? { image: VERIFICATION_IMAGE, checksFile: verification.checksFile }
           : {}),
@@ -274,9 +277,11 @@ export async function createDesktop(
         label: "Set Up Verification Sandbox…",
         click: () => {
           void (async () => {
+            dockerPath = resolveDockerPath();
             const run = (args: string[]) =>
               new Promise<boolean>((resolve) => {
-                const child = spawn("docker", args, {
+                if (!dockerPath) return resolve(false);
+                const child = spawn(dockerPath, args, {
                   stdio: "ignore",
                   shell: false,
                 });

@@ -23,6 +23,7 @@ type WorkbenchOptions = {
   openRouterKey?: string;
   image?: string;
   checksFile?: string;
+  dockerPath?: string;
   onExpired?: (name: string) => void;
   extensionTimeoutMs?: number;
 };
@@ -97,7 +98,7 @@ export function startLocalWorkbench(options: WorkbenchOptions) {
       const id = createHash("sha256").update(source).digest("hex").slice(0, 24);
       const state = join(options.state, `desktop-${id}`);
       child.stdin.write(
-        `${JSON.stringify({ source, state, openRouterKey: options.openRouterKey, image: options.image, checksFile: options.checksFile })}\n`,
+        `${JSON.stringify({ source, state, openRouterKey: options.openRouterKey, image: options.image, checksFile: options.checksFile, dockerPath: options.dockerPath })}\n`,
       );
       return join(state, "connection.json");
     } catch {
