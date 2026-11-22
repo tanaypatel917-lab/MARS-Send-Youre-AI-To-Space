@@ -169,12 +169,26 @@ function hostChecksField(
 ): ShellElement {
   const checks = state.describe?.checks ?? [];
   const legend = h(doc, "legend", {}, "Required host checks");
+  const readiness = state.describe?.verification_readiness;
+  const readinessLine = readiness
+    ? [
+        h(
+          doc,
+          "p",
+          { class: "muted", "data-verification-readiness": readiness.status },
+          readiness.status === "ready"
+            ? "Protected checks run in a network-disabled sandbox"
+            : `${readiness.reason}. ${readiness.setup ?? "Use Project → Set Up Verification Sandbox…"}`,
+        ),
+      ]
+    : [];
   if (checks.length === 0) {
     return h(
       doc,
       "fieldset",
       { class: "checks-group", "data-host-checks": "none" },
       legend,
+      ...readinessLine,
       h(
         doc,
         "p",
@@ -190,6 +204,7 @@ function hostChecksField(
     "fieldset",
     { class: "checks-group", "data-host-checks": "available" },
     legend,
+    ...readinessLine,
     ...checks.map((check) =>
       checkboxField(doc, {
         label: check.label,
@@ -894,11 +909,11 @@ function promptComposer(
         : null,
       composer.startNow ? modelSelect : null,
     ),
-    composer.startNow
+    composer.startNow || state.describe?.verification_readiness
       ? hostChecksField(doc, state, {
           selected: composer.checkIds,
           executeApproved: canExecute && composer.approvals.execute,
-          disabled: composer.submitting,
+          disabled: composer.submitting || !composer.startNow,
           prefix: "composer",
           onToggle: (checkId, checked) =>
             state.onComposerCheckChange?.(checkId, checked),

@@ -1720,6 +1720,39 @@ describe("interactive renderer controller flows", () => {
     }
   });
 
+  test.each(["ready", "unavailable"] as const)(
+    "composer shows verification readiness before starting: %s",
+    async (status) => {
+      const { bridge, close } = await startTestWorkbench((fixture) => {
+        fixture.describe = {
+          ...fixture.describe,
+          checks: [{ id: "amount-totals", label: "Amount totals" }],
+          verification_readiness: {
+            status,
+            reason:
+              status === "ready"
+                ? "Protected checks run in a network-disabled sandbox"
+                : "Sandbox image not downloaded",
+            setup: "Use Project → Set Up Verification Sandbox…",
+          },
+        };
+      });
+      try {
+        const doc = new MiniDocument();
+        const controller = createController(bridge, doc, doc.root);
+        await controller.load();
+        expect(doc.root.textContent).toContain(
+          status === "ready"
+            ? "Protected checks run in a network-disabled sandbox"
+            : "Sandbox image not downloaded. Use Project → Set Up Verification Sandbox…",
+        );
+        controller.dispose();
+      } finally {
+        await close();
+      }
+    },
+  );
+
   test("regression: desktop launches pass selected host checks as required_checks", async () => {
     const { bridge, close } = await startTestWorkbench((fixture) => {
       fixture.describe = {

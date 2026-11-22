@@ -260,6 +260,12 @@ export interface WorkbenchEditFormats {
 }
 
 export interface WorkbenchHostOptions {
+  verifiedExportsOnly?: boolean;
+  verificationReadiness?: {
+    status: "ready" | "unavailable";
+    reason: string;
+    setup?: string;
+  };
   image?: string;
   /** Host-owned read seam; no vault path or store is accepted from an RPC client. */
   vault?: { status(context: RequestContext): Promise<StatusReport> };
@@ -2905,6 +2911,9 @@ export async function createWorkbenchHost(
           : {}),
         connectors: [],
         image: digest ? { digest } : null,
+        ...(options.verificationReadiness
+          ? { verification_readiness: options.verificationReadiness }
+          : {}),
         conventions: options.conventions?.summary ?? {
           instructions: options.conventions?.instructions?.files.length ?? 0,
           hooks: 0,
@@ -3589,6 +3598,12 @@ export async function createWorkbenchHost(
           records,
           sha256,
         );
+        if (
+          options.verifiedExportsOnly &&
+          (presentation.state !== "verified" ||
+            exported.round_trip.status !== "passed")
+        )
+          throw new WorkbenchError("conflict");
         const artifact = await options.store.artifacts.put(
           context,
           exported.patch,

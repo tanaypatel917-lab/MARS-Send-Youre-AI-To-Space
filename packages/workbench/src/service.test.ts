@@ -19,6 +19,11 @@ import {
 import { createMemoryStore } from "@mars/memory";
 import { loadModelRegistry } from "@mars/providers";
 import { SkillStore } from "@mars/skills";
+import {
+  EXAMPLE_BUG,
+  seedVerificationExample,
+  VERIFICATION_IMAGE,
+} from "../../../apps/shell/src/main/verification-example";
 import { MarsClient } from "../../../apps/vscode/src/client";
 import { HttpRpcTransport } from "../../../apps/vscode/src/rpc";
 import { createWorkbenchService } from "./service";
@@ -91,13 +96,15 @@ function task(): Task {
     artifacts: [],
   };
 }
-async function fixture(contextWindow = 32000) {
+async function fixture(contextWindow = 32000, verification = false) {
   const base = await mkdtemp(join(tmpdir(), "mars-service-"));
   cleanup.push(() => rm(base, { recursive: true, force: true }));
-  const source = join(base, "source");
+  const source = verification
+    ? (await seedVerificationExample(base)).source
+    : join(base, "source");
   const root = join(base, "state");
   const home = join(base, "home");
-  await mkdir(source);
+  await mkdir(source, { recursive: true });
   await writeFile(join(source, "baseline.txt"), "untouched\n");
   await mkdir(join(home, ".mars"), { recursive: true });
   await writeFile(
@@ -139,6 +146,11 @@ async function fixture(contextWindow = 32000) {
     fetch: NonNullable<RuntimeSessionOptions["fetch"]>,
     image?: string,
     registryOverride?: typeof registry,
+    extra: {
+      checksFile?: string;
+      allowUnavailableSandbox?: boolean;
+      verifiedExportsOnly?: boolean;
+    } = {},
   ) {
     const service = await createWorkbenchService({
       sourceRoot: source,
@@ -146,6 +158,7 @@ async function fixture(contextWindow = 32000) {
       scope,
       registry: registryOverride ?? registry,
       port: 0,
+      ...extra,
       ...(image ? { image } : {}),
       runtimeFactory: async (options) => {
         const session = await openRuntimeSession({ ...options, fetch });
@@ -1207,6 +1220,134 @@ test.skipIf(process.env.MARS_WORKSPACES_DOCKER_TEST !== "1")(
     expect(await Bun.file(join(f.source, "greet.txt")).exists()).toBe(false);
   },
   30000,
+);
+
+test("desktop verification starts degraded when the pinned image is absent", async () => {
+  const f = await fixture(32000, true);
+  const seeded = await seedVerificationExample(f.base);
+  const { client } = await f.start(
+    async () => sse({ content: "No changes" }),
+    `mirror.gcr.io/library/busybox@sha256:${"0".repeat(64)}`,
+    undefined,
+    { checksFile: seeded.checksFile, allowUnavailableSandbox: true },
+  );
+  expect(await client.describe()).toMatchObject({
+    capabilities: { execute: false },
+    checks: [{ id: "amount-totals" }],
+    verification_readiness: {
+      status: "unavailable",
+      setup: "Use Project → Set Up Verification Sandbox…",
+    },
+  });
+});
+
+test.skipIf(process.env.MARS_WORKSPACES_DOCKER_TEST !== "1")(
+  "desktop seeded protected example: failed, verified export bytes, stale export refused (real Docker)",
+  async () => {
+    const f = await fixture(32000, true);
+    const seeded = await seedVerificationExample(f.base);
+    let fix = false;
+    let wrote = false;
+    const entered = deferred();
+    const proceed = deferred();
+    let restoreBaseline:
+      | Awaited<ReturnType<MarsClient["checkpoint"]>>
+      | undefined;
+    const { client } = await f.start(
+      async () => {
+        if (fix && !wrote) {
+          wrote = true;
+          entered.resolve();
+          await proceed.promise;
+          return sse(
+            {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "fix-total",
+                  type: "function",
+                  function: {
+                    name: "mars_write",
+                    arguments: JSON.stringify({
+                      path: "total.sh",
+                      content: EXAMPLE_BUG.replace(
+                        "read -r amount;",
+                        'read -r amount || [ -n "$amount" ];',
+                      ),
+                    }),
+                  },
+                },
+              ],
+            },
+            "tool_calls",
+          );
+        }
+        return sse({ content: "Finished." });
+      },
+      VERIFICATION_IMAGE,
+      undefined,
+      { checksFile: seeded.checksFile, verifiedExportsOnly: true },
+    );
+    expect((await client.describe()).verification_readiness?.status).toBe(
+      "ready",
+    );
+    const run = async () => {
+      const created = await client.create({
+        ...task(),
+        request: "Fix total.sh to include the final line without a newline.",
+      });
+      await client.start(created.task_id, {
+        expectedRevision: 0,
+        approvals: { read: true, write: true, execute: true },
+        requiredChecks: [{ kind: "host_test", check_id: "amount-totals" }],
+      });
+      if (fix) {
+        await entered.promise;
+        restoreBaseline = await client.checkpoint(created.task_id);
+        proceed.resolve();
+      }
+      await eventually(
+        () => client.inspect(created.task_id),
+        (value) => value.status !== "running",
+      );
+      return created.task_id;
+    };
+    const failedId = await run();
+    const failed = await client.verification(failedId);
+    expect(failed.state).toBe("failed");
+    await expect(
+      client.exportPatch(failedId, {
+        revision: failed.candidate?.revision ?? "none",
+        patchSha256: failed.patch_sha256 ?? "0".repeat(64),
+      }),
+    ).rejects.toBeDefined();
+    console.log("[desktop Docker] baseline verdict=failed; export refused");
+    fix = true;
+    const passedId = await run();
+    const passed = await client.verification(passedId);
+    expect(passed.state).toBe("verified");
+    const expected = {
+      revision: passed.candidate?.revision ?? "none",
+      patchSha256: passed.patch_sha256 ?? "none",
+    };
+    const exported = await client.exportPatch(passedId, expected);
+    const artifact = await client.artifact(passedId, exported.artifact);
+    expect(createHash("sha256").update(artifact.bytes).digest("hex")).toBe(
+      expected.patchSha256,
+    );
+    expect(new TextDecoder().decode(artifact.bytes)).toContain("total.sh");
+    console.log(
+      "[desktop Docker] fixed verdict=verified; exported patch SHA-256 matches bytes",
+    );
+    if (!restoreBaseline) throw new Error("Missing baseline checkpoint");
+    await client.restore(passedId, restoreBaseline, expected.revision);
+    expect((await client.verification(passedId)).state).toBe("stale");
+    await expect(client.exportPatch(passedId, expected)).rejects.toBeDefined();
+    console.log(
+      "[desktop Docker] changed candidate verdict=stale; export refused",
+    );
+  },
+  60000,
 );
 
 test("a startup failure after resources open surfaces the original error and releases the state root", async () => {

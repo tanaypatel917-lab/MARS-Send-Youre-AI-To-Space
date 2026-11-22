@@ -41,6 +41,14 @@ export const WorkbenchProviderSchema = z
   })
   .strict();
 export const WorkbenchDescribeFields = {
+  verification_readiness: z
+    .object({
+      status: z.enum(["ready", "unavailable"]),
+      reason: z.string().min(1).max(1024),
+      setup: z.string().min(1).max(1024).optional(),
+    })
+    .strict()
+    .optional(),
   connectors: z.array(z.never()).max(0).optional(),
   image: z
     .object({ digest: z.string().regex(/^sha256:[a-f0-9]{64}$/) })

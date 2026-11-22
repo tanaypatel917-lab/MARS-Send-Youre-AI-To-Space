@@ -16,6 +16,8 @@ const StartSchema = z
     source: z.string().min(1),
     state: z.string().min(1),
     openRouterKey: z.string().max(512).optional(),
+    image: z.string().min(1).optional(),
+    checksFile: z.string().min(1).optional(),
   })
   .strict();
 
@@ -34,9 +36,8 @@ async function serve(): Promise<void> {
       stopped,
     ]);
     if (line === undefined) return;
-    const { source, state, openRouterKey } = StartSchema.parse(
-      JSON.parse(line),
-    );
+    const { source, state, openRouterKey, image, checksFile } =
+      StartSchema.parse(JSON.parse(line));
     const scope = { owner_id: "local", project_id: basename(state) };
     const extensions = projectExtensions(source, state, scope, undefined, {
       onExpired(id) {
@@ -45,6 +46,11 @@ async function serve(): Promise<void> {
     });
     const service = await createWorkbenchService({
       sourceRoot: source,
+      ...(image ? { image } : {}),
+      ...(checksFile ? { checksFile } : {}),
+      sandboxDockerPath: Bun.which("docker") ?? "/usr/bin/docker",
+      allowUnavailableSandbox: true,
+      verifiedExportsOnly: Boolean(image),
       stateRoot: state,
       scope,
       mcp: extensions.runtime,
