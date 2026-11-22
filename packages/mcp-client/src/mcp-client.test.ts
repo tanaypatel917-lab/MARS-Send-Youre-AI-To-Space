@@ -3,13 +3,15 @@ import {
   copyFile,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
+  realpath,
   rename,
   rm,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import type { RequestContext } from "@mars/contracts";
 import {
   type AuditEvent,
@@ -26,6 +28,7 @@ import {
   type McpCredentialResolver,
   McpEvidenceProbe,
   type McpServerConfig,
+  MemoryMcpRegistry,
   StreamableHttpMcpTransport,
 } from "./index";
 
@@ -593,6 +596,9 @@ describe("@mars/mcp-client end-to-end trust enforcement", () => {
     await cp.loader.admitServer(ctx, config.id);
     const [command, entrypoint, input, literal] = await readPaths();
     expect(command).not.toBe(BUN_BIN);
+    expect(
+      (await realpath(command)).startsWith((await realpath(cp.stateDir)) + sep),
+    ).toBe(true);
     expect(entrypoint).not.toBe(script);
     expect(input).not.toBe(data);
     expect(literal).toBe("--literal");
@@ -601,6 +607,32 @@ describe("@mars/mcp-client end-to-end trust enforcement", () => {
     await cp.loader.closeServer(config.id);
     for (const path of [command, entrypoint, input])
       expect(await Bun.file(path).exists()).toBe(false);
+  });
+
+  it("rejects an implicit entrypoint and cleans its partial snapshot", async () => {
+    const root = await makeTempDir("mars-stdio-private-");
+    const probe = new McpEvidenceProbe({
+      registry: Object.assign(new MemoryMcpRegistry(), {
+        createLaunchDirectory: () => mkdtemp(join(root, "launch-")),
+      }),
+      allowUnapprovedStdioProbe: true,
+    });
+    const config = makeConfig({
+      id: "implicit-entrypoint",
+      transport: {
+        type: "stdio",
+        command: BUN_BIN,
+        args: [],
+        entrypoint: STDIO_FIXTURE,
+        env_allowlist: [],
+      },
+      permissions: [],
+      credential_bindings: [],
+    });
+    await expect(probe.observeServer(makeCtx(), config)).rejects.toMatchObject({
+      code: "evidence_unavailable",
+    });
+    expect(await readdir(root)).toEqual([]);
   });
 
   it("detects an edited script passed as an argument without spawning it or requiring an entrypoint", async () => {

@@ -112,6 +112,7 @@ async function checkConfig(
   }
 }
 
+/** Check current source state only. To launch, use createVerifiedMcpTransport. */
 export async function verifyMcpConfig(
   server: McpServerConfig,
   expected: SourceEvidence,
@@ -129,12 +130,17 @@ export async function createVerifiedMcpTransport(
   server: McpServerConfig,
   expected: SourceEvidence,
   signal?: AbortSignal,
+  registry?: McpServerRegistry,
 ): Promise<McpTransportConnection> {
   if (server.transport.type !== "stdio") {
     await checkConfig(server, expected);
     return createMcpTransport(server.transport);
   }
-  const captured = await captureStdioArtifact(server.transport, signal);
+  const captured = await captureStdioArtifact(
+    server.transport,
+    signal,
+    registry,
+  );
   try {
     await checkConfig(server, expected, captured.sha, signal);
     return captured.transport;
@@ -342,7 +348,7 @@ export class McpEvidenceProbe implements EvidenceProbe {
     }
 
     const stdio = server.transport;
-    const captured = await captureStdioArtifact(stdio, signal);
+    const captured = await captureStdioArtifact(stdio, signal, this.registry);
     try {
       return await this.observeStdioServer(
         ctx,

@@ -193,6 +193,7 @@ export function createTrustedMcpLoader(
           server,
           artifact.evidence,
           signal,
+          registry,
         );
         prepared = transport;
         const descriptor = await transport.initialize({

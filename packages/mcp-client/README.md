@@ -12,8 +12,10 @@ non-file arguments stay unchanged; executable-relative libraries, sibling
 imports, and writes through file arguments may no longer work. Bundle required
 code rather than relying on the original file layout.
 
-The host account needs a private, writable home on an executable filesystem,
-outside agent-writable roots. Launches use a unique directory there (on Windows,
-its protection depends on the host profile ACL). This binds the reviewed files;
+The file-backed host allocates a unique launch directory in its private registry
+outside agent-writable roots. Custom registries can supply their own allocator;
+otherwise the host account's home must also be outside those roots. Launch
+storage needs an executable filesystem and host-only permissions (ACLs on
+Windows). This binds the reviewed files;
 it does not sandbox the child, pin transitive imports, shebang interpreters or
 dynamic libraries, or defend against another process controlling the host account.

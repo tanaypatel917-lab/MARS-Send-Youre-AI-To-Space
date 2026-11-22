@@ -3,6 +3,7 @@ import {
   chmod,
   lstat,
   mkdir,
+  mkdtemp,
   open,
   readFile,
   realpath,
@@ -22,6 +23,8 @@ import {
 } from "./schemas";
 
 export interface McpServerRegistry {
+  /** Allocate an empty host-private directory outside workspace roots; the transport owns cleanup. */
+  createLaunchDirectory?(): Promise<string>;
   list(): Promise<McpServerConfig[]>;
   get(serverId: string): Promise<McpServerConfig | undefined>;
   upsert(config: McpServerConfig): Promise<void>;
@@ -182,6 +185,10 @@ export class FileMcpRegistry implements McpServerRegistry {
     } catch (error) {
       if (error instanceof IntegrationTrustError) throw error;
     }
+  }
+
+  async createLaunchDirectory(): Promise<string> {
+    return this.withLock(() => mkdtemp(resolve(this.dirPath, "launch-")));
   }
 
   private async readState(): Promise<McpRegistryState> {

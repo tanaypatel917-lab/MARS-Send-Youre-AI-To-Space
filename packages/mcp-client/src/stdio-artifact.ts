@@ -15,6 +15,7 @@ import {
   IntegrationTrustError,
   sha256,
 } from "@mars/integration-trust";
+import type { McpServerRegistry } from "./registry";
 import type { StdioTransportConfig } from "./schemas";
 import { resolveStdioExecutable, StdioMcpTransport } from "./transports";
 
@@ -92,6 +93,10 @@ export async function readStdioArtifact(
   };
 }
 
+function removeLaunchDirectory(directory: string) {
+  return rm(directory, { recursive: true, force: true, maxRetries: 3 });
+}
+
 class CapturedStdioTransport extends StdioMcpTransport {
   constructor(
     config: StdioTransportConfig,
@@ -103,7 +108,7 @@ class CapturedStdioTransport extends StdioMcpTransport {
     try {
       await super.close();
     } finally {
-      await rm(this.directory, { recursive: true, force: true });
+      await removeLaunchDirectory(this.directory);
     }
   }
 }
@@ -111,10 +116,12 @@ class CapturedStdioTransport extends StdioMcpTransport {
 export async function captureStdioArtifact(
   config: StdioTransportConfig,
   signal?: AbortSignal,
+  registry?: McpServerRegistry,
 ) {
   signal?.throwIfAborted();
-  // Keep executable and interpreter module lookup away from shared temp directories.
-  const directory = await mkdtemp(join(homedir(), ".mars-mcp-launch-"));
+  const directory = registry?.createLaunchDirectory
+    ? await registry.createLaunchDirectory()
+    : await mkdtemp(join(homedir(), ".mars-mcp-launch-"));
   try {
     const {
       executable,
@@ -124,7 +131,7 @@ export async function captureStdioArtifact(
     const transport = new CapturedStdioTransport(launch, directory);
     return { executable, sha, transport };
   } catch (error) {
-    await rm(directory, { recursive: true, force: true });
+    await removeLaunchDirectory(directory);
     throw error;
   }
 }
