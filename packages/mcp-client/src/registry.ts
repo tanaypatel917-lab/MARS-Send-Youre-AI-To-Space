@@ -207,11 +207,11 @@ export class FileMcpRegistry implements McpServerRegistry {
       }
       throw error;
     }
-    const parsed = McpRegistryStateSchema.safeParse(JSON.parse(raw));
-    if (!parsed.success) {
-      throw new IntegrationTrustError("store_corrupt", { cause: parsed.error });
+    try {
+      return McpRegistryStateSchema.parse(JSON.parse(raw));
+    } catch (cause) {
+      throw new IntegrationTrustError("store_corrupt", { cause });
     }
-    return parsed.data;
   }
 
   private async writeState(state: McpRegistryState): Promise<void> {

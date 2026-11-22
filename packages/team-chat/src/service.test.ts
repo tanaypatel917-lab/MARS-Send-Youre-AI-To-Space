@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   FIXTURE_CONVERSATIONS as C,
+  cloneFixture,
   FIXTURE,
   PLATFORM_SHA,
   FIXTURE_REPOS as R,
@@ -193,6 +194,38 @@ describe("membership-filtered reads", () => {
     ).toEqual({ ok: false, code: "invalid" });
   });
 
+  test("non-finite limits use the default history page", () => {
+    const service = new FixtureTeamService();
+    for (let i = 0; i < 201; i++)
+      ok(service.sendMessage(U.ada, send({ client_message_id: `page_${i}` })));
+    const page = ok(service.openConversation(U.ada, C.dmAdaGrace));
+    expect(page.messages).toHaveLength(20);
+    for (const limit of [NaN, Infinity, -Infinity]) {
+      const result = ok(
+        service.openConversation(U.ada, C.dmAdaGrace, { limit }),
+      );
+      expect(result.messages.map((m) => m.sequence)).toEqual(
+        page.messages.map((m) => m.sequence),
+      );
+      expect(result.older_cursor).toBe(page.older_cursor);
+    }
+  });
+
+  test.each([
+    "",
+    "seq:",
+    "seq:0x10",
+    "seq:1e3",
+    "seq:9007199254740992",
+    "seq:1\n",
+  ])("history rejects malformed cursor %j", (before) => {
+    expect(
+      new FixtureTeamService().openConversation(U.ada, C.dmAdaGrace, {
+        before,
+      }),
+    ).toEqual({ ok: false, code: "invalid" });
+  });
+
   test("replies and reactions are rendered with the viewer's perspective", () => {
     const service = new FixtureTeamService();
     const page = ok(service.openConversation(U.ada, C.dmAdaGrace));
@@ -206,6 +239,95 @@ describe("membership-filtered reads", () => {
 });
 
 describe("sending", () => {
+  test("the default clock rolls over at UTC midnight", () => {
+    const service = new FixtureTeamService();
+    for (let i = 0; i < 561; i++)
+      ok(service.sendMessage(U.ada, send({ client_message_id: `clock_${i}` })));
+    const { messages } = ok(
+      service.openConversation(U.ada, C.dmAdaGrace, { limit: 3 }),
+    );
+    expect(messages.map((m) => m.created_at)).toEqual([
+      "2026-11-03T23:59:00.000Z",
+      "2026-11-04T00:00:00.000Z",
+      "2026-11-04T00:01:00.000Z",
+    ]);
+  });
+
+  test("a new attachment resolves to its own file when the dataset contains generated IDs", () => {
+    const dataset = cloneFixture();
+    const existing = dataset.references[0];
+    if (!existing) throw new Error("fixture reference missing");
+    dataset.references.push({ ...existing, reference_id: "ref_sent_1" });
+    const service = new FixtureTeamService({ dataset });
+    const sent = ok(
+      service.sendMessage(
+        U.ada,
+        send({
+          references: [
+            {
+              kind: "file",
+              repo_id: R.site,
+              path: "src/how.ts",
+              commit_sha: SITE_SHA,
+              line_start: null,
+              line_end: null,
+              symbol: null,
+            },
+          ],
+        }),
+      ),
+    );
+    const page = ok(
+      service.openConversation(U.ada, C.dmAdaGrace, { limit: 1 }),
+    );
+    const chip = page.messages[0]?.references[0];
+    if (!chip) throw new Error("missing new attachment");
+    expect(
+      ok(service.resolveReference(U.ada, sent.message_id, chip.reference_id)),
+    ).toMatchObject({ state: "ok", path: "src/how.ts" });
+    expect(chip.reference_id).not.toBe("ref_sent_1");
+  });
+
+  test("generated message IDs do not collide with another conversation", () => {
+    const dataset = cloneFixture();
+    const existing = dataset.messages.find(
+      (m) => m.conversation_id === C.dmGraceLinus,
+    );
+    if (!existing) throw new Error("fixture message missing");
+    existing.message_id = `msg_${C.dmAdaGrace}_5`;
+    const service = new FixtureTeamService({ dataset });
+    const sent = ok(service.sendMessage(U.ada, send()));
+    expect(sent.message_id).not.toBe(existing.message_id);
+    expect(ok(service.sendMessage(U.ada, send()))).toEqual({
+      ...sent,
+      duplicate: true,
+    });
+  });
+
+  test("a sent message in a maximum-length conversation can be replied to", () => {
+    const dataset = cloneFixture();
+    const conversation_id = "g".repeat(128);
+    for (const row of [
+      ...dataset.conversations,
+      ...dataset.participants,
+      ...dataset.messages,
+    ])
+      if (row.conversation_id === C.groupRelease)
+        row.conversation_id = conversation_id;
+    const service = new FixtureTeamService({ dataset });
+    const sent = ok(service.sendMessage(U.ada, send({ conversation_id })));
+    const reply = service.sendMessage(
+      U.ada,
+      send({
+        conversation_id,
+        client_message_id: "reply",
+        reply_to: sent.message_id,
+      }),
+    );
+    expect(reply.ok).toBe(true);
+    expect(sent.message_id.length).toBeLessThanOrEqual(128);
+  });
+
   test("assigns a server sequence and commits references atomically", () => {
     const service = new FixtureTeamService();
     const result = ok(

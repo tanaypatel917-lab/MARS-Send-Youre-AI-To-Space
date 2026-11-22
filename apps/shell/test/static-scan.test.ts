@@ -53,7 +53,12 @@ test("renderer sources and built bundle have no unsafe DOM, code, or network pri
       }
     }
 
-    for (const file of ["main.cjs", "preload.cjs", "settings.cjs"]) {
+    for (const file of [
+      "main.cjs",
+      "preload.cjs",
+      "managed.cjs",
+      "settings.cjs",
+    ]) {
       const source = await readFile(join(output, file), "utf8");
       const requires = [...source.matchAll(/\brequire\(["']([^"']+)["']\)/g)]
         .map((match) => match[1])

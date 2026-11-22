@@ -1018,7 +1018,7 @@ test("text diff patches apply to a baseline and reproduce file contents and mode
 test("prepare rejects overlapping roots and enforces source limits before creating a workspace [stub runner — not isolation evidence]", async () => {
   const base = await mkdtemp(join(Bun.env.TMPDIR ?? "/tmp", "mars-ws-policy-"));
   const sourceRoot = join(base, "source");
-  const rootDir = join(base, "provider");
+  const rootDir = join(base, "Application Support", "provider");
   await mkdir(sourceRoot);
   await writeFile(join(sourceRoot, "one"), "one");
   await writeFile(join(sourceRoot, "two"), "two");
@@ -1042,6 +1042,7 @@ test("prepare rejects overlapping roots and enforces source limits before creati
       createLocalWorkspaceProvider({
         sourceRoot,
         rootDir: join(base, "unsafe,name"),
+        sandbox: createStubRunner(),
         artifacts: createInMemoryArtifactStore(),
       }),
     ).rejects.toBeInstanceOf(WorkspacePolicyError);

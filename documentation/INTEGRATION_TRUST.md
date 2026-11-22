@@ -47,7 +47,7 @@ Not protected or not implemented:
 - Ambient integration discovery remains **disabled**. `@mars/mcp-client` starts with an empty registry and never auto-discovers MCP servers from project configs, `$PATH`, or global editor manifests; servers must be explicitly registered, probed, and approved by the host.
 - Permission metadata is **not a sandbox**. Process isolation, filesystem confinement, network egress control and secret storage remain separate enforcement layers that must enforce the frozen permissions independently.
 - A remote MCP descriptor digest only shows what the server *advertised* at probe time. It cannot prove the server implementation is unchanged. MARS therefore re-probes the descriptor on every dispatch and caps remote-endpoint grants. The CLI uses 24 hours by default and rejects longer TTLs. Only a host-configured policy can raise the cap, up to 7 days. This is bounded validity, not an immutable-code guarantee.
-- The evidence probe and authorizer are host-supplied. If they are wrong, the gate is wrong. Real user-presence UX (an IDE approval dialog) is future work; today the host-owned CLI (`mars mcp`) signs approvals with a host-held HMAC key.
+- The evidence probe and authorizer are host-supplied. If they are wrong, the gate is wrong. The host-owned CLI (`mars mcp`) signs approvals with a host-held HMAC key. The [managed desktop](SHELL.md#add-a-verified-extension) also signs a scoped grant for its bundled MCP after native confirmation and payload verification; its renderer never receives signing authority.
 - Cross-process locking uses a lock file with stale-lock recovery on a local POSIX filesystem. Network filesystems are unverified.
 
 ## MCP client/loader (`@mars/mcp-client`)

@@ -7,11 +7,13 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  realpath,
   rename,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { createBridge } from "../src/main/bridge";
 import { startLocalWorkbench } from "../src/main/local-workbench";
@@ -96,7 +98,7 @@ async function stageWorkbench(resources: string, scratch: string) {
   const host = startLocalWorkbench({
     resources: runtime,
     source,
-    state: join(scratch, "state"),
+    state: join(scratch, "Application Support", "MARS", "local-workbench"),
   });
   try {
     const connected = await host.connection();
@@ -106,6 +108,17 @@ async function stageWorkbench(resources: string, scratch: string) {
       connectionScope: connected.connection.scope,
     }).call("workbench.describe", {});
     if (!result.ok) throw new Error("Packaged workbench did not answer RPC.");
+    // Native menus and the library can refresh or install at the same time.
+    const [before, , after] = await Promise.all([
+      host.extensionAction({ action: "list" }),
+      host.extensionAction({ action: "install", id: "mars-release-kit" }),
+      host.extensionAction({ action: "list" }),
+    ]);
+    if (
+      before.installed.includes("mars-release-kit") ||
+      !after.installed.includes("mars-release-kit")
+    )
+      throw new Error("Packaged extension catalog is unavailable.");
   } finally {
     await host.stop();
   }
@@ -234,7 +247,8 @@ const expectedBun = (await readFile(join(repo, ".bun-version"), "utf8")).trim();
 if (Bun.version !== expectedBun)
   throw new Error(`Use Bun ${expectedBun} to package MARS.`);
 await mkdir(output, { recursive: true });
-const stage = await mkdtemp(join(shell, "dist", ".desktop-"));
+// Stage outside the checkout so missing dependencies cannot resolve from its node_modules.
+const stage = await mkdtemp(join(await realpath(tmpdir()), "mars-desktop-"));
 try {
   await (process.platform === "darwin"
     ? packageMac(stage)

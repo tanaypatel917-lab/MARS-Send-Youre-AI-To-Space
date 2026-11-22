@@ -8,11 +8,12 @@ import { z } from "zod";
  */
 
 export const TEAM_CHAT_SCHEMA_VERSION = 1;
+export const MAX_ID_CHARS = 128;
 
 const id = z
   .string()
   .min(1)
-  .max(128)
+  .max(MAX_ID_CHARS)
   .regex(/^[A-Za-z0-9._:-]+$/);
 const label = z.string().min(1).max(200);
 const timestamp = z.string().datetime({ offset: true });

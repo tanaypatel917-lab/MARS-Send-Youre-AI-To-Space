@@ -191,7 +191,7 @@ async function resolveProviderOptions(
     );
   }
   await chmod(rootDir, 0o700);
-  if (!/^[A-Za-z0-9._/-]+$/.test(rootDir)) {
+  if (options.sandbox && !/^[A-Za-z0-9._/-]+$/.test(rootDir)) {
     throw new WorkspacePolicyError(
       "rootDir contains characters unsafe for Docker mount arguments",
     );

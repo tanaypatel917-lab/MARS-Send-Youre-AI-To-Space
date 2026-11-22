@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, link, lstat, mkdir, open, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { RequestContext, Scope } from "@mars/contracts";
@@ -51,6 +52,8 @@ export interface HostMcpControlPlane {
   readonly admin: IntegrationTrustAdmin;
   readonly gate: IntegrationGate;
   readonly loader: TrustedMcpLoader;
+  /** Isolates connections so closing one task doesn't stop another task's tools. */
+  createLoader(): TrustedMcpLoader;
   signHostProof(params: {
     review_id: string;
     review_revision: number;
@@ -75,39 +78,58 @@ export function defaultHostMcpStateDir(): string {
   return resolve(homedir(), ".local", "state", "mars", "integration-trust");
 }
 
+async function readHostSigningKey(keyPath: string): Promise<Uint8Array> {
+  if (!(await lstat(keyPath)).isFile()) {
+    throw new IntegrationTrustError("store_location_unsafe");
+  }
+  const file = await open(
+    keyPath,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const hex = (await file.readFile("utf8")).trim();
+    if (!/^(?:[a-f\d]{2}){32,}$/i.test(hex)) {
+      throw new IntegrationTrustError("store_corrupt");
+    }
+    return Buffer.from(hex, "hex");
+  } finally {
+    await file.close();
+  }
+}
+
 async function loadOrCreateHostSigningKey(dir: string): Promise<Uint8Array> {
   await mkdir(dir, { recursive: true, mode: 0o700 });
+  if ((await lstat(dir)).isSymbolicLink()) {
+    throw new IntegrationTrustError("store_location_unsafe");
+  }
   await chmod(dir, 0o700);
   const keyPath = resolve(dir, "host-approval.key");
   try {
-    const st = await lstat(keyPath);
-    if (st.isSymbolicLink()) {
-      throw new IntegrationTrustError("store_location_unsafe");
-    }
-    const hex = (await readFile(keyPath, "utf8")).trim();
-    const bytes = Buffer.from(hex, "hex");
-    if (bytes.length < 32) {
-      throw new IntegrationTrustError("store_corrupt");
-    }
-    return new Uint8Array(bytes);
+    return await readHostSigningKey(keyPath);
   } catch (error) {
-    if (error instanceof IntegrationTrustError) throw error;
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: unknown }).code !== "ENOENT"
-    ) {
-      throw error;
-    }
-    const fresh = randomBytes(32);
-    await writeFile(keyPath, `${fresh.toString("hex")}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await chmod(keyPath, 0o600);
-    return new Uint8Array(fresh);
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+
+  // A hard link publishes a complete key without replacing another host's key.
+  const temporary = resolve(dir, `.host-approval.${randomUUID()}.tmp`);
+  const file = await open(temporary, "wx", 0o600);
+  try {
+    try {
+      await file.writeFile(`${randomBytes(32).toString("hex")}\n`);
+      await file.chmod(0o600);
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    try {
+      await link(temporary, keyPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  } finally {
+    await unlink(temporary);
+  }
+  return readHostSigningKey(keyPath);
 }
 
 export function defaultRequestContext(
@@ -237,22 +259,23 @@ export async function createHostMcpControlPlane(
     },
   };
 
-  const loader = createTrustedMcpLoader({
-    gate,
-    registry,
-    ...(options.credentialResolver
-      ? { credentialResolver: options.credentialResolver }
-      : {}),
-    isGrantActive: async (grantId) => {
-      const { state } = await store.load();
-      const grant = state.grants.find((g) => g.grant_id === grantId);
-      return (
-        grant?.state === "approved" &&
-        (options.clock?.().getTime() ?? Date.now()) <
-          Date.parse(grant.expires_at)
-      );
-    },
-  });
+  const createLoader = () =>
+    createTrustedMcpLoader({
+      gate,
+      registry,
+      ...(options.credentialResolver
+        ? { credentialResolver: options.credentialResolver }
+        : {}),
+      isGrantActive: async (grantId) => {
+        const { state } = await store.load();
+        const grant = state.grants.find((g) => g.grant_id === grantId);
+        return (
+          grant?.state === "approved" &&
+          (options.clock?.().getTime() ?? Date.now()) <
+            Date.parse(grant.expires_at)
+        );
+      },
+    });
 
   return {
     stateDir,
@@ -261,7 +284,8 @@ export async function createHostMcpControlPlane(
     probe,
     admin,
     gate,
-    loader,
+    loader: createLoader(),
+    createLoader,
     signHostProof(params) {
       const challenge: ApprovalChallenge = {
         review_id: params.review_id,

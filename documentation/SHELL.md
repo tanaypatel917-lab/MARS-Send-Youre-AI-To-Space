@@ -13,6 +13,18 @@ Status: **Desktop preview.** `apps/shell` is an Electron window (`electron@44.10
 
 You can browse the workbench and use the **Team chat** demo without a provider key. Team chat contains local sample conversations, not a live team connection; demo messages are not durable. The built-in workbench does not enable command execution or host verification checks. Advanced workbench configuration still uses the CLI and an explicit connection file.
 
+## Add a verified extension
+
+In the installed app, choose **Project → Add Verified Extension**, pick an item, review what it will add to the selected project, then choose **Add to project**. You don't need a model key to install. New tasks in that project can use the extension; other projects are unchanged.
+
+- An **MCP server** supplies a callable tool. **JSON comparison** reports changed paths between supplied documents. **Diff statistics** counts added and removed lines in a supplied unified text patch. **UTC clock** returns the current UTC time. These tools need no credentials or network connection and do not open project files. Their project grants expire after 30 days; add an item again to renew.
+- A **skill** supplies instructions, not executable code. Choose **Bug triage**, **Code review**, **Test planning**, **Change summary**, or **Test handoff** for focused guidance on the corresponding task.
+- A **plugin** groups extensions into a single install. The **Bug investigation kit** combines triage and test planning; the **Pull request review kit** adds review, test planning, and test handoff; the **Release handoff kit** combines change summary and test handoff. Shared skills are reused and customized content is never replaced silently.
+
+An expired MCP stays in the catalog with a renewal notice; adding it again requires approval. A task encountering an expired MCP triggers a desktop renewal notice. To restore a customized active skill, add the skill or kit again and explicitly confirm **Restore bundled instructions**; cancel leaves your edits untouched. The prior content remains in the skill's version history.
+
+Here, **verified** means the payload matches a SHA-256 pin in the catalog shipped with MARS. It is not third-party certification. There are no remote downloads or custom URLs/commands. Adding any MCP requires explicit approval; the workbench checks the grant and artifact on use. In attach-only mode the external workbench, not the shell, manages its own extensions.
+
 ## No second agent loop
 
 MARS Shell owns no model loop, tools, shell, task history store, MCP/LSP, or permission logic. Oh My Pi inside the workbench is the only agent runtime. The installed Shell starts one bundled Bun workbench on an ephemeral loopback port and stops it on teardown; development Shell can still attach to `mars serve`. The renderer never receives the RPC bearer token and cannot spawn processes or access the file system. `tasks.checkpoint` and `tasks.restore` remain refused by the shell bridge.
@@ -22,7 +34,7 @@ MARS Shell owns no model loop, tools, shell, task history store, MCP/LSP, or per
 | Process | What it may do | What it may not do |
 | --- | --- | --- |
 | Main (`src/main`, Node) | Supervise the bundled workbench, accept native folder selection, handle model settings through a separate settings window, hold the bearer token from the private connection file, and forward strictly validated workbench and Team Chat methods over separate IPC channels. Serve exact allowlisted assets from `mars-shell://app/` with CSP and persist window size. | Arbitrary RPC, remote hosts, direct model calls, or renderer-supplied file paths or commands |
-| Preload (`src/preload`, sandboxed) | Expose two frozen objects: `window.marsWorkbench` (15 workbench methods) and `window.marsTeamChat` (9 Team Chat methods), each forwarding over its own IPC channel | Expose `ipcRenderer`, Node, or anything else |
+| Preload (`src/preload`, sandboxed) | Expose frozen `window.marsWorkbench` (15 workbench methods), `window.marsTeamChat` (9 Team Chat methods), and `window.marsExtensions` (list bundled entries or request installation by ID). Each forwards over its own IPC channel. | Expose `ipcRenderer`, Node, or arbitrary commands |
 | Renderer (`src/renderer`, Chromium sandbox, `contextIsolation`, no Node) | Build the DOM with `createElement`/`textContent`/`setAttribute` only; project transcripts with `@mars/ui-core`; re-check artifact and exported-patch SHA-256 with WebCrypto before rendering | `innerHTML` and friends (not in its DOM type), inline scripts/styles, network (`connect-src 'none'`), links, images, imports other than its own modules, `@mars/ui-core`, `@mars/output-format`, `@mars/team-chat` (types) |
 
 Workbench bridge methods (the whitelist):

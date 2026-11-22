@@ -34,9 +34,12 @@ export async function buildShell(outdir: string): Promise<void> {
   });
   if (!main.success) throw new Error(main.logs.join("\n"));
   const preload = await Bun.build({
-    entrypoints: [resolve(root, "src/preload/preload.ts")],
+    entrypoints: [
+      resolve(root, "src/preload/preload.ts"),
+      resolve(root, "src/preload/managed.ts"),
+    ],
     outdir,
-    naming: "preload.cjs",
+    naming: "[name].cjs",
     target: "node",
     format: "cjs",
     external: ["electron"],

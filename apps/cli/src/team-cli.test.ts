@@ -8,6 +8,50 @@ import { runTeam, TeamUsageError } from "./team";
 
 const entrypoint = join(import.meta.dir, "main.ts");
 
+test("concurrent exports publish only the winner unless forced", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-cli-team-export-"));
+  try {
+    const first = join(root, "enabled");
+    const second = join(root, "disabled");
+    const target = join(root, "snapshot.json");
+    const output = () => {};
+    await runTeam(["enable", "--state", first], output);
+    const runExport = (state: string, ...flags: string[]) =>
+      runTeam(["export", "--state", state, "--out", target, ...flags], output);
+    const results = await Promise.allSettled([
+      runExport(first),
+      runExport(second),
+    ]);
+    const winners = results.filter((r) => r.status === "fulfilled");
+    expect(winners).toHaveLength(1);
+    const loser = results.find((r) => r.status === "rejected");
+    expect(loser?.reason).toBeInstanceOf(TeamUsageError);
+    expect(loser?.reason.message).toContain("--force");
+    const firstWon = results[0].status === "fulfilled";
+    expect((await Bun.file(target).json()).enabled).toBe(firstWon);
+    await runExport(firstWon ? second : first, "--force");
+    expect((await Bun.file(target).json()).enabled).toBe(!firstWon);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("serve closes its SQLite store when auth setup fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-cli-team-auth-failure-"));
+  try {
+    await Bun.write(join(root, "team-dev-tokens.json"), "{}");
+    await expect(
+      runTeam(["serve", "--state", root, "--dev-users", "ada"]),
+    ).rejects.toThrow("not a valid dev token file");
+    const db = join(root, "team", "team.sqlite");
+    expect(await Bun.file(db).exists()).toBe(true);
+    // Closing the last SQLite connection checkpoints and removes the WAL.
+    expect(await Bun.file(`${db}-wal`).exists()).toBe(false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 interface Served {
   child: ReturnType<typeof Bun.spawn>;
   report: Record<string, unknown>;

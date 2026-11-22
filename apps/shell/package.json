@@ -13,7 +13,9 @@
   },
   "dependencies": {
     "@mars/contracts": "workspace:*",
+    "@mars/mcp-client": "workspace:*",
     "@mars/providers": "workspace:*",
+    "@mars/skills": "workspace:*",
     "@mars/team-chat": "workspace:*",
     "@mars/ui-core": "workspace:*",
     "@mars/workbench": "workspace:*",

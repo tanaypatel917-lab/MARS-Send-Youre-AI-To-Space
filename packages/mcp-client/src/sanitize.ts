@@ -46,8 +46,12 @@ export function stripSteeringFields(
   stripped: string[] = [],
   depth = 0,
 ): { value: unknown; stripped: string[] } {
-  if (depth > 32 || value === null || typeof value !== "object") {
+  if (value === null || typeof value !== "object") {
     return { value, stripped };
+  }
+  if (depth > 32) {
+    stripped.push(pathPrefix);
+    return { value: null, stripped };
   }
   if (Array.isArray(value)) {
     const cleaned = value.map(
@@ -67,7 +71,12 @@ export function stripSteeringFields(
       stripped.push(childPath);
       continue;
     }
-    out[key] = stripSteeringFields(child, childPath, stripped, depth + 1).value;
+    Object.defineProperty(out, key, {
+      value: stripSteeringFields(child, childPath, stripped, depth + 1).value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   return { value: out, stripped };
 }

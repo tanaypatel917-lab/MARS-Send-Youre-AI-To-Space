@@ -114,7 +114,13 @@ export const McpServerConfigSchema = z
 export const McpRegistryStateSchema = z
   .object({
     schema_version: z.literal(1),
-    servers: z.record(ServerIdSchema, McpServerConfigSchema),
+    servers: z
+      .record(ServerIdSchema, McpServerConfigSchema)
+      .refine(
+        (servers) =>
+          Object.entries(servers).every(([id, server]) => id === server.id),
+        "registry key must match server id",
+      ),
   })
   .strict();
 

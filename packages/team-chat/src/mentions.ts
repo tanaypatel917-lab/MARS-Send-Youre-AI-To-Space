@@ -156,7 +156,7 @@ export function mentionCandidates(
       for (const symbol of file.symbols) {
         if (!symbol.name.toLowerCase().includes(pathQuery)) continue;
         symbols.push({
-          key: `${repo.repo_id}@${repo.commit_sha}:${file.path}#${symbol.name}`,
+          key: `${repo.repo_id}@${repo.commit_sha}:${file.path}#${symbol.name}:${symbol.line}`,
           kind: "symbol",
           repo_id: repo.repo_id,
           repo_name: repo.name,

@@ -19,6 +19,7 @@ import type { RequestContext } from "@mars/contracts";
 import {
   type AuditEvent,
   canonicalJSON,
+  createHmacApprovalAuthorizer,
   IntegrationTrustError,
   type Permission,
   sha256,
@@ -27,12 +28,15 @@ import { startStatefulMcpServer } from "./__fixtures__/stateful-http";
 import {
   createHostMcpControlPlane,
   defaultRequestContext,
+  FileMcpRegistry,
   type HostMcpControlPlane,
   type McpCredentialResolver,
   McpEvidenceProbe,
   type McpServerConfig,
   MemoryMcpRegistry,
   StreamableHttpMcpTransport,
+  sanitizeToolOutput,
+  stripSteeringFields,
 } from "./index";
 import { readStdioArtifact } from "./stdio-artifact";
 
@@ -349,6 +353,135 @@ async function registerReviewApprove(
   });
   return { review, grant };
 }
+
+describe("MCP trust boundaries", () => {
+  it("verifies every concurrent host's proof with the persisted key", async () => {
+    const stateDir = await makeTempDir("mars-mcp-keys-");
+    const hosts = await Promise.all(
+      Array.from({ length: 12 }, () => createControlPlane({ stateDir })),
+    );
+    const ctx = makeCtx();
+    const keyDir = join(stateDir, "keys");
+    const keyPath = join(keyDir, "host-approval.key");
+    expect(await readdir(keyDir)).toEqual(["host-approval.key"]);
+    if (process.platform !== "win32") {
+      expect((await stat(keyPath)).mode & 0o777).toBe(0o600);
+    }
+    const key = await readFile(keyPath, "utf8");
+    const verifier = createHmacApprovalAuthorizer({
+      key: Buffer.from(key.trim(), "hex"),
+      approvers: [
+        {
+          approver_id: ctx.scope.owner_id,
+          owner_id: ctx.scope.owner_id,
+          project_ids: [ctx.scope.project_id],
+        },
+      ],
+    });
+    const challenge = {
+      review_id: "review-1",
+      review_revision: 1,
+      binding_sha256: "a".repeat(64),
+      scope: ctx.scope,
+      decision: "approve" as const,
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    };
+    for (const host of hosts) {
+      const proof = host.signHostProof(challenge);
+      expect(await verifier.verify(ctx, challenge, proof)).not.toBeNull();
+    }
+  });
+
+  it("does not replace a corrupt or symlinked signing key", async () => {
+    const stateDir = await makeTempDir("mars-mcp-keys-");
+    const dir = join(stateDir, "keys");
+    await mkdir(dir, { mode: 0o700 });
+    const path = join(dir, "host-approval.key");
+    const malformed = `${"00".repeat(32)}x`;
+    await writeFile(path, malformed, { mode: 0o600 });
+    await expect(createControlPlane({ stateDir })).rejects.toMatchObject({
+      code: "store_corrupt",
+    });
+    expect(await readFile(path, "utf8")).toBe(malformed);
+    await rm(path);
+    await symlink(join(dir, "missing"), path);
+    await expect(createControlPlane({ stateDir })).rejects.toMatchObject({
+      code: "store_location_unsafe",
+    });
+    expect(await readdir(dir)).toEqual(["host-approval.key"]);
+  });
+
+  it("reports malformed registry JSON as corrupt", async () => {
+    const dir = await makeTempDir("mars-mcp-registry-");
+    const registry = new FileMcpRegistry({ dir, workspaceRoots: [] });
+    await writeFile(join(dir, "servers.json"), "{");
+    await expect(registry.list()).rejects.toMatchObject({
+      name: "IntegrationTrustError",
+      code: "store_corrupt",
+      cause: expect.any(SyntaxError),
+    });
+  });
+
+  it("rejects a registry key that differs from the stored server ID", async () => {
+    const dir = await makeTempDir("mars-mcp-registry-");
+    const registry = new FileMcpRegistry({ dir, workspaceRoots: [] });
+    const config = makeConfig({
+      id: "server-a",
+      transport: { type: "streamable-http", url: "https://a.test/mcp" },
+      permissions: [],
+      credential_bindings: [],
+    });
+    await writeFile(
+      join(dir, "servers.json"),
+      JSON.stringify({
+        schema_version: 1,
+        servers: { "server-b": config },
+      }),
+    );
+    await expect(registry.get("server-b")).rejects.toMatchObject({
+      name: "IntegrationTrustError",
+      code: "store_corrupt",
+    });
+  });
+
+  it("redacts and records uninspected subtrees in structured and JSON text output", () => {
+    let branch: unknown = { instructions: "fixture" };
+    for (let i = 0; i < 32; i++) branch = [branch];
+    const data = { kept: true, branch };
+    const out = sanitizeToolOutput(
+      {
+        structuredContent: data,
+        content: [{ type: "text", text: JSON.stringify(data) }],
+      },
+      {
+        server_id: "a",
+        tool: "fixture",
+        grant_id: "g",
+        binding_sha256: "a".repeat(64),
+      },
+    );
+    let pruned: unknown = null;
+    for (let i = 0; i < 32; i++) pruned = [pruned];
+    const expected = { kept: true, branch: pruned };
+    expect(out.structured_content).toEqual(expected);
+    expect(JSON.parse(out.content[0]?.text ?? "")).toEqual(expected);
+    const path = `branch${"[0]".repeat(32)}`;
+    expect(out.stripped_steering_fields).toEqual([
+      `content[0].text.${path}`,
+      `structuredContent.${path}`,
+    ]);
+  });
+
+  it("keeps __proto__ as an own JSON data property", () => {
+    const data = JSON.parse('{"__proto__":{"label":"fixture"},"kept":true}');
+    const { value } = stripSteeringFields(data);
+    expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+    expect(Object.getOwnPropertyDescriptor(value, "__proto__")?.value).toEqual({
+      label: "fixture",
+    });
+    expect(JSON.stringify(value)).toBe(JSON.stringify(data));
+  });
+});
 
 describe("@mars/mcp-client end-to-end trust enforcement", () => {
   it("enforces default-deny with no ambient MCPs and rejects workspace-local stateDir", async () => {

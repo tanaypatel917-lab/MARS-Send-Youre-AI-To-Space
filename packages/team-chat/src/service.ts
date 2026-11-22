@@ -5,6 +5,7 @@ import {
   FixtureDatasetSchema,
   fail,
   MAX_GROUP_MEMBERS,
+  MAX_ID_CHARS,
   MAX_MESSAGE_CHARS,
   MAX_REFERENCES_PER_MESSAGE,
   type Message,
@@ -449,7 +450,9 @@ export function encodeCursor(sequence: number): string {
 export function decodeCursor(cursor: string): number | null {
   if (!cursor.startsWith(CURSOR_PREFIX)) return null;
   const n = Number(cursor.slice(CURSOR_PREFIX.length));
-  return Number.isInteger(n) && n >= 0 ? n : null;
+  return Number.isSafeInteger(n) && n >= 0 && encodeCursor(n) === cursor
+    ? n
+    : null;
 }
 
 /** Fixed key order so equal references always serialize identically. */
@@ -475,12 +478,10 @@ function fingerprintOf(
 }
 
 function fixedClock(): () => string {
-  let minute = 40;
+  let timestamp = Date.parse("2026-11-03T14:40:00.000Z");
   return () => {
-    minute += 1;
-    const h = 14 + Math.floor(minute / 60);
-    const m = minute % 60;
-    return `2026-11-03T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00.000Z`;
+    timestamp += 60_000;
+    return new Date(timestamp).toISOString();
   };
 }
 
@@ -507,6 +508,7 @@ export class FixtureTeamService implements TeamService {
     { message_id: string; fingerprint: string }
   >();
   private referenceCounter = 0;
+  private messageCounter = 0;
 
   constructor(options: FixtureTeamServiceOptions = {}) {
     // Re-validated here so a custom dataset gets the same DM/participant invariants.
@@ -575,12 +577,12 @@ export class FixtureTeamService implements TeamService {
     if (!participant) return fail("not_found");
     const summary = this.summary(viewer, conversationId);
     if (!summary) return fail("not_found");
-    const limit = Math.min(
-      MAX_PAGE,
-      Math.max(1, Math.floor(options.limit ?? DEFAULT_PAGE)),
-    );
+    const requested = options.limit ?? DEFAULT_PAGE;
+    const limit = Number.isFinite(requested)
+      ? Math.min(MAX_PAGE, Math.max(1, Math.floor(requested)))
+      : DEFAULT_PAGE;
     let before = Number.POSITIVE_INFINITY;
-    if (options.before) {
+    if (options.before != null) {
       const decoded = decodeCursor(options.before);
       if (decoded === null) return fail("invalid");
       before = decoded;
@@ -653,9 +655,14 @@ export class FixtureTeamService implements TeamService {
         return fail("invalid");
       if (draft.kind === "symbol" && draft.symbol === null)
         return fail("invalid");
-      this.referenceCounter += 1;
+      let referenceId: string;
+      do {
+        referenceId = `ref_sent_${++this.referenceCounter}`;
+      } while (
+        this.data.references.some((r) => r.reference_id === referenceId)
+      );
       references.push({
-        reference_id: `ref_sent_${this.referenceCounter}`,
+        reference_id: referenceId,
         kind: draft.kind,
         repo_id: draft.repo_id,
         commit_sha: draft.commit_sha,
@@ -670,8 +677,14 @@ export class FixtureTeamService implements TeamService {
       });
     }
     const sequence = this.lastSequence(input.conversation_id) + 1;
+    let messageId = `msg_${input.conversation_id}_${sequence}`;
+    while (
+      messageId.length > MAX_ID_CHARS ||
+      this.data.messages.some((m) => m.message_id === messageId)
+    )
+      messageId = `msg_sent_${++this.messageCounter}`;
     const message: Message = {
-      message_id: `msg_${input.conversation_id}_${sequence}`,
+      message_id: messageId,
       conversation_id: input.conversation_id,
       author_id: viewer,
       sequence,

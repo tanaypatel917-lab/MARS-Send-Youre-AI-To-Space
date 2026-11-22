@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync } from "node:fs";
-import { open, rename, unlink } from "node:fs/promises";
+import { link, open, rename, unlink } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { createRemoteRepoMirror, createRepoRegistry } from "@mars/code-refs";
@@ -111,21 +111,40 @@ function teamId(value: unknown): string {
   return id;
 }
 
-/** Atomic private write: `wx` temporary file at 0600, fsync, rename over the target. */
-async function writePrivate(file: string, body: string): Promise<void> {
+/** Publish the complete private file atomically; a hard link never replaces an existing entry. */
+async function writePrivate(
+  file: string,
+  body: string,
+  publish: (temporary: string, target: string) => Promise<void> = rename,
+): Promise<void> {
   const temporary = `${file}.${randomBytes(6).toString("hex")}.tmp`;
+  const handle = await open(temporary, "wx", 0o600);
   try {
-    const handle = await open(temporary, "wx", 0o600);
     try {
       await handle.writeFile(body);
+      await handle.chmod(0o600);
       await handle.sync();
     } finally {
       await handle.close();
     }
-    await rename(temporary, file);
-    chmodSync(file, 0o600);
+    await publish(temporary, file);
   } finally {
     await unlink(temporary).catch(() => undefined);
+  }
+}
+
+async function publishNewExport(
+  temporary: string,
+  target: string,
+): Promise<void> {
+  try {
+    await link(temporary, target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST")
+      throw new TeamUsageError(
+        "export refuses to overwrite an existing file; pass --force.",
+      );
+    throw error;
   }
 }
 
@@ -561,6 +580,8 @@ async function runServe(
       : undefined,
   );
   const opened: TeamStore = store;
+  await using resources = new AsyncDisposableStack();
+  resources.defer(() => opened.close());
   const authenticators: Authenticator[] = [];
   let devTokensFile: string | null = null;
   let activeDevUsers = 0;
@@ -707,47 +728,37 @@ async function runServe(
           }),
     });
   }
-  let server: ReturnType<typeof serveTeam>;
-  try {
-    server = serveTeam({
-      store: opened,
-      authenticator,
-      port: options.port,
-      repos: registry,
-      agentReferences: port,
-      ...(options.quiet
-        ? {}
-        : { log: (entry) => out(JSON.stringify({ log: "team", ...entry })) }),
-    });
-  } catch (error) {
-    opened.close();
-    throw error;
-  }
+  const server = serveTeam({
+    store: opened,
+    authenticator,
+    port: options.port,
+    repos: registry,
+    agentReferences: port,
+    ...(options.quiet
+      ? {}
+      : { log: (entry) => out(JSON.stringify({ log: "team", ...entry })) }),
+  });
+  resources.defer(() => server.stop(true));
   const url = `http://127.0.0.1:${server.port}`;
   const connectionFile = join(options.state, CONNECTION_FILE);
-  try {
-    await writePrivate(
-      connectionFile,
-      JSON.stringify({ schema_version: 1, url, team_id: options.team }),
-    );
-  } catch (error) {
-    await server.stop(true);
-    opened.close();
-    throw error;
+  await writePrivate(
+    connectionFile,
+    JSON.stringify({ schema_version: 1, url, team_id: options.team }),
+  );
+  if (agentWorker) {
+    resources.defer(() => agentWorker.stop());
+    agentWorker.start();
   }
-  if (agentWorker) agentWorker.start();
   await new Promise<void>((resolve, reject) => {
-    registerRuntimeCleanup("mars-team", async () => {
+    const unregister = registerRuntimeCleanup("mars-team", async () => {
       try {
-        if (agentWorker) await agentWorker.stop();
-        // `stop(true)` ends every open stream before the process exits.
-        await server.stop(true);
-        opened.close();
+        await resources.disposeAsync();
         resolve();
       } catch {
         reject(new Error("Team service shutdown failed."));
       }
     });
+    resources.defer(unregister);
     out(
       JSON.stringify({
         status: "listening",
@@ -843,14 +854,14 @@ export async function runTeam(
     if (typeof values.out !== "string" || values.out.length === 0)
       throw new TeamUsageError("export needs --out FILE.");
     const target = resolve(values.out);
-    if (existsSync(target) && values.force !== true)
-      throw new TeamUsageError(
-        "export refuses to overwrite an existing file; pass --force.",
-      );
     const store = openStore(stateDir(values.state));
     try {
       const snapshot = store.exportSnapshot();
-      await writePrivate(target, JSON.stringify(snapshot));
+      await writePrivate(
+        target,
+        JSON.stringify(snapshot),
+        values.force === true ? rename : publishNewExport,
+      );
       out(
         JSON.stringify({
           exported: true,

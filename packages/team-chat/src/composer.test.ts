@@ -91,6 +91,40 @@ describe("mention candidates", () => {
 });
 
 describe("composer reducer", () => {
+  test("same-name symbols on different lines can both be attached", () => {
+    const localEnv: ComposerEnvironment = {
+      ...env,
+      index: {
+        repos: [
+          {
+            repo_id: R.site,
+            name: "site",
+            commit_sha: SITE_SHA,
+            files: [
+              {
+                path: "src/example.ts",
+                line_count: 10,
+                symbols: [
+                  { name: "run", line: 2 },
+                  { name: "run", line: 8 },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const input = { type: "input", text: "@run", caret: 4 } as const;
+    let state = reduceComposer(EMPTY_COMPOSER, input, localEnv);
+    state = reduceComposer(state, { type: "pickerSelect" }, localEnv);
+    state = reduceComposer(state, input, localEnv);
+    state = reduceComposer(state, { type: "pickerMove", delta: 1 }, localEnv);
+    state = reduceComposer(state, { type: "pickerSelect" }, localEnv);
+    expect(state.chips.map((chip) => chip.reference.line_start)).toEqual([
+      2, 8,
+    ]);
+  });
+
   test("@ opens the picker, arrows move the selection, Enter attaches the chip and removes the trigger", () => {
     let state = type(EMPTY_COMPOSER, "Look at @ver");
     expect(state.picker?.query).toBe("ver");
