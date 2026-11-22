@@ -30,6 +30,7 @@ import {
   seedVerificationExample,
   VERIFICATION_IMAGE,
 } from "./verification-example";
+import { verificationStateRoot } from "./verification-state";
 
 const settingsPage = "mars-shell://app/settings.html";
 
@@ -62,6 +63,10 @@ export async function createDesktop(
   await mkdir(demo, { recursive: true, mode: 0o700 });
   await chmod(root, 0o700);
   const verification = await seedVerificationExample(root);
+  const verificationState = await verificationStateRoot(
+    join(root, "projects"),
+    app.getPath("home"),
+  );
   let dockerPath = resolveDockerPath();
   await writeFile(
     join(demo, "README.md"),
@@ -227,10 +232,18 @@ export async function createDesktop(
           });
         },
         source,
-        state: join(root, "projects"),
+        state:
+          source === verification.source
+            ? verificationState.state
+            : join(root, "projects"),
         ...(dockerPath ? { dockerPath } : {}),
         ...(source === verification.source
-          ? { image: VERIFICATION_IMAGE, checksFile: verification.checksFile }
+          ? {
+              ...(verificationState.reason
+                ? { verificationUnavailableReason: verificationState.reason }
+                : { image: VERIFICATION_IMAGE }),
+              checksFile: verification.checksFile,
+            }
           : {}),
         ...(openRouterKey ? { openRouterKey } : {}),
       });

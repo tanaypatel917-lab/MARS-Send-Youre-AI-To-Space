@@ -36,9 +36,20 @@ test("verification example preserves user data and rewrites private protected ch
   }
 });
 
-test.each([undefined, "/missing-mars-docker"])(
-  "runtime stdin start preserves checks and degrades with dockerPath=%s",
-  async (dockerPath) => {
+test.each([
+  { dockerPath: undefined, verificationUnavailableReason: undefined },
+  {
+    dockerPath: "/missing-mars-docker",
+    verificationUnavailableReason: undefined,
+  },
+  {
+    dockerPath: undefined,
+    verificationUnavailableReason:
+      "Verification needs a private workspace path without spaces or special characters.",
+  },
+])(
+  "runtime stdin start preserves checks and reports prerequisite readiness: %o",
+  async ({ dockerPath, verificationUnavailableReason }) => {
     const root = await mkdtemp(join(tmpdir(), "mars-example-runtime-"));
     const seeded = await seedVerificationExample(root);
     const state = join(root, "state");
@@ -56,7 +67,7 @@ test.each([undefined, "/missing-mars-docker"])(
     );
     try {
       child.stdin.write(
-        `${JSON.stringify({ source: seeded.source, state, checksFile: seeded.checksFile, dockerPath, image: `mirror.gcr.io/library/busybox@sha256:${"0".repeat(64)}` })}\n`,
+        `${JSON.stringify({ source: seeded.source, state, checksFile: seeded.checksFile, dockerPath, verificationUnavailableReason, ...(!verificationUnavailableReason ? { image: `mirror.gcr.io/library/busybox@sha256:${"0".repeat(64)}` } : {}) })}\n`,
       );
       const reader = child.stdout.getReader();
       let output = "";
@@ -91,6 +102,10 @@ test.each([undefined, "/missing-mars-docker"])(
       if (dockerPath)
         expect(described.verification_readiness?.reason).toBe(
           "Docker CLI is not installed or executable",
+        );
+      if (verificationUnavailableReason)
+        expect(described.verification_readiness?.reason).toBe(
+          verificationUnavailableReason,
         );
     } finally {
       child.stdin.end();

@@ -19,6 +19,7 @@ const StartSchema = z
     image: z.string().min(1).optional(),
     checksFile: z.string().min(1).optional(),
     dockerPath: z.string().min(1).optional(),
+    verificationUnavailableReason: z.string().min(1).max(1024).optional(),
   })
   .strict();
 
@@ -37,8 +38,15 @@ async function serve(): Promise<void> {
       stopped,
     ]);
     if (line === undefined) return;
-    const { source, state, openRouterKey, image, checksFile, dockerPath } =
-      StartSchema.parse(JSON.parse(line));
+    const {
+      source,
+      state,
+      openRouterKey,
+      image,
+      checksFile,
+      dockerPath,
+      verificationUnavailableReason,
+    } = StartSchema.parse(JSON.parse(line));
     const scope = { owner_id: "local", project_id: basename(state) };
     const extensions = projectExtensions(source, state, scope, undefined, {
       onExpired(id) {
@@ -49,6 +57,9 @@ async function serve(): Promise<void> {
       sourceRoot: source,
       ...(image ? { image } : {}),
       ...(checksFile ? { checksFile } : {}),
+      ...(verificationUnavailableReason
+        ? { verificationUnavailableReason }
+        : {}),
       sandboxDockerPath: dockerPath ?? Bun.which("docker") ?? "/usr/bin/docker",
       allowUnavailableSandbox: true,
       verifiedExportsOnly: Boolean(image),

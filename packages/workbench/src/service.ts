@@ -211,6 +211,7 @@ export interface WorkbenchServiceOptions {
   sandboxDockerPath?: string;
   allowUnavailableSandbox?: boolean;
   verifiedExportsOnly?: boolean;
+  verificationUnavailableReason?: string;
   /** Run workspace operations on an OpenHands Agent Server instead of locally. */
   remoteWorkspace?: RemoteWorkspaceConfig;
   /** Host-owned protected check definitions (JSON); clients select them by id at Start. */
@@ -587,7 +588,15 @@ export async function createWorkbenchService(
             : {}),
         })
       : undefined;
-    let verificationReadiness: WorkbenchHostOptions["verificationReadiness"];
+    let verificationReadiness: WorkbenchHostOptions["verificationReadiness"] =
+      options.verificationUnavailableReason
+        ? {
+            status: "unavailable",
+            reason: options.verificationUnavailableReason,
+            setup:
+              "Choose a private workspace path without spaces or special characters, then restart MARS.",
+          }
+        : undefined;
     try {
       await sandbox?.verify();
       if (sandbox)
