@@ -5,7 +5,7 @@
       <span class="masthead-title">MARS</span>
       <span class="masthead-subtitle">Your mission control</span>
     </header>
-    <nav aria-label="Sidebar" class="sidebar">
+    <nav aria-label="Sidebar" class="sidebar" data-scroll-key="sidebar">
       <div class="brand-row">
         <span aria-hidden="true" class="brand-orbit"></span>
         <h1 class="brand">MARS</h1>
@@ -16,7 +16,7 @@
         <strong>fixture-repo (fixture)</strong>
       </div>
       <button aria-pressed="true" class="nav-item selected" data-focus-key="nav-tasks" data-page="tasks" type="button">Tasks</button>
-      <div class="sidebar-history">
+      <div class="sidebar-history" data-scroll-key="sidebar-history">
         <h2 class="sidebar-label">Agent sessions</h2>
         <section aria-label="running" class="session-group">
           <h3 class="group-title">running</h3>
@@ -100,8 +100,8 @@
         <p class="muted">team chat unavailable</p>
       </section>
     </nav>
-    <div class="workspace-panels">
-      <main class="main">
+    <div class="workspace-panels" data-scroll-key="workspace">
+      <main class="main" data-scroll-key="main:fixture-failed">
         <div class="main-toolbar">
           <header class="task-header">
             <p class="eyebrow">02 / WORKSPACE</p>
@@ -116,9 +116,9 @@
             </div>
           </header>
           <button class="refresh" data-focus-key="refresh" type="button">Refresh</button>
-          <button aria-pressed="false" class="details-toggle" type="button">Task details</button>
+          <button aria-pressed="false" class="details-toggle" data-focus-key="task-details" type="button">Task details</button>
         </div>
-        <section aria-live="polite" class="transcript" role="log">
+        <section aria-live="polite" class="transcript" data-scroll-key="transcript:fixture-failed" role="log">
           <div class="transcript-entries">
             <p class="muted transcript-meta">1 transcript entry · 0 task events recorded</p>
             <article class="transcript-entry transcript-user user-request">
@@ -148,7 +148,7 @@
           </div>
         </section>
       </main>
-      <aside aria-label="Task inspector" class="inspector">
+      <aside aria-label="Task inspector" class="inspector" data-scroll-key="inspector:fixture-failed">
         <section class="inspector-section">
           <h2 data-focus-key="inspector-heading" data-inspector-heading="true" tabindex="-1">Task</h2>
           <h3 class="minor-title">Request</h3>

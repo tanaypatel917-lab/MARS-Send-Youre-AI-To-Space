@@ -41,6 +41,7 @@ export interface TeamChatViewState {
   ) => void;
   onResolveReference?: (messageId: string, referenceId: string) => void;
   onSearch?: (query: string) => void;
+  onSearchChange?: (query: string) => void;
   onSwitchViewer?: (viewer: string) => void;
   onLoadOlder?: () => void;
 }
@@ -313,11 +314,15 @@ export function renderTeamChatPane(
     const searchInput = h(doc, "input", {
       type: "text",
       class: "team-search-input",
+      "data-focus-key": "team-search",
       placeholder: "Search messages…",
       value: state.searchQuery,
       "aria-label": "Search team chat messages",
     });
     searchInput.value = state.searchQuery;
+    searchInput.addEventListener("input", () =>
+      state.onSearchChange?.(searchInput.value ?? ""),
+    );
     const searchBtn = h(
       doc,
       "button",
@@ -376,7 +381,8 @@ export function renderTeamChatPane(
       class: "team-messages",
       role: "log",
       "aria-live": "polite",
-      "data-team-feed": JSON.stringify([
+      "data-scroll-key": JSON.stringify([
+        "team-feed",
         state.viewer,
         state.activeConversationId,
         Boolean(state.searchHits),
@@ -485,11 +491,15 @@ export function renderTeamChatPane(
     h(
       doc,
       "div",
-      { class: "team-layout" },
+      { class: "team-layout", "data-scroll-key": "team-layout" },
       h(
         doc,
         "nav",
-        { class: "team-conversations", "aria-label": "Team conversations" },
+        {
+          class: "team-conversations",
+          "data-scroll-key": "team-conversations",
+          "aria-label": "Team conversations",
+        },
         h(doc, "h2", { class: "eyebrow" }, "Conversations"),
         h(doc, "ul", { class: "team-conv-list" }, ...convItems),
       ),

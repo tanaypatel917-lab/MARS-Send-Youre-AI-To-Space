@@ -8,6 +8,8 @@ export interface ShellElement {
   value?: string;
   checked?: boolean;
   disabled?: boolean;
+  scrollTop: number;
+  scrollLeft: number;
   selectionStart?: number | null;
   selectionEnd?: number | null;
   selectionDirection?: "forward" | "backward" | "none" | null;
@@ -22,7 +24,6 @@ export interface ShellElement {
   append(...nodes: (ShellElement | ShellText)[]): void;
   replaceChildren(...nodes: (ShellElement | ShellText)[]): void;
   querySelectorAll(selectors: string): ArrayLike<ShellElement>;
-  scrollTop?: number;
   scrollIntoView?(options: { block: "nearest" }): void;
   getBoundingClientRect?(): { top: number };
   focus(options?: { preventScroll?: boolean }): void;

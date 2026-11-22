@@ -1282,6 +1282,9 @@ export function renderShell(
       {
         type: "button",
         class: `${className}${selected ? " selected" : ""}`,
+        ...(className === "details-toggle"
+          ? { "data-focus-key": "task-details" }
+          : {}),
         "aria-pressed": String(selected),
         disabled,
       },
@@ -1334,7 +1337,7 @@ export function renderShell(
   const sidebar = h(
     doc,
     "nav",
-    { class: "sidebar", "aria-label": "Sidebar" },
+    { class: "sidebar", "aria-label": "Sidebar", "data-scroll-key": "sidebar" },
     h(
       doc,
       "div",
@@ -1357,7 +1360,7 @@ export function renderShell(
     h(
       doc,
       "div",
-      { class: "sidebar-history" },
+      { class: "sidebar-history", "data-scroll-key": "sidebar-history" },
       ...(isChat && state.assistant
         ? [
             h(doc, "h2", { class: "sidebar-label" }, "Conversations"),
@@ -1416,7 +1419,7 @@ export function renderShell(
       ? h(
           doc,
           "main",
-          { class: "main" },
+          { class: "main", "data-scroll-key": "team-main" },
           renderTeamChatPane(doc, state.teamChat),
         )
       : state.page === "settings" && state.assistant
@@ -1434,7 +1437,10 @@ export function renderShell(
             : h(
                 doc,
                 "main",
-                { class: "main" },
+                {
+                  class: "main",
+                  "data-scroll-key": `main:${task?.task_id ?? ""}`,
+                },
                 h(
                   doc,
                   "div",
@@ -1457,7 +1463,12 @@ export function renderShell(
                 h(
                   doc,
                   "section",
-                  { class: "transcript", role: "log", "aria-live": "polite" },
+                  {
+                    class: "transcript",
+                    "data-scroll-key": `transcript:${task?.task_id ?? ""}`,
+                    role: "log",
+                    "aria-live": "polite",
+                  },
                   state.eventsError
                     ? unavailable(doc, state.eventsError)
                     : h(
@@ -1478,7 +1489,11 @@ export function renderShell(
   const inspector = h(
     doc,
     "aside",
-    { class: "inspector", "aria-label": "Task inspector" },
+    {
+      class: "inspector",
+      "aria-label": "Task inspector",
+      "data-scroll-key": `inspector:${task?.task_id ?? ""}`,
+    },
     task
       ? taskInspector(doc, task)
       : h(
@@ -1526,7 +1541,13 @@ export function renderShell(
     },
     masthead,
     sidebar,
-    h(doc, "div", { class: "workspace-panels" }, main, inspector),
+    h(
+      doc,
+      "div",
+      { class: "workspace-panels", "data-scroll-key": "workspace" },
+      main,
+      inspector,
+    ),
     footer,
   );
 }

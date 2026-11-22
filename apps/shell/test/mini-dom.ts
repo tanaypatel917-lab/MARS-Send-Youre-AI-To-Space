@@ -14,8 +14,9 @@ export class MiniElement implements ShellElement {
   readonly children: (MiniElement | MiniText)[] = [];
   value = "";
   checked = false;
-  scrollTop = 0;
   disabled = false;
+  scrollTop = 0;
+  scrollLeft = 0;
   selectionStart: number | null = null;
   selectionEnd: number | null = null;
   selectionDirection: "forward" | "backward" | "none" | null = null;

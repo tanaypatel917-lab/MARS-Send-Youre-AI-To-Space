@@ -3,6 +3,7 @@ import type {
   MessageView,
   ReactionEmoji,
   ReferencePreview,
+  TeamResult,
 } from "@mars/team-chat";
 import { type ProjectionEvent, projectTranscript } from "@mars/ui-core";
 import type { AssistantApi } from "../shared/assistant";
@@ -40,11 +41,23 @@ export const MAX_HYDRATED_EVENT_PAYLOADS = 300;
 const PAYLOAD_FETCH_CONCURRENCY = 6;
 const MAX_PAYLOAD_CACHE_ENTRIES = 5000;
 const FOCUS_KEY = "data-focus-key";
+const TASK_REFRESH_MS = 2_000;
+const MAX_REFRESH_MS = 30_000;
 const DEFAULT_PAID_MODEL_ID = "claude-sonnet-4-5";
 
 type OptionalValue<T> =
   | { ok: true; value: T }
   | { ok: false; error: string; kind?: BridgeError["kind"] };
+
+async function teamAction<T>(
+  invoke: () => Promise<TeamResult<T>>,
+): Promise<TeamResult<T>> {
+  try {
+    return await invoke();
+  } catch {
+    return { ok: false, code: "unavailable" };
+  }
+}
 
 class WorkbenchFailure extends Error {
   constructor(readonly detail: BridgeError) {
@@ -128,6 +141,7 @@ export function createController(
   teamChat?: TeamChatBridgeApi,
   assistant?: AssistantApi,
   extensions?: ExtensionsApi,
+  scheduleRefresh?: (tick: () => void, delay: number) => () => void,
 ) {
   let extensionState: ExtensionState = {
     items: [],
@@ -160,7 +174,7 @@ export function createController(
     const draft = assistantDrafts.get(id) ?? "";
     assistantDrafts.delete(id);
     page = "chat";
-    teamState = { ...teamState, open: false };
+    closeTeamChat();
     assistantState = {
       ...assistantState,
       activeId: id,
@@ -181,6 +195,9 @@ export function createController(
   let selectedId: string | undefined;
   let loadRequested = false;
   let loadPromise: Promise<void> | undefined;
+  let disposed = false;
+  let cancelRefresh: (() => void) | undefined;
+  let refreshDelay = TASK_REFRESH_MS;
   let clientSeq = 1;
   // Per-load prefix: the host keeps sent client_message_ids across renderer
   // reloads, so a bare counter would replay or conflict with earlier sends.
@@ -208,6 +225,12 @@ export function createController(
     return form;
   };
   let patchExport: ExportViewState = { busy: false };
+  const selectTask = (id: string | undefined) => {
+    if (id !== selectedId) {
+      selectedId = id;
+      patchExport = { busy: false };
+    }
+  };
 
   let teamState: TeamChatViewState = {
     available: Boolean(teamChat),
@@ -218,13 +241,20 @@ export function createController(
     searchQuery: "",
     resolvedRefs: {},
   };
-  const teamDrafts = new Map<string, string>();
+  const teamDrafts = new Map<string, { text: string }>();
   const teamKey = (
     viewer = teamState.viewer,
     id = teamState.activeConversationId,
   ) => JSON.stringify([viewer, id]);
 
   let state: ShellState = { tasks: [], events: [], artifacts: [] };
+  let teamContext = 0;
+  let searchVersion = 0;
+  const closeTeamChat = () => {
+    teamContext++;
+    teamState = { ...teamState, open: false };
+    delete teamState.searchHits;
+  };
 
   let extensionAnchorId: string | undefined;
   const libraryScroller = () =>
@@ -234,7 +264,7 @@ export function createController(
       .find((el) => el.getAttribute("data-extension-id") === extensionAnchorId)
       ?.getBoundingClientRect?.().top;
   const render = () => {
-    const previousFeed = root.querySelectorAll("[data-team-feed]")[0];
+    if (disposed) return;
     const oldLibraryOffset = libraryScroller()?.scrollTop;
     const oldAnchorTop =
       oldLibraryOffset === undefined ? undefined : anchorTop();
@@ -242,7 +272,10 @@ export function createController(
       ? launchFor(state.selectedTask)
       : createInitialLaunch();
     const active = doc.activeElement;
-    const focusKey = active?.getAttribute(FOCUS_KEY) ?? null;
+    const focusAttr = [FOCUS_KEY, "data-control", "data-action"].find(
+      (attr) => active?.getAttribute(attr) != null,
+    );
+    const focusKey = focusAttr ? active?.getAttribute(focusAttr) : undefined;
     const selectionStart =
       typeof active?.selectionStart === "number" ? active.selectionStart : null;
     const selectionEnd =
@@ -264,7 +297,7 @@ export function createController(
       },
       onPage: (next) => {
         page = next;
-        teamState = { ...teamState, open: false };
+        closeTeamChat();
         if (next === "extensions") void refreshExtensions();
         render();
         if (next === "extensions") libraryScroller()?.focus();
@@ -332,13 +365,13 @@ export function createController(
       teamChat: {
         ...teamState,
         onClose: () => {
-          teamState = { ...teamState, open: false };
+          closeTeamChat();
           render();
         },
         onSelectConversation: (conversationId) =>
           void openTeamConversation(conversationId),
         onDraftChange: (text) => {
-          if (text) teamDrafts.set(teamKey(), text);
+          if (text) teamDrafts.set(teamKey(), { text });
           else teamDrafts.delete(teamKey());
           teamState = { ...teamState, draft: text };
         },
@@ -350,6 +383,9 @@ export function createController(
         onResolveReference: (messageId, referenceId) =>
           void resolveTeamReference(messageId, referenceId),
         onSearch: (query) => void searchTeamMessages(query),
+        onSearchChange: (searchQuery) => {
+          teamState = { ...teamState, searchQuery };
+        },
         onSwitchViewer: (viewer) => void switchTeamViewer(viewer),
         onLoadOlder: () => void loadOlderTeamMessages(),
       },
@@ -413,15 +449,15 @@ export function createController(
       onCancelTask: () => void handleCancelTask(),
       onExportPatch: () => void handleExportPatch(),
     };
+    const scrollPanes = () =>
+      Array.from(root.querySelectorAll("[data-scroll-key]"));
+    const scroll = new Map(
+      scrollPanes().map((el) => [
+        el.getAttribute("data-scroll-key"),
+        [el.scrollLeft, el.scrollTop] as const,
+      ]),
+    );
     root.replaceChildren(renderShell(doc, state));
-    const currentFeed = root.querySelectorAll("[data-team-feed]")[0];
-    if (
-      currentFeed &&
-      previousFeed?.scrollTop !== undefined &&
-      currentFeed.getAttribute("data-team-feed") ===
-        previousFeed.getAttribute("data-team-feed")
-    )
-      currentFeed.scrollTop = previousFeed.scrollTop;
     const library = libraryScroller();
     if (library && oldLibraryOffset !== undefined) {
       library.scrollTop = oldLibraryOffset;
@@ -429,10 +465,14 @@ export function createController(
       if (oldAnchorTop !== undefined && top !== undefined)
         library.scrollTop += top - oldAnchorTop;
     }
-    if (focusKey === null) return;
-    const targets = Array.from(root.querySelectorAll(`[${FOCUS_KEY}]`));
+    for (const pane of scrollPanes()) {
+      const position = scroll.get(pane.getAttribute("data-scroll-key"));
+      if (position) [pane.scrollLeft, pane.scrollTop] = position;
+    }
+    if (!focusKey || !focusAttr) return;
+    const targets = Array.from(root.querySelectorAll(`[${focusAttr}]`));
     const keyed = (key: string) =>
-      targets.find((element) => element.getAttribute(FOCUS_KEY) === key);
+      targets.find((element) => element.getAttribute(focusAttr) === key);
     const matched = keyed(focusKey);
     const target =
       matched ??
@@ -440,8 +480,10 @@ export function createController(
         ? (keyed("refresh") ?? keyed("assistant-input"))
         : undefined) ??
       (focusKey === "connect-model" ? keyed("assistant-input") : undefined) ??
-      keyed(HEADING_FOCUS_KEY);
-    target?.focus({ preventScroll: Boolean(library) });
+      Array.from(root.querySelectorAll(`[${FOCUS_KEY}]`)).find(
+        (el) => el.getAttribute(FOCUS_KEY) === HEADING_FOCUS_KEY,
+      );
+    target?.focus({ preventScroll: true });
     if (
       matched &&
       selectionStart !== null &&
@@ -668,6 +710,7 @@ export function createController(
   };
 
   const displayError = (message: string) => {
+    patchExport = { busy: false };
     state = {
       tasks: [],
       events: [],
@@ -703,8 +746,10 @@ export function createController(
 
   const loadTeamBootstrap = async () => {
     if (!teamChat) return;
+    const context = teamContext;
     try {
       const res = await teamChat["team.state"]({});
+      if (context !== teamContext) return;
       if (!res.ok) {
         teamState = {
           ...teamState,
@@ -732,13 +777,21 @@ export function createController(
       delete nextTeamState.error;
       if (
         teamState.viewer !== res.value.viewer ||
-        nextConvId !== teamState.activeConversationId
-      )
+        teamState.activeConversationId !== nextConvId
+      ) {
+        teamContext++;
+        delete nextTeamState.activeView;
+        delete nextTeamState.searchHits;
+        delete nextTeamState.activeConversationId;
+        nextTeamState.searchQuery = "";
         nextTeamState.draft =
-          teamDrafts.get(teamKey(res.value.viewer, nextConvId)) ?? "";
+          teamDrafts.get(teamKey(res.value.viewer, nextConvId))?.text ?? "";
+        nextTeamState.resolvedRefs = {};
+      }
       if (nextConvId) nextTeamState.activeConversationId = nextConvId;
       teamState = nextTeamState;
     } catch {
+      if (context !== teamContext) return;
       teamState = {
         ...teamState,
         available: false,
@@ -755,18 +808,24 @@ export function createController(
     const preserveHistory = options?.preserveHistory === true;
     const switchedConversation =
       teamState.activeConversationId !== conversationId;
+    if (switchedConversation) teamContext++;
+    const context = teamContext;
+    if (!preserveHistory) searchVersion++;
     const loadingState: TeamChatViewState = {
       ...teamState,
       activeConversationId: conversationId,
       loading: true,
       ...(switchedConversation
         ? {
+            searchQuery: "",
             draft:
-              teamDrafts.get(teamKey(teamState.viewer, conversationId)) ?? "",
+              teamDrafts.get(teamKey(teamState.viewer, conversationId))?.text ??
+              "",
           }
         : {}),
     };
-    delete loadingState.searchHits;
+    if (!preserveHistory) delete loadingState.searchHits;
+    if (switchedConversation) delete loadingState.activeView;
     delete loadingState.error;
     if (switchedConversation) delete loadingState.notice;
     teamState = loadingState;
@@ -775,6 +834,7 @@ export function createController(
       const res = await teamChat["team.open"]({
         conversation_id: conversationId,
       });
+      if (context !== teamContext) return;
       if (!res.ok) {
         teamState = {
           ...teamState,
@@ -784,9 +844,6 @@ export function createController(
         render();
         return;
       }
-      if (teamState.activeConversationId !== conversationId) {
-        return;
-      }
       const lastSeq = res.value.messages.at(-1)?.sequence;
       if (lastSeq !== undefined && lastSeq > 0) {
         await teamChat["team.markRead"]({
@@ -794,8 +851,9 @@ export function createController(
           sequence: lastSeq,
         });
       }
+      if (context !== teamContext) return;
       await loadTeamBootstrap();
-      if (teamState.activeConversationId !== conversationId) {
+      if (context !== teamContext) {
         return;
       }
       const previousView =
@@ -827,6 +885,7 @@ export function createController(
       };
       render();
     } catch {
+      if (context !== teamContext) return;
       teamState = {
         ...teamState,
         loading: false,
@@ -843,6 +902,7 @@ export function createController(
     if (!teamChat || !convId || !currentView || !cursor || teamState.loading) {
       return;
     }
+    const context = teamContext;
     teamState = { ...teamState, loading: true };
     render();
     try {
@@ -850,6 +910,7 @@ export function createController(
         conversation_id: convId,
         before: cursor,
       });
+      if (context !== teamContext) return;
       if (!res.ok) {
         teamState = {
           ...teamState,
@@ -857,9 +918,6 @@ export function createController(
           notice: `Unable to load older messages (${res.code}).`,
         };
         render();
-        return;
-      }
-      if (teamState.activeConversationId !== convId) {
         return;
       }
       const existingIds = new Set(
@@ -879,6 +937,7 @@ export function createController(
       };
       render();
     } catch {
+      if (context !== teamContext) return;
       teamState = {
         ...teamState,
         loading: false,
@@ -893,8 +952,11 @@ export function createController(
     teamState = { ...teamState, open: true };
     render();
     await loadTeamBootstrap();
+    if (!teamState.open) return;
     if (teamState.activeConversationId) {
-      await openTeamConversation(teamState.activeConversationId);
+      await openTeamConversation(teamState.activeConversationId, {
+        preserveHistory: true,
+      });
     } else {
       render();
     }
@@ -904,8 +966,10 @@ export function createController(
     if (!teamChat || !teamState.activeConversationId) return;
     const convId = teamState.activeConversationId;
     const key = teamKey();
+    const context = teamContext;
+    const draft = teamDrafts.get(key);
     const keepDraft = (notice: string) => {
-      if (teamKey() !== key) return;
+      if (context !== teamContext) return;
       teamState = {
         ...teamState,
         notice,
@@ -934,16 +998,14 @@ export function createController(
         );
         return;
       }
-      if (teamDrafts.get(key)?.trim() === body) teamDrafts.delete(key);
-      if (teamKey() !== key) return;
-      const sent: TeamChatViewState = {
-        ...teamState,
-        draft: teamDrafts.get(key) ?? "",
-      };
+      if (context !== teamContext && teamKey() === key) return;
+      if (teamDrafts.get(key) === draft) teamDrafts.delete(key);
+      if (context !== teamContext) return;
+      const sent = { ...teamState, draft: teamDrafts.get(key)?.text ?? "" };
       delete sent.notice;
       teamState = sent;
       await openTeamConversation(convId, { preserveHistory: true });
-      if (teamState.open && teamKey() === key)
+      if (teamState.open && context === teamContext)
         Array.from(root.querySelectorAll("[data-message-id]"))
           .find(
             (el) => el.getAttribute("data-message-id") === res.value.message_id,
@@ -956,10 +1018,14 @@ export function createController(
 
   const toggleTeamPin = async (conversationId: string, pinned: boolean) => {
     if (!teamChat) return;
-    const res = await teamChat["team.setPinned"]({
-      conversation_id: conversationId,
-      pinned,
-    });
+    const context = teamContext;
+    const res = await teamAction(() =>
+      teamChat["team.setPinned"]({
+        conversation_id: conversationId,
+        pinned,
+      }),
+    );
+    if (context !== teamContext) return;
     if (!res.ok) {
       teamState = { ...teamState, notice: `Team chat error: ${res.code}` };
       render();
@@ -976,11 +1042,15 @@ export function createController(
   ) => {
     const convId = teamState.activeConversationId;
     if (!teamChat || !convId) return;
-    const res = await teamChat["team.setReaction"]({
-      message_id: messageId,
-      emoji,
-      on,
-    });
+    const context = teamContext;
+    const res = await teamAction(() =>
+      teamChat["team.setReaction"]({
+        message_id: messageId,
+        emoji,
+        on,
+      }),
+    );
+    if (context !== teamContext) return;
     if (!res.ok) {
       teamState = { ...teamState, notice: `Team chat error: ${res.code}` };
       render();
@@ -1018,10 +1088,14 @@ export function createController(
     referenceId: string,
   ) => {
     if (!teamChat) return;
-    const res = await teamChat["team.resolveReference"]({
-      message_id: messageId,
-      reference_id: referenceId,
-    });
+    const context = teamContext;
+    const res = await teamAction(() =>
+      teamChat["team.resolveReference"]({
+        message_id: messageId,
+        reference_id: referenceId,
+      }),
+    );
+    if (context !== teamContext) return;
     if (!res.ok) {
       teamState = { ...teamState, notice: `Team chat error: ${res.code}` };
       render();
@@ -1038,6 +1112,9 @@ export function createController(
 
   const searchTeamMessages = async (query: string) => {
     if (!teamChat) return;
+    const context = teamContext;
+    const version = ++searchVersion;
+    teamState = { ...teamState, searchQuery: query };
     const trimmed = query.trim();
     if (!trimmed) {
       const next = { ...teamState, searchQuery: "" };
@@ -1055,11 +1132,13 @@ export function createController(
       render();
       return;
     }
-    const res = await teamChat["team.search"]({ query: trimmed });
+    const res = await teamAction(() =>
+      teamChat["team.search"]({ query: trimmed }),
+    );
+    if (context !== teamContext || version !== searchVersion) return;
     if (!res.ok) {
       teamState = {
         ...teamState,
-        searchQuery: trimmed,
         notice: `Team chat error: ${res.code}`,
       };
       render();
@@ -1067,7 +1146,6 @@ export function createController(
     }
     const found: TeamChatViewState = {
       ...teamState,
-      searchQuery: trimmed,
       searchHits: res.value.hits,
     };
     delete found.notice;
@@ -1077,23 +1155,30 @@ export function createController(
 
   const switchTeamViewer = async (viewer: string) => {
     if (!teamChat) return;
-    const res = await teamChat["team.switchViewer"]({ viewer });
+    const context = ++teamContext;
+    const res = await teamAction(() =>
+      teamChat["team.switchViewer"]({ viewer }),
+    );
+    if (context !== teamContext) return;
     if (!res.ok) {
       teamState = { ...teamState, notice: `Team chat error: ${res.code}` };
       render();
       return;
     }
     const nextConvId = res.value.conversations[0]?.conversation_id;
+    teamContext++;
     const nextTeamState: TeamChatViewState = {
       ...teamState,
       viewer: res.value.viewer,
       users: res.value.users,
       conversations: res.value.conversations,
-      draft: teamDrafts.get(teamKey(res.value.viewer, nextConvId)) ?? "",
+      draft: teamDrafts.get(teamKey(res.value.viewer, nextConvId))?.text ?? "",
+      searchQuery: "",
       resolvedRefs: {},
     };
     delete nextTeamState.searchHits;
     delete nextTeamState.activeView;
+    delete nextTeamState.activeConversationId;
     if (nextConvId) nextTeamState.activeConversationId = nextConvId;
     teamState = nextTeamState;
     if (nextConvId) {
@@ -1194,9 +1279,8 @@ export function createController(
       return;
     }
 
-    selectedId = created.task_id;
+    selectTask(created.task_id);
     composer = createInitialComposer();
-    patchExport = { busy: false };
     const launch = launchFor(created);
 
     if (snapshot.startNow) {
@@ -1395,7 +1479,14 @@ export function createController(
     const task = state.selectedTask;
     const verification = state.verification;
     const diff = state.diff;
-    if (!task || !verification || !diff) return;
+    if (
+      !task ||
+      selectedId !== task.task_id ||
+      !verification ||
+      !diff ||
+      patchExport.busy
+    )
+      return;
     const expectedPatchSha = verification.patch_sha256 ?? null;
     if (
       verification.state !== "verified" ||
@@ -1409,7 +1500,8 @@ export function createController(
       render();
       return;
     }
-    patchExport = { busy: true };
+    const pending = { busy: true };
+    patchExport = pending;
     render();
     try {
       const exported = await value(
@@ -1419,6 +1511,7 @@ export function createController(
           expected_patch_sha256: expectedPatchSha,
         }),
       );
+      if (patchExport !== pending) return;
       if (!exported.verified) {
         patchExport = {
           busy: false,
@@ -1442,6 +1535,7 @@ export function createController(
         task_id: task.task_id,
         artifact: exported.artifact,
       });
+      if (patchExport !== pending) return;
       if (!fetched.ok) {
         patchExport = {
           busy: false,
@@ -1456,6 +1550,7 @@ export function createController(
         fetched.result,
         globalThis.crypto.subtle,
       );
+      if (patchExport !== pending) return;
       if (!verifiedSha256) {
         patchExport = {
           busy: false,
@@ -1474,6 +1569,7 @@ export function createController(
       patchExport = nextExport;
       render();
     } catch (error) {
+      if (patchExport !== pending) return;
       patchExport = {
         busy: false,
         error: error instanceof Error ? error.message : "Patch export failed.",
@@ -1582,14 +1678,21 @@ export function createController(
     return payloads;
   };
 
-  const loadOnce = async () => {
+  const loadOnce = async (background: boolean) => {
     try {
       const described = await value(bridge["workbench.describe"]({}));
       const tasks = await value(bridge["tasks.list"]({}));
-      await loadTeamBootstrap();
+      if (!background) await loadTeamBootstrap();
+      if (disposed || loadRequested) return;
       const selected =
         tasks.find((task) => task.task_id === selectedId) ?? tasks[0];
-      selectedId = selected?.task_id;
+      selectTask(selected?.task_id);
+      if (
+        selected &&
+        state.selectedTask &&
+        launchFor(selected) !== launchFor(state.selectedTask)
+      )
+        patchExport = { busy: false };
       if (!selected) {
         state = {
           describe: described,
@@ -1604,6 +1707,7 @@ export function createController(
       const inspected = await value(
         bridge["tasks.inspect"]({ task_id: selected.task_id }),
       );
+      if (disposed || loadRequested) return;
       const [verification, diff, evidence, events] = await Promise.all([
         optionalValue(() =>
           value(bridge["tasks.verification"]({ task_id: selected.task_id })),
@@ -1756,9 +1860,8 @@ export function createController(
         artifacts,
         onSelect: (taskId) => {
           page = "tasks";
-          selectedId = taskId;
-          patchExport = { busy: false };
-          teamState = { ...teamState, open: false };
+          selectTask(taskId);
+          closeTeamChat();
           void load();
         },
         onRefresh: () => void load(),
@@ -1774,26 +1877,44 @@ export function createController(
       else if (!mayHaveNoOutput || evidence.kind !== "not_found")
         nextState.evidenceError = evidence.error;
       if (!events.ok) nextState.eventsError = events.error;
+      if (disposed || loadRequested || selectedId !== selected.task_id) return;
       state = nextState;
-      render();
+      refreshDelay = TASK_REFRESH_MS;
+      if (!background || (page === "tasks" && !teamState.open)) render();
     } catch (error) {
+      if (disposed || loadRequested) return;
+      if (background) {
+        // Keep the last task and editable controls usable during a transient outage.
+        refreshDelay = Math.min(MAX_REFRESH_MS, refreshDelay * 2);
+        return;
+      }
       displayError(
         error instanceof Error ? error.message : "Workbench is unavailable.",
       );
     }
   };
 
-  const load = () => {
-    loadRequested = true;
+  const load = (background = false) => {
+    if (disposed) return Promise.resolve();
+    cancelRefresh?.();
+    cancelRefresh = undefined;
+    if (!background) loadRequested = true;
     if (!loadPromise) {
       loadPromise = (async () => {
+        if (background) await loadOnce(true);
         while (loadRequested) {
           loadRequested = false;
-          await Promise.all([loadAssistant(), loadOnce()]);
+          await Promise.all([loadAssistant(), loadOnce(false)]);
         }
       })().finally(() => {
         loadPromise = undefined;
+        if (disposed) return;
         if (loadRequested) void load();
+        else if (state.selectedTask?.status === "running")
+          cancelRefresh = scheduleRefresh?.(
+            () => void load(true),
+            refreshDelay,
+          );
       });
     }
     return loadPromise;
@@ -1803,5 +1924,12 @@ export function createController(
     while (loadPromise) await loadPromise;
   };
 
-  return { load, settled };
+  const dispose = () => {
+    disposed = true;
+    loadRequested = false;
+    cancelRefresh?.();
+    cancelRefresh = undefined;
+  };
+
+  return { load, settled, dispose };
 }

@@ -11,6 +11,11 @@ type ShellGlobal = typeof globalThis & {
   marsAssistant?: AssistantApi;
   marsExtensions?: ExtensionsApi;
   document?: ShellDocument;
+  addEventListener(
+    type: "pagehide",
+    listener: () => void,
+    options: { once: boolean },
+  ): void;
 };
 
 const shell = globalThis as ShellGlobal;
@@ -26,7 +31,12 @@ if (shell.marsWorkbench && shell.document && root) {
     shell.marsTeamChat,
     shell.marsAssistant,
     shell.marsExtensions,
+    (tick, delay) => {
+      const timer = setTimeout(tick, delay);
+      return () => clearTimeout(timer);
+    },
   );
+  shell.addEventListener("pagehide", controller.dispose, { once: true });
   shell.marsAssistant?.onModelChanged?.(() => void controller.load());
   void controller.load();
 }
