@@ -9,6 +9,7 @@ import {
   type CatalogEntry,
   type DesktopExtensions,
   EXTENSION_CHANNEL,
+  EXTENSIONS_CHANGED,
   findExtension,
 } from "../runtime/extension-catalog";
 import {
@@ -225,6 +226,7 @@ export function desktopExtensionsMenu(
             click: async () => {
               const result = await api.install(entry.id);
               if (window.isDestroyed() || result === "cancelled") return;
+              window.webContents.send(EXTENSIONS_CHANGED);
               await dialog.showMessageBox(
                 window,
                 result === "installed"
@@ -265,6 +267,7 @@ export function desktopExtensionsMenu(
                 if (active !== project() || window.isDestroyed()) return;
                 const result = await api.remove(entry.id);
                 if (result === "cancelled" || window.isDestroyed()) return;
+                window.webContents.send(EXTENSIONS_CHANGED);
                 await dialog.showMessageBox(
                   window,
                   result === "removed"

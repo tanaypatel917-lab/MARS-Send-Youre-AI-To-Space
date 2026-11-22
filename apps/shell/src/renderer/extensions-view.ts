@@ -8,10 +8,13 @@ export type ExtensionItem = {
   permissions: string[];
   version: string;
   installed: boolean;
+  removable?: boolean;
 };
 export type ExtensionsApi = {
   list(): Promise<ExtensionItem[]>;
   install(id: string): Promise<"installed" | "cancelled" | "unavailable">;
+  remove?(id: string): Promise<"removed" | "cancelled" | "unavailable">;
+  onChanged?(refresh: () => void): () => void;
 };
 export type ExtensionState = {
   items: ExtensionItem[];
@@ -19,6 +22,7 @@ export type ExtensionState = {
   notice: string;
   available: boolean;
   onInstall?: (id: string) => void;
+  onRemove?: (id: string) => void;
   onRefresh?: () => void;
   onDraftTask?: (example: string) => void;
   hasTaskDraft?: boolean;
@@ -160,6 +164,24 @@ export function renderExtensions(
               ? state?.onDraftTask?.(example)
               : state?.onInstall?.(item.id);
           });
+          const remove =
+            item.removable && state?.onRemove
+              ? h(
+                  doc,
+                  "button",
+                  {
+                    type: "button",
+                    class: "connect-action",
+                    "aria-disabled": String(state.busy),
+                    "aria-label": `Remove ${item.name} from project`,
+                    "data-focus-key": `remove-extension-${item.id}`,
+                  },
+                  "Remove from project",
+                )
+              : null;
+          remove?.addEventListener("click", () => {
+            if (!state?.busy) state?.onRemove?.(item.id);
+          });
           return h(
             doc,
             "article",
@@ -192,7 +214,7 @@ export function renderExtensions(
                 `Permissions: ${item.permissions.join(", ") || "None"}`,
               ),
             ),
-            add,
+            h(doc, "div", { class: "library-actions" }, add, remove),
           );
         }),
       ),

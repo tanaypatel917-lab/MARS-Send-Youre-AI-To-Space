@@ -309,7 +309,13 @@ export function createController(
       extensions: {
         ...extensionState,
         onRefresh: () => void refreshExtensions(),
-        onInstall: (id) => void refreshExtensions(id),
+        onInstall: (id) => void refreshExtensions({ action: "install", id }),
+        ...(extensions?.remove
+          ? {
+              onRemove: (id: string) =>
+                void refreshExtensions({ action: "remove", id }),
+            }
+          : {}),
         hasTaskDraft: Boolean(composer.request || composer.criteria),
         onDraftTask: (example) => {
           if (!composer.request && !composer.criteria)
@@ -511,6 +517,9 @@ export function createController(
     const matched = keyed(focusKey);
     const target =
       matched ??
+      (focusKey.startsWith("remove-extension-")
+        ? keyed(focusKey.slice("remove-".length))
+        : undefined) ??
       (focusKey === "workbench-retry"
         ? (keyed("refresh") ?? keyed("assistant-input"))
         : undefined) ??
@@ -627,32 +636,58 @@ export function createController(
     render();
   };
 
-  const refreshExtensions = async (installId?: string) => {
+  let libraryChanged = false;
+  const refreshExtensions = async (change?: {
+    action: "install" | "remove";
+    id: string;
+  }) => {
     if (!extensions || extensionState.busy) return;
-    extensionAnchorId = installId;
+    const removing = change?.action === "remove";
+    extensionAnchorId = change?.id;
     extensionState = {
       ...extensionState,
       busy: true,
-      notice: installId
-        ? "Review this addition in the confirmation window."
+      notice: change
+        ? `Review this ${removing ? "removal" : "addition"} in the confirmation window.`
         : "Loading verified library…",
     };
     render();
     try {
-      const outcome = installId
-        ? await extensions.install(installId)
-        : undefined;
-      const items = await extensions.list();
+      let outcome:
+        | "installed"
+        | "removed"
+        | "cancelled"
+        | "unavailable"
+        | undefined;
+      if (change) {
+        try {
+          outcome = removing
+            ? ((await extensions.remove?.(change.id)) ?? "unavailable")
+            : await extensions.install(change.id);
+        } catch {
+          outcome = "unavailable";
+        }
+      }
+      let items: ExtensionState["items"];
+      do {
+        libraryChanged = false;
+        items = await extensions.list();
+        if (disposed) return;
+      } while (libraryChanged && page === "extensions");
       const notice =
         outcome === "cancelled"
           ? "Nothing changed."
           : outcome === "unavailable"
-            ? "Could not add this extension. Review the project and retry."
-            : outcome === "installed"
-              ? "Added to this project."
-              : items.length
-                ? "Review the permissions, then choose Add to project."
-                : "No verified extensions are available for this project.";
+            ? removing
+              ? "Could not confirm removal; refresh the library."
+              : "Could not add this extension. Review the project and retry."
+            : outcome === "removed"
+              ? "Removed from this project."
+              : outcome === "installed"
+                ? "Added to this project."
+                : items.length
+                  ? "Review the permissions, then choose Add to project."
+                  : "No verified extensions are available for this project.";
       extensionState = { items, notice, busy: false, available: true };
     } catch {
       extensionState = {
@@ -665,9 +700,12 @@ export function createController(
     }
     render();
     if (
-      installId &&
+      change &&
       page === "extensions" &&
-      doc.activeElement?.getAttribute(FOCUS_KEY) === `extension-${installId}`
+      (doc.activeElement?.getAttribute(FOCUS_KEY) ===
+        `extension-${change.id}` ||
+        doc.activeElement?.getAttribute(FOCUS_KEY) ===
+          `remove-extension-${change.id}`)
     )
       doc.activeElement.scrollIntoView?.({ block: "nearest" });
   };
@@ -1959,7 +1997,13 @@ export function createController(
     while (loadPromise) await loadPromise;
   };
 
+  const unsubscribeLibrary = extensions?.onChanged?.(() => {
+    if (disposed || page !== "extensions" || teamState.open) return;
+    if (extensionState.busy) libraryChanged = true;
+    else void refreshExtensions();
+  });
   const dispose = () => {
+    unsubscribeLibrary?.();
     disposed = true;
     loadRequested = false;
     cancelRefresh?.();
