@@ -1,20 +1,24 @@
 # MARS - Send You're AI To Space
 
-An IDE-connected agent platform for completing work, retaining useful context, and promoting workflows and specialist models **only when independent evidence supports improvement**.
+MARS is a coding workbench with CLI, VS Code and desktop preview clients. A configured workbench runs host-owned checks and binds the verdict to the exact patch. A task can complete unverified; only a current passing verdict unlocks verified export.
 
-## Desktop app
+## Desktop preview
 
-Install MARS from the [Desktop installers workflow](https://github.com/tanaypatel917-lab/MARS-Send-Youre-AI-To-Space/actions/workflows/desktop.yml), then open it from Applications. The app includes the local workbench and a demo project; no terminal or separate Bun install is needed. See [desktop setup](documentation/SHELL.md#install-and-open) for downloads, model setup, and platform limits.
+Sign in to GitHub and download a build from the [Desktop installers workflow](https://github.com/tanaypatel917-lab/MARS-Send-Youre-AI-To-Space/actions/workflows/desktop.yml). Builds are available for Ubuntu/Debian x64 and macOS on Apple silicon and Intel. Mac builds are not notarized. There are no auto-updates or Windows installer. See [desktop setup](documentation/SHELL.md#install-and-open).
 
-## Current state: offline-verified platform
+The build includes a local demo project you can browse without a key. Live tasks need your OpenRouter key. The default route is free-only, subject to quota and availability. Paid models require opt-in and may incur provider charges. Desktop does not execute commands or run host checks by default. To get verified export, attach to a [configured workbench with a Docker sandbox and trusted host checks](documentation/LOCAL_WORKBENCH.md#host-checks-and-verified-patch-export).
 
-The local workbench connects the VS Code client and CLI to durable tasks, isolated filesystem copies, checkpoints, and the Oh My Pi execution engine, and is the base for the learning, evaluation, training and specialist-serving milestones built on top of it. Everything below is **offline-verified only** (fixtures, fake servers, injected model responses); it is **not** a Milestone 1 or later acceptance claim. The per-milestone state and blockers are in the [HANDOFF milestone table](HANDOFF.md). It contains:
+## Current state: one recorded live verified bug fix
+
+On November 20, 2026, a live hosted OpenRouter model fixed one TypeScript CSV fixture through the configured workbench. The baseline failed, then all six protected tests passed in network-disabled Docker. The source checkout stayed untouched, and the exact exported diff passed an apply-and-compare round trip. [Replay the live bug fix](https://mars-dusky.vercel.app/demo#run-live-bugfix) or [read the receipt with the check, diff and verdict](documentation/evidence/live-openrouter-bugfix.json).
+
+This is CLI/workbench evidence from one fixture, not live desktop or VS Code acceptance, a general benchmark, or evidence of a useful GPU-trained specialist. The local workbench connects the clients to durable tasks, isolated filesystem copies, checkpoints and the Oh My Pi execution engine. See the [HANDOFF milestone table](HANDOFF.md) for per-milestone status and blockers.
 
 - The unchanged [master specification](documentation/MASTER_SPECIFICATION.md).
 - A [26-component source audit](documentation/SOURCE_REGISTER.md), with exact commits, licenses, APIs, integration owners, runtime requirements, risks, and proposed acceptance tests.
 - Initial [shared TypeScript contracts](packages/contracts/src/index.ts), with runtime schemas for tasks, budgets, events, scope, and immutable artifact references.
 - Oh My Pi start/resume/cancel/steer through the existing configurable model registry. No second agent loop or task database.
-- Host-bound file edits selected per model: `mars_edit` uses per-line hash anchors, `mars_replace` uses exact substrings, or `mars_apply_patch` uses the host patch applier; `mars_write` remains available. Model `editFormat` overrides omp-derived defaults; launch/event evidence records the selection. Only fake-model/offline tests so far: no real model has used `mars_edit`, and no edit-format benchmark has run. Semantics and limits in [documentation/EXECUTION_WORKBENCH.md](documentation/EXECUTION_WORKBENCH.md#file-reads-and-edits).
+- Host-bound file edits selected per model: `mars_edit` uses per-line hash anchors, `mars_replace` uses exact substrings, or `mars_apply_patch` uses the host patch applier; `mars_write` remains available. Model `editFormat` overrides omp-derived defaults; launch/event evidence records the selection. The [live edit-format comparison](documentation/evidence/live-edit-formats-benchmark.md) was exploratory: provider rate limits stopped most trials, and it supports no comparative verdict. [Edit semantics and limits](documentation/EXECUTION_WORKBENCH.md#file-reads-and-edits).
 - Authenticated loopback RPC, private connection-file import into VS Code SecretStorage, task progress/artifacts/diffs, checkpoint/restore, and isolated task copies that leave the source checkout unchanged.
 - Digest-pinned Docker execution with no host-shell fallback; command execution is disabled when no sandbox is configured.
 - Offline integration tests using the actual SDK with injected model responses; these are **not** live-model or real VS Code UI acceptance evidence.
