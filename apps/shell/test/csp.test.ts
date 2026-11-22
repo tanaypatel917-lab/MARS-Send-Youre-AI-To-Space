@@ -54,6 +54,12 @@ test("only exact same-origin assets resolve and preferences stay sandboxed", asy
     resolveAppAsset("mars-shell://app/shell.css", rendererDir)?.mediaType,
   ).toBe("text/css; charset=utf-8");
   expect(
+    resolveAppAsset("mars-shell://app/site-theme.css", rendererDir),
+  ).toEqual({
+    file: `${rendererDir}/site-theme.css`,
+    mediaType: "text/css; charset=utf-8",
+  });
+  expect(
     resolveAppAsset("mars-shell://app/settings.html", rendererDir)?.mediaType,
   ).toBe("text/html; charset=utf-8");
   expect(

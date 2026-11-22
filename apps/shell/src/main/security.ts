@@ -45,6 +45,7 @@ export function resolveAppAsset(
     "/index.html": "text/html; charset=utf-8",
     "/renderer.js": "text/javascript; charset=utf-8",
     "/shell.css": "text/css; charset=utf-8",
+    "/site-theme.css": "text/css; charset=utf-8",
     "/orbit.svg": "image/svg+xml",
     "/navigation.svg": "image/svg+xml",
     "/settings.html": "text/html; charset=utf-8",
