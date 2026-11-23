@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmod,
@@ -20,10 +21,17 @@ import {
   shell,
 } from "electron";
 import { DESKTOP_MODEL_CHANNEL } from "../shared/desktop-model";
+import { resolveDockerHost } from "./docker-host";
+import { resolveDockerPath } from "./docker-path";
 import { desktopExtensionsMenu } from "./extensions";
 import { startLocalWorkbench } from "./local-workbench";
 import { hasRemovableKey } from "./model-key";
 import { SHELL_WEB_PREFERENCES } from "./security";
+import {
+  seedVerificationExample,
+  VERIFICATION_IMAGE,
+} from "./verification-example";
+import { verificationStateRoot } from "./verification-state";
 
 const settingsPage = "mars-shell://app/settings.html";
 
@@ -55,6 +63,13 @@ export async function createDesktop(
   const keyFile = join(root, "openrouter-key.bin");
   await mkdir(demo, { recursive: true, mode: 0o700 });
   await chmod(root, 0o700);
+  const verification = await seedVerificationExample(root);
+  const verificationState = await verificationStateRoot(
+    join(root, "projects"),
+    app.getPath("home"),
+  );
+  let dockerPath = resolveDockerPath();
+  let dockerHost = await resolveDockerHost(dockerPath);
   await writeFile(
     join(demo, "README.md"),
     "# MARS demo project\n\nThis is a sample project you can give to the MARS agent. Try: summarize the README and suggest a next step.\n",
@@ -219,7 +234,21 @@ export async function createDesktop(
           });
         },
         source,
-        state: join(root, "projects"),
+        state:
+          source === verification.source
+            ? verificationState.state
+            : join(root, "projects"),
+        ...(dockerPath ? { dockerPath } : {}),
+        ...(dockerHost ? { dockerHost } : {}),
+        ...(source === verification.source
+          ? {
+              ...(verificationState.reason
+                ? { verificationUnavailableReason: verificationState.reason }
+                : { image: VERIFICATION_IMAGE }),
+              checksFile: verification.checksFile,
+              verifiedExportsOnly: true,
+            }
+          : {}),
         ...(openRouterKey ? { openRouterKey } : {}),
       });
       workbench = running;
@@ -250,6 +279,71 @@ export async function createDesktop(
             await rm(projectFile, { force: true });
             source = demo;
           });
+        },
+      },
+      {
+        label: "Open Verification Example",
+        click: () => {
+          void change(async () => {
+            await replacePrivate(projectFile, verification.source);
+            source = verification.source;
+          });
+        },
+      },
+      {
+        label: "Set Up Verification Sandbox…",
+        click: () => {
+          void (async () => {
+            dockerPath = resolveDockerPath();
+            dockerHost = await resolveDockerHost(dockerPath);
+            const run = (args: string[]) =>
+              new Promise<boolean>((resolve) => {
+                if (!dockerPath) return resolve(false);
+                const child = spawn(dockerPath, args, {
+                  stdio: "ignore",
+                  shell: false,
+                });
+                child.once("error", () => resolve(false));
+                child.once("close", (code) => resolve(code === 0));
+              });
+            if (!(await run(["--version"]))) {
+              const answer = await dialog.showMessageBox(window, {
+                type: "info",
+                message: "Install Docker to run protected checks",
+                detail:
+                  "Install and start Docker, then use Set Up Verification Sandbox… again.",
+                buttons: ["Cancel", "Open Docker installation guide"],
+                cancelId: 0,
+              });
+              if (answer.response === 1)
+                await shell.openExternal("https://docs.docker.com/get-docker/");
+              return;
+            }
+            const answer = await dialog.showMessageBox(window, {
+              type: "question",
+              message: "Download the verification sandbox?",
+              detail: `Docker will pull this exact pinned image:\n${VERIFICATION_IMAGE}\nProtected checks run without network access.`,
+              buttons: ["Cancel", "Download"],
+              cancelId: 0,
+            });
+            if (answer.response !== 1) return;
+            const ok = await run(["pull", VERIFICATION_IMAGE]);
+            await dialog.showMessageBox(window, {
+              type: ok ? "info" : "error",
+              message: ok
+                ? "Verification sandbox downloaded"
+                : "Sandbox download failed",
+              detail: ok
+                ? "The workbench will restart to refresh verification readiness."
+                : "Make sure Docker is running and your connection can reach the image registry, then try again.",
+            });
+            await change(async () => {});
+          })().catch(() =>
+            dialog.showErrorBox(
+              "Sandbox setup failed",
+              "Could not set up the verification sandbox.",
+            ),
+          );
         },
       },
       { type: "separator" },

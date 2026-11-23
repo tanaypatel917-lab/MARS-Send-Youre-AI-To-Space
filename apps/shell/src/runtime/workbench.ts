@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import { loadModelRegistry } from "@mars/providers";
 import { createWorkbenchService } from "@mars/workbench";
 import { z } from "zod";
+import { isLocalDockerHost } from "../../../../packages/workspaces/src/docker-host";
 import {
   type CatalogStatus,
   EXPIRED_PREFIX,
@@ -16,6 +17,16 @@ const StartSchema = z
     source: z.string().min(1),
     state: z.string().min(1),
     openRouterKey: z.string().max(512).optional(),
+    image: z.string().min(1).optional(),
+    checksFile: z.string().min(1).optional(),
+    dockerPath: z.string().min(1).optional(),
+    dockerHost: z
+      .string()
+      .min(1)
+      .refine((host) => isLocalDockerHost(host))
+      .optional(),
+    verificationUnavailableReason: z.string().min(1).max(1024).optional(),
+    verifiedExportsOnly: z.boolean().optional(),
   })
   .strict();
 
@@ -34,9 +45,17 @@ async function serve(): Promise<void> {
       stopped,
     ]);
     if (line === undefined) return;
-    const { source, state, openRouterKey } = StartSchema.parse(
-      JSON.parse(line),
-    );
+    const {
+      source,
+      state,
+      openRouterKey,
+      image,
+      checksFile,
+      dockerPath,
+      dockerHost,
+      verificationUnavailableReason,
+      verifiedExportsOnly,
+    } = StartSchema.parse(JSON.parse(line));
     const scope = { owner_id: "local", project_id: basename(state) };
     const extensions = projectExtensions(source, state, scope, undefined, {
       onExpired(id) {
@@ -45,6 +64,15 @@ async function serve(): Promise<void> {
     });
     const service = await createWorkbenchService({
       sourceRoot: source,
+      ...(image ? { image } : {}),
+      ...(checksFile ? { checksFile } : {}),
+      ...(verificationUnavailableReason
+        ? { verificationUnavailableReason }
+        : {}),
+      sandboxDockerPath: dockerPath ?? Bun.which("docker") ?? "/usr/bin/docker",
+      ...(dockerHost ? { sandboxDockerHost: dockerHost } : {}),
+      allowUnavailableSandbox: true,
+      ...(verifiedExportsOnly !== undefined ? { verifiedExportsOnly } : {}),
       stateRoot: state,
       scope,
       mcp: extensions.runtime,

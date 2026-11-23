@@ -61,6 +61,7 @@ export interface SandboxRunner {
 export interface DockerSandboxOptions {
   image: string;
   dockerPath?: string;
+  dockerHost?: string;
   user?: { uid: number; gid: number };
   memoryBytes?: number;
   pids?: number;

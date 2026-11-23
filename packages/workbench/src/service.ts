@@ -70,6 +70,7 @@ import {
   type CommandApprovalRequest,
   createDockerSandbox,
   createLocalWorkspaceProvider,
+  DockerSandboxPrerequisiteError,
   type LocalWorkspaceProvider,
   WorkspaceNotFoundError,
 } from "@mars/workspaces";
@@ -207,6 +208,11 @@ export interface WorkbenchServiceOptions {
   scope: Scope;
   port?: number;
   image?: string;
+  sandboxDockerPath?: string;
+  sandboxDockerHost?: string;
+  allowUnavailableSandbox?: boolean;
+  verifiedExportsOnly?: boolean;
+  verificationUnavailableReason?: string;
   /** Run workspace operations on an OpenHands Agent Server instead of locally. */
   remoteWorkspace?: RemoteWorkspaceConfig;
   /** Host-owned protected check definitions (JSON); clients select them by id at Start. */
@@ -575,10 +581,50 @@ export async function createWorkbenchService(
     } catch {
       review = undefined;
     }
-    const sandbox = options.image
-      ? createDockerSandbox({ image: options.image })
+    let sandbox = options.image
+      ? createDockerSandbox({
+          image: options.image,
+          ...(options.sandboxDockerHost
+            ? { dockerHost: options.sandboxDockerHost }
+            : {}),
+          ...(options.sandboxDockerPath
+            ? { dockerPath: options.sandboxDockerPath }
+            : {}),
+        })
       : undefined;
-    await sandbox?.verify();
+    let verificationReadiness: WorkbenchHostOptions["verificationReadiness"] =
+      options.verificationUnavailableReason
+        ? {
+            status: "unavailable",
+            reason: options.verificationUnavailableReason,
+            setup:
+              "Choose a private workspace path without spaces or special characters, then restart MARS.",
+          }
+        : undefined;
+    try {
+      await sandbox?.verify();
+      if (sandbox)
+        verificationReadiness = {
+          status: "ready",
+          reason: "Protected checks run in a network-disabled sandbox",
+        };
+    } catch (error) {
+      if (
+        !options.allowUnavailableSandbox ||
+        !(error instanceof DockerSandboxPrerequisiteError)
+      )
+        throw error;
+      sandbox = undefined;
+      verificationReadiness = {
+        status: "unavailable",
+        reason: error.message.startsWith("Pinned Docker image")
+          ? "Sandbox image not downloaded"
+          : error.message === "Docker daemon is unavailable"
+            ? "Docker is not running or access is denied"
+            : "Docker CLI is not installed or executable",
+        setup: "Use Project → Set Up Verification Sandbox…",
+      };
+    }
     const checks = options.checksFile
       ? await loadHostChecks(options.checksFile)
       : [];
@@ -645,8 +691,10 @@ export async function createWorkbenchService(
       store,
       registry,
       canExecute,
+      ...(verificationReadiness ? { verificationReadiness } : {}),
+      verifiedExportsOnly: Boolean(options.verifiedExportsOnly),
       ...(checks.length ? { checks } : {}),
-      ...(options.image ? { image: options.image } : {}),
+      ...(sandbox && options.image ? { image: options.image } : {}),
       ...(providerStatus ? { providerStatus } : {}),
       ...(options.vaultDir
         ? {
