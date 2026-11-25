@@ -72,7 +72,8 @@ export function renderAssistant(
   const empty = messages.length === 0;
   const health = state.health?.state ?? "unchecked";
   const healthy = health === "ok" || health === "unchecked";
-  const startTask = () => state.onTask?.(state.draft.trim());
+  // The live composer does not re-render on each keystroke.
+  const startTask = () => state.onTask?.((input.value ?? state.draft).trim());
   const startTaskAction = (key: string) => {
     const el = action(doc, "Start a coding task  ↗", "start-task", startTask);
     el.setAttribute("data-focus-key", key);
