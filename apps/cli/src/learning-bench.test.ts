@@ -200,15 +200,19 @@ test("learning reports rate limits, 5xx and provider timeouts independently of p
       status,
       headers: { "retry-after": "999" },
     });
-  const run = (status: number) =>
+  const run = (
+    status: number,
+    fetch = transport(status),
+    baselineFetch = transport(429),
+  ) =>
     runLearningBenchmark({
       suite,
       plan,
-      outDir: join(repo, "out"),
+      outDir: join(repo, `out-${status}`),
       mode: "offline",
       bindings: {
-        baseline: { ...binding, fetch: transport(429) },
-        specialist: { ...binding, fetch: transport(status) },
+        baseline: { ...binding, fetch: baselineFetch },
+        specialist: { ...binding, fetch },
       },
     });
   const report = await run(503);
@@ -229,4 +233,46 @@ test("learning reports rate limits, 5xx and provider timeouts independently of p
     ci_95: null,
   });
   expect((await run(408)).arms.specialist.provider_errors.timeout).toBe(1);
+  const truncated = await run(
+    200,
+    async () => {
+      const frame = JSON.stringify({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_1",
+                  function: {
+                    name: "mars_apply_patch",
+                    arguments: '{"patch":',
+                  },
+                },
+              ],
+            },
+            finish_reason: "length",
+          },
+        ],
+        usage: { prompt_tokens: 100, completion_tokens: 100 },
+      });
+      return new Response(`data: ${frame}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    },
+    async () =>
+      new Response(
+        'data: {"choices":[{"delta":{"content":"No changes"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+  );
+  expect(truncated.arms.specialist).toMatchObject({
+    eligible: 1,
+    solved: 0,
+  });
+  expect(truncated.tasks[0]?.outcomes.specialist.provider_failure).toBeNull();
+  expect(truncated.paired).toMatchObject({
+    pairs: 1,
+    excluded_provider_pairs: 0,
+  });
 });
