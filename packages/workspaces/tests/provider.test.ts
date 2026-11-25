@@ -2725,3 +2725,29 @@ test("exportPatch reconstructs a BOM-only edit over a dirty git baseline byte fo
     await fixture.close();
   }
 });
+
+test("review handoff detects source changes outside the verified patch", async () => {
+  const fixture = await makeFixture();
+  try {
+    const options = { compareSourceBaseline: true };
+    const before = await fixture.provider.exportPatch(
+      context,
+      fixture.workspace,
+      options,
+    );
+    expect(before.source_baseline).toBe("matches");
+    await writeFile(
+      join(fixture.sourceRoot, "source-only.txt"),
+      "after launch\n",
+    );
+    const after = await fixture.provider.exportPatch(
+      context,
+      fixture.workspace,
+      options,
+    );
+    expect(after.source_baseline).toBe("mismatch");
+    expect(after.round_trip).toEqual(before.round_trip);
+  } finally {
+    await fixture.close();
+  }
+});

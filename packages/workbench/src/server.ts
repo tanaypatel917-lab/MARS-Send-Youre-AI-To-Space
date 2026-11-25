@@ -167,6 +167,7 @@ export type RpcErrorCode =
   | "forbidden"
   | "not_found"
   | "conflict"
+  | "patch_round_trip_failed"
   | "unavailable"
   | "model_unavailable"
   | "too_large"
@@ -185,6 +186,10 @@ const errors: Record<RpcErrorCode, { status: number; message: string }> = {
   conflict: {
     status: 409,
     message: "Workbench revision or execution conflict.",
+  },
+  patch_round_trip_failed: {
+    status: 409,
+    message: "The patch could not be reconstructed from the task baseline.",
   },
   unavailable: { status: 503, message: "Workbench execution is unavailable." },
   model_unavailable: {

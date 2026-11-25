@@ -8,6 +8,7 @@ import type {
 import { type ProjectionEvent, projectTranscript } from "@mars/ui-core";
 import type { AssistantApi } from "../shared/assistant";
 import type { BridgeError, BridgeResult, ShellBridge } from "../shared/methods";
+import type { PatchHandoffApi } from "../shared/patch-handoff";
 import {
   TEAM_CHAT_MAX_MESSAGE_CHARS,
   TEAM_CHAT_MAX_SEARCH_CHARS,
@@ -17,7 +18,7 @@ import type { AssistantViewState } from "./assistant-view";
 import type { ShellDocument, ShellElement } from "./dom";
 import type { ExtensionState, ExtensionsApi } from "./extensions-view";
 import type { TeamChatViewState } from "./team-chat-view";
-import { verifyArtifact } from "./verify";
+import { sha256Hex, verifyArtifact } from "./verify";
 import {
   type ApprovalsState,
   type ArtifactView,
@@ -26,6 +27,7 @@ import {
   HEADING_FOCUS_KEY,
   type LaunchCardState,
   MAX_REQUIRED_CHECKS,
+  patchExportBlocker,
   renderShell,
   type ShellState,
   type WorkspacePage,
@@ -142,6 +144,7 @@ export function createController(
   assistant?: AssistantApi,
   extensions?: ExtensionsApi,
   scheduleRefresh?: (tick: () => void, delay: number) => () => void,
+  patchHandoff?: PatchHandoffApi,
 ) {
   let extensionState: ExtensionState = {
     items: [],
@@ -472,6 +475,7 @@ export function createController(
       onSteerTask: (instruction) => void handleSteerTask(instruction),
       onCancelTask: () => void handleCancelTask(),
       onExportPatch: () => void handleExportPatch(),
+      ...(patchHandoff ? { onSavePatch: () => void handleSavePatch() } : {}),
     };
     const scrollPanes = () =>
       Array.from(root.querySelectorAll("[data-scroll-key]"));
@@ -1561,14 +1565,11 @@ export function createController(
     )
       return;
     const expectedPatchSha = verification.patch_sha256 ?? null;
-    if (
-      verification.state !== "verified" ||
-      !verification.candidate?.revision ||
-      !expectedPatchSha
-    ) {
+    const blocker = patchExportBlocker(state);
+    if (blocker || !verification.candidate?.revision || !expectedPatchSha) {
       patchExport = {
         busy: false,
-        error: "Host verification must be Verified before exporting.",
+        error: blocker ?? "Verification does not identify the current patch.",
       };
       render();
       return;
@@ -1649,6 +1650,62 @@ export function createController(
       };
       render();
     }
+  };
+
+  const handleSavePatch = async () => {
+    const task = state.selectedTask;
+    const verification = state.verification;
+    const diff = state.diff;
+    const revision = verification?.candidate?.revision;
+    const digest = verification?.patch_sha256;
+    if (
+      !patchHandoff ||
+      !task ||
+      selectedId !== task.task_id ||
+      !diff ||
+      !revision ||
+      !digest ||
+      patchExport.busy ||
+      patchExportBlocker(state) ||
+      verification.record?.patch_sha256 !== digest
+    )
+      return;
+    const pending: ExportViewState = { ...patchExport, busy: true };
+    delete pending.handoff;
+    patchExport = pending;
+    render();
+    try {
+      const bytes = new TextEncoder().encode(
+        diff.files.map((file) => file.patch).join(""),
+      );
+      const reviewedSha = await sha256Hex(bytes, globalThis.crypto.subtle);
+      if (patchExport !== pending) return;
+      const handoff =
+        reviewedSha === digest
+          ? await patchHandoff.save({
+              task_id: task.task_id,
+              expected_revision: revision,
+              expected_patch_sha256: digest,
+            })
+          : {
+              status: "blocked" as const,
+              reason:
+                "The diff does not match the verified patch. Refresh the review and rerun the checks if the mismatch remains.",
+            };
+      if (patchExport !== pending) return;
+      patchExport = { ...pending, busy: false, handoff };
+    } catch {
+      if (patchExport !== pending) return;
+      patchExport = {
+        ...pending,
+        busy: false,
+        handoff: {
+          status: "blocked",
+          reason: "Patch handoff is unavailable. Try again.",
+        },
+      };
+    }
+    render();
   };
 
   const loadEvents = async (

@@ -1079,12 +1079,12 @@ export async function createLocalWorkspaceProvider(
         }
       });
     },
-    async exportPatch(context, workspace) {
+    async exportPatch(context, workspace, exportOptions) {
       return withWorkspace(context, workspace, async (current) => {
         if (workspace.revision !== current.revision)
           throw new RevisionConflictError();
         const base = await baselineRef(context, current);
-        const { files: baseFiles } = await getCheckpoint(
+        const { manifest, files: baseFiles } = await getCheckpoint(
           context,
           current,
           base,
@@ -1178,12 +1178,29 @@ export async function createLocalWorkspaceProvider(
             : { status: "passed", reason: null };
         };
         try {
+          const proof = await roundTrip();
+          const source = exportOptions?.compareSourceBaseline
+            ? await snapshotTree(sourceRoot, {
+                limits,
+                extraIgnores,
+                includeData: false,
+              }).catch(() => null)
+            : undefined;
           return {
             workspace: currentRef(current),
             patch,
             files: diff.files.length,
-            round_trip: await roundTrip(),
+            round_trip: proof,
             unsupported,
+            ...(source === undefined
+              ? {}
+              : {
+                  source_baseline: !source
+                    ? "unavailable"
+                    : source.digest === manifest.tree_digest
+                      ? "matches"
+                      : "mismatch",
+                }),
           };
         } finally {
           await rm(scratch, { recursive: true, force: true });

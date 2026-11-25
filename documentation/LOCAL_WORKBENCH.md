@@ -59,6 +59,8 @@ The provider runs commands non-root, without network, with read-only container r
 
 `tasks.evidence` returns Watch verify records only. Pass `include_host_verification: true` to also receive `host_verification` (the `tasks.verification` view), so Watch assurance and host required-check verdicts arrive in one response but stay separate fields; older hosts reject the parameter.
 
+The desktop Save action requests `tasks.export` with `review_handoff: true`. It requires a stored passing verdict that names the exact patch SHA-256 and a successful baseline round trip. The local provider compares the included source files, executable bits and directories against the original task snapshot, not just the Git commit ID: uncommitted changes present at launch are part of the baseline, and workspace exclusions are not compared. The desktop blocks saving if that comparison fails or is unavailable. The exported receipt describes the snapshot comparison at save time; it is not proof the checkout stayed unchanged afterward. Recheck applicability in Git before applying.
+
 ## Recovery and privacy
 
 Start/resume require exact revisions and saved task/workspace/model/approval identity. Resume reopens the same workspace and original private SDK journal; missing or corrupt state fails closed, never recreating from source. Checkpoints and artifacts are task-owned. Restore is refused while a task is running. Keep state intact for recovery, including unresolved restore backup/journal directories.

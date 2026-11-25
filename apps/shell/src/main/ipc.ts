@@ -1,6 +1,10 @@
 import { fail } from "@mars/team-chat";
 import { ASSISTANT_CHANNEL } from "../shared/assistant";
 import { BRIDGE_CHANNEL, bridgeFailure } from "../shared/methods";
+import {
+  PATCH_HANDOFF_CHANNEL,
+  type PatchHandoffResult,
+} from "../shared/patch-handoff";
 import { TEAM_CHAT_CHANNEL } from "../shared/team-chat";
 import type { createAssistant } from "./assistant";
 import type { Bridge } from "./bridge";
@@ -97,6 +101,18 @@ export function registerBridge(
       return bridgeFailure("protocol");
     }
   });
+}
+
+export function registerPatchHandoff(
+  ipcMain: IpcMainLike,
+  save: (payload: unknown) => Promise<PatchHandoffResult>,
+  options: SenderPolicy,
+): void {
+  ipcMain.handle(PATCH_HANDOFF_CHANNEL, async (event, payload) =>
+    trustedSender(event, options)
+      ? save(payload)
+      : { status: "blocked", reason: "Patch handoff request refused." },
+  );
 }
 
 export function registerTeamChatBridge(

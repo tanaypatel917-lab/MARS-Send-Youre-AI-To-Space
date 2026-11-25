@@ -66,6 +66,7 @@ import {
   isLoopbackUrl,
   OMNIROUTE_PROVIDER_ID,
 } from "@mars/providers-omniroute";
+import { redact } from "@mars/research-worker";
 import type { Turn } from "@mars/review";
 import type {
   AppendEventInput,
@@ -1297,6 +1298,13 @@ export async function createWorkbenchHost(
     scope: options.scope,
     store: options.store,
     workspace: options.workspace,
+    scrubOutput: async (context, taskId, output) => {
+      const patterns = await privatePatterns(context, taskId);
+      return redact(output, [
+        ...patterns,
+        ...patterns.map((pattern) => JSON.stringify(pattern).slice(1, -1)),
+      ]);
+    },
     ...(options.checks ? { checks: options.checks } : {}),
   };
   const run = (
@@ -3573,6 +3581,7 @@ export async function createWorkbenchHost(
         const exported = await options.workspace.exportPatch(
           context,
           candidate,
+          params.review_handoff ? { compareSourceBaseline: true } : undefined,
         );
         const after = await options.workspace.reopen(context, params.task_id);
         if (after.revision !== candidate.revision)
@@ -3584,10 +3593,8 @@ export async function createWorkbenchHost(
           .digest("hex");
         if (sha256 !== params.expected_patch_sha256)
           throw new WorkbenchError("conflict");
-        assertPublicBytes(
-          exported.patch,
-          await privatePatterns(context, params.task_id),
-        );
+        const patterns = await privatePatterns(context, params.task_id);
+        assertPublicBytes(exported.patch, patterns);
         const records = await verificationRecords(
           verificationHost,
           context,
@@ -3598,6 +3605,18 @@ export async function createWorkbenchHost(
           records,
           sha256,
         );
+        const verdict = presentation.record;
+        if (params.review_handoff) {
+          if (
+            presentation.state !== "verified" ||
+            verdict?.patch_sha256 !== sha256 ||
+            !exported.files
+          )
+            throw new WorkbenchError("conflict");
+          if (exported.round_trip.status !== "passed")
+            throw new WorkbenchError("patch_round_trip_failed");
+          assertPublicBytes(Buffer.from(JSON.stringify(verdict)), patterns);
+        }
         if (
           options.verifiedExportsOnly &&
           (presentation.state !== "verified" ||
@@ -3633,6 +3652,14 @@ export async function createWorkbenchHost(
             presentation.state === "verified" &&
             exported.round_trip.status === "passed",
           verdict_run_id: presentation.record?.run_id ?? null,
+          ...(params.review_handoff && verdict
+            ? {
+                handoff: {
+                  source_baseline: exported.source_baseline ?? "unavailable",
+                  verdict,
+                },
+              }
+            : {}),
           round_trip: exported.round_trip,
           unsupported: exported.unsupported.map((entry) => ({
             path: entry.path,

@@ -146,6 +146,7 @@ export interface PatchExportResult {
     reason: string | null;
   };
   unsupported: { path: string; reason: string }[];
+  source_baseline?: "matches" | "mismatch" | "unavailable";
 }
 
 export interface LocalWorkspaceProvider extends ExecutionProvider {
@@ -174,6 +175,7 @@ export interface LocalWorkspaceProvider extends ExecutionProvider {
   exportPatch(
     context: RequestContext,
     workspace: WorkspaceRef,
+    options?: { compareSourceBaseline?: boolean },
   ): Promise<PatchExportResult>;
   execute(
     context: RequestContext,

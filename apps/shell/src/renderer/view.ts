@@ -2,6 +2,7 @@ import type {
   ArtifactRef,
   EventEnvelope,
   Task,
+  VerificationEvidenceRecord,
   VerificationView,
 } from "@mars/contracts";
 import type { TranscriptProjection } from "@mars/ui-core";
@@ -12,6 +13,7 @@ import type {
   InspectResult,
   PatchExportResult,
 } from "../shared/methods";
+import type { PatchHandoffResult } from "../shared/patch-handoff";
 import { type AssistantViewState, renderAssistant } from "./assistant-view";
 import { disclosure, h, type ShellDocument, type ShellElement } from "./dom";
 import { type ExtensionState, renderExtensions } from "./extensions-view";
@@ -67,6 +69,7 @@ export type ExportViewState = {
   result?: PatchExportResult;
   patchText?: string;
   verifiedSha256?: boolean;
+  handoff?: PatchHandoffResult;
 };
 
 export type WorkspacePage = "chat" | "tasks" | "extensions" | "settings";
@@ -115,6 +118,7 @@ export type ShellState = {
   onSteerTask?: (instruction: string) => void;
   onCancelTask?: () => void;
   onExportPatch?: () => void;
+  onSavePatch?: () => void;
 };
 
 export const HEADING_FOCUS_KEY = "heading";
@@ -964,6 +968,38 @@ function taskInspector(doc: ShellDocument, task: Task): ShellElement {
   );
 }
 
+function checkResults(
+  doc: ShellDocument,
+  record: VerificationEvidenceRecord,
+): ShellElement[] {
+  return record.checks.map((check, index) =>
+    h(
+      doc,
+      "article",
+      { class: "record" },
+      untrusted(doc, check.check_id ?? check.path, "required check"),
+      h(
+        doc,
+        "p",
+        {},
+        `${check.status} · ${check.duration_ms} ms${check.exit_code === undefined ? "" : ` · exit ${check.exit_code}`}`,
+      ),
+      check.reason ? untrusted(doc, check.reason, "check reason") : null,
+      check.output_tail
+        ? disclosure(
+            doc,
+            "patch-details",
+            `check:${record.run_id}:${index}`,
+            "Check log (output tail)",
+            untrusted(doc, check.output_tail, "sandbox check output"),
+          )
+        : check.kind === "host_test"
+          ? h(doc, "p", { class: "muted" }, "No check log available.")
+          : null,
+    ),
+  );
+}
+
 function verificationSection(
   doc: ShellDocument,
   view: VerificationView | undefined,
@@ -974,7 +1010,7 @@ function verificationSection(
       doc,
       "section",
       { class: "inspector-section" },
-      heading(doc, "Verification"),
+      h(doc, "h3", { class: "minor-title" }, "Verification and check logs"),
       unavailable(doc, error),
     );
   if (!view)
@@ -982,33 +1018,37 @@ function verificationSection(
       doc,
       "section",
       { class: "inspector-section" },
-      heading(doc, "Verification"),
+      h(doc, "h3", { class: "minor-title" }, "Verification and check logs"),
       h(doc, "p", {}, "No verification view available."),
     );
   const reasons = view.reasons.map((reason) =>
     untrusted(doc, reason, "host verdict reason"),
   );
-  const records = view.records.map((record) =>
-    h(
-      doc,
-      "article",
-      { class: "record" },
+  const records = view.records
+    .filter((record) => record.run_id !== view.record?.run_id)
+    .reverse()
+    .map((record) =>
       h(
         doc,
-        "p",
-        {},
-        `${record.verdict} · ${record.candidate?.revision ?? "no candidate"} · ${record.recorded_at}`,
+        "article",
+        { class: "record" },
+        h(
+          doc,
+          "p",
+          {},
+          `${record.verdict} · ${record.candidate?.revision ?? "no candidate"} · ${record.recorded_at}`,
+        ),
+        ...record.reasons.map((reason) =>
+          untrusted(doc, reason, "host verdict reason"),
+        ),
+        ...checkResults(doc, record),
       ),
-      ...record.reasons.map((reason) =>
-        untrusted(doc, reason, "host verdict reason"),
-      ),
-    ),
-  );
+    );
   return h(
     doc,
     "section",
     { class: "inspector-section" },
-    heading(doc, "Verification"),
+    h(doc, "h3", { class: "minor-title" }, "Verification and check logs"),
     h(
       doc,
       "p",
@@ -1016,7 +1056,16 @@ function verificationSection(
       VERIFICATION_LABEL[view.state],
     ),
     ...reasons,
-    h(doc, "div", { class: "records" }, ...records),
+    ...(view.record ? checkResults(doc, view.record) : []),
+    records.length
+      ? disclosure(
+          doc,
+          "patch-details",
+          "earlier-checks",
+          "Earlier check runs",
+          ...records,
+        )
+      : null,
   );
 }
 
@@ -1029,6 +1078,31 @@ function countPatch(patch: string): { added: number; removed: number } {
     else if (line.startsWith("-")) removed++;
   }
   return { added, removed };
+}
+
+export function patchExportBlocker(state: ShellState): string | undefined {
+  if (state.diffError)
+    return "The diff is unavailable. Refresh the review to try again.";
+  if (!state.diff?.files.length) return "There are no changes to export.";
+  if (state.selectedTask?.status === "running")
+    return "The task is still running. Wait for it to finish and verify the result.";
+  if (state.verificationError || !state.verification)
+    return "Verification is unavailable. Refresh the review to try again.";
+  switch (state.verification.state) {
+    case "failed":
+      return "Required checks failed. Review the check logs and fix the candidate before verifying again.";
+    case "inconclusive":
+      return "Required checks could not confirm the result. Review the check logs and rerun verification.";
+    case "stale":
+      return "Verification is stale. Run the required checks against the current candidate.";
+    case "unverified":
+      return "No verified result. Run the task with required checks before exporting.";
+  }
+  if (
+    !state.verification.candidate?.revision ||
+    !state.verification.patch_sha256
+  )
+    return "Verification does not identify the current patch. Rerun the required checks.";
 }
 
 function changesSection(doc: ShellDocument, state: ShellState): ShellElement {
@@ -1063,14 +1137,17 @@ function changesSection(doc: ShellDocument, state: ShellState): ShellElement {
     );
   });
 
-  const canExport =
-    verification?.state === "verified" &&
-    Boolean(verification.candidate?.revision) &&
-    Boolean(verification.patch_sha256) &&
-    (diff?.files.length ?? 0) > 0;
+  const blocker = patchExportBlocker(state);
+  const canExport = !blocker;
+  const saveBlocker =
+    blocker ??
+    (verification?.record?.patch_sha256 !== verification?.patch_sha256
+      ? "The check record does not name the exact patch bytes. Run the required checks again to save a receipt."
+      : undefined);
+  const handoff = exportState?.handoff;
 
   let exportBox: ShellElement | null = null;
-  if (state.selectedTask && !error && (diff?.files.length ?? 0) > 0) {
+  if (state.selectedTask) {
     const exportBtn = h(
       doc,
       "button",
@@ -1084,6 +1161,22 @@ function changesSection(doc: ShellDocument, state: ShellState): ShellElement {
     );
     exportBtn.disabled = !canExport || Boolean(exportState?.busy);
     exportBtn.addEventListener("click", () => state.onExportPatch?.());
+    const saveBtn =
+      state.onSavePatch && (diff?.files.length ?? 0) > 0
+        ? h(
+            doc,
+            "button",
+            {
+              type: "button",
+              class: "primary-btn export-btn",
+              disabled: Boolean(saveBlocker || exportState?.busy),
+              "data-action": "save-patch-handoff",
+            },
+            "Save verified patch + receipt…",
+          )
+        : null;
+    saveBtn?.addEventListener("click", () => state.onSavePatch?.());
+    if (saveBtn) saveBtn.disabled = Boolean(saveBlocker || exportState?.busy);
 
     exportBox = h(
       doc,
@@ -1097,13 +1190,34 @@ function changesSection(doc: ShellDocument, state: ShellState): ShellElement {
             { class: "muted" },
             `Revision ${verification?.candidate?.revision} · sha256 ${verification?.patch_sha256}`,
           )
-        : h(
+        : h(doc, "p", { class: "muted" }, blocker),
+      (diff?.files.length ?? 0) > 0 ? exportBtn : null,
+      saveBtn,
+      saveBtn && saveBlocker && !blocker
+        ? h(doc, "p", { class: "muted" }, saveBlocker)
+        : null,
+      handoff?.status === "blocked"
+        ? h(doc, "p", { class: "error", role: "alert" }, handoff.reason)
+        : null,
+      handoff?.status === "saved"
+        ? h(
             doc,
-            "p",
-            { class: "muted" },
-            "Host verification must be Verified before exporting a patch.",
-          ),
-      exportBtn,
+            "div",
+            { role: "status" },
+            h(
+              doc,
+              "p",
+              {},
+              `Saved candidate.patch and check-receipt.json in ${handoff.folder}. No changes were applied.`,
+            ),
+            h(
+              doc,
+              "p",
+              {},
+              "From the matching source checkout, create a review branch and run git apply --check with candidate.patch before running git apply. Attach check-receipt.json to your PR or share it with the patch.",
+            ),
+          )
+        : null,
       exportState?.error
         ? h(doc, "p", { class: "error", role: "alert" }, exportState.error)
         : null,
@@ -1147,11 +1261,15 @@ function changesSection(doc: ShellDocument, state: ShellState): ShellElement {
     "section",
     { class: "inspector-section" },
     heading(doc, "Changes"),
+    state.selectedTask
+      ? verificationSection(doc, verification, state.verificationError)
+      : null,
     ...(error
       ? [unavailable(doc, error)]
       : files.length
-        ? [...files, exportBox]
+        ? files
         : [h(doc, "p", {}, "No diff files.")]),
+    exportBox,
   );
 }
 
@@ -1518,7 +1636,6 @@ export function renderShell(
           heading(doc, "Task"),
           h(doc, "p", {}, "Select a task."),
         ),
-    verificationSection(doc, state.verification, state.verificationError),
     changesSection(doc, state),
     evidenceSection(doc, state.evidence, state.evidenceError),
     artifactsSection(doc, state.artifacts),

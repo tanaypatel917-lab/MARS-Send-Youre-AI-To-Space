@@ -118,6 +118,7 @@ export const VerificationCheckResultSchema = z
     check_id: HostCheckIdSchema.optional(),
     exit_code: z.number().int().optional(),
     output_sha256: sha256.optional(),
+    output_tail: z.string().max(600).optional(),
     expected_sha256: sha256,
     observed_sha256: sha256.nullable(),
     status: VerificationVerdictSchema,
@@ -318,6 +319,13 @@ export const PatchExportSchema = z
     verification: VerificationStateSchema,
     verified: z.boolean(),
     verdict_run_id: z.string().min(1).max(256).nullable(),
+    handoff: z
+      .object({
+        source_baseline: z.enum(["matches", "mismatch", "unavailable"]),
+        verdict: VerificationEvidenceRecordSchema,
+      })
+      .strict()
+      .optional(),
     round_trip: z
       .object({
         status: z.enum(["passed", "failed", "unavailable"]),

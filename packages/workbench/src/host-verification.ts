@@ -159,6 +159,11 @@ export interface VerificationHost {
     };
   /** Host-defined protected checks; resolved again at verification time. */
   checks?: readonly HostCheckDefinition[];
+  scrubOutput?(
+    context: RequestContext,
+    taskId: string,
+    output: string,
+  ): Promise<string>;
 }
 
 /**
@@ -260,7 +265,14 @@ export async function verifyCandidate(
     const result =
       check.kind === "file_content"
         ? await runFileContentCheck(host, context, candidate, check)
-        : await runHostTestCheck(host, context, candidate, check, patch);
+        : await runHostTestCheck(
+            host,
+            context,
+            candidate,
+            check,
+            patch,
+            task.task_id,
+          );
     if (result.reason) reasons.push(result.reason);
     checks.push(result);
   }
@@ -374,6 +386,7 @@ async function runHostTestCheck(
   candidate: WorkspaceRef,
   check: HostTestCheck,
   patch: { paths: string[] } | null,
+  taskId: string,
 ): Promise<VerificationCheckResult> {
   const began = Date.now();
   const result = (
@@ -440,12 +453,22 @@ async function runHostTestCheck(
       }),
       timeoutMs + 5_000,
     );
-    const output = new Uint8Array([...run.stdout, ...run.stderr]);
-    const tail = new TextDecoder().decode(output).slice(-OUTPUT_TAIL);
+    const digest = createHash("sha256")
+      .update(run.stdout)
+      .update(run.stderr)
+      .digest("hex");
+    const decoder = new TextDecoder();
+    const output = [decoder.decode(run.stdout), decoder.decode(run.stderr)]
+      .filter(Boolean)
+      .join("\n");
+    const tail = (
+      await host.scrubOutput?.(context, taskId, output).catch(() => "")
+    )?.slice(-OUTPUT_TAIL);
     const extra = {
       exit_code: run.exit_code,
-      output_sha256: sha256(output),
-      observed_sha256: sha256(output),
+      output_sha256: digest,
+      observed_sha256: digest,
+      ...(tail ? { output_tail: tail } : {}),
     };
     if (run.workspace.revision !== candidate.revision)
       return result(
@@ -468,7 +491,7 @@ async function runHostTestCheck(
     if (run.exit_code === 0) return result("passed", null, extra);
     return result(
       "failed",
-      `Host check ${check.check_id} exited ${run.exit_code}: ${tail}`,
+      `Host check ${check.check_id} exited ${run.exit_code}${tail ? `: ${tail}` : ""}`,
       extra,
     );
   } catch (error) {
