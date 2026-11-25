@@ -512,7 +512,7 @@ async function runHostTestCheck(
     if (run.exit_code === 0) return result("passed", null, extra);
     return result(
       "failed",
-      `Host check ${check.check_id} exited ${run.exit_code}${tail ? `: ${tail}` : ""}`,
+      `Host check ${check.check_id} exited ${run.exit_code}`,
       extra,
     );
   } catch (error) {

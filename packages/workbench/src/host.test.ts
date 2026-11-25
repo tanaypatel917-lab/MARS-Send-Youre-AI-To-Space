@@ -6552,9 +6552,13 @@ test("a protected host check binds its verdict to the exact patch bytes; a faili
   const failed = await runHostCheckTask(f, api, "task-2", 1);
   expect(failed.state).toBe("failed");
   expect(failed.reasons.join(" ")).toContain("exited 1");
+  expect(failed.record?.checks[0]?.reason).toBe("Host check sum-test exited 1");
   expect(failed).not.toHaveProperty("check_logs");
   expect(failed.record?.checks[0]).not.toHaveProperty("output_tail");
-  expect(JSON.stringify(failed)).not.toContain(f.root);
+  const standardVerdict = JSON.stringify(failed);
+  expect(standardVerdict).not.toContain(f.root);
+  expect(standardVerdict).not.toContain("1 fail");
+  expect(standardVerdict).not.toContain("Diagnostic path");
   const failedReview = await api.verification(context(), "task-2", true);
   expect(failedReview.check_logs).toEqual([
     {
