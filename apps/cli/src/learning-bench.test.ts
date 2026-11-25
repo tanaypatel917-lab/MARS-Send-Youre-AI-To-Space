@@ -17,7 +17,7 @@ afterAll(async () => {
   for (const root of roots) await rm(root, { recursive: true, force: true });
 });
 
-async function setup() {
+async function setup(fileChanges = false) {
   const repo = await mkdtemp(join(tmpdir(), "mars-learning-"));
   roots.push(repo);
   const git = (...args: string[]) => {
@@ -39,9 +39,19 @@ async function setup() {
   const paths = ["a.ts"];
   await Bun.write(join(repo, "a.ts"), "export const count = 0;\n");
   git("add", "a.ts");
+  if (fileChanges) {
+    await Bun.write(join(repo, "gone.ts"), "");
+    git("add", "gone.ts");
+    paths.push("gone.ts", "new.ts");
+  }
   git("commit", "-qm", "initial");
   const parent = git("rev-parse", "HEAD");
   await Bun.write(join(repo, "a.ts"), "export const count = 1;\n");
+  if (fileChanges) {
+    git("rm", "gone.ts");
+    await Bun.write(join(repo, "new.ts"), "export const newCount = 1;");
+    git("add", "new.ts");
+  }
   git("commit", "-qam", "correct initial count");
   const fix = git("rev-parse", "HEAD");
   const pin = {
@@ -128,6 +138,22 @@ test("learning CLI verifies the pinned fix and emits deterministic JSON and Mark
   });
   expect(first.markdown).toContain("SIMULATED");
   expect(first.markdown).toContain("Underpowered");
+});
+
+test("learning offline specialist verifies added and deleted files byte for byte", async () => {
+  const { repo, file } = await setup(true);
+  const out = join(repo, "out");
+  await runBench(
+    ["learning", "--repo", repo, "--suite", file, "--offline", "--out", out],
+    () => {},
+  );
+  const report = JSON.parse(await readFile(join(out, "report.json"), "utf8"));
+  expect(report.tasks[0].outcomes.specialist.verification).toMatchObject({
+    solved: true,
+    missing: [],
+    unexpected: [],
+    mismatched: [],
+  });
 });
 
 test("learning refuses condition overrides and normalized request leakage before dispatch", async () => {
