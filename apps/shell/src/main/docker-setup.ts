@@ -1,4 +1,7 @@
+import { dockerHelperPath } from "./docker-path";
+
 export function dockerPullOptions(
+  executable: string,
   dockerHost: string | undefined,
   home: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -10,7 +13,7 @@ export function dockerPullOptions(
   return {
     args: ["--host", dockerHost ?? defaultHost],
     env: {
-      PATH: env.PATH,
+      PATH: dockerHelperPath(executable, env.PATH),
       HOME: home,
       ...(env.DOCKER_CONFIG ? { DOCKER_CONFIG: env.DOCKER_CONFIG } : {}),
     },

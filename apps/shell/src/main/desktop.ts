@@ -136,7 +136,7 @@ export async function createDesktop(
         if (!executable) return resolve(false);
         const pull = args[0] === "pull";
         const options = pull
-          ? dockerPullOptions(dockerHost, app.getPath("home"))
+          ? dockerPullOptions(executable, dockerHost, app.getPath("home"))
           : { args: [], env: probeEnv };
         execFile(
           executable,
