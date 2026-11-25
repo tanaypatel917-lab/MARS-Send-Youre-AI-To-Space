@@ -15,10 +15,15 @@ export function renderSettings(
   error: string | undefined,
   extensions: () => void,
   retry: () => void,
-  readiness?: {
-    status: "ready" | "unavailable";
-    reason: string;
-    setup?: string | undefined;
+  verification?: {
+    checks: number;
+    readiness?:
+      | {
+          status: "ready" | "unavailable";
+          reason: string;
+          setup?: string | undefined;
+        }
+      | undefined;
   },
 ): ShellElement {
   const button = (label: string, key: string, click: () => void) => {
@@ -40,6 +45,7 @@ export function renderSettings(
         ? "Key present"
         : "No key added";
   const health = model.health?.state ?? "unchecked";
+  const readiness = verification?.readiness;
   const row = (label: string, value: string, ok: boolean, key: string) =>
     h(
       doc,
@@ -81,12 +87,18 @@ export function renderSettings(
       ),
       row(
         "Verification checks",
+        !verification
+          ? "Connect to your workbench to check"
+          : readiness
+            ? readiness.status === "ready"
+              ? "Ready"
+              : `${readiness.reason}. ${readiness.setup ?? "Use Project → Set Up Verification Sandbox…"}`
+            : verification.checks
+              ? `${verification.checks} host check${verification.checks === 1 ? "" : "s"} configured`
+              : "No host checks configured. Try Project → Open Verification Example",
         readiness
           ? readiness.status === "ready"
-            ? "Ready"
-            : `${readiness.reason}. ${readiness.setup ?? "Use Project → Set Up Verification Sandbox…"}`
-          : "Connect to your workbench to check",
-        readiness?.status === "ready",
+          : Boolean(verification?.checks),
         "verification",
       ),
     ),

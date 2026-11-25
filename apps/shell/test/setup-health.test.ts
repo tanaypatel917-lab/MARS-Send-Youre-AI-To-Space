@@ -179,7 +179,10 @@ test("settings diagnostics show key, model, verification, and local pilot progre
     undefined,
     () => {},
     () => {},
-    { status: "unavailable", reason: "Docker is not running" },
+    {
+      checks: 1,
+      readiness: { status: "unavailable", reason: "Docker is not running" },
+    },
   );
   const text = view.textContent ?? "";
   expect(text).toContain("Setup diagnostics");
@@ -189,4 +192,51 @@ test("settings diagnostics show key, model, verification, and local pilot progre
   expect(text).toContain("First task startedNot yet");
   expect(text).toContain("Chat rate-limited by provider3×");
   expect(text).toContain("Nothing here is sent anywhere");
+  const demo = renderSettings(
+    doc,
+    { ...emptyModel(), configured: false },
+    undefined,
+    () => {},
+    () => {},
+    { checks: 0 },
+  );
+  expect(demo.textContent).toContain("No host checks configured");
+  expect(demo.textContent).not.toContain("Connect to your workbench");
+});
+
+test("Start a coding task hands off the live, unrendered draft", () => {
+  const doc = new MiniDocument();
+  let handoff: string | undefined;
+  const view = renderAssistant(doc, {
+    ...emptyModel(),
+    draft: "old",
+    onTask: (text) => {
+      handoff = text;
+    },
+  }) as MiniElement;
+  const input = findAll(view, (element) => element.tagName === "TEXTAREA")[0];
+  if (!input) throw new Error("missing composer");
+  input.value = " fresh draft ";
+  findAll(
+    view,
+    (element) => element.textContent === "Start a coding task  ↗",
+  )[0]?.click();
+  expect(handoff).toBe("fresh draft");
+  input.value = "";
+  findAll(
+    view,
+    (element) => element.textContent === "Start a coding task  ↗",
+  )[1]?.click();
+  expect(handoff).toBe("");
+});
+
+const emptyModel = () => ({
+  sessions: [],
+  activeId: "new",
+  draft: "",
+  configured: true,
+  canConfigure: true,
+  consent: false,
+  busy: false,
+  loading: false,
 });
