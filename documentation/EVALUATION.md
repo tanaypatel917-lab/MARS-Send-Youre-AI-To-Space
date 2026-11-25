@@ -604,8 +604,10 @@ bun apps/cli/src/main.ts bench learning --offline --seed p2 --out "$HOME/mars-le
 ```
 
 The bundled manifest projects the affected source files from three historical
-MARS fixes and their exact Git parents. Both arms use the same MARS agent,
-file-only tools with the apply-patch format, and execution disabled. A
+MARS fixes and their exact Git parents. The relevant Git objects must already
+be available locally; the suite loader never fetches missing objects. Both
+arms use the same MARS agent, file-only tools with the apply-patch format,
+and execution disabled. A
 host-side check compares the entire projected tree to the fix byte for byte;
 it does not run the historical test suite and can reject equivalent patches.
 The scripted adapters see the answer by design. This smoke tests the pipeline,

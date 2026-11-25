@@ -54,6 +54,7 @@ async function git(repo: string, args: string[]): Promise<Uint8Array> {
     ["git", "--no-replace-objects", "--literal-pathspecs", ...args],
     {
       cwd: repo,
+      env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
       stdin: "ignore",
       stdout: "pipe",
       stderr: "ignore",

@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { sha256 } from "@mars/contracts/canonical";
 import { requestSha256 } from "@mars/datasets";
 import {
@@ -154,6 +155,38 @@ test("learning offline specialist verifies added and deleted files byte for byte
     unexpected: [],
     mismatched: [],
   });
+});
+
+test("learning suite refuses missing objects rather than fetching from a promisor remote", async () => {
+  const { repo, file, pin } = await setup();
+  const partial = join(repo, "partial");
+  const clone = Bun.spawnSync([
+    "git",
+    "-c",
+    "protocol.file.allow=always",
+    "clone",
+    "--no-checkout",
+    "--filter=blob:none",
+    "--upload-pack=git -c uploadpack.allowFilter=true upload-pack",
+    pathToFileURL(repo).href,
+    partial,
+  ]);
+  if (clone.exitCode !== 0) throw new Error(clone.stderr.toString());
+  const blob = Bun.spawnSync(["git", "rev-parse", `${pin.parent}:a.ts`], {
+    cwd: repo,
+  })
+    .stdout.toString()
+    .trim();
+  const hasBlobLocally = () =>
+    Bun.spawnSync(["git", "cat-file", "-e", blob], {
+      cwd: partial,
+      env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+    }).exitCode === 0;
+  expect(hasBlobLocally()).toBe(false);
+  await expect(loadLearningSuite(file, partial)).rejects.toThrow(
+    "Cannot read pinned Git object (cat-file)",
+  );
+  expect(hasBlobLocally()).toBe(false);
 });
 
 test("learning refuses condition overrides and normalized request leakage before dispatch", async () => {
