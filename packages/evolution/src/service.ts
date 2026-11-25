@@ -703,10 +703,10 @@ export class EvolutionService {
             AbortSignal.any([AbortSignal.timeout(timeout), lost.signal]),
           ),
         );
+        await verifyControlDigests(control.control_digests, "after evaluation");
       } finally {
         clearInterval(heartbeat);
       }
-      await verifyControlDigests(control.control_digests, "after evaluation");
       if (
         outcome.evaluator_digest !== control.evaluator_digest ||
         this.options.evaluator.digest !== control.evaluator_digest
