@@ -5,7 +5,7 @@ import type { PatchExport } from "@mars/contracts";
 import type { ArtifactData } from "../shared/methods";
 import type { PatchHandoffResult } from "../shared/patch-handoff";
 import type { Bridge } from "./bridge";
-import { ParamsSchema } from "./protocol";
+import { RendererExportParamsSchema } from "./protocol";
 
 const blocked = (reason: string): PatchHandoffResult => ({
   status: "blocked",
@@ -18,7 +18,7 @@ export function createPatchHandoff(
 ) {
   let busy = false;
   return async (payload: unknown): Promise<PatchHandoffResult> => {
-    const parsed = ParamsSchema["tasks.export"].safeParse(payload);
+    const parsed = RendererExportParamsSchema.safeParse(payload);
     if (!parsed.success) return blocked("Invalid patch handoff request.");
     if (busy) return blocked("A patch handoff is already open.");
     busy = true;

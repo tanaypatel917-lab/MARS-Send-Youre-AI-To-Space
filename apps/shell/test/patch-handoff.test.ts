@@ -13,10 +13,15 @@ import {
   sha256Hex,
 } from "../scripts/fixture-workbench";
 import { createBridge } from "../src/main/bridge";
-import { type IpcEventLike, registerPatchHandoff } from "../src/main/ipc";
+import {
+  type IpcEventLike,
+  registerBridge,
+  registerPatchHandoff,
+} from "../src/main/ipc";
 import { createPatchHandoff } from "../src/main/patch-handoff";
 import { createLoopbackTransport } from "../src/main/transport";
 import { createController } from "../src/renderer/controller";
+import { BRIDGE_CHANNEL, bridgeFailure } from "../src/shared/methods";
 import {
   PATCH_HANDOFF_CHANNEL,
   type PatchHandoffResult,
@@ -25,12 +30,54 @@ import { ipcFixture } from "./ipc-fixture";
 import { findAll, MiniDocument, serialize } from "./mini-dom";
 import { fakeBridge, loadFixtureData } from "./test-utils";
 
+test("renderer export cannot forward a destination to the workbench", async () => {
+  const fixture = ipcFixture();
+  let ipc: ((event: IpcEventLike, payload: unknown) => unknown) | undefined;
+  const params = {
+    task_id: "task",
+    expected_revision: "revision",
+    expected_patch_sha256: "a".repeat(64),
+  };
+  const calls: unknown[] = [];
+  const response = bridgeFailure("not_connected");
+  registerBridge(
+    {
+      handle(channel, handler) {
+        expect(channel).toBe(BRIDGE_CHANNEL);
+        ipc = handler;
+      },
+    },
+    {
+      async call(method, params) {
+        calls.push({ method, params });
+        return response;
+      },
+    },
+    fixture.options,
+  );
+  if (!ipc) throw new Error("Missing IPC handler");
+  const request = { method: "tasks.export", params };
+  expect(
+    await ipc(fixture.owner, {
+      ...request,
+      params: {
+        ...params,
+        review_handoff: true,
+        review_destination: "/somewhere",
+      },
+    }),
+  ).toEqual(bridgeFailure("protocol"));
+  expect(calls).toEqual([]);
+  expect(await ipc(fixture.owner, request)).toEqual(response);
+  expect(calls).toEqual([request]);
+});
+
 test("desktop reviewer sees check logs and saves the same reviewed patch with its check receipt only on a matching source", async () => {
   const data = await loadFixtureData();
   const taskId = "fixture-completed-verified";
   const detail = data.details[taskId];
   const record = detail?.verification.record;
-  if (!detail?.diff || !record || !record.checks[0])
+  if (!detail?.diff || !record?.candidate || !record.checks[0])
     throw new Error("Missing fixture review");
   detail.diff.files = detail.diff.files.map((file) => ({
     ...file,
@@ -126,6 +173,14 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
     expect(await ipc(fixture.owner, { folder: parent })).toMatchObject({
       status: "blocked",
     });
+    expect(
+      await ipc(fixture.owner, {
+        task_id: taskId,
+        expected_revision: record.candidate.revision,
+        expected_patch_sha256: record.patch_sha256,
+        review_destination: parent,
+      }),
+    ).toMatchObject({ status: "blocked" });
     expect(chosen).toBe(0);
 
     const document = new MiniDocument();

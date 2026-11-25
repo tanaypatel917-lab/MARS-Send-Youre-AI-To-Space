@@ -1,5 +1,9 @@
 import type { z } from "zod";
-import type { ParamsSchema, ResultSchema } from "../main/protocol";
+import type {
+  ParamsSchema,
+  RendererExportParamsSchema,
+  ResultSchema,
+} from "../main/protocol";
 
 export const READ_METHODS = [
   "workbench.describe",
@@ -48,7 +52,9 @@ export const BRIDGE_CHANNEL = "mars-shell:rpc";
 export const BRIDGE_GLOBAL = "marsWorkbench";
 
 export type ParamsFor<M extends BridgeMethod> = z.infer<
-  (typeof ParamsSchema)[M]
+  M extends "tasks.export"
+    ? typeof RendererExportParamsSchema
+    : (typeof ParamsSchema)[M]
 >;
 export type ResultFor<M extends BridgeMethod> = z.infer<
   (typeof ResultSchema)[M]

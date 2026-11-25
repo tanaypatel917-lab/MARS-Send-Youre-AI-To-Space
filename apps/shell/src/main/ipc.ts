@@ -8,6 +8,7 @@ import {
 import { TEAM_CHAT_CHANNEL } from "../shared/team-chat";
 import type { createAssistant } from "./assistant";
 import type { Bridge } from "./bridge";
+import { RendererExportParamsSchema } from "./protocol";
 import type { TeamChatBridge } from "./team-chat-bridge";
 
 export type IpcEventLike = {
@@ -96,6 +97,11 @@ export function registerBridge(
       if (!trustedSender(event, options)) return bridgeFailure("refused");
       const request = requestPayload(payload);
       if (!request) return bridgeFailure("refused");
+      if (request.method === "tasks.export") {
+        const parsed = RendererExportParamsSchema.safeParse(request.params);
+        if (!parsed.success) return bridgeFailure("protocol");
+        return await bridge.call(request.method, parsed.data);
+      }
       return await bridge.call(request.method, request.params);
     } catch {
       return bridgeFailure("protocol");

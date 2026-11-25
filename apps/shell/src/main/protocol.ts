@@ -11,10 +11,15 @@ import {
   DescribeResultSchema,
   DiffResultSchema,
   EvidenceResultSchema,
+  ExportParamsSchema,
   InspectResultSchema,
   RpcRequestSchema,
 } from "../../../../packages/workbench/src/protocol";
 import type { BridgeMethod } from "../shared/methods";
+
+export const RendererExportParamsSchema = ExportParamsSchema.omit({
+  review_destination: true,
+});
 
 type RpcRequest = z.infer<typeof RpcRequestSchema>;
 type ParamsByMethod = {
