@@ -328,7 +328,9 @@ export async function runLearningBenchmark(
         wall_ms:
           options.mode === "offline" ? 100 * result.turns : result.wall_ms,
         edit_failures: result.edit_failures,
-        transcript: result.transcript,
+        transcript: result.transcript
+          ? join("transcripts", arm, result.transcript)
+          : null,
         category: provider_failure ? null : failureCategory(result, task),
         provider_failure,
         http_errors,

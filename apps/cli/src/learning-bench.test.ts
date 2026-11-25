@@ -104,7 +104,14 @@ test("learning CLI verifies the pinned fix and emits deterministic JSON and Mark
     "Use a fresh benchmark output directory",
   );
   expect(await readFile(journal, "utf8")).toBe(originalJournal);
-  expect(JSON.parse(first.json)).toMatchObject({
+  const report = JSON.parse(first.json);
+  const { baseline, specialist } = report.tasks[0].outcomes;
+  expect(baseline.transcript).not.toBe(specialist.transcript);
+  for (const { transcript } of [baseline, specialist])
+    expect(await readFile(join(repo, "first", transcript), "utf8")).not.toBe(
+      "",
+    );
+  expect(report).toMatchObject({
     simulated: true,
     arms: {
       baseline: { solved: 0, eligible: 1, failures: { edit_tool: 1 } },
