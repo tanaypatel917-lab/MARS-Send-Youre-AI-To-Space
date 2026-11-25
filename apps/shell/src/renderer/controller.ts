@@ -362,7 +362,14 @@ export function createController(
               onNew: () => selectChat(globalThis.crypto.randomUUID()),
               onSelect: selectChat,
               onTask: (text) => {
-                if (text) composer = { ...composer, request: text };
+                if (text && text !== composer.request.trim())
+                  composer = {
+                    ...composer,
+                    request: text,
+                    replacedRequest: composer.request.trim()
+                      ? composer.request
+                      : undefined,
+                  };
                 page = "tasks";
                 render();
               },
@@ -419,7 +426,8 @@ export function createController(
           "modelChoice" in patch ||
           "paidModelConsent" in patch ||
           "error" in patch ||
-          "submitting" in patch
+          "submitting" in patch ||
+          "replacedRequest" in patch
         ) {
           render();
           if (keepSubmitVisible)

@@ -10,8 +10,10 @@ import {
 } from "../src/main/assistant";
 import { createSetupJournal, observeBridge } from "../src/main/setup-journal";
 import { renderAssistant } from "../src/renderer/assistant-view";
+import { createController } from "../src/renderer/controller";
 import { renderSettings } from "../src/renderer/settings-view";
 import { findAll, MiniDocument, type MiniElement } from "./mini-dom";
+import { fakeBridge, loadFixtureData } from "./test-utils";
 
 const fail = (status: number | undefined, extra = {}) =>
   new ProviderError("openrouter", "private-fixture", {
@@ -239,4 +241,65 @@ const emptyModel = () => ({
   consent: false,
   busy: false,
   loading: false,
+});
+
+test("a Chat handoff that replaces an unsaved task request can restore it", async () => {
+  const doc = new MiniDocument();
+  const ctl = createController(
+    fakeBridge(await loadFixtureData()),
+    doc,
+    doc.root,
+    undefined,
+    {
+      request: async () => ({
+        ok: true,
+        sessions: [],
+        configured: true,
+        workspace: "scope",
+        canConfigure: false,
+      }),
+    },
+  );
+  await ctl.load();
+  const one = (match: (el: MiniElement) => boolean, label: string) => {
+    const el = findAll(doc.root, match)[0];
+    if (!el) throw new Error(`Missing ${label}`);
+    return el;
+  };
+  const nav = (page: string) =>
+    one((el) => el.getAttribute("data-page") === page, page).click();
+  const request = () =>
+    one(
+      (el) => el.getAttribute("data-control") === "composer-request",
+      "task prompt",
+    );
+  const handoff = (text: string) => {
+    nav("chat");
+    one((el) => el.tagName === "TEXTAREA", "chat input").value = text;
+    one(
+      (el) => el.textContent === "Start a coding task  ↗",
+      "Start a coding task",
+    ).click();
+  };
+  const restore = () =>
+    findAll(
+      doc.root,
+      (el) => el.getAttribute("data-action") === "restore-task-request",
+    )[0];
+
+  nav("tasks");
+  request().value = "Keep my existing work";
+  request().dispatch("input");
+  handoff("Fix the login bug");
+  expect(request().value).toBe("Fix the login bug");
+  expect(doc.root.textContent).toContain("replaced your earlier task request");
+  restore()?.click();
+  expect(request().value).toBe("Keep my existing work");
+  expect(restore()).toBeUndefined();
+
+  handoff("Keep my existing work");
+  expect(restore()).toBeUndefined();
+  handoff("");
+  expect(request().value).toBe("Keep my existing work");
+  expect(restore()).toBeUndefined();
 });
