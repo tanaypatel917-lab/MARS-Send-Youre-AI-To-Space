@@ -23,6 +23,7 @@ import {
 import { DESKTOP_MODEL_CHANNEL } from "../shared/desktop-model";
 import { resolveDockerHost } from "./docker-host";
 import { resolveDockerPath } from "./docker-path";
+import { ensureDockerImage } from "./docker-setup";
 import { desktopExtensionsMenu } from "./extensions";
 import { startLocalWorkbench } from "./local-workbench";
 import { hasRemovableKey } from "./model-key";
@@ -165,24 +166,27 @@ export async function createDesktop(
       });
       return;
     }
-    if (await run(["image", "inspect", image])) {
-      if (source === project) await change(async () => {});
+    const outcome = await ensureDockerImage(image, run, async () => {
+      const answer = await dialog.showMessageBox(window, {
+        type: "question",
+        message: "Download the verification sandbox?",
+        detail: `Docker will pull this exact pinned image:\n${image}\nChecks run without network access.`,
+        buttons: ["Cancel", "Download"],
+        cancelId: 0,
+        defaultId: 0,
+      });
+      return answer.response === 1;
+    });
+    if (outcome === "cancelled" || closing || window.isDestroyed()) return;
+    if (outcome === "present") {
       await dialog.showMessageBox(window, {
         message: "Verification sandbox is already downloaded",
-        detail: "Approve Execute and select your checks when starting a task.",
+        detail:
+          "Approve Execute and select your checks when starting a task. If MARS still shows the sandbox as unavailable, reopen the project when no tasks are running.",
       });
       return;
     }
-    const answer = await dialog.showMessageBox(window, {
-      type: "question",
-      message: "Download the verification sandbox?",
-      detail: `Docker will pull this exact pinned image:\n${image}\nChecks run without network access.`,
-      buttons: ["Cancel", "Download"],
-      cancelId: 0,
-      defaultId: 0,
-    });
-    if (answer.response !== 1) return;
-    const ok = await run(["pull", image]);
+    const ok = outcome === "downloaded";
     if (ok && source === project) await change(async () => {});
     if (closing || window.isDestroyed()) return;
     await dialog.showMessageBox(window, {
