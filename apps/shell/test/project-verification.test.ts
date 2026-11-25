@@ -49,8 +49,8 @@ test("detects supported scripts without enabling them and persists only those ap
   await writeFile(join(source, "package.json"), manifest);
   const candidate = await suggestProjectChecks(source);
   expect(candidate?.checks).toEqual([
-    { name: "test", command: "bun test" },
-    { name: "lint", command: "echo lint" },
+    { name: "test", steps: [{ name: "test", command: "bun test" }] },
+    { name: "lint", steps: [{ name: "lint", command: "echo lint" }] },
   ]);
   expect(await projectChecksFile(approvals, source)).toBeUndefined();
   if (!candidate) throw new Error("Missing proposal");
@@ -83,6 +83,37 @@ test("detects supported scripts without enabling them and persists only those ap
   expect((await stat(overlay?.source ?? "")).mode & 0o777).toBe(0o600);
   await removeProjectChecks(approvals, source);
   expect(await projectChecksFile(approvals, source)).toBeUndefined();
+});
+
+test("proposes lifecycle scripts in the same order Bun runs them", async () => {
+  await writeFile(
+    join(source, "package.json"),
+    JSON.stringify({
+      scripts: {
+        pretest: "echo before",
+        test: "echo during",
+        posttest: "echo after",
+        prelint: "x".repeat(1001),
+        lint: "echo lint",
+      },
+    }),
+  );
+  expect((await suggestProjectChecks(source))?.checks).toEqual([
+    {
+      name: "test",
+      steps: [
+        { name: "pretest", command: "echo before" },
+        { name: "test", command: "echo during" },
+        { name: "posttest", command: "echo after" },
+      ],
+    },
+  ]);
+  const result = Bun.spawnSync(
+    [process.execPath, "run", "--no-env-file", "--no-install", "test"],
+    { cwd: source },
+  );
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.toString()).toBe("before\nduring\nafter\n");
 });
 
 test("does not read symlink manifests or transfer approvals to a replacement checkout", async () => {

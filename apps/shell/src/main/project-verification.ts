@@ -51,13 +51,21 @@ export async function suggestProjectChecks(source: string) {
     const scripts: unknown = JSON.parse(manifest.toString("utf8"))?.scripts;
     if (!scripts || typeof scripts !== "object" || Array.isArray(scripts))
       return undefined;
+    const getScript = (name: string): unknown =>
+      Object.getOwnPropertyDescriptor(scripts, name)?.value;
     const checks = scriptNames.flatMap((name) => {
-      const command = Object.getOwnPropertyDescriptor(scripts, name)?.value;
-      return typeof command === "string" &&
-        command.trim() &&
-        command.length <= 1000 &&
-        !command.includes("\0")
-        ? [{ name, command }]
+      const command = getScript(name);
+      if (typeof command !== "string" || !command.trim()) return [];
+      const steps = [`pre${name}`, name, `post${name}`].flatMap((step) => {
+        const value = getScript(step);
+        return typeof value === "string" && value
+          ? [{ name: step, command: value }]
+          : [];
+      });
+      return steps.every(
+        ({ command }) => command.length <= 1000 && !command.includes("\0"),
+      )
+        ? [{ name, steps }]
         : [];
     });
     if (checks.length && projectRootIdentity(source) === identity)

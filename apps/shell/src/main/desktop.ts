@@ -249,11 +249,14 @@ export async function createDesktop(
       }
       if (!proposal) return;
       const selected = new Set<string>();
-      for (const { name, command } of proposal.checks) {
+      for (const { name, steps } of proposal.checks) {
+        const commands = steps
+          .map((step) => `${step.name}: ${JSON.stringify(step.command)}`)
+          .join("\n");
         const answer = await dialog.showMessageBox(window, {
           type: "question",
           message: `Use the ${name} script as a verification check?`,
-          detail: `${project}\n\n${name}: ${JSON.stringify(command)}\n\nApprove only if you trust this project and the code the script invokes. Checks run in Docker, offline, without dependencies installed by MARS. Task changes can still alter the project’s tests.`,
+          detail: `${project}\n\n${commands}\n\nApprove only if you trust this project and the code these scripts invoke. Checks run in Docker, offline, without dependencies installed by MARS. Task changes can still alter the project’s tests.`,
           buttons: ["Cancel Setup", "Skip", "Use Check"],
           defaultId: 0,
           cancelId: 0,
