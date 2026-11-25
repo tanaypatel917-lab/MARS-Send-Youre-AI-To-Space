@@ -362,7 +362,12 @@ export function createController(
               onNew: () => selectChat(globalThis.crypto.randomUUID()),
               onSelect: selectChat,
               onTask: (text) => {
-                if (text) composer = { ...composer, request: text };
+                const existing = composer.request.trim();
+                if (text && existing !== text)
+                  composer = {
+                    ...composer,
+                    request: existing ? `${existing}\n\n${text}` : text,
+                  };
                 page = "tasks";
                 render();
               },
