@@ -595,6 +595,83 @@ edit attempt per file and retries cleanly (stale-anchor recovery for
 profiles on v1 and one full v2 run (`patch-fluent`, `mars:apply_patch` vs
 `omp-stock`, 288 trials) to exercise the powered verdict path.
 
+### Baseline vs. specialist learning benchmark
+
+Run a no-network smoke from a checkout containing the fixture's pinned history:
+
+```sh
+bun apps/cli/src/main.ts bench learning --offline --seed p2 --out "$HOME/mars-learning-dry-run"
+```
+
+The bundled manifest projects the affected source files from three historical
+MARS fixes and their exact Git parents. Both arms use the same MARS agent,
+file-only tools with the apply-patch format, and execution disabled. A
+host-side check compares the entire projected tree to the fix byte for byte;
+it does not run the historical test suite and can reject equivalent patches.
+The scripted adapters see the answer by design. This smoke tests the pipeline,
+not either model; the dollar amounts and latencies are synthetic.
+
+For a live run, curate a private, representative suite of independent real
+fixes excluded from training and validation before registering the specialist.
+Use the [committed suite](../packages/evaluation/fixtures/learning-benchmark.json)
+as the format example: supply a single-parent fix and its exact parent, a
+clear request, a routing domain/complexity, and the relevant regular text
+files (including any necessary context). Review the projection and make sure
+the named fixes and their variants were not used for training. The loader
+refuses duplicate fix commits, request digests, and changed-content pairs.
+The suite guard checks train/validation IDs, normalized request digests and
+dataset digests against the supplied lineage. It cannot detect paraphrased
+overlaps or contamination in an upstream base model.
+
+```sh
+bun apps/cli/src/main.ts bench learning --print-suite-pin --repo /trusted/repo --suite held-out.json
+sha256sum specialist-lineage.json
+```
+
+Create a plan with those two digests and the exact model IDs from your trusted
+MARS model registry (use immutable served names for the base and specialist;
+the harness does not attest remote server weights). The provider must support
+tool calling and both configurations must match on provider, context/capability,
+request timeout and output cap. Pin the harness revision, provider settings and
+checkpoint version when sharing results. The operator is responsible for matching
+the lineage to the served specialist. Only send approved projections to your provider.
+
+```json
+{
+  "schema": "mars.learning-plan/v1",
+  "suite_sha256": "REPLACE_WITH_SUITE_SHA256",
+  "seed": "pre-registered-seed-1",
+  "budget_per_task": { "max_tokens": 100000, "max_usd": 0.5, "max_duration_ms": 180000 },
+  "max_total_usd": 160,
+  "arms": {
+    "baseline": { "model": "local/base-pinned" },
+    "specialist": { "model": "local/specialist-pinned", "lineage_sha256": "REPLACE_WITH_LINEAGE_SHA256" }
+  }
+}
+```
+
+```sh
+bun apps/cli/src/main.ts bench learning --live --repo /trusted/repo --suite held-out.json \
+  --plan learning-plan.json --training-lineage specialist-lineage.json --out "$HOME/mars-learning-live"
+```
+
+Per-arm overrides are refused. Each pair shares a sampling seed (best effort
+at the serving endpoint); task order and within-pair arm order are seeded.
+The worst-case committed per-task dollar caps must fit under the plan's
+total cap. The reports record Wilson 95% intervals, a paired lift interval,
+provider exclusions, failures, metered cost per verified solve, and time to
+verified patch. Private transcripts are under `transcripts/`. Provider
+exclusions can bias the comparison; review their counts before interpreting
+conditional solve rates.
+
+The pre-registered power design uses the exact paired sign test at
+two-sided alpha .05: 40% discordant pairs and 70% of discordances favoring
+the specialist imply a 16-point lift and require at least 129 complete pairs
+for 80% power. Plan more tasks if provider failures are expected. A small or
+underpowered run is exploratory. Routing recommendations keep the base
+model when evidence is inadequate, simulated, or not covered; a positive
+signal means review, not promotion. No production routing is changed.
+
 ### Evidence-based per-model edit-format selection
 
 `selectEditFormat` (`@mars/execution`) takes `mars.edit-format-evidence/v1`

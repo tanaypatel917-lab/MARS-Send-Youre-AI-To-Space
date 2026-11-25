@@ -19,6 +19,7 @@ import type { EditFormatEvidence } from "@mars/execution";
 import { loadModelRegistry } from "@mars/providers";
 import { z } from "zod";
 import { CliUsageError } from "./cli-errors";
+import { LEARNING_BENCH_USAGE, runLearningBench } from "./learning-bench";
 
 export const BENCH_USAGE = [
   "Usage: mars bench edit-formats (--offline [--profile small-model|oracle|patch-fluent|patch-hostile] | --live --model ID --max-usd N)",
@@ -31,6 +32,8 @@ export const BENCH_USAGE = [
   "  --offline uses deterministic scripted models (zero real model calls). --live calls the configured model",
   "  (~/.mars/models.json or $MARS_HOME/models.json: Ollama, OpenRouter, any OpenAI-compatible endpoint) and is",
   "  refused without --max-usd; the run is refused up front unless trials x per-task USD fits under it.",
+  "",
+  LEARNING_BENCH_USAGE,
 ].join("\n");
 
 export class BenchUsageError extends CliUsageError {
@@ -92,6 +95,7 @@ export async function runBench(
     fetch?: (input: string, init?: RequestInit) => Promise<Response>;
   } = {},
 ): Promise<void> {
+  if (args[0] === "learning") return runLearningBench(args.slice(1), out, io);
   const env = io.env ?? process.env;
   const { values, positionals } = parseArgs({
     args,

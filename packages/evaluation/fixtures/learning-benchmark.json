@@ -1,0 +1,34 @@
+{
+  "schema": "mars.learning-suite/v1",
+  "split_id": "mars-learning-dry-run-v1",
+  "repository": "https://github.com/tanaypatel917-lab/MARS-Send-Youre-AI-To-Space",
+  "tasks": [
+    {
+      "task_id": "mars-team-id-error",
+      "domain": "code/cli",
+      "complexity": "light",
+      "request": "In apps/cli/src/team.ts, ensure team serve reports the actual source flag when rejecting the reserved MARS identity (with any capitalization), for both --members and --dev-users. The validation should work even when no agent model is configured.",
+      "parent": "4c96075db12fa80e0c3aacac7014427838452b38",
+      "fix": "8c9713194f472cb49fe3a6540fc77edc245ca513",
+      "paths": ["apps/cli/src/team.ts"]
+    },
+    {
+      "task_id": "mars-fullwidth-sentence-punctuation",
+      "domain": "code/team-chat",
+      "complexity": "light",
+      "request": "In packages/team-chat/src/mentions.ts, recognize full-width sentence punctuation and ellipses around @MARS invocations and file-and-line references just as ASCII punctuation is recognized; do not turn file references into agent prompts.",
+      "parent": "2998a4ae77e4680861957f9ee59936ed108be93c",
+      "fix": "4c96075db12fa80e0c3aacac7014427838452b38",
+      "paths": ["packages/team-chat/src/mentions.ts"]
+    },
+    {
+      "task_id": "mars-packaging-temp-root",
+      "domain": "code/packaging",
+      "complexity": "light",
+      "request": "In apps/shell/scripts/package.ts, make the desktop staging directory canonical even if the OS temp directory is a symlink, so downstream private trust-store validation accepts it.",
+      "parent": "56fb10d9fa03d2b1cabc12b8ee4d122c03f460c6",
+      "fix": "753f3d29e882728be48d3b91886bf5a09b639116",
+      "paths": ["apps/shell/scripts/package.ts"]
+    }
+  ]
+}
