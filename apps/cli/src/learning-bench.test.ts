@@ -90,6 +90,20 @@ test("learning CLI verifies the pinned fix and emits deterministic JSON and Mark
   };
   const first = await run("first");
   expect(await run("second")).toEqual(first);
+  const journal = join(
+    repo,
+    "first",
+    "transcripts",
+    "baseline",
+    "mars_apply_patch",
+    "correct-count",
+    "0.jsonl",
+  );
+  const originalJournal = await readFile(journal, "utf8");
+  await expect(run("first")).rejects.toThrow(
+    "Use a fresh benchmark output directory",
+  );
+  expect(await readFile(journal, "utf8")).toBe(originalJournal);
   expect(JSON.parse(first.json)).toMatchObject({
     simulated: true,
     arms: {

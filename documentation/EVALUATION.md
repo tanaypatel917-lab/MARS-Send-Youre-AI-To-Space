@@ -660,7 +660,8 @@ at the serving endpoint); task order and within-pair arm order are seeded.
 The worst-case committed per-task dollar caps must fit under the plan's
 total cap. The reports record Wilson 95% intervals, a paired lift interval,
 provider exclusions, failures, metered cost per verified solve, and time to
-verified patch. Private transcripts are under `transcripts/`. Provider
+verified patch. Private transcripts are under `transcripts/`; use a fresh
+output directory for each run so its journals cannot be overwritten. Provider
 exclusions can bias the comparison; review their counts before interpreting
 conditional solve rates.
 

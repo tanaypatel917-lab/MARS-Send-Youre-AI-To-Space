@@ -261,6 +261,15 @@ export async function runLearningBenchmark(
 
   const { outDir } = options;
   await mkdir(outDir, { recursive: true, mode: 0o700 });
+  const transcriptRoot = join(outDir, "transcripts");
+  try {
+    await mkdir(transcriptRoot, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    throw new Error(
+      "Use a fresh benchmark output directory; transcripts already exist.",
+    );
+  }
   const jobSeed = sha256(canonicalJson([plan.schema, suite.sha256, plan.seed]));
   const matches = [...suite.tasks]
     .map(({ task, pin }) => ({
@@ -289,7 +298,7 @@ export async function runLearningBenchmark(
         budget: plan.budget_per_task,
         ...(binding.env ? { env: binding.env } : {}),
         workRoot: join(outDir, "work"),
-        transcriptRoot: join(outDir, "transcripts", arm),
+        transcriptRoot: join(transcriptRoot, arm),
         async fetch(url, init) {
           lastStatus = undefined;
           const response = await binding.fetch(url, init);
