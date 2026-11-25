@@ -50,7 +50,7 @@ async function setup(fileChanges = false) {
   await Bun.write(join(repo, "a.ts"), "export const count = 1;\n");
   if (fileChanges) {
     git("rm", "gone.ts");
-    await Bun.write(join(repo, "new.ts"), "export const newCount = 1;");
+    await Bun.write(join(repo, "new.ts"), "\uFEFFexport const newCount = 1;");
     git("add", "new.ts");
   }
   git("commit", "-qam", "correct initial count");

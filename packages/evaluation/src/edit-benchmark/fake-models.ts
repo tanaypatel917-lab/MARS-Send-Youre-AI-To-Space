@@ -120,7 +120,8 @@ interface WireTool {
   };
 }
 
-const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+const decoder = new TextDecoder();
+const writeDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
 const text = (bytes: Uint8Array | undefined) =>
   bytes === undefined ? "" : decoder.decode(bytes);
 
@@ -550,13 +551,13 @@ export function createScriptedEditModel(options: {
         : [],
     );
     const targets = [...task.after.keys()].filter(
-      (path) => text(task.after.get(path)) !== text(task.before.get(path)),
+      (path) =>
+        (editTool === "mars_apply_patch" && !task.before.has(path)) ||
+        text(task.after.get(path)) !== text(task.before.get(path)),
     );
     if (editTool === "mars_apply_patch") {
       for (const path of task.before.keys())
         if (!task.after.has(path)) targets.push(path);
-      for (const [path, bytes] of task.after)
-        if (!task.before.has(path) && bytes.length === 0) targets.push(path);
     }
     for (const path of targets) {
       const events = history.filter((event) => event.path === path);
@@ -610,7 +611,7 @@ export function createScriptedEditModel(options: {
           });
         return call("mars_write", {
           path,
-          content: text(task.after.get(path)),
+          content: writeDecoder.decode(task.after.get(path)),
         });
       }
       // Re-read after a failed edit; after a successful one, continue from
