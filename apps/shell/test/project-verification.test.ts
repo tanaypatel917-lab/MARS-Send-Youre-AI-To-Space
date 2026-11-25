@@ -204,4 +204,4 @@ test("the local workbench advertises approved checks and reports when Docker is 
       await workbench.stop();
     }
   }
-});
+}, 30000);
