@@ -23,7 +23,7 @@ import {
 import { DESKTOP_MODEL_CHANNEL } from "../shared/desktop-model";
 import { resolveDockerHost } from "./docker-host";
 import { resolveDockerPath } from "./docker-path";
-import { ensureDockerImage } from "./docker-setup";
+import { dockerPullOptions, ensureDockerImage } from "./docker-setup";
 import { desktopExtensionsMenu } from "./extensions";
 import { startLocalWorkbench } from "./local-workbench";
 import { hasRemovableKey } from "./model-key";
@@ -126,7 +126,7 @@ export async function createDesktop(
     dockerPath = resolveDockerPath();
     dockerHost = await resolveDockerHost(dockerPath);
     const executable = dockerPath;
-    const env = {
+    const probeEnv = {
       PATH: process.env.PATH,
       HOME: "/nonexistent",
       ...(dockerHost ? { DOCKER_HOST: dockerHost } : {}),
@@ -134,12 +134,16 @@ export async function createDesktop(
     const run = (args: string[]) =>
       new Promise<boolean>((resolve) => {
         if (!executable) return resolve(false);
+        const pull = args[0] === "pull";
+        const options = pull
+          ? dockerPullOptions(dockerHost, app.getPath("home"))
+          : { args: [], env: probeEnv };
         execFile(
           executable,
-          args,
+          [...options.args, ...args],
           {
-            env,
-            timeout: args[0] === "pull" ? 600_000 : 5_000,
+            env: options.env,
+            timeout: pull ? 600_000 : 5_000,
           },
           (error) => resolve(!error),
         );
