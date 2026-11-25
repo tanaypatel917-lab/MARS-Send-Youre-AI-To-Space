@@ -368,7 +368,7 @@ export function createController(
                     request: text,
                     replacedRequest: composer.request.trim()
                       ? composer.request
-                      : undefined,
+                      : composer.replacedRequest,
                   };
                 page = "tasks";
                 render();

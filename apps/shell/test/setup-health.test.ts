@@ -299,6 +299,14 @@ test("a Chat handoff that replaces an unsaved task request can restore it", asyn
 
   handoff("Keep my existing work");
   expect(restore()).toBeUndefined();
+
+  handoff("Fix the login bug");
+  request().value = "";
+  request().dispatch("input");
+  handoff("Add a settings page");
+  expect(request().value).toBe("Add a settings page");
+  restore()?.click();
+  expect(request().value).toBe("Keep my existing work");
   handoff("");
   expect(request().value).toBe("Keep my existing work");
   expect(restore()).toBeUndefined();
