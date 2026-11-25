@@ -1179,6 +1179,13 @@ export async function createLocalWorkspaceProvider(
         };
         try {
           const proof = await roundTrip();
+          const destination = exportOptions?.destination;
+          const destinationRoot =
+            destination && isAbsolute(destination)
+              ? await realDirectory(destination, "Patch destination").catch(
+                  () => null,
+                )
+              : null;
           const source = exportOptions?.compareSourceBaseline
             ? await snapshotTree(sourceRoot, {
                 limits,
@@ -1192,6 +1199,15 @@ export async function createLocalWorkspaceProvider(
             files: diff.files.length,
             round_trip: proof,
             unsupported,
+            ...(destination === undefined
+              ? {}
+              : {
+                  destination: !destinationRoot
+                    ? "unavailable"
+                    : isInsideOrEqual(sourceRoot, destinationRoot)
+                      ? "inside_source"
+                      : "outside_source",
+                }),
             ...(source === undefined
               ? {}
               : {

@@ -144,7 +144,7 @@ app.on("ready", async () => {
         const result = await dialog.showOpenDialog(window, {
           title: "Save verified patch and check receipt",
           buttonLabel: "Save handoff here",
-          properties: ["openDirectory", "createDirectory"],
+          properties: ["openDirectory"],
         });
         return result.canceled ? undefined : result.filePaths[0];
       },

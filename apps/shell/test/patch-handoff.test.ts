@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serveWorkbench, WorkbenchError } from "@mars/workbench";
@@ -45,17 +45,23 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
   const api = createFixtureOperations(data);
   const fixtureExport = api.export;
   let sourceBaseline: "matches" | "mismatch" | "unavailable" = "mismatch";
+  let destinationStatus: "inside_source" | "outside_source" = "outside_source";
   let refuseRoundTrip = false;
+  const parent = await mkdtemp(join(tmpdir(), "mars-handoff-test-"));
   api.export = async (context, params) => {
     if (refuseRoundTrip) throw new WorkbenchError("patch_round_trip_failed");
     const result = await fixtureExport(context, params);
     expect(params.review_handoff).toBe(true);
+    expect(params.review_destination).toBe(await realpath(parent));
     return {
       ...result,
-      handoff: { source_baseline: sourceBaseline, verdict: record },
+      handoff: {
+        source_baseline: sourceBaseline,
+        destination: destinationStatus,
+        verdict: record,
+      },
     };
   };
-  const parent = await mkdtemp(join(tmpdir(), "mars-handoff-test-"));
   const token = "fixture-token-0123456789abcdefghijklmnopqrstuvwxyz";
   const server = serveWorkbench({ api, token, port: 0 });
   try {
@@ -145,6 +151,12 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
     expect(await readdir(parent)).toEqual([]);
 
     sourceBaseline = "matches";
+    destinationStatus = "inside_source";
+    save();
+    await waitForText(root, "Choose a destination outside the source checkout");
+    expect(await readdir(parent)).toEqual([]);
+
+    destinationStatus = "outside_source";
     refuseRoundTrip = true;
     save();
     await waitForText(root, "patch cannot be reconstructed");

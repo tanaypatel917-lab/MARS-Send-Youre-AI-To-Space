@@ -2751,3 +2751,30 @@ test("review handoff detects source changes outside the verified patch", async (
     await fixture.close();
   }
 });
+
+test("review handoff detects both direct and symlinked destinations inside the source", async () => {
+  const fixture = await makeFixture();
+  const outside = await mkdtemp(join(tmpdir(), "mars-destination-test-"));
+  try {
+    const nested = join(fixture.sourceRoot, "nested");
+    const alias = join(outside, "alias");
+    await symlink(nested, alias, "dir");
+    for (const [destination, expected] of [
+      [fixture.sourceRoot, "inside_source"],
+      [nested, "inside_source"],
+      [alias, "inside_source"],
+      [outside, "outside_source"],
+      [join(outside, "missing"), "unavailable"],
+    ] as const) {
+      const exported = await fixture.provider.exportPatch(
+        context,
+        fixture.workspace,
+        { destination },
+      );
+      expect(exported.destination).toBe(expected);
+    }
+  } finally {
+    await rm(outside, { recursive: true, force: true });
+    await fixture.close();
+  }
+});

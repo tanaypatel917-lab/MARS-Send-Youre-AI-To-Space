@@ -163,6 +163,7 @@ export const ExportParamsSchema = z
     expected_revision: id,
     expected_patch_sha256: z.string().regex(/^[a-f0-9]{64}$/),
     review_handoff: z.literal(true).optional(),
+    review_destination: z.string().min(1).max(4096).optional(),
   })
   .strict();
 export type ExportParams = z.infer<typeof ExportParamsSchema>;

@@ -3581,7 +3581,14 @@ export async function createWorkbenchHost(
         const exported = await options.workspace.exportPatch(
           context,
           candidate,
-          params.review_handoff ? { compareSourceBaseline: true } : undefined,
+          params.review_handoff
+            ? {
+                compareSourceBaseline: true,
+                ...(params.review_destination === undefined
+                  ? {}
+                  : { destination: params.review_destination }),
+              }
+            : undefined,
         );
         const after = await options.workspace.reopen(context, params.task_id);
         if (after.revision !== candidate.revision)
@@ -3656,6 +3663,9 @@ export async function createWorkbenchHost(
             ? {
                 handoff: {
                   source_baseline: exported.source_baseline ?? "unavailable",
+                  ...(params.review_destination === undefined
+                    ? {}
+                    : { destination: exported.destination ?? "unavailable" }),
                   verdict,
                 },
               }

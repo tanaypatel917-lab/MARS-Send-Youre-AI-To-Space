@@ -322,6 +322,9 @@ export const PatchExportSchema = z
     handoff: z
       .object({
         source_baseline: z.enum(["matches", "mismatch", "unavailable"]),
+        destination: z
+          .enum(["outside_source", "inside_source", "unavailable"])
+          .optional(),
         verdict: VerificationEvidenceRecordSchema,
       })
       .strict()
