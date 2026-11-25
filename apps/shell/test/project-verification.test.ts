@@ -151,11 +151,29 @@ test("the local workbench advertises approved checks and reports when Docker is 
   await saveProjectChecks(approvals, source, candidate, new Set(["test"]));
   const other = join(root, "other");
   await mkdir(other);
-  for (const project of [source, other]) {
+  const state = join(root, "Application Support", "state");
+  const alias = join(root, "state-alias");
+  const unsafe = join(root, "state,with,commas");
+  await mkdir(unsafe);
+  await symlink(unsafe, alias);
+  for (const options of [
+    {
+      project: source,
+      state,
+      unavailable: "Docker CLI is not installed or executable",
+    },
+    { project: other, state, unavailable: undefined },
+    {
+      project: source,
+      state: alias,
+      unavailable:
+        "The private workspace path contains characters that Docker mounts do not support",
+    },
+  ]) {
     const workbench = startLocalWorkbench({
       resources,
-      source: project,
-      state: join(root, "Application Support", "state"),
+      source: options.project,
+      state: options.state,
       projectVerificationRoot: approvals,
       dockerPath: join(root, "missing-docker"),
     });
@@ -173,10 +191,10 @@ test("the local workbench advertises approved checks and reports when Docker is 
       const payload = ResultSchema["workbench.describe"].parse(
         (await response.json()).result,
       );
-      if (project === source) {
+      if (options.project === source) {
         expect(payload.checks?.map(({ id }) => id)).toEqual(["project-test"]);
         expect(payload.verification_readiness?.reason).toBe(
-          "Docker CLI is not installed or executable",
+          options.unavailable,
         );
       } else {
         expect(payload.checks ?? []).toEqual([]);

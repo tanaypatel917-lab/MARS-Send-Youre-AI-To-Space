@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import {
   type ConnectionResult,
@@ -42,6 +42,17 @@ const unavailable: ConnectionResult = {
   reason:
     "The local workbench couldn’t start. Retry or choose another project folder from the Project menu.",
 };
+
+async function canonicalWorkspacePath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const parent = dirname(path);
+    if (parent === path) throw error;
+    return join(await canonicalWorkspacePath(parent), basename(path));
+  }
+}
 
 export function startLocalWorkbench(options: WorkbenchOptions) {
   const child = spawn(
@@ -110,13 +121,18 @@ export function startLocalWorkbench(options: WorkbenchOptions) {
         options.projectVerificationRoot && source === options.source
           ? await projectChecksFile(options.projectVerificationRoot, source)
           : undefined;
-      const mountSafe = isSafeDockerWorkspacePath(state);
-      const image =
-        projectChecks && mountSafe ? PROJECT_VERIFICATION_IMAGE : options.image;
-      const verificationUnavailableReason =
-        projectChecks && !mountSafe
-          ? "The private workspace path contains characters that Docker mounts do not support"
-          : options.verificationUnavailableReason;
+      const requestedImage = projectChecks
+        ? PROJECT_VERIFICATION_IMAGE
+        : options.image;
+      const mountSafe =
+        !requestedImage ||
+        isSafeDockerWorkspacePath(
+          await canonicalWorkspacePath(join(state, "workspaces")),
+        );
+      const image = mountSafe ? requestedImage : undefined;
+      const verificationUnavailableReason = !mountSafe
+        ? "The private workspace path contains characters that Docker mounts do not support"
+        : options.verificationUnavailableReason;
       child.stdin.write(
         `${JSON.stringify({ source, state, openRouterKey: options.openRouterKey, image, checksFile: projectChecks ?? options.checksFile, dockerPath: options.dockerPath, dockerHost: options.dockerHost, verificationUnavailableReason, verifiedExportsOnly: options.verifiedExportsOnly })}\n`,
       );
