@@ -2,6 +2,10 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  ReviewVerificationViewSchema,
+  VerificationViewSchema,
+} from "@mars/contracts";
 import { serveWorkbench, WorkbenchError } from "@mars/workbench";
 import {
   canonicalPatchBytes,
@@ -39,10 +43,34 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
     kind: "host_test",
     check_id: "fixture-check",
     exit_code: 0,
-    output_tail: "1 passed <script>not markup</script>",
   });
   detail.verification.records = [record];
   const api = createFixtureOperations(data);
+  const fixtureVerification = api.verification;
+  let supportsLogs = true;
+  api.verification = (context, id, includeCheckLogs) => {
+    if (includeCheckLogs && !supportsLogs)
+      throw new WorkbenchError("invalid_request");
+    if (id !== taskId) return fixtureVerification(context, id);
+    return Promise.resolve({
+      ...detail.verification,
+      ...(includeCheckLogs
+        ? {
+            check_logs: [
+              {
+                run_id: record.run_id,
+                checks: [
+                  {
+                    check_index: 0,
+                    output_tail: "1 passed <script>not markup</script>",
+                  },
+                ],
+              },
+            ],
+          }
+        : {}),
+    });
+  };
   const fixtureExport = api.export;
   let sourceBaseline: "matches" | "mismatch" | "unavailable" = "mismatch";
   let destinationStatus: "inside_source" | "outside_source" = "outside_source";
@@ -101,8 +129,25 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
     expect(chosen).toBe(0);
 
     const document = new MiniDocument();
+    const legacy = await bridge.call("tasks.verification", { task_id: taskId });
+    expect(legacy.ok).toBe(true);
+    if (!legacy.ok) throw new Error("Missing compatible verdict");
+    expect(VerificationViewSchema.parse(legacy.result)).not.toHaveProperty(
+      "check_logs",
+    );
     const controller = createController(
-      fakeBridge(data),
+      {
+        ...fakeBridge(data),
+        "tasks.verification": async (params) => {
+          const result = await bridge.call("tasks.verification", params);
+          return result.ok
+            ? {
+                ok: true,
+                result: ReviewVerificationViewSchema.parse(result.result),
+              }
+            : result;
+        },
+      },
       document,
       document.root,
       undefined,
@@ -184,6 +229,11 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
     });
     expect(receipt).not.toContain("not markup");
     expect(root.textContent).toContain("git apply --check");
+
+    supportsLogs = false;
+    await controller.load();
+    expect(root.textContent).toContain("No check log available.");
+    expect(root.textContent).toContain("passed · 4 ms · exit 0");
 
     detail.verification.state = "stale";
     await controller.load();

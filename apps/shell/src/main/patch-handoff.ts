@@ -102,12 +102,7 @@ export function createPatchHandoff(
         patch_sha256,
         source_baseline: handoff.source_baseline,
         round_trip: exported.round_trip.status,
-        verdict: {
-          ...verdict,
-          checks: verdict.checks.map(
-            ({ output_tail: _outputTail, ...check }) => check,
-          ),
-        },
+        verdict,
       };
       await writeFile(join(folder, receipt.patch_file), patch, {
         flag: "wx",

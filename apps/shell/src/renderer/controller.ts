@@ -1839,9 +1839,17 @@ export function createController(
       );
       if (disposed || loadRequested) return;
       const [verification, diff, evidence, events] = await Promise.all([
-        optionalValue(() =>
-          value(bridge["tasks.verification"]({ task_id: selected.task_id })),
-        ),
+        optionalValue(async () => {
+          const params = { task_id: selected.task_id };
+          if (patchHandoff) {
+            const review = await bridge["tasks.verification"]({
+              ...params,
+              include_check_logs: true,
+            });
+            if (review.ok) return review.result;
+          }
+          return value(bridge["tasks.verification"](params));
+        }),
         optionalValue(() =>
           value(bridge["tasks.diff"]({ task_id: selected.task_id })),
         ),

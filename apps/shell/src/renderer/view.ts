@@ -1,7 +1,9 @@
 import type {
   ArtifactRef,
   EventEnvelope,
+  ReviewVerificationView,
   Task,
+  VerificationCheckLogs,
   VerificationEvidenceRecord,
   VerificationView,
 } from "@mars/contracts";
@@ -84,7 +86,7 @@ export type ShellState = {
   describe?: DescribeResult;
   tasks: Task[];
   selectedTask?: InspectResult;
-  verification?: VerificationView;
+  verification?: ReviewVerificationView;
   events: EventEnvelope[];
   transcript?: TranscriptProjection;
   diff?: DiffResult;
@@ -971,9 +973,13 @@ function taskInspector(doc: ShellDocument, task: Task): ShellElement {
 function checkResults(
   doc: ShellDocument,
   record: VerificationEvidenceRecord,
+  logs: VerificationCheckLogs | undefined,
 ): ShellElement[] {
-  return record.checks.map((check, index) =>
-    h(
+  return record.checks.map((check, index) => {
+    const tail = logs?.checks.find(
+      (entry) => entry.check_index === index,
+    )?.output_tail;
+    return h(
       doc,
       "article",
       { class: "record" },
@@ -985,24 +991,24 @@ function checkResults(
         `${check.status} · ${check.duration_ms} ms${check.exit_code === undefined ? "" : ` · exit ${check.exit_code}`}`,
       ),
       check.reason ? untrusted(doc, check.reason, "check reason") : null,
-      check.output_tail
+      tail
         ? disclosure(
             doc,
             "patch-details",
             `check:${record.run_id}:${index}`,
             "Check log (output tail)",
-            untrusted(doc, check.output_tail, "sandbox check output"),
+            untrusted(doc, tail, "sandbox check output"),
           )
         : check.kind === "host_test"
           ? h(doc, "p", { class: "muted" }, "No check log available.")
           : null,
-    ),
-  );
+    );
+  });
 }
 
 function verificationSection(
   doc: ShellDocument,
-  view: VerificationView | undefined,
+  view: ReviewVerificationView | undefined,
   error: string | undefined,
 ): ShellElement {
   if (error)
@@ -1024,6 +1030,8 @@ function verificationSection(
   const reasons = view.reasons.map((reason) =>
     untrusted(doc, reason, "host verdict reason"),
   );
+  const logsFor = (runId: string) =>
+    view.check_logs?.find((entry) => entry.run_id === runId);
   const records = view.records
     .filter((record) => record.run_id !== view.record?.run_id)
     .reverse()
@@ -1041,7 +1049,7 @@ function verificationSection(
         ...record.reasons.map((reason) =>
           untrusted(doc, reason, "host verdict reason"),
         ),
-        ...checkResults(doc, record),
+        ...checkResults(doc, record, logsFor(record.run_id)),
       ),
     );
   return h(
@@ -1056,7 +1064,9 @@ function verificationSection(
       VERIFICATION_LABEL[view.state],
     ),
     ...reasons,
-    ...(view.record ? checkResults(doc, view.record) : []),
+    ...(view.record
+      ? checkResults(doc, view.record, logsFor(view.record.run_id))
+      : []),
     records.length
       ? disclosure(
           doc,

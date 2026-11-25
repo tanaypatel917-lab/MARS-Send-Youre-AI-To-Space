@@ -7,6 +7,8 @@ import {
   type Scope,
   type Task,
   VERIFICATION_EVIDENCE_OPERATION,
+  type VerificationCheckLogs,
+  VerificationCheckLogsSchema,
   type VerificationCheckResult,
   type VerificationEvidenceRecord,
   VerificationEvidenceRecordSchema,
@@ -30,6 +32,7 @@ import {
 import { WorkspaceRefSchema } from "./protocol";
 
 const MAX_VERIFICATION_RECORDS = 50;
+const CHECK_LOGS_OPERATION = "verification.check_logs";
 /** Fragments of the text-form tool-call syntax some models emit instead of a structured call. */
 const TEXTUAL_TOOL_CALL = /<function=[A-Za-z0-9_]+>|<\/?tool_call>/;
 
@@ -199,6 +202,7 @@ export async function verifyCandidate(
   }
   const startedAt = Date.now();
   const diagnostics: string[] = [];
+  const checkLogs: VerificationCheckLogs["checks"] = [];
   if (textual) diagnostics.push(textual);
   // An unstored verdict is no verdict: it must not feed review or the badge.
   const persist = async (record: VerificationEvidenceRecord) => {
@@ -208,10 +212,24 @@ export async function verifyCandidate(
         task.task_id,
         workbenchEvent(record, runtime.sessionId),
       );
-      return record;
     } catch {
       return null;
     }
+    if (checkLogs.length)
+      await host.store
+        .appendEvent(
+          context,
+          task.task_id,
+          workbenchEvent(
+            {
+              operation: CHECK_LOGS_OPERATION,
+              logs: { run_id: record.run_id, checks: checkLogs },
+            },
+            runtime.sessionId,
+          ),
+        )
+        .catch(() => undefined);
+    return record;
   };
   let candidate: WorkspaceRef;
   try {
@@ -261,7 +279,7 @@ export async function verifyCandidate(
   } catch {
     patch = null;
   }
-  for (const check of requiredChecks) {
+  for (const [checkIndex, check] of requiredChecks.entries()) {
     const result =
       check.kind === "file_content"
         ? await runFileContentCheck(host, context, candidate, check)
@@ -272,6 +290,8 @@ export async function verifyCandidate(
             check,
             patch,
             task.task_id,
+            (tail) =>
+              checkLogs.push({ check_index: checkIndex, output_tail: tail }),
           );
     if (result.reason) reasons.push(result.reason);
     checks.push(result);
@@ -387,6 +407,7 @@ async function runHostTestCheck(
   check: HostTestCheck,
   patch: { paths: string[] } | null,
   taskId: string,
+  captureTail: (tail: string) => void,
 ): Promise<VerificationCheckResult> {
   const began = Date.now();
   const result = (
@@ -464,11 +485,11 @@ async function runHostTestCheck(
     const tail = (
       await host.scrubOutput?.(context, taskId, output).catch(() => "")
     )?.slice(-OUTPUT_TAIL);
+    if (tail) captureTail(tail);
     const extra = {
       exit_code: run.exit_code,
       output_sha256: digest,
       observed_sha256: digest,
-      ...(tail ? { output_tail: tail } : {}),
     };
     if (run.workspace.revision !== candidate.revision)
       return result(
@@ -515,6 +536,7 @@ export async function verificationRecords(
   host: VerificationHost,
   context: RequestContext,
   taskId: string,
+  checkLogs?: Map<string, VerificationCheckLogs>,
 ): Promise<VerificationEvidenceRecord[]> {
   const records: VerificationEvidenceRecord[] = [];
   for await (const event of host.store.events(context, taskId)) {
@@ -530,13 +552,24 @@ export async function verificationRecords(
     } catch {
       continue;
     }
-    if (
-      !payload ||
-      typeof payload !== "object" ||
-      (payload as { operation?: unknown }).operation !==
-        VERIFICATION_EVIDENCE_OPERATION
-    )
-      continue;
+    if (!payload || typeof payload !== "object") continue;
+    const { operation, logs } = payload as {
+      operation?: unknown;
+      logs?: unknown;
+    };
+    if (operation === CHECK_LOGS_OPERATION && checkLogs) {
+      const parsed = VerificationCheckLogsSchema.safeParse(logs);
+      if (parsed.success) {
+        checkLogs.set(parsed.data.run_id, parsed.data);
+        const firstRunId = checkLogs.keys().next().value;
+        if (
+          checkLogs.size > MAX_VERIFICATION_RECORDS &&
+          firstRunId !== undefined
+        )
+          checkLogs.delete(firstRunId);
+      }
+    }
+    if (operation !== VERIFICATION_EVIDENCE_OPERATION) continue;
     const parsed = VerificationEvidenceRecordSchema.safeParse(payload);
     if (parsed.success && parsed.data.task_id === taskId)
       records.push(parsed.data);

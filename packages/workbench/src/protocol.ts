@@ -441,7 +441,10 @@ export const RpcRequestSchema = z.discriminatedUnion("method", [
       .strict(),
   ),
   method("tasks.checkpoint", taskId),
-  method("tasks.verification", taskId),
+  method(
+    "tasks.verification",
+    taskId.extend({ include_check_logs: z.literal(true).optional() }),
+  ),
   method("tasks.export", ExportParamsSchema),
   method(
     "tasks.restore",

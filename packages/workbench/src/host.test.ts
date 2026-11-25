@@ -6552,9 +6552,22 @@ test("a protected host check binds its verdict to the exact patch bytes; a faili
   const failed = await runHostCheckTask(f, api, "task-2", 1);
   expect(failed.state).toBe("failed");
   expect(failed.reasons.join(" ")).toContain("exited 1");
-  expect(failed.record?.checks[0]?.output_tail).toContain("1 fail");
-  expect(failed.record?.checks[0]?.output_tail).toContain("[redacted]");
+  expect(failed).not.toHaveProperty("check_logs");
+  expect(failed.record?.checks[0]).not.toHaveProperty("output_tail");
   expect(JSON.stringify(failed)).not.toContain(f.root);
+  const failedReview = await api.verification(context(), "task-2", true);
+  expect(failedReview.check_logs).toEqual([
+    {
+      run_id: required(failed.record ?? undefined).run_id,
+      checks: [
+        {
+          check_index: 0,
+          output_tail: "1 fail\nDiagnostic path: [redacted]/test",
+        },
+      ],
+    },
+  ]);
+  expect(failedReview.record).toEqual(failed.record);
 
   setExit(0);
   f.diffFiles = [
@@ -6643,10 +6656,11 @@ test("export returns the exact verified patch bytes and refuses a moved revision
       verdict: {
         run_id: view.record?.run_id,
         patch_sha256: sha,
-        checks: [{ status: "passed", output_tail: "1 pass" }],
+        checks: [{ status: "passed" }],
       },
     },
   });
+  expect(JSON.stringify(exported)).not.toContain("output_tail");
   expect(exported.artifact.sha256).toBe(sha);
   // `ignoreBOM` so the leading U+FEFF is compared rather than stripped.
   expect(

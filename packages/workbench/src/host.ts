@@ -25,9 +25,10 @@ import type {
   PatchExport,
   RequestContext,
   RequiredCheck,
+  ReviewVerificationView,
   Scope,
   Task,
-  VerificationView,
+  VerificationCheckLogs,
   WorkspaceRef,
 } from "@mars/contracts";
 import {
@@ -669,12 +670,17 @@ export async function createWorkbenchHost(
     context: RequestContext,
     taskId: string,
     bound?: { workspace: WorkspaceRef; diff: { files: { patch: string }[] } },
-  ): Promise<VerificationView> => {
+    includeCheckLogs = false,
+  ): Promise<ReviewVerificationView> => {
     await options.store.inspect(context, taskId);
+    const checkLogs = includeCheckLogs
+      ? new Map<string, VerificationCheckLogs>()
+      : undefined;
     const records = await verificationRecords(
       verificationHost,
       context,
       taskId,
+      checkLogs,
     );
     let candidate: WorkspaceRef | null = null;
     let patch: string | null = null;
@@ -693,13 +699,27 @@ export async function createWorkbenchHost(
       records,
       patch,
     );
-    const view: VerificationView = {
+    const runIds = new Set([
+      presentation.record?.run_id,
+      ...records.toReversed().map((record) => record.run_id),
+    ]);
+    const view: ReviewVerificationView = {
       candidate,
       state: presentation.state,
       record: presentation.record,
       reasons: presentation.reasons,
       records,
       patch_sha256: patch,
+      ...(checkLogs
+        ? {
+            check_logs: [...runIds]
+              .flatMap((id) => {
+                const logs = id && checkLogs.get(id);
+                return logs ? [logs] : [];
+              })
+              .slice(0, 8),
+          }
+        : {}),
     };
     // Same guard as artifacts and diffs: nothing host-private leaves the
     // service, even when a client named such a path in a required check.
@@ -3561,9 +3581,13 @@ export async function createWorkbenchHost(
       );
       return checkpoint;
     },
-    async verification(context, taskId): Promise<VerificationView> {
+    async verification(
+      context,
+      taskId,
+      includeCheckLogs,
+    ): Promise<ReviewVerificationView> {
       checkContext(context);
-      return verificationView(context, taskId);
+      return verificationView(context, taskId, undefined, includeCheckLogs);
     },
     async export(context, params): Promise<PatchExport> {
       checkContext(context);

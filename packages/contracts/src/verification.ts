@@ -118,7 +118,6 @@ export const VerificationCheckResultSchema = z
     check_id: HostCheckIdSchema.optional(),
     exit_code: z.number().int().optional(),
     output_sha256: sha256.optional(),
-    output_tail: z.string().max(600).optional(),
     expected_sha256: sha256,
     observed_sha256: sha256.nullable(),
     status: VerificationVerdictSchema,
@@ -292,6 +291,30 @@ export const VerificationViewSchema = z
   })
   .strict();
 export type VerificationView = z.infer<typeof VerificationViewSchema>;
+
+export const VerificationCheckLogsSchema = z
+  .object({
+    run_id: z.string().min(1).max(256),
+    checks: z
+      .array(
+        z
+          .object({
+            check_index: z.number().int().min(0).max(63),
+            output_tail: z.string().min(1).max(600),
+          })
+          .strict(),
+      )
+      .max(64),
+  })
+  .strict();
+export type VerificationCheckLogs = z.infer<typeof VerificationCheckLogsSchema>;
+
+export const ReviewVerificationViewSchema = VerificationViewSchema.extend({
+  check_logs: z.array(VerificationCheckLogsSchema).max(8).optional(),
+}).strict();
+export type ReviewVerificationView = z.infer<
+  typeof ReviewVerificationViewSchema
+>;
 
 /** What `workbench.describe` advertises about a host check: never its command or files. */
 export const HostCheckSummarySchema = z

@@ -2,8 +2,8 @@ import {
   EventEnvelopeSchema,
   JournalResultSchema,
   PatchExportSchema,
+  ReviewVerificationViewSchema,
   TaskSchema,
-  VerificationViewSchema,
 } from "@mars/contracts";
 import { z } from "zod";
 import {
@@ -59,7 +59,7 @@ export const ResultSchema = {
   "tasks.events": z.array(EventEnvelopeSchema).max(10_000),
   "tasks.artifact": ArtifactDataSchema,
   "tasks.diff": DiffResultSchema,
-  "tasks.verification": VerificationViewSchema,
+  "tasks.verification": ReviewVerificationViewSchema,
   "tasks.evidence": EvidenceResultSchema,
   "tasks.journal": JournalResultSchema,
   "tasks.create": TaskSchema,
