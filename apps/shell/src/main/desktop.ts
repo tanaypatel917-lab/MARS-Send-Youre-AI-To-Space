@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmod,
@@ -26,6 +26,13 @@ import { resolveDockerPath } from "./docker-path";
 import { desktopExtensionsMenu } from "./extensions";
 import { startLocalWorkbench } from "./local-workbench";
 import { hasRemovableKey } from "./model-key";
+import {
+  PROJECT_VERIFICATION_IMAGE,
+  projectChecksFile,
+  removeProjectChecks,
+  saveProjectChecks,
+  suggestProjectChecks,
+} from "./project-verification";
 import { SHELL_WEB_PREFERENCES } from "./security";
 import {
   seedVerificationExample,
@@ -60,6 +67,7 @@ export async function createDesktop(
   const root = join(app.getPath("userData"), "local-workbench");
   const demo = join(root, "demo-project");
   const projectFile = join(root, "project.txt");
+  const projectVerificationRoot = join(root, "project-verification");
   const keyFile = join(root, "openrouter-key.bin");
   await mkdir(demo, { recursive: true, mode: 0o700 });
   await chmod(root, 0o700);
@@ -113,21 +121,186 @@ export async function createDesktop(
     }
   };
 
+  const downloadSandbox = async (project: string, image: string) => {
+    dockerPath = resolveDockerPath();
+    dockerHost = await resolveDockerHost(dockerPath);
+    const executable = dockerPath;
+    const env = {
+      PATH: process.env.PATH,
+      HOME: "/nonexistent",
+      ...(dockerHost ? { DOCKER_HOST: dockerHost } : {}),
+    };
+    const run = (args: string[]) =>
+      new Promise<boolean>((resolve) => {
+        if (!executable) return resolve(false);
+        execFile(
+          executable,
+          args,
+          {
+            env,
+            timeout: args[0] === "pull" ? 600_000 : 5_000,
+          },
+          (error) => resolve(!error),
+        );
+      });
+    if (!(await run(["--version"]))) {
+      const answer = await dialog.showMessageBox(window, {
+        type: "info",
+        message: "Install Docker to run verification checks",
+        detail:
+          "Install and start Docker, then use Set Up Verification Sandbox… again.",
+        buttons: ["Cancel", "Open Docker installation guide"],
+        cancelId: 0,
+      });
+      if (answer.response === 1)
+        await shell.openExternal("https://docs.docker.com/get-docker/");
+      return;
+    }
+    if (!(await run(["version", "--format", "{{.Server.Version}}"]))) {
+      await dialog.showMessageBox(window, {
+        type: "info",
+        message: "Start Docker to run verification checks",
+        detail:
+          "Make sure the local Docker daemon is running and available, then use Set Up Verification Sandbox… again.",
+      });
+      return;
+    }
+    if (await run(["image", "inspect", image])) {
+      if (source === project) await change(async () => {});
+      await dialog.showMessageBox(window, {
+        message: "Verification sandbox is already downloaded",
+        detail: "Approve Execute and select your checks when starting a task.",
+      });
+      return;
+    }
+    const answer = await dialog.showMessageBox(window, {
+      type: "question",
+      message: "Download the verification sandbox?",
+      detail: `Docker will pull this exact pinned image:\n${image}\nChecks run without network access.`,
+      buttons: ["Cancel", "Download"],
+      cancelId: 0,
+      defaultId: 0,
+    });
+    if (answer.response !== 1) return;
+    const ok = await run(["pull", image]);
+    if (ok && source === project) await change(async () => {});
+    if (closing || window.isDestroyed()) return;
+    await dialog.showMessageBox(window, {
+      type: ok ? "info" : "error",
+      message: ok
+        ? "Verification sandbox downloaded"
+        : "Sandbox download failed",
+      detail: ok
+        ? "Approve Execute and select your checks when starting a task."
+        : "Make sure Docker is running and your connection can reach the image registry, then try again.",
+    });
+  };
+
+  let settingUpVerification = false;
+  const setupVerification = async (project: string, firstOpen = false) => {
+    if (settingUpVerification || closing) return;
+    settingUpVerification = true;
+    try {
+      if (project === verification.source || project === demo) {
+        if (!firstOpen) await downloadSandbox(project, VERIFICATION_IMAGE);
+        return;
+      }
+      const current = await projectChecksFile(projectVerificationRoot, project);
+      if (firstOpen && current) return;
+      const proposal = await suggestProjectChecks(project);
+      if (source !== project || closing || window.isDestroyed()) return;
+      if (!proposal && !current) {
+        if (!firstOpen)
+          await dialog.showMessageBox(window, {
+            message: "No supported verification checks found",
+            detail:
+              "Add a test, lint, or typecheck script to the root package.json and try again. Or open the built-in Verification Example.",
+          });
+        return;
+      }
+      if (current) {
+        const answer = await dialog.showMessageBox(window, {
+          type: "question",
+          message: "Manage project verification",
+          detail: project,
+          buttons: [
+            "Cancel",
+            "Check Sandbox",
+            "Remove Checks",
+            ...(proposal ? ["Review Current Scripts"] : []),
+          ],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        if (source !== project || answer.response === 0) return;
+        if (answer.response === 1) {
+          await downloadSandbox(project, PROJECT_VERIFICATION_IMAGE);
+          return;
+        }
+        if (answer.response === 2) {
+          if (
+            !(await change(() =>
+              removeProjectChecks(projectVerificationRoot, project),
+            ))
+          )
+            throw new Error("Could not remove checks");
+          return;
+        }
+      }
+      if (!proposal) return;
+      const selected = new Set<string>();
+      for (const { name, command } of proposal.checks) {
+        const answer = await dialog.showMessageBox(window, {
+          type: "question",
+          message: `Use the ${name} script as a verification check?`,
+          detail: `${project}\n\n${name}: ${JSON.stringify(command)}\n\nApprove only if you trust this project and the code the script invokes. Checks run in Docker, offline, without dependencies installed by MARS. Task changes can still alter the project’s tests.`,
+          buttons: ["Cancel Setup", "Skip", "Use Check"],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        if (source !== project || closing || answer.response === 0) return;
+        if (answer.response === 2) selected.add(name);
+      }
+      if (!selected.size) return;
+      if (
+        !(await change(() =>
+          saveProjectChecks(
+            projectVerificationRoot,
+            project,
+            proposal,
+            selected,
+          ),
+        ))
+      )
+        throw new Error("Could not save checks");
+      await downloadSandbox(project, PROJECT_VERIFICATION_IMAGE);
+    } catch {
+      dialog.showErrorBox(
+        "Verification setup failed",
+        "Could not finish verification setup. Use the Project menu to try again.",
+      );
+    } finally {
+      settingUpVerification = false;
+    }
+  };
+
   const chooseProject = async () => {
     const result = await dialog.showOpenDialog(window, {
       title: "Open a MARS project folder",
       properties: ["openDirectory"],
     });
     if (result.canceled || !result.filePaths[0]) return;
-    const path = result.filePaths[0];
+    const selected = await realpath(result.filePaths[0]);
     if (
       !(await change(async () => {
-        const selected = await realpath(path);
         await replacePrivate(projectFile, selected);
         source = selected;
       }))
-    )
+    ) {
       dialog.showErrorBox("Project unchanged", "Could not switch projects.");
+      return;
+    }
+    await setupVerification(selected, true);
   };
 
   const showModelSettings = () => {
@@ -248,7 +421,7 @@ export async function createDesktop(
               checksFile: verification.checksFile,
               verifiedExportsOnly: true,
             }
-          : {}),
+          : { projectVerificationRoot }),
         ...(openRouterKey ? { openRouterKey } : {}),
       });
       workbench = running;
@@ -292,59 +465,7 @@ export async function createDesktop(
       },
       {
         label: "Set Up Verification Sandbox…",
-        click: () => {
-          void (async () => {
-            dockerPath = resolveDockerPath();
-            dockerHost = await resolveDockerHost(dockerPath);
-            const run = (args: string[]) =>
-              new Promise<boolean>((resolve) => {
-                if (!dockerPath) return resolve(false);
-                const child = spawn(dockerPath, args, {
-                  stdio: "ignore",
-                  shell: false,
-                });
-                child.once("error", () => resolve(false));
-                child.once("close", (code) => resolve(code === 0));
-              });
-            if (!(await run(["--version"]))) {
-              const answer = await dialog.showMessageBox(window, {
-                type: "info",
-                message: "Install Docker to run protected checks",
-                detail:
-                  "Install and start Docker, then use Set Up Verification Sandbox… again.",
-                buttons: ["Cancel", "Open Docker installation guide"],
-                cancelId: 0,
-              });
-              if (answer.response === 1)
-                await shell.openExternal("https://docs.docker.com/get-docker/");
-              return;
-            }
-            const answer = await dialog.showMessageBox(window, {
-              type: "question",
-              message: "Download the verification sandbox?",
-              detail: `Docker will pull this exact pinned image:\n${VERIFICATION_IMAGE}\nProtected checks run without network access.`,
-              buttons: ["Cancel", "Download"],
-              cancelId: 0,
-            });
-            if (answer.response !== 1) return;
-            const ok = await run(["pull", VERIFICATION_IMAGE]);
-            await dialog.showMessageBox(window, {
-              type: ok ? "info" : "error",
-              message: ok
-                ? "Verification sandbox downloaded"
-                : "Sandbox download failed",
-              detail: ok
-                ? "The workbench will restart to refresh verification readiness."
-                : "Make sure Docker is running and your connection can reach the image registry, then try again.",
-            });
-            await change(async () => {});
-          })().catch(() =>
-            dialog.showErrorBox(
-              "Sandbox setup failed",
-              "Could not set up the verification sandbox.",
-            ),
-          );
-        },
+        click: () => void setupVerification(source),
       },
       { type: "separator" },
       { label: "Model Settings…", click: showModelSettings },

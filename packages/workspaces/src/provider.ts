@@ -29,6 +29,7 @@ import { sha256 } from "@mars/contracts/canonical";
 import { isInsideOrEqual } from "@mars/contracts/path-containment";
 import { z } from "zod";
 import { createWorkspaceDiff } from "./diff";
+import { isSafeDockerWorkspacePath } from "./docker-host";
 import {
   CommandNotApprovedError,
   IntegrityError,
@@ -191,7 +192,7 @@ async function resolveProviderOptions(
     );
   }
   await chmod(rootDir, 0o700);
-  if (options.sandbox && !/^[A-Za-z0-9._/-]+$/.test(rootDir)) {
+  if (options.sandbox && !isSafeDockerWorkspacePath(rootDir)) {
     throw new WorkspacePolicyError(
       "rootDir contains characters unsafe for Docker mount arguments",
     );

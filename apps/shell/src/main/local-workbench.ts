@@ -7,6 +7,7 @@ import {
   type ConnectionResult,
   loadConnectionFile,
 } from "@mars/contracts/connection-file";
+import { isSafeDockerWorkspacePath } from "../../../../packages/workspaces/src/docker-host";
 import { findExtension } from "../runtime/extension-catalog";
 import {
   type CatalogStatus,
@@ -15,6 +16,10 @@ import {
   type OperatorAction,
   REPLY_PREFIX,
 } from "../runtime/extension-wire";
+import {
+  PROJECT_VERIFICATION_IMAGE,
+  projectChecksFile,
+} from "./project-verification";
 
 type WorkbenchOptions = {
   resources: string;
@@ -23,6 +28,7 @@ type WorkbenchOptions = {
   openRouterKey?: string;
   image?: string;
   checksFile?: string;
+  projectVerificationRoot?: string;
   dockerPath?: string;
   dockerHost?: string;
   verificationUnavailableReason?: string;
@@ -100,8 +106,19 @@ export function startLocalWorkbench(options: WorkbenchOptions) {
       const source = await realpath(options.source);
       const id = createHash("sha256").update(source).digest("hex").slice(0, 24);
       const state = join(options.state, `desktop-${id}`);
+      const projectChecks =
+        options.projectVerificationRoot && source === options.source
+          ? await projectChecksFile(options.projectVerificationRoot, source)
+          : undefined;
+      const mountSafe = isSafeDockerWorkspacePath(state);
+      const image =
+        projectChecks && mountSafe ? PROJECT_VERIFICATION_IMAGE : options.image;
+      const verificationUnavailableReason =
+        projectChecks && !mountSafe
+          ? "The private workspace path contains characters that Docker mounts do not support"
+          : options.verificationUnavailableReason;
       child.stdin.write(
-        `${JSON.stringify({ source, state, openRouterKey: options.openRouterKey, image: options.image, checksFile: options.checksFile, dockerPath: options.dockerPath, dockerHost: options.dockerHost, verificationUnavailableReason: options.verificationUnavailableReason, verifiedExportsOnly: options.verifiedExportsOnly })}\n`,
+        `${JSON.stringify({ source, state, openRouterKey: options.openRouterKey, image, checksFile: projectChecks ?? options.checksFile, dockerPath: options.dockerPath, dockerHost: options.dockerHost, verificationUnavailableReason, verifiedExportsOnly: options.verifiedExportsOnly })}\n`,
       );
       return join(state, "connection.json");
     } catch {
