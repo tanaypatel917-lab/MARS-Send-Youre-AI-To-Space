@@ -1444,6 +1444,7 @@ export function renderShell(
             state.settingsError,
             () => state.onPage?.("extensions"),
             () => state.onRefresh?.(),
+            state.describe?.verification_readiness,
           )
         : state.page === "extensions"
           ? renderExtensions(doc, state.extensions)

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ModelHealth, SetupSummary } from "./setup";
 
 export const ASSISTANT_CHANNEL = "mars-shell:assistant";
 export const AssistantMessageSchema = z
@@ -37,8 +38,15 @@ export type AssistantResult =
       sessions: AssistantSession[];
       configured: boolean;
       canConfigure: boolean;
+      health?: ModelHealth;
+      setup?: SetupSummary;
     }
-  | { ok: false; error: string; reloadHistory?: boolean };
+  | {
+      ok: false;
+      error: string;
+      reloadHistory?: boolean;
+      health?: ModelHealth;
+    };
 export type AssistantApi = {
   onModelChanged?(refresh: () => void): void;
   request(payload: AssistantRequest): Promise<AssistantResult>;

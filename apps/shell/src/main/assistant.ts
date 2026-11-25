@@ -10,7 +10,9 @@ import {
   type AssistantResult,
   type AssistantSession,
 } from "../shared/assistant";
+import type { ModelHealth, ProviderIssue } from "../shared/setup";
 import { readHistory, saveTurn } from "./assistant-history";
+import type { SetupJournal } from "./setup-journal";
 
 type Context = {
   workspace: string;
@@ -26,6 +28,51 @@ type Options = {
     key: string,
     signal?: AbortSignal,
   ) => Promise<string>;
+  journal?: SetupJournal;
+  now?: () => Date;
+};
+
+type ChatIssue = Exclude<ProviderIssue, "task_model_unavailable">;
+
+/** Maps a provider failure to what the user can do about it. */
+export function classifyProviderFailure(error: unknown): {
+  issue: ChatIssue;
+  retryAfterSeconds?: number;
+} {
+  const failure = (error ?? {}) as {
+    name?: unknown;
+    status?: unknown;
+    timedOut?: unknown;
+    retryAfterMs?: unknown;
+  };
+  if (failure.name !== "ProviderError") return { issue: "unavailable" };
+  const status = typeof failure.status === "number" ? failure.status : 0;
+  if (status === 429) {
+    const ms = failure.retryAfterMs;
+    return {
+      issue: "rate_limited",
+      ...(typeof ms === "number" && ms > 0
+        ? { retryAfterSeconds: Math.min(86_400, Math.ceil(ms / 1000)) }
+        : {}),
+    };
+  }
+  if (status === 401 || status === 403) return { issue: "auth_failed" };
+  if (status === 402) return { issue: "credits" };
+  if (status === 0 || failure.timedOut === true) return { issue: "network" };
+  return { issue: "unavailable" };
+}
+
+const FAILURE_MESSAGE: Record<ChatIssue, string> = {
+  rate_limited:
+    "OpenRouter’s free route is rate-limited right now. Free models have per-minute and daily request caps shared with your key. Your draft is kept; retry shortly.",
+  auth_failed:
+    "OpenRouter rejected this API key. Your draft is kept. Replace the key under Settings → Model connection.",
+  credits:
+    "OpenRouter says this key needs credits for the request. Your draft is kept. Check your OpenRouter balance, then retry.",
+  network:
+    "Could not reach OpenRouter. Your draft is kept. Check your connection, then retry.",
+  unavailable:
+    "The free model did not return a reply. Your draft is kept. Retry, or check Settings → Setup diagnostics if this keeps happening.",
 };
 
 async function complete(
@@ -74,6 +121,14 @@ async function complete(
 /** All credentials, provider access, and history stay outside the sandboxed renderer. */
 export function createAssistant(options: Options) {
   let active: Context | undefined;
+  let health: ModelHealth = { state: "unchecked" };
+  let healthKey: string | undefined;
+  const now = options.now ?? (() => new Date());
+  const keyHealth = (key: string | undefined) => {
+    if (key === healthKey) return;
+    healthKey = key;
+    health = { state: "unchecked" };
+  };
   return {
     async call(payload: unknown): Promise<AssistantResult> {
       const parsed = AssistantRequestSchema.safeParse(payload);
@@ -99,6 +154,8 @@ export function createAssistant(options: Options) {
             "Connect to a workbench and reload to open this project's chat.",
         };
       }
+      keyHealth(context.key);
+      if (context.key) void options.journal?.mark("key_connected");
       if (request.action === "settings") {
         if (!context.settings)
           return {
@@ -174,6 +231,7 @@ export function createAssistant(options: Options) {
               "This conversation has reached its context limit. Start a new chat.",
           };
         active = context;
+        let replied = false;
         try {
           const reply = await (options.complete ?? complete)(
             messages,
@@ -181,6 +239,9 @@ export function createAssistant(options: Options) {
             context.signal,
           );
           context.signal?.throwIfAborted();
+          replied = true;
+          health = { state: "ok", at: now().toISOString() };
+          void options.journal?.mark("first_chat_reply");
           const updated: AssistantSession = {
             id: request.id,
             title: existing?.title ?? request.text.slice(0, 80),
@@ -200,11 +261,31 @@ export function createAssistant(options: Options) {
               reloadHistory: true,
             };
           sessions = saved;
-        } catch {
+        } catch (error) {
+          if (context.signal?.aborted || healthKey !== context.key)
+            return {
+              ok: false,
+              error: "Model settings or project changed. Please retry.",
+            };
+          if (!replied) {
+            const { issue, retryAfterSeconds } = classifyProviderFailure(error);
+            health = {
+              state: issue,
+              at: now().toISOString(),
+              ...(retryAfterSeconds ? { retryAfterSeconds } : {}),
+            };
+            void options.journal?.count(issue);
+          }
           return {
             ok: false,
-            error:
-              "Could not finish or save the reply. Your draft is kept. Check your key and connection, or retry if the free model is busy.",
+            error: replied
+              ? "Could not save the reply. Your draft is kept; retry."
+              : `${FAILURE_MESSAGE[health.state as ChatIssue]}${
+                  health.retryAfterSeconds
+                    ? ` OpenRouter suggests waiting ${health.retryAfterSeconds}s.`
+                    : ""
+                }`,
+            health,
           };
         } finally {
           if (active === context) active = undefined;
@@ -216,6 +297,8 @@ export function createAssistant(options: Options) {
         sessions,
         configured: Boolean(context.key),
         canConfigure: Boolean(context.settings),
+        health,
+        ...(options.journal ? { setup: await options.journal.snapshot() } : {}),
       };
     },
   };

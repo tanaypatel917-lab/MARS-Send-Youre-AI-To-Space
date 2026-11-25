@@ -1,3 +1,10 @@
+import {
+  HEALTH_LABEL,
+  ISSUE_LABEL,
+  MILESTONE_LABEL,
+  PROVIDER_ISSUES,
+  SETUP_MILESTONES,
+} from "../shared/setup";
 import type { AssistantViewState } from "./assistant-view";
 import { h, type ShellDocument, type ShellElement } from "./dom";
 
@@ -8,6 +15,11 @@ export function renderSettings(
   error: string | undefined,
   extensions: () => void,
   retry: () => void,
+  readiness?: {
+    status: "ready" | "unavailable";
+    reason: string;
+    setup?: string | undefined;
+  },
 ): ShellElement {
   const button = (label: string, key: string, click: () => void) => {
     const el = h(
@@ -27,6 +39,82 @@ export function renderSettings(
       : model.configured
         ? "Key present"
         : "No key added";
+  const health = model.health?.state ?? "unchecked";
+  const row = (label: string, value: string, ok: boolean, key: string) =>
+    h(
+      doc,
+      "li",
+      { "data-check": ok ? "ok" : "warn", "data-diagnostic": key },
+      h(doc, "span", {}, label),
+      h(doc, "span", {}, value),
+    );
+  const date = (iso: string) => iso.slice(0, 10);
+  const issues = PROVIDER_ISSUES.filter((key) => model.setup?.issues[key]);
+  const diagnostics = h(
+    doc,
+    "section",
+    { class: "settings-block", "aria-label": "Setup diagnostics" },
+    h(
+      doc,
+      "p",
+      { class: "settings-index", "aria-hidden": "true" },
+      "04 / DIAGNOSTICS",
+    ),
+    h(doc, "h2", {}, "Setup diagnostics"),
+    h(
+      doc,
+      "ul",
+      { class: "setup-diagnostics" },
+      row(
+        "Model key",
+        model.configured ? "Present" : "Missing: add an OpenRouter key",
+        model.configured,
+        "key",
+      ),
+      row(
+        "Chat model (OpenRouter free route)",
+        health === "unchecked"
+          ? "Checked on your next chat message"
+          : `${HEALTH_LABEL[health]}${model.health?.at ? ` · ${date(model.health.at)}` : ""}`,
+        health === "ok" || health === "unchecked",
+        "chat-model",
+      ),
+      row(
+        "Verification checks",
+        readiness
+          ? readiness.status === "ready"
+            ? "Ready"
+            : `${readiness.reason}. ${readiness.setup ?? "Use Project → Set Up Verification Sandbox…"}`
+          : "Connect to your workbench to check",
+        readiness?.status === "ready",
+        "verification",
+      ),
+    ),
+    h(doc, "h2", {}, "Pilot progress"),
+    h(
+      doc,
+      "ul",
+      { class: "setup-diagnostics" },
+      ...SETUP_MILESTONES.map((key) => {
+        const at = model.setup?.milestones[key];
+        return row(MILESTONE_LABEL[key], at ? date(at) : "Not yet", true, key);
+      }),
+      ...issues.map((key) =>
+        row(
+          ISSUE_LABEL[key],
+          `${model.setup?.issues[key]}×`,
+          false,
+          `issue-${key}`,
+        ),
+      ),
+    ),
+    h(
+      doc,
+      "p",
+      {},
+      "Kept only on this device to help you and your pilot contact see where setup stalled. Nothing here is sent anywhere.",
+    ),
+  );
   return h(
     doc,
     "main",
@@ -136,6 +224,7 @@ export function renderSettings(
         ),
         button("Browse extensions", "settings-extensions", extensions),
       ),
+      diagnostics,
     ),
   );
 }

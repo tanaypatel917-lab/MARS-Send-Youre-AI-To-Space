@@ -1,4 +1,9 @@
 import type { AssistantSession } from "../shared/assistant";
+import {
+  HEALTH_LABEL,
+  type ModelHealth,
+  type SetupSummary,
+} from "../shared/setup";
 import { h, type ShellDocument, type ShellElement } from "./dom";
 
 export type AssistantViewState = {
@@ -14,6 +19,8 @@ export type AssistantViewState = {
   error?: string | undefined;
   validation?: "key" | "consent" | undefined;
   pending?: { id: string; text: string } | undefined;
+  health?: ModelHealth | undefined;
+  setup?: SetupSummary | undefined;
   onDraft?: (draft: string) => void;
   onConsent?: (consent: boolean) => void;
   onSend?: () => void;
@@ -63,6 +70,14 @@ export function renderAssistant(
       : []),
   ];
   const empty = messages.length === 0;
+  const health = state.health?.state ?? "unchecked";
+  const healthy = health === "ok" || health === "unchecked";
+  const startTask = () => state.onTask?.(state.draft.trim());
+  const startTaskAction = (key: string) => {
+    const el = action(doc, "Start a coding task  ↗", "start-task", startTask);
+    el.setAttribute("data-focus-key", key);
+    return el;
+  };
   const input = h(doc, "textarea", {
     id: "assistant-composer-input",
     rows: "2",
@@ -176,8 +191,20 @@ export function renderAssistant(
         doc,
         "span",
         { class: "composer-model" },
-        state.configured ? "OpenRouter · Free" : "No model connected",
-        state.configured ? h(doc, "span", { class: "model-dot" }, "●") : null,
+        state.configured
+          ? `OpenRouter · Free${health === "unchecked" ? "" : ` · ${HEALTH_LABEL[health]}`}`
+          : "No model connected",
+        state.configured
+          ? h(
+              doc,
+              "span",
+              {
+                class: `model-dot${healthy ? "" : " model-dot-warn"}`,
+                "data-model-health": health,
+              },
+              "●",
+            )
+          : null,
       ),
       send,
     ),
@@ -206,6 +233,7 @@ export function renderAssistant(
         h(doc, "strong", {}, session?.title ?? "New conversation"),
       ),
       h(doc, "span", { class: "mode-badge" }, "Chat"),
+      startTaskAction("start-task-toolbar"),
     ),
     h(
       doc,
@@ -235,6 +263,36 @@ export function renderAssistant(
                 "p",
                 { class: "welcome-subtitle" },
                 "Explore an idea, plan a build, or talk through code.",
+              ),
+              h(
+                doc,
+                "div",
+                { class: "mode-explainer", "aria-label": "Chat and tasks" },
+                h(
+                  doc,
+                  "div",
+                  {},
+                  h(doc, "strong", {}, "Chat  ·  talk it through"),
+                  h(
+                    doc,
+                    "p",
+                    {},
+                    "Answers questions and drafts plans. It can’t read your files, run commands, or change code.",
+                  ),
+                ),
+                h(
+                  doc,
+                  "div",
+                  {},
+                  h(doc, "strong", {}, "Task  ·  do the work"),
+                  h(
+                    doc,
+                    "p",
+                    {},
+                    "An agent edits your project with the approvals you grant, runs your checks, and hands back a patch.",
+                  ),
+                  startTaskAction("start-task-welcome"),
+                ),
               ),
             ),
           ]
@@ -322,6 +380,14 @@ export function renderAssistant(
             { class: "chat-cost" },
             consent,
             "Send this conversation to OpenRouter’s free model route",
+          )
+        : null,
+      state.configured
+        ? h(
+            doc,
+            "p",
+            { class: "composer-footnote", "data-cost-note": "chat" },
+            "Chat costs nothing: the free route has shared rate limits and daily caps. Paid models are only used by tasks you approve, within each task’s budget.",
           )
         : null,
       h(

@@ -362,7 +362,7 @@ export function createController(
               onNew: () => selectChat(globalThis.crypto.randomUUID()),
               onSelect: selectChat,
               onTask: (text) => {
-                composer = { ...composer, request: text };
+                if (text) composer = { ...composer, request: text };
                 page = "tasks";
                 render();
               },
@@ -588,6 +588,8 @@ export function createController(
           : {}),
         configured: result.configured,
         canConfigure: result.canConfigure,
+        health: result.health,
+        setup: result.setup ?? assistantState.setup,
         loading: false,
         ...(changed
           ? {
@@ -765,11 +767,18 @@ export function createController(
             ...assistantState,
             sessions: result.sessions,
             configured: result.configured,
+            health: result.health,
+            setup: result.setup ?? assistantState.setup,
             draft:
               assistantState.activeId === activeId ? "" : assistantState.draft,
             busy: false,
           }
-        : { ...assistantState, busy: false, error: result.error };
+        : {
+            ...assistantState,
+            busy: false,
+            error: result.error,
+            health: result.health ?? assistantState.health,
+          };
     } catch {
       if (scopeGeneration !== generation) return;
       assistantState = {
