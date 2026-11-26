@@ -17,6 +17,7 @@ import {
   createAssistantMessageEventStream,
   type Model,
   type SimpleStreamOptions,
+  type ToolCall,
   toolWireSchema,
 } from "@oh-my-pi/pi-ai";
 
@@ -335,6 +336,7 @@ export function createModelBridge(options: ModelBridgeOptions) {
         });
         let textIndex = -1;
         let emittedText = "";
+        const toolCalls: ToolCall[] = [];
         let done = false;
         stream.push({ type: "start", partial: output });
         const routed: OpenAICompatibleChatRequest = {
@@ -369,39 +371,24 @@ export function createModelBridge(options: ModelBridgeOptions) {
               partial: output,
             });
           } else if (event.type === "tool-call") {
-            const index = output.content.length;
-            const toolCall = {
-              type: "toolCall" as const,
+            toolCalls.push({
+              type: "toolCall",
               ...event.toolCall,
               arguments: redactValue(
                 event.toolCall.arguments,
                 workspace.restore,
               ) as typeof event.toolCall.arguments,
-            };
-            output.content.push(toolCall);
-            stream.push({
-              type: "toolcall_start",
-              contentIndex: index,
-              partial: output,
-            });
-            stream.push({
-              type: "toolcall_end",
-              contentIndex: index,
-              toolCall,
-              partial: output,
             });
           } else if (event.type === "error") {
             throw new Error("Provider stream failed.");
           } else if (event.type === "done") {
             if (done || event.response.content !== emittedText)
               throw new Error("Provider stream response mismatch.");
-            const calls = output.content
-              .filter((part) => part.type === "toolCall")
-              .map(({ id, name, arguments: args }) => ({
-                id,
-                name,
-                arguments: args,
-              }));
+            const calls = toolCalls.map(({ id, name, arguments: args }) => ({
+              id,
+              name,
+              arguments: args,
+            }));
             if (
               JSON.stringify(calls) !==
               JSON.stringify(
@@ -449,12 +436,13 @@ export function createModelBridge(options: ModelBridgeOptions) {
                   1_000_000,
               },
             };
-            output.stopReason = calls.length
-              ? "toolUse"
-              : event.response.finishReason === "length" ||
-                  event.response.finishReason === "max_tokens"
+            output.stopReason =
+              event.response.finishReason === "length" ||
+              event.response.finishReason === "max_tokens"
                 ? "length"
-                : "stop";
+                : calls.length
+                  ? "toolUse"
+                  : "stop";
             if (textIndex >= 0)
               stream.push({
                 type: "text_end",
@@ -466,6 +454,24 @@ export function createModelBridge(options: ModelBridgeOptions) {
           }
         }
         if (!done) throw new Error("Provider stream ended without completion.");
+        // Even non-runnable tool blocks on a length stop make the SDK retry.
+        if (output.stopReason === "toolUse") {
+          for (const toolCall of toolCalls) {
+            const index = output.content.length;
+            output.content.push(toolCall);
+            stream.push({
+              type: "toolcall_start",
+              contentIndex: index,
+              partial: output,
+            });
+            stream.push({
+              type: "toolcall_end",
+              contentIndex: index,
+              toolCall,
+              partial: output,
+            });
+          }
+        }
         stream.push({
           type: "done",
           reason: output.stopReason as "stop" | "length" | "toolUse",

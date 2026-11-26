@@ -270,11 +270,15 @@ test("mars_grep checkTool blocks searching outside an active run", async () => {
   }
 });
 
-function sse(delta: Record<string, unknown>, reason = "stop") {
+function sse(
+  delta: Record<string, unknown>,
+  reason = "stop",
+  completionTokens = 12,
+) {
   return new Response(
     [
       `data: ${JSON.stringify({ choices: [{ delta, finish_reason: null }] })}\n\n`,
-      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: reason }], usage: { prompt_tokens: 50, completion_tokens: 12 } })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: reason }], usage: { prompt_tokens: 50, completion_tokens: completionTokens } })}\n\n`,
       "data: [DONE]\n\n",
     ].join(""),
     { headers: { "content-type": "text/event-stream" } },
@@ -3259,6 +3263,60 @@ for (const [label, contextWindow, config, check] of [
       await f.cleanup();
     }
   });
+
+for (const reason of ["length", "max_tokens"]) {
+  test(`a ${reason} response pauses without running complete tool calls or retrying`, async () => {
+    const f = await fixture(200_000, { maxOutputTokens: 32_000 });
+    let requests = 0;
+    let reads = 0;
+    try {
+      const session = await f.open({
+        tools: {
+          ...f.tools,
+          read: async () => {
+            reads++;
+            return Buffer.from("Hello");
+          },
+        },
+        fetch: async (_url, init) => {
+          requests++;
+          const request = JSON.parse(String(init?.body));
+          return sse(
+            {
+              content: "Checking the file.",
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "capped_read",
+                  type: "function",
+                  function: {
+                    name: "mars_read",
+                    arguments: JSON.stringify({ path: "greeting.txt" }),
+                  },
+                },
+              ],
+            },
+            reason,
+            request.max_tokens,
+          );
+        },
+      });
+      const outcome = await session.run(f.task.request);
+      expect(outcome).toMatchObject({
+        status: "paused",
+        content: "Checking the file.",
+        usage: { reserved_tokens: f.task.budget.max_tokens },
+      });
+      expect(requests).toBe(1);
+      expect(reads).toBe(0);
+      expect(JSON.stringify(session.journalSnapshot())).not.toContain(
+        "capped_read",
+      );
+    } finally {
+      await f.cleanup();
+    }
+  });
+}
 
 test("a file that names the workspace root can be read and exactly edited through the placeholder", async () => {
   const f = await fixture(200_000);
