@@ -664,9 +664,10 @@ total cap. The reports record Wilson 95% intervals, a paired lift interval,
 provider exclusions, failures, metered cost per verified solve, and time to
 verified patch. Private transcripts are under `transcripts/`; use a fresh
 output directory for each run so its journals cannot be overwritten. SDK
-failures and exhausted empty replies count as failed attempts, not provider
-exclusions. Provider exclusions can bias the comparison; review their counts
-before interpreting conditional solve rates.
+failures and exhausted empty replies remain eligible, and an exact patch still
+counts as a solve if the runtime fails or pauses afterward. The report keeps
+the runtime outcome separate from patch verification. Provider exclusions can
+bias the comparison; review their counts before interpreting conditional solve rates.
 
 The pre-registered power design uses the exact paired sign test at
 two-sided alpha .05: 40% discordant pairs and 70% of discordances favoring

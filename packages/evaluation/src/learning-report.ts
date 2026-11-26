@@ -33,6 +33,8 @@ export function renderLearningReport(report: LearningReport): string {
     "",
     "## Failure and provider accounting",
     "",
+    "An eligible trial is solved if the final tree verifies, even if the runtime fails or pauses afterward. The task table shows those runtime outcomes beside the verified patch.",
+    "",
     "The solve-rate denominator excludes terminal provider failures; paired analysis excludes either-arm provider failures. Transient HTTP errors (including recovered retries) are counted separately in JSON. Metered cost includes successful and unsuccessful attempts, based on recorded runtime token counts (which may include estimates). Charges missing from the runtime ledger and hosting costs are not included. Times cover inference through the exact-tree check for solves only.",
     "",
     "| Arm | Attempts | Timeout | Rate limit | Server | Other provider | Other failures |",
@@ -49,12 +51,15 @@ export function renderLearningReport(report: LearningReport): string {
     "| Task | Baseline | Specialist |",
     "| --- | --- | --- |",
     ...report.tasks.map(({ task_id, outcomes }) => {
-      const outcome = (result: typeof outcomes.baseline) =>
-        result.solved
-          ? "verified"
-          : result.provider_failure
-            ? `provider: ${result.provider_failure}`
-            : (result.category ?? "unsolved");
+      const outcome = (result: typeof outcomes.baseline) => {
+        if (result.solved)
+          return result.status === "completed"
+            ? "verified"
+            : `verified (${result.failure ?? result.status})`;
+        return result.provider_failure
+          ? `provider: ${result.provider_failure}`
+          : (result.category ?? "unsolved");
+      };
       return `| ${task_id} | ${outcome(outcomes.baseline)} | ${outcome(outcomes.specialist)} |`;
     }),
     "",

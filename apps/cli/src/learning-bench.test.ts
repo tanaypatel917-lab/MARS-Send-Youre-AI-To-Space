@@ -475,3 +475,105 @@ test("learning reports rate limits, 5xx and provider timeouts independently of p
     excluded_provider_pairs: 0,
   });
 });
+
+test.each(["stop", "length"] as const)(
+  "learning reports a verified patch separately from a final empty %s",
+  async (finishReason) => {
+    const { repo, suite } = await setup();
+    const binding = await scriptedModelRegistry(join(repo, "binding"));
+    const stream = (delta: object, finish: string) =>
+      new Response(
+        `data: ${JSON.stringify({ choices: [{ delta, finish_reason: finish }] })}\n\ndata: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    const trial = (complete: boolean) => ({
+      ...binding,
+      fetch: async (_url: string, init?: RequestInit) => {
+        const { messages } = JSON.parse(String(init?.body)) as {
+          messages: { role: string }[];
+        };
+        if (messages.some(({ role }) => role === "tool")) {
+          return complete
+            ? stream({ content: "Done." }, "stop")
+            : stream({}, finishReason);
+        }
+        return stream(
+          {
+            tool_calls: [
+              {
+                index: 0,
+                id: "correct_patch",
+                type: "function",
+                function: {
+                  name: "mars_apply_patch",
+                  arguments: JSON.stringify({
+                    patch: [
+                      "*** Begin Patch",
+                      "*** Update File: a.ts",
+                      "@@",
+                      "-export const count = 0;",
+                      "+export const count = 1;",
+                      "*** End Patch",
+                    ].join("\n"),
+                  }),
+                },
+              },
+            ],
+          },
+          "tool_calls",
+        );
+      },
+    });
+    const report = await runLearningBenchmark({
+      suite,
+      outDir: join(repo, "out"),
+      mode: "offline",
+      plan: {
+        schema: "mars.learning-plan/v1",
+        suite_sha256: suite.sha256,
+        seed: "test",
+        budget_per_task: {
+          max_tokens: 100_000,
+          max_usd: 1,
+          max_duration_ms: 30_000,
+        },
+        max_total_usd: 2,
+        arms: {
+          baseline: { model: binding.modelId },
+          specialist: {
+            model: binding.modelId,
+            lineage_sha256: "0".repeat(64),
+          },
+        },
+      },
+      bindings: { baseline: trial(true), specialist: trial(false) },
+    });
+    expect(report.tasks[0]?.outcomes).toMatchObject({
+      baseline: {
+        status: "completed",
+        solved: true,
+        verification: { solved: true },
+      },
+      specialist: {
+        status: finishReason === "stop" ? "failed" : "paused",
+        failure: finishReason === "stop" ? "no_response" : null,
+        turns: finishReason === "stop" ? 5 : 2,
+        solved: true,
+        verification: { solved: true, changed: ["a.ts"] },
+        category: null,
+        provider_failure: null,
+      },
+    });
+    expect(report.arms.baseline).toMatchObject({ eligible: 1, solved: 1 });
+    expect(report.arms.specialist).toMatchObject({ eligible: 1, solved: 1 });
+    expect(report.paired).toMatchObject({
+      pairs: 1,
+      excluded_provider_pairs: 0,
+      ties: 1,
+    });
+    const runtime = finishReason === "stop" ? "no_response" : "paused";
+    expect(renderLearningReport(report)).toContain(
+      `| correct-count | verified | verified (${runtime}) |`,
+    );
+  },
+);
