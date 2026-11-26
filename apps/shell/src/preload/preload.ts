@@ -1,6 +1,4 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { ASSISTANT_CHANNEL, type AssistantApi } from "../shared/assistant";
-import { WORKBENCH_CHANGED } from "../shared/desktop-model";
 import {
   BRIDGE_CHANNEL,
   BRIDGE_GLOBAL,
@@ -17,6 +15,7 @@ import {
   TEAM_CHAT_METHODS,
   type TeamChatBridgeApi,
 } from "../shared/team-chat";
+import { createAssistantPreloadApi } from "./assistant";
 
 export type Invoke = (channel: string, payload: unknown) => Promise<unknown>;
 
@@ -46,13 +45,7 @@ if (typeof contextBridge?.exposeInMainWorld === "function") {
   contextBridge.exposeInMainWorld(BRIDGE_GLOBAL, createPreloadApi(invoke));
   contextBridge.exposeInMainWorld(
     "marsAssistant",
-    Object.freeze({
-      onWorkbenchChanged: (refresh: () => void) => {
-        ipcRenderer.on(WORKBENCH_CHANGED, () => refresh());
-      },
-      request: (payload: Parameters<AssistantApi["request"]>[0]) =>
-        invoke(ASSISTANT_CHANNEL, payload),
-    }),
+    createAssistantPreloadApi(ipcRenderer),
   );
   contextBridge.exposeInMainWorld(
     TEAM_CHAT_GLOBAL,

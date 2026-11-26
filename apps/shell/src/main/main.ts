@@ -11,7 +11,6 @@ import {
   session,
   shell,
 } from "electron";
-import { WORKBENCH_CHANGED } from "../shared/desktop-model";
 import { createAssistant } from "./assistant";
 import { explicitConnection, resolveConnection } from "./connection";
 import { createDesktop } from "./desktop";
@@ -138,8 +137,7 @@ app.on("ready", async () => {
   const bridge = createManagedWorkbenchBridge({
     connect: newBridge,
     isChanging: () => desktop?.isChanging() ?? false,
-    reloadWindow: () => window.webContents.reload(),
-    refreshRenderer: () => window.webContents.send(WORKBENCH_CHANGED),
+    webContents: window.webContents,
   });
   registerBridge(ipcMain, bridge, senderPolicy);
   registerPatchHandoff(

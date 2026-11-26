@@ -90,8 +90,7 @@ test.each(["project", "sandbox"] as const)(
         },
       }),
       isChanging: () => false,
-      reloadWindow() {},
-      refreshRenderer() {},
+      webContents: { reload() {}, send() {} },
     });
     const parent = await mkdtemp(join(tmpdir(), "mars-handoff-reconnect-"));
     try {
@@ -168,8 +167,7 @@ test.each(["project", "sandbox"] as const)(
         },
       }),
       isChanging: () => false,
-      reloadWindow() {},
-      refreshRenderer() {},
+      webContents: { reload() {}, send() {} },
     });
     const parent = await mkdtemp(join(tmpdir(), "mars-handoff-reconnect-"));
     const handoff = createPatchHandoff(

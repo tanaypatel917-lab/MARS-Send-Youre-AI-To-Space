@@ -2,6 +2,7 @@ import type {
   ConnectionResult,
   LocalConnection,
 } from "@mars/contracts/connection-file";
+import { WORKBENCH_CHANGED } from "../shared/desktop-model";
 import {
   type BridgeErrorKind,
   bridgeError,
@@ -72,8 +73,10 @@ export type DesktopChange = "project" | "model" | "sandbox";
 export function createManagedWorkbenchBridge(options: {
   connect(): Bridge;
   isChanging(): boolean;
-  reloadWindow(): void;
-  refreshRenderer(): void;
+  webContents: {
+    reload(): void;
+    send(channel: string): void;
+  };
 }) {
   let bridge = options.connect();
   let pendingLaunches = 0;
@@ -93,8 +96,8 @@ export function createManagedWorkbenchBridge(options: {
     currentBridge: () => bridge,
     reconnect(kind: DesktopChange) {
       bridge = options.connect();
-      if (kind === "project") options.reloadWindow();
-      else options.refreshRenderer();
+      if (kind === "project") options.webContents.reload();
+      else options.webContents.send(WORKBENCH_CHANGED);
     },
   };
 }

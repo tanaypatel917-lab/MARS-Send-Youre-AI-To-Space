@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import {
   mkdir,
   mkdtemp,
@@ -26,6 +27,7 @@ import {
   seedVerificationExample,
   VERIFICATION_IMAGE,
 } from "../src/main/verification-example";
+import { createAssistantPreloadApi } from "../src/preload/assistant";
 import { startShell } from "../src/renderer/app";
 import { BRIDGE_METHODS, type ShellBridge } from "../src/shared/methods";
 import { findAll, MiniDocument } from "./mini-dom";
@@ -116,7 +118,7 @@ esac
 
   let desktop: Awaited<ReturnType<typeof createDesktop>>;
   let windowReloads = 0;
-  let notifyWorkbenchChanged: (() => void) | undefined;
+  const ipc = new EventEmitter();
   const bridge = createManagedWorkbenchBridge({
     connect: () =>
       createReconnectingBridge({
@@ -125,11 +127,13 @@ esac
           wrapTransport(createLoopbackTransport(connection)),
       }),
     isChanging: () => desktop.isChanging(),
-    reloadWindow: () => {
-      windowReloads++;
-    },
-    refreshRenderer: () => {
-      notifyWorkbenchChanged?.();
+    webContents: {
+      reload() {
+        windowReloads++;
+      },
+      send(channel) {
+        ipc.emit(channel);
+      },
     },
   });
   desktop = await createDesktop(
@@ -163,9 +167,16 @@ esac
       Reflect.apply(checkSandbox, undefined, []);
       return notice.promise;
     },
-    onWorkbenchChanged(refresh: () => void) {
-      notifyWorkbenchChanged = refresh;
-    },
+    assistant: createAssistantPreloadApi({
+      on: (channel, listener) => ipc.on(channel, listener),
+      invoke: async () => ({
+        ok: true,
+        workspace: desktop.chatContext().workspace,
+        configured: true,
+        canConfigure: true,
+        sessions: [],
+      }),
+    }),
     windowReloads: () => windowReloads,
   };
 }
@@ -184,16 +195,7 @@ test.skipIf(process.platform === "win32")(
       const app = startShell({
         document: doc,
         marsWorkbench: shell,
-        marsAssistant: {
-          onWorkbenchChanged: fixture.onWorkbenchChanged,
-          request: async () => ({
-            ok: true,
-            workspace: fixture.desktop.chatContext().workspace,
-            configured: true,
-            canConfigure: true,
-            sessions: [],
-          }),
-        },
+        marsAssistant: fixture.assistant,
         addEventListener() {},
       });
       if (!app) throw new Error("Renderer did not start");
