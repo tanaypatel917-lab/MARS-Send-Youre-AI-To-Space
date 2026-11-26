@@ -3,10 +3,10 @@ import type { ShellBridge } from "../shared/methods";
 import type { PatchHandoffApi } from "../shared/patch-handoff";
 import type { TeamChatBridgeApi } from "../shared/team-chat";
 import { createController } from "./controller";
-import type { ShellDocument, ShellElement } from "./dom";
+import type { ShellDocument } from "./dom";
 import type { ExtensionsApi } from "./extensions-view";
 
-type ShellGlobal = typeof globalThis & {
+type ShellGlobal = {
   marsWorkbench?: ShellBridge;
   marsTeamChat?: TeamChatBridgeApi;
   marsAssistant?: AssistantApi;
@@ -20,12 +20,9 @@ type ShellGlobal = typeof globalThis & {
   ): void;
 };
 
-const shell = globalThis as ShellGlobal;
-const root = shell.document?.getElementById("app") as
-  | ShellElement
-  | null
-  | undefined;
-if (shell.marsWorkbench && shell.document && root) {
+export function startShell(shell: ShellGlobal) {
+  const root = shell.document?.getElementById("app");
+  if (!shell.marsWorkbench || !shell.document || !root) return;
   const controller = createController(
     shell.marsWorkbench,
     shell.document,
@@ -42,4 +39,7 @@ if (shell.marsWorkbench && shell.document && root) {
   shell.addEventListener("pagehide", controller.dispose, { once: true });
   shell.marsAssistant?.onWorkbenchChanged?.(() => void controller.load());
   void controller.load();
+  return { dispose: controller.dispose, settled: controller.settled };
 }
+
+startShell(globalThis as unknown as ShellGlobal);

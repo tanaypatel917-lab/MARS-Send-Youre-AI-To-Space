@@ -26,7 +26,7 @@ import {
   seedVerificationExample,
   VERIFICATION_IMAGE,
 } from "../src/main/verification-example";
-import { createController } from "../src/renderer/controller";
+import { startShell } from "../src/renderer/app";
 import { BRIDGE_METHODS, type ShellBridge } from "../src/shared/methods";
 import { findAll, MiniDocument } from "./mini-dom";
 
@@ -115,9 +115,8 @@ esac
   } as unknown as Parameters<typeof createDesktop>[3]["electron"];
 
   let desktop: Awaited<ReturnType<typeof createDesktop>>;
-  let rendererRefresh = Promise.resolve();
   let windowReloads = 0;
-  let refreshRenderer = async () => {};
+  let notifyWorkbenchChanged: (() => void) | undefined;
   const bridge = createManagedWorkbenchBridge({
     connect: () =>
       createReconnectingBridge({
@@ -130,7 +129,7 @@ esac
       windowReloads++;
     },
     refreshRenderer: () => {
-      rendererRefresh = refreshRenderer();
+      notifyWorkbenchChanged?.();
     },
   });
   desktop = await createDesktop(
@@ -162,12 +161,10 @@ esac
       notice = Promise.withResolvers<string>();
       // The menu callback does not use Electron's event arguments.
       Reflect.apply(checkSandbox, undefined, []);
-      const detail = await notice.promise;
-      await rendererRefresh;
-      return detail;
+      return notice.promise;
     },
-    attachRenderer(refresh: () => Promise<void>) {
-      refreshRenderer = refresh;
+    onWorkbenchChanged(refresh: () => void) {
+      notifyWorkbenchChanged = refresh;
     },
     windowReloads: () => windowReloads,
   };
@@ -184,15 +181,22 @@ test.skipIf(process.platform === "win32")(
           (params: unknown) => fixture.bridge.call(method, params),
         ]),
       ) as ShellBridge;
-      const controller = createController(shell, doc, doc.root, undefined, {
-        request: async () => ({
-          ok: true,
-          workspace: fixture.desktop.chatContext().workspace,
-          configured: true,
-          canConfigure: true,
-          sessions: [],
-        }),
+      const app = startShell({
+        document: doc,
+        marsWorkbench: shell,
+        marsAssistant: {
+          onWorkbenchChanged: fixture.onWorkbenchChanged,
+          request: async () => ({
+            ok: true,
+            workspace: fixture.desktop.chatContext().workspace,
+            configured: true,
+            canConfigure: true,
+            sessions: [],
+          }),
+        },
+        addEventListener() {},
       });
+      if (!app) throw new Error("Renderer did not start");
       const node = (attr: string, value: string) => {
         const element = findAll(
           doc.root,
@@ -202,8 +206,7 @@ test.skipIf(process.platform === "win32")(
         return element;
       };
       try {
-        fixture.attachRenderer(controller.load);
-        await controller.load();
+        await app.settled();
         const initial = await fixture.desktop.resolve();
         expect(initial.ok).toBe(true);
         expect(await fixture.verifiedHosts()).toEqual([originalHost]);
@@ -222,6 +225,7 @@ test.skipIf(process.platform === "win32")(
 
         await fixture.switchContext();
         expect(await fixture.checkSandbox()).toContain("Approve Execute");
+        await app.settled();
 
         const next = await fixture.desktop.resolve();
         expect(next.ok).toBe(true);
@@ -239,7 +243,7 @@ test.skipIf(process.platform === "win32")(
           "Unsent chat",
         );
       } finally {
-        controller.dispose();
+        app.dispose();
       }
     });
   },

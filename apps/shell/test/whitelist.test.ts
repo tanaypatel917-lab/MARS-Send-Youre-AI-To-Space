@@ -2,6 +2,8 @@ import { expect, mock, test } from "bun:test";
 import { RpcRequestSchema } from "../../../packages/workbench/src/protocol";
 import { createBridge } from "../src/main/bridge";
 import { type IpcEventLike, registerBridge } from "../src/main/ipc";
+import type { AssistantApi } from "../src/shared/assistant";
+import { WORKBENCH_CHANGED } from "../src/shared/desktop-model";
 import {
   BRIDGE_CHANNEL,
   BRIDGE_GLOBAL,
@@ -55,11 +57,15 @@ test("isReadMethod and isBridgeMethod accept exactly the whitelisted method name
 test("the preload exposes only the frozen workbench, assistant, team chat and patch handoff bridges", async () => {
   const exposed: unknown[][] = [];
   const calls: unknown[][] = [];
+  const listeners = new Map<string, () => void>();
   mock.module("electron", () => ({
     contextBridge: {
       exposeInMainWorld: (...args: unknown[]) => exposed.push(args),
     },
     ipcRenderer: {
+      on: (channel: string, listener: () => void) => {
+        listeners.set(channel, listener);
+      },
       invoke: (...args: unknown[]) => {
         calls.push(args);
         return Promise.resolve({ ok: true, result: null });
@@ -82,6 +88,14 @@ test("the preload exposes only the frozen workbench, assistant, team chat and pa
   >;
   expect(Object.isFrozen(api)).toBe(true);
   expect(Object.isFrozen(teamApi)).toBe(true);
+  const assistant = exposed[1]?.[1] as AssistantApi;
+  let refreshed = false;
+  assistant.onWorkbenchChanged?.(() => {
+    refreshed = true;
+  });
+  expect(refreshed).toBe(false);
+  listeners.get(WORKBENCH_CHANGED)?.();
+  expect(refreshed).toBe(true);
   const handoff = exposed[3]?.[1] as PatchHandoffApi;
   expect(Object.isFrozen(handoff)).toBe(true);
   expect(Object.keys(handoff)).toEqual(["save"]);
