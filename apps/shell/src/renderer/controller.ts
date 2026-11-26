@@ -303,6 +303,7 @@ export function createController(
         page = next;
         closeTeamChat();
         if (next === "extensions") void refreshExtensions();
+        if (next === "settings") void refreshSetup();
         render();
         if (next === "extensions") libraryScroller()?.focus();
       },
@@ -552,6 +553,21 @@ export function createController(
         // Ignore input types that do not support selection ranges.
       }
     }
+  };
+
+  const refreshSetup = async () => {
+    if (!assistant || !assistantLoaded) return;
+    try {
+      const result = await assistant.request({ action: "load" });
+      if (
+        !result.ok ||
+        !result.setup ||
+        result.workspace !== assistantWorkspace
+      )
+        return;
+      assistantState = { ...assistantState, setup: result.setup };
+      if (page === "settings") render();
+    } catch {}
   };
 
   const loadAssistant = async () => {

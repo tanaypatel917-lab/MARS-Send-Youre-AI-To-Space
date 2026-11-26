@@ -75,6 +75,9 @@ const FAILURE_MESSAGE: Record<ChatIssue, string> = {
     "The free model did not return a reply. Your draft is kept. Retry, or check Settings → Setup diagnostics if this keeps happening.",
 };
 
+const ATTACHED_AUTH_FAILED =
+  "OpenRouter rejected this API key. Your draft is kept. Set a valid OPENROUTER_API_KEY in the environment that launches MARS, then restart the app.";
+
 async function complete(
   messages: AssistantSession["messages"],
   key: string,
@@ -280,12 +283,19 @@ export function createAssistant(options: Options) {
             ok: false,
             error: replied
               ? "Could not save the reply. Your draft is kept; retry."
-              : `${FAILURE_MESSAGE[health.state as ChatIssue]}${
+              : `${
+                  health.state === "auth_failed" && !context.settings
+                    ? ATTACHED_AUTH_FAILED
+                    : FAILURE_MESSAGE[health.state as ChatIssue]
+                }${
                   health.retryAfterSeconds
                     ? ` OpenRouter suggests waiting ${health.retryAfterSeconds}s.`
                     : ""
                 }`,
             health,
+            ...(options.journal
+              ? { setup: await options.journal.snapshot() }
+              : {}),
           };
         } finally {
           if (active === context) active = undefined;

@@ -12,6 +12,7 @@ import { createSetupJournal, observeBridge } from "../src/main/setup-journal";
 import { renderAssistant } from "../src/renderer/assistant-view";
 import { createController } from "../src/renderer/controller";
 import { renderSettings } from "../src/renderer/settings-view";
+import type { SetupSummary } from "../src/shared/setup";
 import { findAll, MiniDocument, type MiniElement } from "./mini-dom";
 import { fakeBridge, loadFixtureData } from "./test-utils";
 
@@ -35,6 +36,7 @@ test("provider failures map to actionable model health", () => {
     "network",
   );
   expect(classifyProviderFailure(fail(503)).issue).toBe("unavailable");
+  expect(classifyProviderFailure(fail(200)).issue).toBe("unavailable");
   expect(classifyProviderFailure(new Error("x")).issue).toBe("unavailable");
 });
 
@@ -76,10 +78,11 @@ test("chat reports rate limits and recovery, and the journal records setup local
     });
     expect(limited.error).toContain("rate-limited");
     expect(limited.error).toContain("30s");
+    expect(limited.setup?.issues).toEqual({ rate_limited: 1 });
     expect(JSON.stringify(limited)).not.toContain("private-fixture");
     error = fail(401);
     const rejected = await chat.call(request);
-    expect(!rejected.ok && rejected.error).toContain("Settings");
+    expect(!rejected.ok && rejected.error).toContain("OPENROUTER_API_KEY");
     error = undefined;
     const ok = await chat.call(request);
     expect(ok.ok && ok.health?.state).toBe("ok");
@@ -310,4 +313,80 @@ test("a Chat handoff that replaces an unsaved task request can restore it", asyn
   handoff("");
   expect(request().value).toBe("Keep my existing work");
   expect(restore()).toBeUndefined();
+});
+
+test("a provider reply that is not JSON keeps its status and is not reported as unreachable", async () => {
+  const { readJson } = await import(
+    "../../../packages/providers/src/models/http"
+  );
+  const error = await readJson(
+    "openrouter",
+    new Response("<html>", { status: 200 }),
+    new AbortController().signal,
+  ).catch((caught: unknown) => caught);
+  expect(classifyProviderFailure(error).issue).toBe("unavailable");
+});
+
+test("a rejected key in attach mode points to the launch environment", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mars-attach-"));
+  const call = (settings?: () => void) =>
+    createAssistant({
+      directory,
+      context: () => ({ workspace: "a", key: "private-fixture", settings }),
+      complete: async () => {
+        throw fail(401);
+      },
+    }).call({
+      action: "send",
+      workspace: createHash("sha256").update("a").digest("hex"),
+      seenMessages: 0,
+      id: randomUUID(),
+      text: "hi",
+      consent: true,
+    });
+  try {
+    const attached = await call();
+    expect(!attached.ok && attached.error).toContain("OPENROUTER_API_KEY");
+    expect(!attached.ok && attached.error).not.toContain("Settings");
+    const installed = await call(() => {});
+    expect(!installed.ok && installed.error).toContain(
+      "Settings → Model connection",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("opening Settings refreshes pilot progress from the journal", async () => {
+  const doc = new MiniDocument();
+  let setup: SetupSummary = { milestones: {}, issues: {} };
+  const ctl = createController(
+    fakeBridge(await loadFixtureData()),
+    doc,
+    doc.root,
+    undefined,
+    {
+      request: async () => ({
+        ok: true,
+        sessions: [],
+        configured: true,
+        workspace: "scope",
+        canConfigure: true,
+        setup,
+      }),
+    },
+  );
+  await ctl.load();
+  setup = {
+    milestones: { first_verified_export: "2026-11-25T00:00:00.000Z" },
+    issues: { network: 2 },
+  };
+  findAll(
+    doc.root,
+    (el) => el.getAttribute("data-page") === "settings",
+  )[0]?.click();
+  await ctl.settled();
+  await Bun.sleep(0);
+  expect(doc.root.textContent).toContain("First verified patch exported");
+  expect(doc.root.textContent).toMatch(/Chat could not reach provider\D*2/);
 });
