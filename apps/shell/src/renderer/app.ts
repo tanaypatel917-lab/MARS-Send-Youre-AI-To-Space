@@ -37,6 +37,6 @@ if (shell.marsWorkbench && shell.document && root) {
     },
   );
   shell.addEventListener("pagehide", controller.dispose, { once: true });
-  shell.marsAssistant?.onModelChanged?.(() => void controller.load());
+  shell.marsAssistant?.onWorkbenchChanged?.(() => void controller.load());
   void controller.load();
 }

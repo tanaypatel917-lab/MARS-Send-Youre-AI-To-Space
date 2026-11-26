@@ -19,7 +19,7 @@ For a verified patch, choose **Project → Open Verification Example**. Its READ
 
 When you open a project folder with a `test`, `lint`, or `typecheck` script in its root `package.json`, MARS offers to set up those checks. Review each command and approve only scripts from a project you trust; you can skip individual checks or cancel the setup. Nothing from the project runs during setup. If Docker is ready, MARS checks for the pinned Bun image and asks before downloading it. You can come back to **Project → Set Up Verification Sandbox…** to review updated scripts, check the sandbox, or remove the project's checks. Unconfigured projects keep Execute disabled in the managed workbench.
 
-If Docker was previously unavailable, **Check Sandbox** refreshes the composer when no task is running. If a task is running, repeat the check after it finishes; MARS does not pause it just to refresh sandbox status.
+If Docker was previously unavailable or you switched Docker contexts, **Check Sandbox** refreshes the composer without clearing drafts. If a task is running, repeat the check after it finishes; MARS does not pause it just to refresh sandbox status.
 
 After setup, approve Execute and select the saved checks when starting a task. MARS saves the approved manifest outside the project and uses it when checking the candidate; a candidate change to `package.json` fails that check. Unlike the example's independent tests, project test code can still be changed by a candidate. These scripts must work with the Bun image and the files in the isolated project copy: MARS does not copy `node_modules`, install dependencies, or give checks network access.
 

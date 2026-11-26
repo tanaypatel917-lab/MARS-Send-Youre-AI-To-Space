@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { ASSISTANT_CHANNEL, type AssistantApi } from "../shared/assistant";
-import { MODEL_CHANGED } from "../shared/desktop-model";
+import { WORKBENCH_CHANGED } from "../shared/desktop-model";
 import {
   BRIDGE_CHANNEL,
   BRIDGE_GLOBAL,
@@ -43,8 +43,8 @@ if (typeof contextBridge?.exposeInMainWorld === "function") {
   contextBridge.exposeInMainWorld(
     "marsAssistant",
     Object.freeze({
-      onModelChanged: (refresh: () => void) => {
-        ipcRenderer.on(MODEL_CHANGED, () => refresh());
+      onWorkbenchChanged: (refresh: () => void) => {
+        ipcRenderer.on(WORKBENCH_CHANGED, () => refresh());
       },
       request: (payload: Parameters<AssistantApi["request"]>[0]) =>
         invoke(ASSISTANT_CHANNEL, payload),

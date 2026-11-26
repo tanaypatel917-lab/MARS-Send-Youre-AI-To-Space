@@ -103,25 +103,35 @@ test("only stale sandbox readiness with no running tasks can be refreshed", asyn
   const check = (
     status: "ready" | "unavailable",
     taskStatus: "running" | "completed",
+    dockerChanged = false,
   ) =>
-    sandboxRefreshState({
-      async call(method) {
-        calls.push(method);
-        return {
-          ok: true,
-          result:
-            method === "workbench.describe"
-              ? {
-                  ...fixture.describe,
-                  verification_readiness: { status, reason: "Fixture", setup },
-                }
-              : [{ ...task, status: taskStatus }],
-        };
+    sandboxRefreshState(
+      {
+        async call(method) {
+          calls.push(method);
+          return {
+            ok: true,
+            result:
+              method === "workbench.describe"
+                ? {
+                    ...fixture.describe,
+                    verification_readiness: {
+                      status,
+                      reason: "Fixture",
+                      setup,
+                    },
+                  }
+                : [{ ...task, status: taskStatus }],
+          };
+        },
       },
-    });
+      dockerChanged,
+    );
   expect(await check("ready", "running")).toBe("ready");
   expect(calls.splice(0)).toEqual(["workbench.describe"]);
   expect(await check("unavailable", "running")).toBe("busy");
   expect(calls.splice(0)).toEqual(["workbench.describe", "tasks.list"]);
   expect(await check("unavailable", "completed")).toBe("idle");
+  expect(await check("ready", "running", true)).toBe("busy");
+  expect(await check("ready", "completed", true)).toBe("idle");
 });

@@ -9,7 +9,7 @@ import {
   protocol,
   session,
 } from "electron";
-import { MODEL_CHANGED } from "../shared/desktop-model";
+import { WORKBENCH_CHANGED } from "../shared/desktop-model";
 import { bridgeFailure } from "../shared/methods";
 import { createAssistant } from "./assistant";
 import { explicitConnection, resolveConnection } from "./connection";
@@ -172,7 +172,7 @@ app.on("ready", async () => {
         (kind) => {
           bridge = newBridge();
           if (kind === "project") window.webContents.reload();
-          else window.webContents.send(MODEL_CHANGED);
+          else window.webContents.send(WORKBENCH_CHANGED);
         },
         () => pendingTaskLaunches > 0,
       );

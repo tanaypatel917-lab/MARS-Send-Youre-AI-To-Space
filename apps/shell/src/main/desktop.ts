@@ -48,6 +48,13 @@ import { verificationStateRoot } from "./verification-state";
 
 const settingsPage = "mars-shell://app/settings.html";
 
+type DesktopChange = "project" | "model" | "sandbox";
+
+async function locateDocker() {
+  const path = resolveDockerPath();
+  return { path, host: await resolveDockerHost(path) };
+}
+
 async function replacePrivate(path: string, contents: string | Buffer) {
   const temp = `${path}.${randomUUID()}.tmp`;
   try {
@@ -68,7 +75,7 @@ function canStoreKey(): boolean {
 
 export async function createDesktop(
   window: BrowserWindow,
-  reload: (change: "project" | "model") => void,
+  reload: (change: DesktopChange) => void,
   hasPendingTaskLaunch: () => boolean,
 ) {
   const root = join(app.getPath("userData"), "local-workbench");
@@ -83,8 +90,7 @@ export async function createDesktop(
     join(root, "projects"),
     app.getPath("home"),
   );
-  let dockerPath = resolveDockerPath();
-  let dockerHost = await resolveDockerHost(dockerPath);
+  let docker = await locateDocker();
   await writeFile(
     join(demo, "README.md"),
     "# MARS demo project\n\nThis is a sample project you can give to the MARS agent. Try: summarize the README and suggest a next step.\n",
@@ -104,13 +110,14 @@ export async function createDesktop(
   }
   let modelWindow: BrowserWindow | undefined;
   let workbench: ReturnType<typeof startLocalWorkbench> | undefined;
+  let workbenchDocker: typeof docker | undefined;
   let changing = false;
   let closing = false;
   let chatLifetime = new AbortController();
 
   const change = async (
     save: () => Promise<void>,
-    kind: "project" | "model" = "project",
+    kind: DesktopChange = "project",
     options: { when?: () => Promise<boolean>; stopFirst?: boolean } = {},
   ) => {
     if (changing || closing) return false;
@@ -118,7 +125,7 @@ export async function createDesktop(
     try {
       if (options.when && !(await options.when())) return false;
       if (closing) return false;
-      chatLifetime.abort();
+      if (kind !== "sandbox") chatLifetime.abort();
       if (options.stopFirst) await workbench?.stop();
       await save();
       if (!options.stopFirst) await workbench?.stop();
@@ -134,9 +141,8 @@ export async function createDesktop(
   };
 
   const downloadSandbox = async (project: string, image: string) => {
-    dockerPath = resolveDockerPath();
-    dockerHost = await resolveDockerHost(dockerPath);
-    const executable = dockerPath;
+    docker = await locateDocker();
+    const { path: executable, host: dockerHost } = docker;
     const probeEnv = {
       PATH: process.env.PATH,
       HOME: "/nonexistent",
@@ -200,19 +206,28 @@ export async function createDesktop(
     )
       return;
     const ok = outcome !== "failed";
-    const readStatus = async (running: typeof workbench) => {
+    const readStatus = async (
+      running: typeof workbench,
+      dockerChanged = false,
+    ) => {
       const connection = await running?.connection();
       return connection?.ok
-        ? sandboxRefreshState(sandboxStatusBridge(connection.connection))
+        ? sandboxRefreshState(
+            sandboxStatusBridge(connection.connection),
+            dockerChanged,
+          )
         : "unknown";
     };
     let status: Awaited<ReturnType<typeof readStatus>> = "unknown";
     if (ok) {
       const running = activeWorkbench();
-      const refreshed = await change(async () => {}, "project", {
+      const dockerChanged =
+        workbenchDocker?.path !== docker.path ||
+        workbenchDocker?.host !== docker.host;
+      const refreshed = await change(async () => {}, "sandbox", {
         when: async () => {
           const launchPending = hasPendingTaskLaunch();
-          status = await readStatus(running);
+          status = await readStatus(running, dockerChanged);
           if (status === "idle" && launchPending) status = "busy";
           return source === project && status === "idle";
         },
@@ -461,8 +476,8 @@ export async function createDesktop(
           source === verification.source
             ? verificationState.state
             : join(root, "projects"),
-        ...(dockerPath ? { dockerPath } : {}),
-        ...(dockerHost ? { dockerHost } : {}),
+        ...(docker.path ? { dockerPath: docker.path } : {}),
+        ...(docker.host ? { dockerHost: docker.host } : {}),
         ...(source === verification.source
           ? {
               ...(verificationState.reason
@@ -475,8 +490,12 @@ export async function createDesktop(
         ...(openRouterKey ? { openRouterKey } : {}),
       });
       workbench = running;
+      workbenchDocker = docker;
       void running.exited.then(() => {
-        if (workbench === running) workbench = undefined;
+        if (workbench === running) {
+          workbench = undefined;
+          workbenchDocker = undefined;
+        }
       });
     }
     return workbench;

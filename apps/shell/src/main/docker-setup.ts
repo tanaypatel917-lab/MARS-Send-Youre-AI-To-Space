@@ -42,7 +42,10 @@ export function sandboxStatusBridge(connection: LocalConnection) {
   });
 }
 
-export async function sandboxRefreshState(bridge: Bridge) {
+export async function sandboxRefreshState(
+  bridge: Bridge,
+  dockerChanged = false,
+) {
   const description = await bridge.call("workbench.describe", {});
   if (!description.ok) return "unknown";
   const parsed = ResultSchema["workbench.describe"].safeParse(
@@ -50,8 +53,11 @@ export async function sandboxRefreshState(bridge: Bridge) {
   );
   if (!parsed.success) return "unknown";
   const readiness = parsed.data.verification_readiness;
-  if (readiness?.status === "ready") return "ready";
-  if (!readiness || readiness.setup !== VERIFICATION_SANDBOX_SETUP)
+  if (readiness?.status === "ready" && !dockerChanged) return "ready";
+  if (
+    readiness?.status !== "ready" &&
+    readiness?.setup !== VERIFICATION_SANDBOX_SETUP
+  )
     return "unavailable";
   const tasks = await bridge.call("tasks.list", {});
   if (!tasks.ok) return "unknown";
