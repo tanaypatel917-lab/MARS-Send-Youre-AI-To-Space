@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   writeFile,
@@ -19,6 +20,12 @@ import {
 import { createMemoryStore } from "@mars/memory";
 import { loadModelRegistry } from "@mars/providers";
 import { SkillStore } from "@mars/skills";
+import {
+  PROJECT_VERIFICATION_IMAGE,
+  projectChecksFile,
+  saveProjectChecks,
+  suggestProjectChecks,
+} from "../../../apps/shell/src/main/project-verification";
 import {
   EXAMPLE_BUG,
   seedVerificationExample,
@@ -96,13 +103,17 @@ function task(): Task {
     artifacts: [],
   };
 }
-async function fixture(contextWindow = 32000, verification = false) {
+async function fixture(
+  contextWindow = 32000,
+  verification = false,
+  stateDirectory = "state",
+) {
   const base = await mkdtemp(join(tmpdir(), "mars-service-"));
   cleanup.push(() => rm(base, { recursive: true, force: true }));
   const source = verification
     ? (await seedVerificationExample(base)).source
     : join(base, "source");
-  const root = join(base, "state");
+  const root = join(base, stateDirectory);
   const home = join(base, "home");
   await mkdir(source, { recursive: true });
   await writeFile(join(source, "baseline.txt"), "untouched\n");
@@ -1222,6 +1233,100 @@ test.skipIf(process.env.MARS_WORKSPACES_DOCKER_TEST !== "1")(
     expect(await Bun.file(join(f.source, "greet.txt")).exists()).toBe(false);
   },
   30000,
+);
+
+test.skipIf(process.env.MARS_PROJECT_VERIFICATION_DOCKER_TEST !== "1")(
+  "guided project verification runs approved Bun scripts in real Docker with a spaced workspace path",
+  async () => {
+    const f = await fixture(32000, false, "Application Support");
+    const image =
+      process.env.MARS_PROJECT_VERIFICATION_DOCKER_IMAGE ??
+      PROJECT_VERIFICATION_IMAGE;
+    expect(image.split("@")[1]).toBe(PROJECT_VERIFICATION_IMAGE.split("@")[1]);
+    const manifest = join(f.source, "package.json");
+    await writeFile(
+      manifest,
+      JSON.stringify({
+        scripts: {
+          pretest: "test -f baseline.txt",
+          test: "test -f baseline.txt",
+          posttest: "test -f baseline.txt",
+        },
+      }),
+    );
+    const source = await realpath(f.source);
+    const proposal = await suggestProjectChecks(source);
+    if (!proposal) throw new Error("Missing proposal");
+    const approved = join(f.base, "approvals");
+    await saveProjectChecks(approved, source, proposal, new Set(["test"]));
+    const checksFile = await projectChecksFile(approved, source);
+    if (!checksFile) throw new Error("Missing saved checks");
+    let requests = 0;
+    let sawSandboxOutput = false;
+    const { client } = await f.start(
+      async (_url, init) => {
+        if (++requests === 1)
+          return sse(
+            {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "check-spaced-workspace",
+                  type: "function",
+                  function: {
+                    name: "mars_execute",
+                    arguments: JSON.stringify({
+                      argv: ["cat", "baseline.txt"],
+                    }),
+                  },
+                },
+              ],
+            },
+            "tool_calls",
+          );
+        const request = JSON.parse(String(init?.body)) as {
+          messages: { role: string; content: string }[];
+        };
+        const output = JSON.parse(
+          request.messages.findLast(({ role }) => role === "tool")?.content ??
+            "{}",
+        );
+        sawSandboxOutput =
+          output.exit_code === 0 && output.stdout === "untouched\n";
+        return sse({ content: "Finished." });
+      },
+      image,
+      undefined,
+      {
+        checksFile,
+        sandboxDockerHost:
+          process.env.MARS_WORKSPACES_DOCKER_HOST ??
+          "unix:///var/run/docker.sock",
+      },
+    );
+    expect(await client.describe()).toMatchObject({
+      capabilities: { execute: true },
+      checks: [{ id: "project-test" }],
+      verification_readiness: { status: "ready" },
+    });
+    const created = await client.create(task());
+    await client.start(created.task_id, {
+      expectedRevision: 0,
+      approvals: { read: true, write: false, execute: true },
+      requiredChecks: [{ kind: "host_test", check_id: "project-test" }],
+    });
+    const verdict = await eventually(
+      () => client.verification(created.task_id),
+      (current) => current.record !== null,
+    );
+    expect(sawSandboxOutput).toBe(true);
+    expect(f.launches[0]?.cwd).toContain("Application Support");
+    expect(verdict).toMatchObject({
+      state: "verified",
+      record: { checks: [{ status: "passed" }] },
+    });
+  },
+  30_000,
 );
 
 test.each([true, false])(

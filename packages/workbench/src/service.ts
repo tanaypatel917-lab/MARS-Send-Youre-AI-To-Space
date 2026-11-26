@@ -26,7 +26,11 @@ import {
   createRepositoryMapProvider,
   type RepositoryMapProvider,
 } from "@mars/context";
-import { type Scope, ScopeSchema } from "@mars/contracts";
+import {
+  type Scope,
+  ScopeSchema,
+  VERIFICATION_SANDBOX_SETUP,
+} from "@mars/contracts";
 import { createKnowledgeGraphService } from "@mars/knowledge-graph";
 import { createMemoryStore, type DurableMemoryStore } from "@mars/memory";
 import { vaultStatus } from "@mars/memory-vault";
@@ -622,7 +626,7 @@ export async function createWorkbenchService(
           : error.message === "Docker daemon is unavailable"
             ? "Docker is not running or access is denied"
             : "Docker CLI is not installed or executable",
-        setup: "Use Project → Set Up Verification Sandbox…",
+        setup: VERIFICATION_SANDBOX_SETUP,
       };
     }
     const checks = options.checksFile

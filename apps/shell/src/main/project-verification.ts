@@ -1,6 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { isInsideOrEqual } from "@mars/contracts/path-containment";
 import { projectRootIdentity } from "../runtime/project-root";
@@ -86,6 +94,22 @@ export async function projectChecksFile(root: string, source: string) {
   }
 }
 
+async function pruneSnapshots(directory: string, keep?: string) {
+  const entries = await readdir(directory).catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    },
+  );
+  await Promise.all(
+    entries
+      .filter(
+        (name) => name !== keep && /^package-[a-f0-9]{64}\.json$/.test(name),
+      )
+      .map((name) => rm(join(directory, name), { force: true })),
+  );
+}
+
 export async function saveProjectChecks(
   root: string,
   source: string,
@@ -124,9 +148,13 @@ export async function saveProjectChecks(
       })),
     }),
   );
+  await pruneSnapshots(directory, snapshot);
 }
 
 export async function removeProjectChecks(root: string, source: string) {
-  const path = await projectChecksFile(root, source);
-  if (path) await rm(path);
+  const identity = projectRootIdentity(source);
+  if (!identity) return;
+  const directory = approvalDirectory(root, source, identity);
+  await rm(join(directory, "checks.json"), { force: true });
+  await pruneSnapshots(directory);
 }

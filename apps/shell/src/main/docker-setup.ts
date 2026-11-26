@@ -1,4 +1,9 @@
+import { VERIFICATION_SANDBOX_SETUP } from "@mars/contracts";
+import type { LocalConnection } from "@mars/contracts/connection-file";
+import { type Bridge, createBridge } from "./bridge";
 import { dockerHelperPath } from "./docker-path";
+import { ResultSchema } from "./protocol";
+import { createLoopbackTransport } from "./transport";
 
 export function dockerPullOptions(
   executable: string,
@@ -28,4 +33,31 @@ export async function ensureDockerImage(
   if (await run(["image", "inspect", image])) return "present";
   if (!(await confirmPull())) return "cancelled";
   return (await run(["pull", image])) ? "downloaded" : "failed";
+}
+
+export function sandboxStatusBridge(connection: LocalConnection) {
+  return createBridge({
+    transport: createLoopbackTransport(connection),
+    connectionScope: connection.scope,
+  });
+}
+
+export async function sandboxRefreshState(bridge: Bridge) {
+  const description = await bridge.call("workbench.describe", {});
+  if (!description.ok) return "unknown";
+  const parsed = ResultSchema["workbench.describe"].safeParse(
+    description.result,
+  );
+  if (!parsed.success) return "unknown";
+  const readiness = parsed.data.verification_readiness;
+  if (readiness?.status === "ready") return "ready";
+  if (!readiness || readiness.setup !== VERIFICATION_SANDBOX_SETUP)
+    return "unavailable";
+  const tasks = await bridge.call("tasks.list", {});
+  if (!tasks.ok) return "unknown";
+  const listed = ResultSchema["tasks.list"].safeParse(tasks.result);
+  if (!listed.success) return "unknown";
+  return listed.data.some(({ status }) => status === "running")
+    ? "busy"
+    : "idle";
 }

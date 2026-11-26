@@ -3,6 +3,8 @@ import { HostCheckSummarySchema } from "./verification";
 
 const count = z.number().int().nonnegative();
 const id = z.string().min(1).max(256);
+export const VERIFICATION_SANDBOX_SETUP =
+  "Use Project → Set Up Verification Sandbox…";
 export const WorkbenchUsageSchema = z
   .object({
     input_tokens: count,

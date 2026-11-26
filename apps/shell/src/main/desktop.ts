@@ -23,7 +23,12 @@ import {
 import { DESKTOP_MODEL_CHANNEL } from "../shared/desktop-model";
 import { resolveDockerHost } from "./docker-host";
 import { resolveDockerPath } from "./docker-path";
-import { dockerPullOptions, ensureDockerImage } from "./docker-setup";
+import {
+  dockerPullOptions,
+  ensureDockerImage,
+  sandboxRefreshState,
+  sandboxStatusBridge,
+} from "./docker-setup";
 import { desktopExtensionsMenu } from "./extensions";
 import { startLocalWorkbench } from "./local-workbench";
 import { hasRemovableKey } from "./model-key";
@@ -64,6 +69,7 @@ function canStoreKey(): boolean {
 export async function createDesktop(
   window: BrowserWindow,
   reload: (change: "project" | "model") => void,
+  hasPendingTaskLaunch: () => boolean,
 ) {
   const root = join(app.getPath("userData"), "local-workbench");
   const demo = join(root, "demo-project");
@@ -105,19 +111,24 @@ export async function createDesktop(
   const change = async (
     save: () => Promise<void>,
     kind: "project" | "model" = "project",
+    options: { when?: () => Promise<boolean>; stopFirst?: boolean } = {},
   ) => {
     if (changing || closing) return false;
     changing = true;
-    chatLifetime.abort();
     try {
+      if (options.when && !(await options.when())) return false;
+      if (closing) return false;
+      chatLifetime.abort();
+      if (options.stopFirst) await workbench?.stop();
       await save();
-      await workbench?.stop();
+      if (!options.stopFirst) await workbench?.stop();
       if (!closing && !window.isDestroyed()) reload(kind);
       return true;
     } catch {
       return false;
     } finally {
-      chatLifetime = new AbortController();
+      if (chatLifetime.signal.aborted && !closing)
+        chatLifetime = new AbortController();
       changing = false;
     }
   };
@@ -181,26 +192,49 @@ export async function createDesktop(
       });
       return answer.response === 1;
     });
-    if (outcome === "cancelled" || closing || window.isDestroyed()) return;
-    if (outcome === "present") {
-      await dialog.showMessageBox(window, {
-        message: "Verification sandbox is already downloaded",
-        detail:
-          "Approve Execute and select your checks when starting a task. If MARS still shows the sandbox as unavailable, reopen the project when no tasks are running.",
-      });
+    if (
+      outcome === "cancelled" ||
+      closing ||
+      window.isDestroyed() ||
+      source !== project
+    )
       return;
+    const ok = outcome !== "failed";
+    const readStatus = async (running: typeof workbench) => {
+      const connection = await running?.connection();
+      return connection?.ok
+        ? sandboxRefreshState(sandboxStatusBridge(connection.connection))
+        : "unknown";
+    };
+    let status: Awaited<ReturnType<typeof readStatus>> = "unknown";
+    if (ok) {
+      const running = activeWorkbench();
+      const refreshed = await change(async () => {}, "project", {
+        when: async () => {
+          const launchPending = hasPendingTaskLaunch();
+          status = await readStatus(running);
+          if (status === "idle" && launchPending) status = "busy";
+          return source === project && status === "idle";
+        },
+      });
+      if (refreshed) status = await readStatus(activeWorkbench());
     }
-    const ok = outcome === "downloaded";
-    if (ok && source === project) await change(async () => {});
-    if (closing || window.isDestroyed()) return;
+    if (closing || window.isDestroyed() || source !== project) return;
     await dialog.showMessageBox(window, {
       type: ok ? "info" : "error",
-      message: ok
-        ? "Verification sandbox downloaded"
-        : "Sandbox download failed",
-      detail: ok
-        ? "Approve Execute and select your checks when starting a task."
-        : "Make sure Docker is running and your connection can reach the image registry, then try again.",
+      message:
+        outcome === "present"
+          ? "Verification sandbox is already downloaded"
+          : outcome === "downloaded"
+            ? "Verification sandbox downloaded"
+            : "Sandbox download failed",
+      detail: !ok
+        ? "Make sure Docker is running and your connection can reach the image registry, then try again."
+        : status === "ready"
+          ? "Approve Execute and select your checks when starting a task."
+          : status === "busy"
+            ? "A task is running. When it finishes, use Check Sandbox again to enable verification without pausing the task."
+            : "The image is installed, but verification is not ready for this project. See the composer for details.",
     });
   };
 
@@ -247,8 +281,10 @@ export async function createDesktop(
         }
         if (answer.response === 2) {
           if (
-            !(await change(() =>
-              removeProjectChecks(projectVerificationRoot, project),
+            !(await change(
+              () => removeProjectChecks(projectVerificationRoot, project),
+              "project",
+              { stopFirst: true },
             ))
           )
             throw new Error("Could not remove checks");
@@ -274,13 +310,16 @@ export async function createDesktop(
       }
       if (!selected.size) return;
       if (
-        !(await change(() =>
-          saveProjectChecks(
-            projectVerificationRoot,
-            project,
-            proposal,
-            selected,
-          ),
+        !(await change(
+          () =>
+            saveProjectChecks(
+              projectVerificationRoot,
+              project,
+              proposal,
+              selected,
+            ),
+          "project",
+          { stopFirst: true },
         ))
       )
         throw new Error("Could not save checks");
@@ -503,6 +542,7 @@ export async function createDesktop(
   );
 
   return {
+    isChanging: () => changing || closing,
     chatContext() {
       if (changing || closing) throw new Error("Workspace changing");
       return {

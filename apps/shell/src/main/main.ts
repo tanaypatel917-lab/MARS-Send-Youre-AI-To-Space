@@ -10,6 +10,7 @@ import {
   session,
 } from "electron";
 import { MODEL_CHANGED } from "../shared/desktop-model";
+import { bridgeFailure } from "../shared/methods";
 import { createAssistant } from "./assistant";
 import { explicitConnection, resolveConnection } from "./connection";
 import { createDesktop } from "./desktop";
@@ -129,9 +130,22 @@ app.on("ready", async () => {
       makeTransport: (connection) => createLoopbackTransport(connection),
     });
   let bridge = newBridge();
+  let pendingTaskLaunches = 0;
   registerBridge(
     ipcMain,
-    { call: (method, params) => bridge.call(method, params) },
+    {
+      async call(method, params) {
+        if (method !== "tasks.start" && method !== "tasks.resume")
+          return bridge.call(method, params);
+        if (desktop?.isChanging()) return bridgeFailure("unavailable");
+        pendingTaskLaunches++;
+        try {
+          return await bridge.call(method, params);
+        } finally {
+          pendingTaskLaunches--;
+        }
+      },
+    },
     senderPolicy,
   );
   registerTeamChatBridge(ipcMain, createTeamChatBridge(), senderPolicy);
@@ -153,11 +167,15 @@ app.on("ready", async () => {
   );
   if (managed) {
     try {
-      desktop = await createDesktop(window, (kind) => {
-        bridge = newBridge();
-        if (kind === "project") window.webContents.reload();
-        else window.webContents.send(MODEL_CHANGED);
-      });
+      desktop = await createDesktop(
+        window,
+        (kind) => {
+          bridge = newBridge();
+          if (kind === "project") window.webContents.reload();
+          else window.webContents.send(MODEL_CHANGED);
+        },
+        () => pendingTaskLaunches > 0,
+      );
     } catch {
       showDesktopStartupError();
       return;

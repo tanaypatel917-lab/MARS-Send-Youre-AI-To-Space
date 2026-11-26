@@ -4,7 +4,7 @@ Status: **Desktop preview.** `apps/shell` is an Electron window (`electron@44.10
 
 ## Install and open
 
-1. Sign in to GitHub, open a successful run of [Desktop installers](https://github.com/tanaypatel917-lab/MARS-Send-Youre-AI-To-Space/actions/workflows/desktop.yml), and download and unzip the artifact for your computer:
+1. Sign in to GitHub and open a successful `main`-branch run of [Desktop installers](https://github.com/tanaypatel917-lab/MARS-Send-Youre-AI-To-Space/actions/workflows/desktop.yml). Confirm the artifact for your computer is listed, then download and unzip it. Pull-request runs test packaging but can pass even when GitHub cannot publish their installers:
    - **Mac:** `MARS-macOS-Apple-Silicon` (M-series) or `MARS-macOS-Intel`. Open the disk image, drag MARS to Applications, then open MARS. These preview builds are ad-hoc signed, not Apple-notarized. If Gatekeeper blocks a trusted build, use **System Settings → Privacy & Security → Open Anyway** after trying to launch it. Managed Macs may prohibit this.
    - **Ubuntu/Debian (x64):** `MARS-Ubuntu-Debian-x64`. Open the `.deb` in your package installer and launch MARS from the applications menu. If your distribution has no graphical package installer, use `sudo apt install ./MARS-0.0.1-linux-amd64.deb`.
    - There is no Windows installer.
@@ -18,6 +18,8 @@ For a verified patch, choose **Project → Open Verification Example**. Its READ
 ## Set up verification for your project
 
 When you open a project folder with a `test`, `lint`, or `typecheck` script in its root `package.json`, MARS offers to set up those checks. Review each command and approve only scripts from a project you trust; you can skip individual checks or cancel the setup. Nothing from the project runs during setup. If Docker is ready, MARS checks for the pinned Bun image and asks before downloading it. You can come back to **Project → Set Up Verification Sandbox…** to review updated scripts, check the sandbox, or remove the project's checks. Unconfigured projects keep Execute disabled in the managed workbench.
+
+If Docker was previously unavailable, **Check Sandbox** refreshes the composer when no task is running. If a task is running, repeat the check after it finishes; MARS does not pause it just to refresh sandbox status.
 
 After setup, approve Execute and select the saved checks when starting a task. MARS saves the approved manifest outside the project and uses it when checking the candidate; a candidate change to `package.json` fails that check. Unlike the example's independent tests, project test code can still be changed by a candidate. These scripts must work with the Bun image and the files in the isolated project copy: MARS does not copy `node_modules`, install dependencies, or give checks network access.
 

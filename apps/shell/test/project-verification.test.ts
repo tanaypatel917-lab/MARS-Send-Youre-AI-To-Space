@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rename,
@@ -11,8 +12,12 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { loadHostChecks } from "@mars/workbench";
+import {
+  sandboxRefreshState,
+  sandboxStatusBridge,
+} from "../src/main/docker-setup";
 import { startLocalWorkbench } from "../src/main/local-workbench";
 import {
   projectChecksFile,
@@ -81,8 +86,15 @@ test("detects supported scripts without enabling them and persists only those ap
   expect(await readFile(overlay?.source ?? "", "utf8")).toBe(manifest);
   expect((await stat(path)).mode & 0o777).toBe(0o600);
   expect((await stat(overlay?.source ?? "")).mode & 0o777).toBe(0o600);
+  const updated = await suggestProjectChecks(source);
+  if (!updated || !overlay)
+    throw new Error("Missing updated proposal or overlay");
+  await saveProjectChecks(approvals, source, updated, new Set(["test"]));
+  await expect(stat(overlay.source)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await readdir(dirname(path))).toHaveLength(2);
   await removeProjectChecks(approvals, source);
   expect(await projectChecksFile(approvals, source)).toBeUndefined();
+  expect(await readdir(dirname(path))).toEqual([]);
 });
 
 test("proposes lifecycle scripts in the same order Bun runs them", async () => {
@@ -161,13 +173,15 @@ test("the local workbench advertises approved checks and reports when Docker is 
       project: source,
       state,
       unavailable: "Docker CLI is not installed or executable",
+      refresh: "idle",
     },
-    { project: other, state, unavailable: undefined },
+    { project: other, state, unavailable: undefined, refresh: "unavailable" },
     {
       project: source,
       state: alias,
       unavailable:
         "The private workspace path contains characters that Docker mounts do not support",
+      refresh: "unavailable",
     },
   ]) {
     const workbench = startLocalWorkbench({
@@ -180,6 +194,9 @@ test("the local workbench advertises approved checks and reports when Docker is 
     try {
       const connection = await workbench.connection();
       if (!connection.ok) throw new Error(connection.reason);
+      expect(
+        await sandboxRefreshState(sandboxStatusBridge(connection.connection)),
+      ).toBe(options.refresh);
       const response = await fetch(`${connection.connection.url}/v1/rpc`, {
         method: "POST",
         headers: {
