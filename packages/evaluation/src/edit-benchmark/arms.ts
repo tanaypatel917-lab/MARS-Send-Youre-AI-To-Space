@@ -609,6 +609,7 @@ async function runOmpStock(
   };
   const controller = new AbortController();
   let failure: string | null = null;
+  let outputCapped = false;
   let pathRefusals = 0;
   const bridge = createModelBridge({
     registry: input.registry,
@@ -619,6 +620,9 @@ async function runOmpStock(
     signal: controller.signal,
     onFailure: (code) => {
       failure = code;
+    },
+    onTurnEnd: (reason) => {
+      outputCapped = reason === "length";
     },
     fetch,
     seed: input.seed,
@@ -746,13 +750,14 @@ async function runOmpStock(
     const last = [...session.messages]
       .reverse()
       .find((message) => message.role === "assistant");
+    const stopReason = outputCapped ? "length" : last?.stopReason;
     const status: TrialResult["status"] =
       controller.signal.aborted ||
-      last?.role !== "assistant" ||
-      last.stopReason === "error" ||
-      last.stopReason === "aborted"
+      !stopReason ||
+      stopReason === "error" ||
+      stopReason === "aborted"
         ? "failed"
-        : last.stopReason === "length"
+        : stopReason === "length"
           ? "paused"
           : "completed";
     return {

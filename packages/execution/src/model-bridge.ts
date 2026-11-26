@@ -225,6 +225,7 @@ export interface ModelBridgeOptions {
   fetch?: (input: string, init?: RequestInit) => Promise<Response>;
   signal: AbortSignal;
   onFailure?(code: ModelFailureCode): void;
+  onTurnEnd?(stopReason: AssistantMessage["stopReason"], text: string): void;
   /** OpenAI-compatible sampling seed forwarded on every request (non-negative safe integer). */
   seed?: number;
   /** Host paths of the agent workspace (canonical first); the model only sees `WORKSPACE_PLACEHOLDER`. */
@@ -260,6 +261,7 @@ export function createModelBridge(options: ModelBridgeOptions) {
     };
     void (async () => {
       let ownsReservation = false;
+      let emittedText = "";
       try {
         if (busy || Date.now() >= ledger.deadline)
           throw new ExecutionLimitError();
@@ -335,7 +337,6 @@ export function createModelBridge(options: ModelBridgeOptions) {
           },
         });
         let textIndex = -1;
-        let emittedText = "";
         const toolCalls: ToolCall[] = [];
         let done = false;
         stream.push({ type: "start", partial: output });
@@ -477,7 +478,6 @@ export function createModelBridge(options: ModelBridgeOptions) {
           reason: output.stopReason as "stop" | "length" | "toolUse",
           message: output,
         });
-        stream.end(output);
       } catch (error) {
         output.stopReason =
           options.signal.aborted || streamOptions?.signal?.aborted
@@ -504,8 +504,9 @@ export function createModelBridge(options: ModelBridgeOptions) {
           reason: output.stopReason,
           error: output,
         });
-        stream.end(output);
       } finally {
+        options.onTurnEnd?.(output.stopReason, emittedText);
+        stream.end(output);
         if (ownsReservation) busy = false;
       }
     })();

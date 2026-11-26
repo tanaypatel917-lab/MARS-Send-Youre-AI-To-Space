@@ -3264,8 +3264,14 @@ for (const [label, contextWindow, config, check] of [
     }
   });
 
-for (const reason of ["length", "max_tokens"]) {
-  test(`a ${reason} response pauses without running complete tool calls or retrying`, async () => {
+for (const [reason, content, warmup] of [
+  ["length", "Checking the file.", false],
+  ["max_tokens", "Checking the file.", false],
+  ["length", "", false],
+  ["max_tokens", "", false],
+  ["length", "", true],
+] as const) {
+  test(`a ${reason} response with ${content ? "text and tools" : "only tools"} pauses without running tools or retrying${warmup ? " after an earlier turn" : ""}`, async () => {
     const f = await fixture(200_000, { maxOutputTokens: 32_000 });
     let requests = 0;
     let reads = 0;
@@ -3280,10 +3286,12 @@ for (const reason of ["length", "max_tokens"]) {
         },
         fetch: async (_url, init) => {
           requests++;
+          if (warmup && requests === 1)
+            return sse({ content: "Earlier response" });
           const request = JSON.parse(String(init?.body));
           return sse(
             {
-              content: "Checking the file.",
+              ...(content ? { content } : {}),
               tool_calls: [
                 {
                   index: 0,
@@ -3301,13 +3309,19 @@ for (const reason of ["length", "max_tokens"]) {
           );
         },
       });
+      if (warmup) {
+        expect(await session.run("Warm up")).toMatchObject({
+          status: "completed",
+          content: "Earlier response",
+        });
+      }
       const outcome = await session.run(f.task.request);
       expect(outcome).toMatchObject({
         status: "paused",
-        content: "Checking the file.",
+        content,
         usage: { reserved_tokens: f.task.budget.max_tokens },
       });
-      expect(requests).toBe(1);
+      expect(requests).toBe(warmup ? 2 : 1);
       expect(reads).toBe(0);
       expect(JSON.stringify(session.journalSnapshot())).not.toContain(
         "capped_read",

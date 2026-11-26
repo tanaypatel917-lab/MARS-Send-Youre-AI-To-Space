@@ -464,7 +464,12 @@ test("learning reports rate limits, 5xx and provider timeouts independently of p
     eligible: 1,
     solved: 0,
   });
-  expect(truncated.tasks[0]?.outcomes.specialist.provider_failure).toBeNull();
+  expect(truncated.tasks[0]?.outcomes.specialist).toMatchObject({
+    status: "paused",
+    failure: null,
+    provider_failure: null,
+    turns: 1,
+  });
   expect(truncated.paired).toMatchObject({
     pairs: 1,
     excluded_provider_pairs: 0,

@@ -1026,6 +1026,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
     await manager.flush();
   };
   let modelFailure: ModelFailureCode | undefined;
+  let cappedContent: string | undefined;
   const bridge = createModelBridge({
     registry: options.registry,
     selected,
@@ -1036,6 +1037,10 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
     signal: controller.signal,
     onFailure: (code) => {
       modelFailure = code;
+    },
+    onTurnEnd: (reason, text) => {
+      // The SDK may remove a length-stopped turn when it contains no text.
+      cappedContent = reason === "length" ? text : undefined;
     },
     workspaceRoots: [cwd, options.cwd],
     ...(options.env ? { env: options.env } : {}),
@@ -1275,6 +1280,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
         throw new Error("Invalid task instruction.");
       running = true;
       modelFailure = undefined;
+      cappedContent = undefined;
       try {
         await session.prompt(instruction);
         await observations;
@@ -1285,20 +1291,23 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
           .reverse()
           .find((message) => message.role === "assistant");
         const content =
-          last?.role === "assistant"
+          cappedContent ??
+          (last?.role === "assistant"
             ? last.content
                 .filter((part) => part.type === "text")
                 .map((part) => part.text)
                 .join("")
-            : "";
+            : "");
+        const stopReason =
+          cappedContent === undefined ? last?.stopReason : "length";
         const status = userCancelled
           ? "cancelled"
           : controller.signal.aborted ||
-              last?.role !== "assistant" ||
-              last.stopReason === "error" ||
-              last.stopReason === "aborted"
+              !stopReason ||
+              stopReason === "error" ||
+              stopReason === "aborted"
             ? "failed"
-            : last.stopReason === "length"
+            : stopReason === "length"
               ? "paused"
               : "completed";
         // The bridge's own classification wins; the runtime deadline abort only surfaces

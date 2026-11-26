@@ -554,6 +554,57 @@ test("omp-stock tool calls naming paths outside the throwaway workspace are refu
   expect(result.solved).toBe(false);
 }, 60_000);
 
+test("omp-stock classifies a tool-only capped turn as paused without executing the tool", async () => {
+  const root = await scratch();
+  const { registry, env, modelId } = await scriptedModelRegistry(root);
+  const trial = await runEditTrial({
+    arm: "omp-stock",
+    task: suite.tasks[2] as (typeof suite.tasks)[number],
+    repeat: 0,
+    registry,
+    env,
+    modelId,
+    seed: 1,
+    budget,
+    fetch: async () => {
+      const frame = JSON.stringify({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "capped_read",
+                  type: "function",
+                  function: {
+                    name: "read",
+                    arguments: JSON.stringify({
+                      path: join(root, "outside-workspace.txt"),
+                    }),
+                  },
+                },
+              ],
+            },
+            finish_reason: "length",
+          },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      });
+      return new Response(`data: ${frame}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    },
+    workRoot: join(root, "work"),
+    transcriptRoot: join(root, "tx"),
+  });
+  expect(trial).toMatchObject({
+    status: "paused",
+    failure: null,
+    turns: 1,
+    path_refusals: 0,
+  });
+});
+
 test("omp-stock resolves its edit mode from the upstream model name, not the MARS alias", async () => {
   const root = await scratch();
   const { registry, env, modelId } = await scriptedModelRegistry(
