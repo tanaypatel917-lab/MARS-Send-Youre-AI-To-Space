@@ -1671,6 +1671,7 @@ export function createController(
         patchText,
       };
       patchExport = nextExport;
+      if (page === "settings") void refreshSetup();
       render();
     } catch (error) {
       if (patchExport !== pending) return;
@@ -1724,6 +1725,8 @@ export function createController(
             };
       if (patchExport !== pending) return;
       patchExport = { ...pending, busy: false, handoff };
+      if (handoff.status === "saved" && page === "settings")
+        void refreshSetup();
     } catch {
       if (patchExport !== pending) return;
       patchExport = {

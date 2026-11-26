@@ -157,14 +157,18 @@ app.on("ready", async () => {
   );
   registerPatchHandoff(
     ipcMain,
-    createPatchHandoff(bridge.currentBridge, async () => {
-      const result = await dialog.showOpenDialog(window, {
-        title: "Save verified patch and check receipt",
-        buttonLabel: "Save handoff here",
-        properties: ["openDirectory"],
-      });
-      return result.canceled ? undefined : result.filePaths[0];
-    }),
+    createPatchHandoff(
+      bridge.currentBridge,
+      async () => {
+        const result = await dialog.showOpenDialog(window, {
+          title: "Save verified patch and check receipt",
+          buttonLabel: "Save handoff here",
+          properties: ["openDirectory"],
+        });
+        return result.canceled ? undefined : result.filePaths[0];
+      },
+      journal,
+    ),
     senderPolicy,
   );
   registerTeamChatBridge(ipcMain, createTeamChatBridge(), senderPolicy);
