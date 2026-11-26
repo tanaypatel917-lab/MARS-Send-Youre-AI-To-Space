@@ -60,11 +60,11 @@ export function renderLearningReport(report: LearningReport): string {
     "",
     "## Routing recommendations (not production routing decisions)",
     "",
-    "| Route (domain:role:complexity) | Complete pairs | Paired lift (95% CI) | Recommendation | Reason |",
-    "| --- | ---: | ---: | --- | --- |",
+    "| Route (domain:role:complexity) | Complete pairs | Paired lift (95% CI) | Exact sign-test p (two-sided) | Recommendation | Reason |",
+    "| --- | ---: | ---: | ---: | --- | --- |",
     ...report.routing.map(
       (row) =>
-        `| ${row.route} | ${row.pairs} | ${pct(row.difference)} ${ci(row.ci_95)} | ${row.recommendation} | ${row.reason} |`,
+        `| ${row.route} | ${row.pairs} | ${pct(row.difference)} ${ci(row.ci_95)} | ${row.sign_test_p_two_sided ?? "—"} | ${row.recommendation} | ${row.reason} |`,
     ),
     "",
     "Untested routes stay on base. Review recommendations are exploratory by route and do not substitute for the registry's promotion gates.",

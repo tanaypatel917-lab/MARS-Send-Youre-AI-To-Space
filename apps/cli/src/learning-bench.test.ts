@@ -9,6 +9,7 @@ import {
   assertLearningHoldout,
   createScriptedEditModel,
   loadLearningSuite,
+  renderLearningReport,
   runLearningBenchmark,
   SCRIPTED_PROFILES,
   scriptedModelRegistry,
@@ -134,6 +135,7 @@ test("learning CLI verifies the pinned fix and emits deterministic JSON and Mark
     routing: [
       {
         route: "code/backend:worker:light",
+        sign_test_p_two_sided: 1,
         recommendation: "stay_on_base",
         reason: "simulated",
       },
@@ -141,6 +143,10 @@ test("learning CLI verifies the pinned fix and emits deterministic JSON and Mark
   });
   expect(first.markdown).toContain("SIMULATED");
   expect(first.markdown).toContain("Underpowered");
+  expect(first.markdown).toContain("Exact sign-test p (two-sided)");
+  expect(first.markdown).toMatch(
+    /\| code\/backend:worker:light \| 1 \| [^|]+ \| 1 \| stay_on_base \| simulated \|/,
+  );
 });
 
 test("learning offline specialist verifies added and deleted files byte for byte", async () => {
@@ -417,6 +423,9 @@ test("learning reports rate limits, 5xx and provider timeouts independently of p
     excluded_provider_pairs: 1,
     ci_95: null,
   });
+  expect(renderLearningReport(report)).toContain(
+    "| code/backend:worker:light | 0 | — — | — | stay_on_base | simulated |",
+  );
   expect((await run(408)).arms.specialist.provider_errors.timeout).toBe(1);
   const truncated = await run(
     200,

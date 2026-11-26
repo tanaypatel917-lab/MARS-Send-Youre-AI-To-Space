@@ -675,8 +675,9 @@ underpowered run is exploratory. Routing recommendations keep the base
 model when evidence is inadequate, simulated, or not covered. With full
 coverage and at least 129 complete pairs for a route, more specialist wins
 than losses and a two-sided sign-test p-value below .05 mean review, not
-promotion. The paired lift interval is reported for context, not used as a
-second gate. No production routing is changed.
+promotion. The Markdown routing table shows each route's exact two-sided
+sign-test p-value alongside the paired lift interval, which is reported for
+context rather than used as a second gate. No production routing is changed.
 
 ### Evidence-based per-model edit-format selection
 
