@@ -2,6 +2,7 @@ import type {
   ArtifactRef,
   CheckpointRef,
   EventEnvelope,
+  ReviewVerificationView,
   Scope,
   Task,
   TaskStatus,
@@ -111,12 +112,38 @@ function watchRecords(records: readonly EvidenceRecord[]): WatchRecordView[] {
 }
 
 /** Every "Verified" word the client shows comes from the shared presentation rule. */
-function verificationBadge(view: VerificationView): VerificationBadge {
+function verificationBadge(
+  view: VerificationView,
+  review?: ReviewVerificationView,
+): VerificationBadge {
   const presentation = verificationStateFor(
     view.candidate?.revision ?? null,
     view.records,
     view.patch_sha256 ?? null,
   );
+  const verdict = presentation.record;
+  const logs =
+    verdict &&
+    review?.candidate?.revision === view.candidate?.revision &&
+    review?.candidate?.workspace_id === view.candidate?.workspace_id &&
+    review?.patch_sha256 === view.patch_sha256 &&
+    review?.record?.run_id === verdict.run_id
+      ? review?.check_logs?.find((entry) => entry.run_id === verdict.run_id)
+      : undefined;
+  const checkLogs = (logs?.checks ?? []).flatMap((log) => {
+    const check = verdict?.checks[log.check_index];
+    return check?.kind === "host_test" && check.status !== "passed"
+      ? [
+          {
+            label: check.check_id ?? check.path,
+            output: log.output_tail,
+            ...(log.capture_truncated
+              ? { captureTruncated: log.capture_truncated }
+              : {}),
+          },
+        ]
+      : [];
+  });
   return {
     state: presentation.state,
     label: VERIFICATION_STATE_LABEL[presentation.state],
@@ -125,6 +152,7 @@ function verificationBadge(view: VerificationView): VerificationBadge {
     verdict: presentation.record?.verdict ?? null,
     reasons: presentation.reasons,
     diagnostics: presentation.record?.diagnostics ?? [],
+    ...(checkLogs.length > 0 ? { checkLogs } : {}),
     recorded_at: presentation.record?.recorded_at ?? null,
     patch_sha256: view.patch_sha256 ?? null,
   };
@@ -560,22 +588,25 @@ export class WorkbenchController {
   private async loadVerification(taskId: string): Promise<void> {
     const generation = this.generation;
     const seq = ++this.verificationSeq;
-    // One evidence read binds the host verdict and Watch records to the same
-    // candidate; hosts without that parameter fall back to two reads.
     const loaded = await this.request(null, async (client, signal) => {
       const bound = await client
         .evidence(taskId, signal, true)
         .catch(() => null);
-      if (bound?.host_verification)
-        return {
-          view: bound.host_verification,
-          watch: watchRecords(bound.verify_records),
-        };
-      const [view, legacy] = await Promise.all([
-        client.verification(taskId, signal),
-        bound ?? client.evidence(taskId, signal).catch(() => null),
-      ]);
-      return { view, watch: legacy ? watchRecords(legacy.verify_records) : [] };
+      const [view, evidence] = bound?.host_verification
+        ? [bound.host_verification, bound]
+        : await Promise.all([
+            client.verification(taskId, signal),
+            bound ?? client.evidence(taskId, signal).catch(() => null),
+          ]);
+      const review = view.record?.checks.some(
+        (check) => check.kind === "host_test" && check.status !== "passed",
+      )
+        ? await client.verification(taskId, signal, true).catch(() => undefined)
+        : undefined;
+      return {
+        verification: verificationBadge(view, review),
+        watch: evidence ? watchRecords(evidence.verify_records) : [],
+      };
     });
     const selected = this.current(taskId);
     // Only the newest answer may paint the badge; an older reply can speak
@@ -587,7 +618,7 @@ export class WorkbenchController {
       seq !== this.verificationSeq
     )
       return;
-    selected.verification = verificationBadge(loaded.view);
+    selected.verification = loaded.verification;
     selected.watch = loaded.watch;
     this.emit();
   }

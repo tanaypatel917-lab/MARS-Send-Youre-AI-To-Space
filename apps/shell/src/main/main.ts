@@ -16,8 +16,10 @@ import { createDesktop } from "./desktop";
 import {
   registerAssistantBridge,
   registerBridge,
+  registerPatchHandoff,
   registerTeamChatBridge,
 } from "./ipc";
+import { createPatchHandoff } from "./patch-handoff";
 import {
   appResponseHeaders,
   resolveAppAsset,
@@ -132,6 +134,21 @@ app.on("ready", async () => {
   registerBridge(
     ipcMain,
     { call: (method, params) => bridge.call(method, params) },
+    senderPolicy,
+  );
+  registerPatchHandoff(
+    ipcMain,
+    createPatchHandoff(
+      () => bridge,
+      async () => {
+        const result = await dialog.showOpenDialog(window, {
+          title: "Save verified patch and check receipt",
+          buttonLabel: "Save handoff here",
+          properties: ["openDirectory"],
+        });
+        return result.canceled ? undefined : result.filePaths[0];
+      },
+    ),
     senderPolicy,
   );
   registerTeamChatBridge(ipcMain, createTeamChatBridge(), senderPolicy);

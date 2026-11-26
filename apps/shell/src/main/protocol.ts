@@ -2,8 +2,8 @@ import {
   EventEnvelopeSchema,
   JournalResultSchema,
   PatchExportSchema,
+  ReviewVerificationViewSchema,
   TaskSchema,
-  VerificationViewSchema,
 } from "@mars/contracts";
 import { z } from "zod";
 import {
@@ -11,10 +11,15 @@ import {
   DescribeResultSchema,
   DiffResultSchema,
   EvidenceResultSchema,
+  ExportParamsSchema,
   InspectResultSchema,
   RpcRequestSchema,
 } from "../../../../packages/workbench/src/protocol";
 import type { BridgeMethod } from "../shared/methods";
+
+export const RendererExportParamsSchema = ExportParamsSchema.omit({
+  review_destination: true,
+});
 
 type RpcRequest = z.infer<typeof RpcRequestSchema>;
 type ParamsByMethod = {
@@ -59,7 +64,7 @@ export const ResultSchema = {
   "tasks.events": z.array(EventEnvelopeSchema).max(10_000),
   "tasks.artifact": ArtifactDataSchema,
   "tasks.diff": DiffResultSchema,
-  "tasks.verification": VerificationViewSchema,
+  "tasks.verification": ReviewVerificationViewSchema,
   "tasks.evidence": EvidenceResultSchema,
   "tasks.journal": JournalResultSchema,
   "tasks.create": TaskSchema,

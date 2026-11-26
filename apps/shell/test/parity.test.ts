@@ -5,6 +5,7 @@ import {
   EventEnvelopeSchema,
   JournalResultSchema,
   PatchExportSchema,
+  ReviewVerificationViewSchema,
   TaskSchema,
   VERIFICATION_STATE_LABEL,
   VerificationViewSchema,
@@ -76,7 +77,7 @@ test("bridge schemas reuse the server request and result schemas", async () => {
   expect(ResultSchema["tasks.events"].element).toBe(EventEnvelopeSchema);
   expect(ResultSchema["tasks.artifact"]).toBe(ArtifactDataSchema);
   expect(ResultSchema["tasks.diff"]).toBe(DiffResultSchema);
-  expect(ResultSchema["tasks.verification"]).toBe(VerificationViewSchema);
+  expect(ResultSchema["tasks.verification"]).toBe(ReviewVerificationViewSchema);
   expect(ResultSchema["tasks.evidence"]).toBe(EvidenceResultSchema);
   expect(ResultSchema["tasks.journal"]).toBe(JournalResultSchema);
   expect(ResultSchema["tasks.create"]).toBe(TaskSchema);

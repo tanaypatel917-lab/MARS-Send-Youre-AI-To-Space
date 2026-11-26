@@ -75,6 +75,7 @@ function codeKind(code: string): BridgeErrorKind | undefined {
   if (code === "forbidden" || code === "permission_denied") return "forbidden";
   if (code === "not_found") return "not_found";
   if (code === "conflict" || code === "revision_conflict") return "conflict";
+  if (code === "patch_round_trip_failed" || code === "too_large") return code;
   if (code === "unavailable" || code === "model_unavailable") return code;
   return undefined;
 }

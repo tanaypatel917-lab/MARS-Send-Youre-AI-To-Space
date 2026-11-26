@@ -8,6 +8,10 @@ import {
   type ShellBridge,
 } from "../shared/methods";
 import {
+  PATCH_HANDOFF_CHANNEL,
+  type PatchHandoffApi,
+} from "../shared/patch-handoff";
+import {
   TEAM_CHAT_CHANNEL,
   TEAM_CHAT_GLOBAL,
   TEAM_CHAT_METHODS,
@@ -53,5 +57,12 @@ if (typeof contextBridge?.exposeInMainWorld === "function") {
   contextBridge.exposeInMainWorld(
     TEAM_CHAT_GLOBAL,
     createTeamChatPreloadApi(invoke),
+  );
+  contextBridge.exposeInMainWorld(
+    "marsPatchHandoff",
+    Object.freeze({
+      save: (params: Parameters<PatchHandoffApi["save"]>[0]) =>
+        invoke(PATCH_HANDOFF_CHANNEL, params),
+    }),
   );
 }

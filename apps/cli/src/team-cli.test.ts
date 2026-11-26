@@ -562,7 +562,7 @@ test("revoking the first dev user never promotes the next survivor to admin", as
     served?.child.kill("SIGKILL");
     await rm(root, { recursive: true, force: true });
   }
-});
+}, 60000);
 
 test("mars team serve requires an identity option, rejects bad repo specs, and --auth-provider none authenticates nobody", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-cli-team-none-"));

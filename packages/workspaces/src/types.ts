@@ -133,6 +133,8 @@ export interface CheckRunResult {
   exit_code: number;
   stdout: Uint8Array;
   stderr: Uint8Array;
+  /** At least one captured stream was capped before its end. */
+  output_truncated?: boolean;
   timed_out: boolean;
   cancelled: boolean;
 }
@@ -146,6 +148,8 @@ export interface PatchExportResult {
     reason: string | null;
   };
   unsupported: { path: string; reason: string }[];
+  source_baseline?: "matches" | "mismatch" | "unavailable";
+  destination?: "outside_source" | "inside_source" | "unavailable";
 }
 
 export interface LocalWorkspaceProvider extends ExecutionProvider {
@@ -174,6 +178,7 @@ export interface LocalWorkspaceProvider extends ExecutionProvider {
   exportPatch(
     context: RequestContext,
     workspace: WorkspaceRef,
+    options?: { compareSourceBaseline?: boolean; destination?: string },
   ): Promise<PatchExportResult>;
   execute(
     context: RequestContext,

@@ -292,6 +292,31 @@ export const VerificationViewSchema = z
   .strict();
 export type VerificationView = z.infer<typeof VerificationViewSchema>;
 
+export const VerificationCheckLogsSchema = z
+  .object({
+    run_id: z.string().min(1).max(256),
+    checks: z
+      .array(
+        z
+          .object({
+            check_index: z.number().int().min(0).max(63),
+            output_tail: z.string().min(1).max(600),
+            capture_truncated: z.literal(true).optional(),
+          })
+          .strict(),
+      )
+      .max(64),
+  })
+  .strict();
+export type VerificationCheckLogs = z.infer<typeof VerificationCheckLogsSchema>;
+
+export const ReviewVerificationViewSchema = VerificationViewSchema.extend({
+  check_logs: z.array(VerificationCheckLogsSchema).max(8).optional(),
+}).strict();
+export type ReviewVerificationView = z.infer<
+  typeof ReviewVerificationViewSchema
+>;
+
 /** What `workbench.describe` advertises about a host check: never its command or files. */
 export const HostCheckSummarySchema = z
   .object({
@@ -318,6 +343,16 @@ export const PatchExportSchema = z
     verification: VerificationStateSchema,
     verified: z.boolean(),
     verdict_run_id: z.string().min(1).max(256).nullable(),
+    handoff: z
+      .object({
+        source_baseline: z.enum(["matches", "mismatch", "unavailable"]),
+        destination: z
+          .enum(["outside_source", "inside_source", "unavailable"])
+          .optional(),
+        verdict: VerificationEvidenceRecordSchema,
+      })
+      .strict()
+      .optional(),
     round_trip: z
       .object({
         status: z.enum(["passed", "failed", "unavailable"]),

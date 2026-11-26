@@ -25,9 +25,10 @@ import type {
   PatchExport,
   RequestContext,
   RequiredCheck,
+  ReviewVerificationView,
   Scope,
   Task,
-  VerificationView,
+  VerificationCheckLogs,
   WorkspaceRef,
 } from "@mars/contracts";
 import {
@@ -66,6 +67,7 @@ import {
   isLoopbackUrl,
   OMNIROUTE_PROVIDER_ID,
 } from "@mars/providers-omniroute";
+import { redact } from "@mars/research-worker";
 import type { Turn } from "@mars/review";
 import type {
   AppendEventInput,
@@ -668,12 +670,17 @@ export async function createWorkbenchHost(
     context: RequestContext,
     taskId: string,
     bound?: { workspace: WorkspaceRef; diff: { files: { patch: string }[] } },
-  ): Promise<VerificationView> => {
+    includeCheckLogs = false,
+  ): Promise<ReviewVerificationView> => {
     await options.store.inspect(context, taskId);
+    const checkLogs = includeCheckLogs
+      ? new Map<string, VerificationCheckLogs>()
+      : undefined;
     const records = await verificationRecords(
       verificationHost,
       context,
       taskId,
+      checkLogs,
     );
     let candidate: WorkspaceRef | null = null;
     let patch: string | null = null;
@@ -692,13 +699,27 @@ export async function createWorkbenchHost(
       records,
       patch,
     );
-    const view: VerificationView = {
+    const runIds = new Set([
+      presentation.record?.run_id,
+      ...records.toReversed().map((record) => record.run_id),
+    ]);
+    const view: ReviewVerificationView = {
       candidate,
       state: presentation.state,
       record: presentation.record,
       reasons: presentation.reasons,
       records,
       patch_sha256: patch,
+      ...(checkLogs
+        ? {
+            check_logs: [...runIds]
+              .flatMap((id) => {
+                const logs = id && checkLogs.get(id);
+                return logs ? [logs] : [];
+              })
+              .slice(0, 8),
+          }
+        : {}),
     };
     // Same guard as artifacts and diffs: nothing host-private leaves the
     // service, even when a client named such a path in a required check.
@@ -740,7 +761,7 @@ export async function createWorkbenchHost(
           return true;
         const exported = z
           .object({
-            operation: z.literal("patch.exported"),
+            operation: z.enum(["patch.exported", "patch.prepared_for_handoff"]),
             artifact: ArtifactRefSchema,
             round_trip: z.enum(["passed", "failed", "unavailable"]).optional(),
           })
@@ -1297,6 +1318,13 @@ export async function createWorkbenchHost(
     scope: options.scope,
     store: options.store,
     workspace: options.workspace,
+    scrubOutput: async (context, taskId, output) => {
+      const patterns = await privatePatterns(context, taskId);
+      return redact(output, [
+        ...patterns,
+        ...patterns.map((pattern) => JSON.stringify(pattern).slice(1, -1)),
+      ]);
+    },
     ...(options.checks ? { checks: options.checks } : {}),
   };
   const run = (
@@ -3553,9 +3581,13 @@ export async function createWorkbenchHost(
       );
       return checkpoint;
     },
-    async verification(context, taskId): Promise<VerificationView> {
+    async verification(
+      context,
+      taskId,
+      includeCheckLogs,
+    ): Promise<ReviewVerificationView> {
       checkContext(context);
-      return verificationView(context, taskId);
+      return verificationView(context, taskId, undefined, includeCheckLogs);
     },
     async export(context, params): Promise<PatchExport> {
       checkContext(context);
@@ -3573,6 +3605,14 @@ export async function createWorkbenchHost(
         const exported = await options.workspace.exportPatch(
           context,
           candidate,
+          params.review_handoff
+            ? {
+                compareSourceBaseline: true,
+                ...(params.review_destination === undefined
+                  ? {}
+                  : { destination: params.review_destination }),
+              }
+            : undefined,
         );
         const after = await options.workspace.reopen(context, params.task_id);
         if (after.revision !== candidate.revision)
@@ -3584,10 +3624,8 @@ export async function createWorkbenchHost(
           .digest("hex");
         if (sha256 !== params.expected_patch_sha256)
           throw new WorkbenchError("conflict");
-        assertPublicBytes(
-          exported.patch,
-          await privatePatterns(context, params.task_id),
-        );
+        const patterns = await privatePatterns(context, params.task_id);
+        assertPublicBytes(exported.patch, patterns);
         const records = await verificationRecords(
           verificationHost,
           context,
@@ -3598,6 +3636,18 @@ export async function createWorkbenchHost(
           records,
           sha256,
         );
+        const verdict = presentation.record;
+        if (params.review_handoff) {
+          if (
+            presentation.state !== "verified" ||
+            verdict?.patch_sha256 !== sha256 ||
+            !exported.files
+          )
+            throw new WorkbenchError("conflict");
+          if (exported.round_trip.status !== "passed")
+            throw new WorkbenchError("patch_round_trip_failed");
+          assertPublicBytes(Buffer.from(JSON.stringify(verdict)), patterns);
+        }
         if (
           options.verifiedExportsOnly &&
           (presentation.state !== "verified" ||
@@ -3609,12 +3659,14 @@ export async function createWorkbenchHost(
           exported.patch,
           "text/x-diff",
         );
-        // An event, not a task update: owning the export must not move the task revision.
+        // Handoff preparation makes the artifact readable but does not prove that desktop saved it.
         await options.store.appendEvent(
           context,
           params.task_id,
           workbenchEvent({
-            operation: "patch.exported",
+            operation: params.review_handoff
+              ? "patch.prepared_for_handoff"
+              : "patch.exported",
             artifact,
             round_trip: exported.round_trip.status,
           }),
@@ -3633,6 +3685,17 @@ export async function createWorkbenchHost(
             presentation.state === "verified" &&
             exported.round_trip.status === "passed",
           verdict_run_id: presentation.record?.run_id ?? null,
+          ...(params.review_handoff && verdict
+            ? {
+                handoff: {
+                  source_baseline: exported.source_baseline ?? "unavailable",
+                  ...(params.review_destination === undefined
+                    ? {}
+                    : { destination: exported.destination ?? "unavailable" }),
+                  verdict,
+                },
+              }
+            : {}),
           round_trip: exported.round_trip,
           unsupported: exported.unsupported.map((entry) => ({
             path: entry.path,
