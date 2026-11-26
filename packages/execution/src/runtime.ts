@@ -21,7 +21,7 @@ import {
   type WorkspaceSearchRequest,
   type WorkspaceSearchResult,
 } from "@mars/workspaces";
-import { type as defineSchema } from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, type as defineSchema } from "@oh-my-pi/pi-ai";
 import {
   AuthStorage,
   type CustomTool,
@@ -1026,7 +1026,6 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
     await manager.flush();
   };
   let modelFailure: ModelFailureCode | undefined;
-  let cappedContent: string | undefined;
   const bridge = createModelBridge({
     registry: options.registry,
     selected,
@@ -1037,10 +1036,6 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
     signal: controller.signal,
     onFailure: (code) => {
       modelFailure = code;
-    },
-    onTurnEnd: (reason, text) => {
-      // The SDK may remove a length-stopped turn when it contains no text.
-      cappedContent = reason === "length" ? text : undefined;
     },
     workspaceRoots: [cwd, options.cwd],
     ...(options.env ? { env: options.env } : {}),
@@ -1215,7 +1210,15 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
     await authStorage.close();
     throw new Error("Missing execution journal.");
   }
+  let activeRun: { lastAssistant?: AssistantMessage } | undefined;
   const unsubscribe = session.subscribe((event) => {
+    // Capture sanitized turns before session maintenance drops empty messages.
+    if (
+      activeRun &&
+      event.type === "turn_end" &&
+      event.message.role === "assistant"
+    )
+      activeRun.lastAssistant = event.message;
     const observation: RuntimeObservation = {
       type: event.type,
       session_id: manager.getSessionId(),
@@ -1280,26 +1283,21 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
         throw new Error("Invalid task instruction.");
       running = true;
       modelFailure = undefined;
-      cappedContent = undefined;
+      const run: { lastAssistant?: AssistantMessage } = {};
+      activeRun = run;
       try {
         await session.prompt(instruction);
         await observations;
         await session.flushToDisk();
         if (observationFailure)
           throw new Error("Runtime event persistence failed.");
-        const last = [...session.messages]
-          .reverse()
-          .find((message) => message.role === "assistant");
+        const last = run.lastAssistant;
         const content =
-          cappedContent ??
-          (last?.role === "assistant"
-            ? last.content
-                .filter((part) => part.type === "text")
-                .map((part) => part.text)
-                .join("")
-            : "");
-        const stopReason =
-          cappedContent === undefined ? last?.stopReason : "length";
+          last?.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("") ?? "";
+        const stopReason = last?.stopReason;
         const status = userCancelled
           ? "cancelled"
           : controller.signal.aborted ||
@@ -1317,7 +1315,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
           (controller.signal.reason instanceof ExecutionLimitError ||
           Date.now() >= ledger.deadline
             ? "deadline_exceeded"
-            : last?.role === "assistant"
+            : last
               ? "provider_error"
               : "no_response");
         return {
@@ -1332,6 +1330,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
             : {}),
         };
       } finally {
+        activeRun = undefined;
         running = false;
       }
     },

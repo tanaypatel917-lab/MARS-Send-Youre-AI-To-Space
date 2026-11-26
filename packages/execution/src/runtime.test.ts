@@ -3332,6 +3332,45 @@ for (const [reason, content, warmup] of [
   });
 }
 
+for (const content of ["Checking the file.", ""]) {
+  test(`a capped DeepSeek turn returns ${content ? "only finalized prose" : "empty content, not earlier text"}`, async () => {
+    const modelId = "deepseek-v4-pro";
+    const f = await fixture(200_000, { id: modelId, model: modelId });
+    let requests = 0;
+    try {
+      const session = await f.open({
+        modelId,
+        fetch: async () => {
+          requests++;
+          if (requests === 1) return sse({ content: "Earlier response" });
+          return sse(
+            {
+              content: [content, '<｜DSML｜invoke name="mars_read">'].join(
+                "\n",
+              ),
+            },
+            "length",
+          );
+        },
+      });
+      expect(await session.run("Warm up")).toMatchObject({
+        status: "completed",
+        content: "Earlier response",
+      });
+      expect(await session.run(f.task.request)).toMatchObject({
+        status: "paused",
+        content,
+      });
+      expect(requests).toBe(2);
+      expect(JSON.stringify(session.journalSnapshot())).not.toContain(
+        "｜DSML｜",
+      );
+    } finally {
+      await f.cleanup();
+    }
+  });
+}
+
 test("a file that names the workspace root can be read and exactly edited through the placeholder", async () => {
   const f = await fixture(200_000);
   const requests: Record<string, unknown>[] = [];

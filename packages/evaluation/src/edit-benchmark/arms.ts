@@ -24,7 +24,10 @@ import {
   selectExecutionModel,
 } from "@mars/execution";
 import type { ModelProviderRegistry } from "@mars/providers";
-import { createAssistantMessageEventStream } from "@oh-my-pi/pi-ai";
+import {
+  type AssistantMessage,
+  createAssistantMessageEventStream,
+} from "@oh-my-pi/pi-ai";
 import {
   AuthStorage,
   createAgentSession,
@@ -609,7 +612,6 @@ async function runOmpStock(
   };
   const controller = new AbortController();
   let failure: string | null = null;
-  let outputCapped = false;
   let pathRefusals = 0;
   const bridge = createModelBridge({
     registry: input.registry,
@@ -620,9 +622,6 @@ async function runOmpStock(
     signal: controller.signal,
     onFailure: (code) => {
       failure = code;
-    },
-    onTurnEnd: (reason) => {
-      outputCapped = reason === "length";
     },
     fetch,
     seed: input.seed,
@@ -729,7 +728,10 @@ async function runOmpStock(
   };
   let editCalls = 0;
   let editFailures = 0;
+  let stopReason: AssistantMessage["stopReason"] | undefined;
   const unsubscribe = session.subscribe((event) => {
+    if (event.type === "turn_end" && event.message.role === "assistant")
+      stopReason = event.message.stopReason;
     if (event.type === "tool_execution_end" && event.toolName === "edit") {
       editCalls += 1;
       if (event.isError) editFailures += 1;
@@ -747,10 +749,6 @@ async function runOmpStock(
       );
     await session.prompt(input.task.instruction);
     await session.flushToDisk();
-    const last = [...session.messages]
-      .reverse()
-      .find((message) => message.role === "assistant");
-    const stopReason = outputCapped ? "length" : last?.stopReason;
     const status: TrialResult["status"] =
       controller.signal.aborted ||
       !stopReason ||
