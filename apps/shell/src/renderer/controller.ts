@@ -802,6 +802,7 @@ export function createController(
             busy: false,
             error: result.error,
             health: result.health ?? assistantState.health,
+            setup: result.setup ?? assistantState.setup,
           };
     } catch {
       if (scopeGeneration !== generation) return;

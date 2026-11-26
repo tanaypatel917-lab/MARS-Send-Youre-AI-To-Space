@@ -46,6 +46,7 @@ export type AssistantResult =
       error: string;
       reloadHistory?: boolean;
       health?: ModelHealth;
+      setup?: SetupSummary;
     };
 export type AssistantApi = {
   onModelChanged?(refresh: () => void): void;
