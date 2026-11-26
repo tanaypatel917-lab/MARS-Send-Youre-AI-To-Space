@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -7,8 +7,10 @@ import { sha256 } from "@mars/contracts/canonical";
 import { requestSha256 } from "@mars/datasets";
 import {
   assertLearningHoldout,
+  createScriptedEditModel,
   loadLearningSuite,
   runLearningBenchmark,
+  SCRIPTED_PROFILES,
   scriptedModelRegistry,
 } from "@mars/evaluation";
 import { runBench } from "./bench";
@@ -154,6 +156,109 @@ test("learning offline specialist verifies added and deleted files byte for byte
     missing: [],
     unexpected: [],
     mismatched: [],
+  });
+});
+
+test("learning live CLI dispatches both pinned checkpoints through one registry after validating lineage", async () => {
+  const { repo, file, suite } = await setup();
+  const marsHome = join(repo, "registry");
+  await mkdir(marsHome);
+  const checkpoints = { baseline: "base-pinned", specialist: "adapter-pinned" };
+  const modelId = (arm: string) => `fixture/${arm}`;
+  await Bun.write(
+    join(marsHome, "models.json"),
+    JSON.stringify({
+      version: 1,
+      providers: [
+        {
+          id: "fixture",
+          kind: "openai-compatible",
+          baseUrl: "https://models.invalid/v1",
+          apiKeyEnv: "MARS_FIXTURE_KEY",
+        },
+      ],
+      models: Object.entries(checkpoints).map(([arm, model]) => ({
+        id: modelId(arm),
+        providerId: "fixture",
+        model,
+        capabilities: { tools: true, vision: false, contextWindow: 1_000_000 },
+        pricing: { free: true, inputPerMTokUsd: 0, outputPerMTokUsd: 0 },
+      })),
+      routes: { default: [modelId("baseline")] },
+    }),
+  );
+  const lineage = JSON.stringify({
+    schema: "mars.specialist-dataset-lineage/v1",
+    train_task_ids: ["other-task"],
+    validation_task_ids: [],
+    datasets: [{ sha256: "f".repeat(64) }],
+    request_sha256s: [requestSha256("Unrelated training request")],
+    provenance: { synthetic_fixture: false },
+  });
+  const lineagePath = join(repo, "lineage.json");
+  const planPath = join(repo, "plan.json");
+  const out = join(repo, "live");
+  await Bun.write(lineagePath, lineage);
+  await Bun.write(
+    planPath,
+    JSON.stringify({
+      schema: "mars.learning-plan/v1",
+      suite_sha256: suite.sha256,
+      seed: "live-test",
+      budget_per_task: {
+        max_tokens: 10_000,
+        max_usd: 1,
+        max_duration_ms: 30_000,
+      },
+      max_total_usd: 2,
+      arms: {
+        baseline: { model: modelId("baseline") },
+        specialist: {
+          model: modelId("specialist"),
+          lineage_sha256: sha256(lineage),
+        },
+      },
+    }),
+  );
+  const profile = SCRIPTED_PROFILES.oracle;
+  if (!profile) throw new Error("Missing oracle fixture");
+  const mock = createScriptedEditModel({
+    tasks: suite.tasks.map(({ task }) => task),
+    profile,
+  });
+  const requested = new Set<string>();
+  await runBench(
+    [
+      "learning",
+      "--live",
+      "--repo",
+      repo,
+      "--suite",
+      file,
+      "--plan",
+      planPath,
+      "--training-lineage",
+      lineagePath,
+      "--out",
+      out,
+    ],
+    () => {},
+    {
+      env: { MARS_HOME: marsHome, MARS_FIXTURE_KEY: "not-a-secret" },
+      fetch: async (url, init) => {
+        expect(url).toBe("https://models.invalid/v1/chat/completions");
+        requested.add(JSON.parse(String(init?.body)).model);
+        return mock.fetch(url, init);
+      },
+    },
+  );
+  expect(requested).toEqual(new Set(Object.values(checkpoints)));
+  expect(
+    JSON.parse(await readFile(join(out, "report.json"), "utf8")),
+  ).toMatchObject({
+    simulated: false,
+    arms: { baseline: { solved: 1 }, specialist: { solved: 1 } },
+    paired: { pairs: 1, excluded_provider_pairs: 0 },
   });
 });
 
