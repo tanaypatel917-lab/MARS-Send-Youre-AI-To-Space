@@ -19,6 +19,45 @@ import { loadFixtureData } from "./test-utils";
 
 const TOKEN = "fixture-token-0123456789abcdefghijklmnopqrstuvwxyz";
 
+test("size errors distinguish task start from patch export", async () => {
+  const data = await loadFixtureData();
+  const bridge = createBridge({
+    transport: {
+      async send({ method }) {
+        if (method === "workbench.describe") return data.describe;
+        throw new TransportError("too_large");
+      },
+    },
+    connectionScope: data.describe.scope,
+  });
+  expect(
+    await bridge.call("tasks.start", {
+      task_id: "task",
+      expected_revision: 0,
+      approvals: { read: true, write: true, execute: false },
+    }),
+  ).toMatchObject({
+    ok: false,
+    error: {
+      kind: "too_large",
+      message: expect.stringContaining("task instructions are too large"),
+    },
+  });
+  expect(
+    await bridge.call("tasks.export", {
+      task_id: "task",
+      expected_revision: "r1",
+      expected_patch_sha256: "0".repeat(64),
+    }),
+  ).toMatchObject({
+    ok: false,
+    error: {
+      kind: "too_large",
+      message: expect.stringContaining("patch is too large"),
+    },
+  });
+});
+
 async function runningServer(data: FixtureData, token = TOKEN) {
   const server = serveWorkbench({
     api: createFixtureOperations(data),

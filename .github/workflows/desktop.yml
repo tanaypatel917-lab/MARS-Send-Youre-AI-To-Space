@@ -55,17 +55,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb "$PWD"/apps/shell/dist/installers/*.deb
           MARS_PACKAGED_ELECTRON=/opt/mars/mars bun test apps/shell/test/electron-xvfb.test.ts -t 'installed MARS'
-      - name: Upload installer (best-effort on pull requests)
-        id: installer_upload
-        continue-on-error: ${{ github.event_name == 'pull_request' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        # PRs verify the installers without publishing preview downloads.
+        if: github.event_name != 'pull_request'
         with:
           name: ${{ matrix.artifact }}
           path: apps/shell/dist/installers/*
           if-no-files-found: error
           compression-level: 0
-      - name: Report unpublished pull-request installer
-        if: github.event_name == 'pull_request' && steps.installer_upload.outcome == 'failure'
-        run: |
-          echo "::warning::The installer built successfully but could not be published."
-          echo "Installer built successfully, but no downloadable artifact was published. See the upload step for details." >> "$GITHUB_STEP_SUMMARY"

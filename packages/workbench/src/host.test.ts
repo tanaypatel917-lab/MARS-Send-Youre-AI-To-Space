@@ -6439,7 +6439,10 @@ async function hostCheckFixture() {
       workspace,
       exit_code: exitCode,
       stdout: new TextEncoder().encode(exitCode ? "1 fail" : "1 pass"),
-      stderr: new Uint8Array(),
+      stderr: exitCode
+        ? new TextEncoder().encode(`Diagnostic path: ${f.root}/test`)
+        : new Uint8Array(),
+      output_truncated: exitCode !== 0,
       timed_out: false,
       cancelled: false,
     };
@@ -6550,6 +6553,27 @@ test("a protected host check binds its verdict to the exact patch bytes; a faili
   const failed = await runHostCheckTask(f, api, "task-2", 1);
   expect(failed.state).toBe("failed");
   expect(failed.reasons.join(" ")).toContain("exited 1");
+  expect(failed.record?.checks[0]?.reason).toBe("Host check sum-test exited 1");
+  expect(failed).not.toHaveProperty("check_logs");
+  expect(failed.record?.checks[0]).not.toHaveProperty("output_tail");
+  const standardVerdict = JSON.stringify(failed);
+  expect(standardVerdict).not.toContain(f.root);
+  expect(standardVerdict).not.toContain("1 fail");
+  expect(standardVerdict).not.toContain("Diagnostic path");
+  const failedReview = await api.verification(context(), "task-2", true);
+  expect(failedReview.check_logs).toEqual([
+    {
+      run_id: required(failed.record ?? undefined).run_id,
+      checks: [
+        {
+          check_index: 0,
+          output_tail: "1 fail\nDiagnostic path: [redacted]/test",
+          capture_truncated: true,
+        },
+      ],
+    },
+  ]);
+  expect(failedReview.record).toEqual(failed.record);
 
   setExit(0);
   f.diffFiles = [
@@ -6582,13 +6606,17 @@ test("export returns the exact verified patch bytes and refuses a moved revision
   const { f, host } = await hostCheckFixture();
   const patchText = () => f.diffFiles.map((file) => file.patch).join("");
   const api = await host({
-    async exportPatch(_context, workspace) {
+    async exportPatch(_context, workspace, options) {
       return {
         workspace,
         patch: new TextEncoder().encode(patchText()),
         files: f.diffFiles.length,
         round_trip: { status: "passed", reason: null },
         unsupported: [],
+        ...(options?.compareSourceBaseline
+          ? { source_baseline: "mismatch" }
+          : {}),
+        ...(options?.destination ? { destination: "inside_source" } : {}),
       };
     },
   });
@@ -6621,6 +6649,8 @@ test("export returns the exact verified patch bytes and refuses a moved revision
     task_id: "task",
     expected_revision: "r1",
     expected_patch_sha256: sha,
+    review_handoff: true,
+    review_destination: "/fixture/source",
   });
   expect((await f.store.inspect(context(), "task")).revision).toBe(before);
   expect(exported).toMatchObject({
@@ -6629,8 +6659,28 @@ test("export returns the exact verified patch bytes and refuses a moved revision
     verified: true,
     files: 1,
     round_trip: { status: "passed", reason: null },
+    handoff: {
+      source_baseline: "mismatch",
+      destination: "inside_source",
+      verdict: {
+        run_id: view.record?.run_id,
+        patch_sha256: sha,
+        checks: [{ status: "passed" }],
+      },
+    },
   });
+  expect(JSON.stringify(exported)).not.toContain("output_tail");
   expect(exported.artifact.sha256).toBe(sha);
+  const operations: string[] = [];
+  for await (const event of f.store.events(context(), "task")) {
+    if (event.event_type !== "tool.completed") continue;
+    const bytes = await f.store.artifacts.get(context(), event.payload);
+    const payload = JSON.parse(new TextDecoder().decode(bytes));
+    if (typeof payload?.operation === "string")
+      operations.push(payload.operation);
+  }
+  expect(operations).toContain("patch.prepared_for_handoff");
+  expect(operations).not.toContain("patch.exported");
   // `ignoreBOM` so the leading U+FEFF is compared rather than stripped.
   expect(
     new TextDecoder("utf-8", { ignoreBOM: true }).decode(

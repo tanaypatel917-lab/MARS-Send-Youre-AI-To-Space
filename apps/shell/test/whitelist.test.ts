@@ -11,6 +11,10 @@ import {
   READ_METHODS,
 } from "../src/shared/methods";
 import {
+  PATCH_HANDOFF_CHANNEL,
+  type PatchHandoffApi,
+} from "../src/shared/patch-handoff";
+import {
   isTeamChatMethod,
   TEAM_CHAT_CHANNEL,
   TEAM_CHAT_GLOBAL,
@@ -48,7 +52,7 @@ test("isReadMethod and isBridgeMethod accept exactly the whitelisted method name
   expect(isBridgeMethod("tasks.start")).toBe(true);
 });
 
-test("the preload exposes exactly the frozen workbench and team chat bridges", async () => {
+test("the preload exposes only the frozen workbench, assistant, team chat and patch handoff bridges", async () => {
   const exposed: unknown[][] = [];
   const calls: unknown[][] = [];
   mock.module("electron", () => ({
@@ -63,10 +67,11 @@ test("the preload exposes exactly the frozen workbench and team chat bridges", a
     },
   }));
   await import("../src/preload/preload");
-  expect(exposed).toHaveLength(3);
+  expect(exposed).toHaveLength(4);
   expect(exposed[0]?.[0]).toBe(BRIDGE_GLOBAL);
   expect(exposed[1]?.[0]).toBe("marsAssistant");
   expect(exposed[2]?.[0]).toBe(TEAM_CHAT_GLOBAL);
+  expect(exposed[3]?.[0]).toBe("marsPatchHandoff");
   const api = exposed[0]?.[1] as Record<
     string,
     (params: unknown) => Promise<unknown>
@@ -77,11 +82,20 @@ test("the preload exposes exactly the frozen workbench and team chat bridges", a
   >;
   expect(Object.isFrozen(api)).toBe(true);
   expect(Object.isFrozen(teamApi)).toBe(true);
+  const handoff = exposed[3]?.[1] as PatchHandoffApi;
+  expect(Object.isFrozen(handoff)).toBe(true);
+  expect(Object.keys(handoff)).toEqual(["save"]);
   expect(Object.keys(api).sort()).toEqual([...BRIDGE_METHODS].sort());
   expect(Object.keys(teamApi).sort()).toEqual([...TEAM_CHAT_METHODS].sort());
   await api["tasks.list"]?.({});
   await api["tasks.journal"]?.({ task_id: "fixture", entry_ids: [] });
   await teamApi["team.state"]?.({});
+  const saveParams = {
+    task_id: "fixture",
+    expected_revision: "r1",
+    expected_patch_sha256: "0".repeat(64),
+  };
+  await handoff.save(saveParams);
   expect(calls).toEqual([
     [BRIDGE_CHANNEL, { method: "tasks.list", params: {} }],
     [
@@ -92,6 +106,7 @@ test("the preload exposes exactly the frozen workbench and team chat bridges", a
       },
     ],
     [TEAM_CHAT_CHANNEL, { method: "team.state", params: {} }],
+    [PATCH_HANDOFF_CHANNEL, saveParams],
   ]);
   mock.restore();
 });

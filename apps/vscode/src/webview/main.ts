@@ -422,7 +422,8 @@ function renderVerificationDetail(
         ? `Verdict bound to revision ${verification.bound}; current candidate ${verification.candidate}.`
         : `Candidate ${verification.candidate}.`
       : "";
-  if (lines.length === 0 && !bound) return [];
+  const logs = verification.checkLogs ?? [];
+  if (lines.length === 0 && !bound && logs.length === 0) return [];
   const list = h("ul", { class: "small" });
   for (const line of lines) list.append(h("li", {}, line));
   return [
@@ -431,6 +432,18 @@ function renderVerificationDetail(
       { class: "verification small" },
       bound ? h("p", { class: "muted mono small" }, bound) : null,
       lines.length ? list : null,
+      ...logs.map((log) =>
+        h(
+          "details",
+          {},
+          h(
+            "summary",
+            {},
+            `${log.label} · ${log.captureTruncated ? "Check log excerpt (later output discarded)" : "Check log tail"}`,
+          ),
+          h("pre", {}, log.output),
+        ),
+      ),
     ),
   ];
 }

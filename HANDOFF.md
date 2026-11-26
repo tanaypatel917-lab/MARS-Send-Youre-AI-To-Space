@@ -44,6 +44,12 @@ State: **scripted real-Docker service path verified; model-backed export in the 
 - For supported projects, the desktop offers to review `test`, `lint`, and `typecheck` commands and their lifecycle hooks. Approval ties the manifest snapshot to the selected folder and stores it outside the checkout; replacing or removing checks discards old snapshots. Execute still requires task-level approval. Check Sandbox refreshes stale readiness and picks up Docker context changes without losing drafts. `desktop-sandbox-refresh.test.ts` covers the workbench replacement and deferring refresh while `tasks.start` awaits a reply.
 - For the guided project real-Docker regression, pull `oven/bun@sha256:5148f6742ac31fac28e6eab391ab1f11f6dfc0c8512c7a3679b374ec470f5982`, then run `MARS_PROJECT_VERIFICATION_DOCKER_TEST=1 bun test packages/workbench/src/service.test.ts -t 'guided project verification'`. If Docker Hub is rate-limited, set `MARS_PROJECT_VERIFICATION_DOCKER_IMAGE` to the same digest pulled from `mirror.gcr.io/oven/bun`.
 
+## Desktop: reviewer diff, checks and patch handoff (PR #266)
+
+- Desktop shows per-check outcomes and redacted sandbox excerpts beside the diff. VS Code can also request logs without adding output to standard verdict records.
+- Native Save checks the exact verified patch, successful round trip and matching source snapshot, then saves the patch and receipt outside the source. Host-side preparation is not a training export. MARS never applies or pushes the patch.
+- PR CI packages all preview installers and smoke-tests the installed Linux app; only main and manual runs publish downloads. Native save-dialog acceptance is separate from those checks.
+
 ## Milestone 2: shared research allowance (first offline slice)
 
 - Research admission (`packages/research/src/service.ts`, `taskResearchCommitment`) now checks the sum across a task's jobs, not each job alone: queued/running jobs hold their whole `max_tokens`/`max_usd`, finished jobs count reported usage (or their whole budget when usage was never reported), never-started jobs count nothing. The check runs inside the same immediate SQLite transaction as the insert, so concurrent submits cannot both fit, and it is derived from durable rows, so retries, lease handovers and restarts neither double-count nor refill. A job that would exceed the task allowance is refused with `budget_exceeded`.

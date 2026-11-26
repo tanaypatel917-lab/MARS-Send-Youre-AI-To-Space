@@ -1,5 +1,6 @@
 import type { AssistantApi } from "../shared/assistant";
 import type { ShellBridge } from "../shared/methods";
+import type { PatchHandoffApi } from "../shared/patch-handoff";
 import type { TeamChatBridgeApi } from "../shared/team-chat";
 import { createController } from "./controller";
 import type { ShellDocument, ShellElement } from "./dom";
@@ -10,6 +11,7 @@ type ShellGlobal = typeof globalThis & {
   marsTeamChat?: TeamChatBridgeApi;
   marsAssistant?: AssistantApi;
   marsExtensions?: ExtensionsApi;
+  marsPatchHandoff?: PatchHandoffApi;
   document?: ShellDocument;
   addEventListener(
     type: "pagehide",
@@ -35,6 +37,7 @@ if (shell.marsWorkbench && shell.document && root) {
       const timer = setTimeout(tick, delay);
       return () => clearTimeout(timer);
     },
+    shell.marsPatchHandoff,
   );
   shell.addEventListener("pagehide", controller.dispose, { once: true });
   shell.marsAssistant?.onWorkbenchChanged?.(() => void controller.load());

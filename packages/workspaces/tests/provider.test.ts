@@ -2733,3 +2733,56 @@ test("exportPatch reconstructs a BOM-only edit over a dirty git baseline byte fo
     await fixture.close();
   }
 });
+
+test("review handoff detects source changes outside the verified patch", async () => {
+  const fixture = await makeFixture();
+  try {
+    const options = { compareSourceBaseline: true };
+    const before = await fixture.provider.exportPatch(
+      context,
+      fixture.workspace,
+      options,
+    );
+    expect(before.source_baseline).toBe("matches");
+    await writeFile(
+      join(fixture.sourceRoot, "source-only.txt"),
+      "after launch\n",
+    );
+    const after = await fixture.provider.exportPatch(
+      context,
+      fixture.workspace,
+      options,
+    );
+    expect(after.source_baseline).toBe("mismatch");
+    expect(after.round_trip).toEqual(before.round_trip);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("review handoff detects both direct and symlinked destinations inside the source", async () => {
+  const fixture = await makeFixture();
+  const outside = await mkdtemp(join(tmpdir(), "mars-destination-test-"));
+  try {
+    const nested = join(fixture.sourceRoot, "nested");
+    const alias = join(outside, "alias");
+    await symlink(nested, alias, "dir");
+    for (const [destination, expected] of [
+      [fixture.sourceRoot, "inside_source"],
+      [nested, "inside_source"],
+      [alias, "inside_source"],
+      [outside, "outside_source"],
+      [join(outside, "missing"), "unavailable"],
+    ] as const) {
+      const exported = await fixture.provider.exportPatch(
+        context,
+        fixture.workspace,
+        { destination },
+      );
+      expect(exported.destination).toBe(expected);
+    }
+  } finally {
+    await rm(outside, { recursive: true, force: true });
+    await fixture.close();
+  }
+});
