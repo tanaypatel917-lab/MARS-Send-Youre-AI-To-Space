@@ -1210,15 +1210,29 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
     await authStorage.close();
     throw new Error("Missing execution journal.");
   }
-  let activeRun: { lastAssistant?: AssistantMessage } | undefined;
+  interface RunTurns {
+    lastAssistant: AssistantMessage | undefined;
+    capped: AssistantMessage | undefined;
+  }
+  let activeRun: RunTurns | undefined;
   const unsubscribe = session.subscribe((event) => {
-    // Capture sanitized turns before session maintenance drops empty messages.
+    if (
+      activeRun &&
+      event.type === "message_end" &&
+      event.message.role === "assistant"
+    ) {
+      // Use the stored message identity, not the SDK's event snapshot.
+      activeRun.lastAssistant = session.getLastAssistantMessage();
+      activeRun.capped = undefined;
+    }
+    // Preserve sanitized length stops even if settling removes them from history.
     if (
       activeRun &&
       event.type === "turn_end" &&
-      event.message.role === "assistant"
+      event.message.role === "assistant" &&
+      event.message.stopReason === "length"
     )
-      activeRun.lastAssistant = event.message;
+      activeRun.capped = event.message;
     const observation: RuntimeObservation = {
       type: event.type,
       session_id: manager.getSessionId(),
@@ -1283,7 +1297,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
         throw new Error("Invalid task instruction.");
       running = true;
       modelFailure = undefined;
-      const run: { lastAssistant?: AssistantMessage } = {};
+      const run: RunTurns = { lastAssistant: undefined, capped: undefined };
       activeRun = run;
       try {
         await session.prompt(instruction);
@@ -1291,7 +1305,9 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
         await session.flushToDisk();
         if (observationFailure)
           throw new Error("Runtime event persistence failed.");
-        const last = run.lastAssistant;
+        const settled = session.getLastAssistantMessage();
+        const last =
+          run.capped ?? (settled === run.lastAssistant ? settled : undefined);
         const content =
           last?.content
             .filter((part) => part.type === "text")

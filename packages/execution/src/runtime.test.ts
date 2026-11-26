@@ -3332,6 +3332,45 @@ for (const [reason, content, warmup] of [
   });
 }
 
+for (const scenario of [
+  "fresh",
+  "after an earlier run",
+  "successful retry",
+] as const) {
+  test(`runtime handles an empty normal stop: ${scenario}`, async () => {
+    const f = await fixture(200_000);
+    let requests = 0;
+    const warmup = scenario === "after an earlier run";
+    const succeeds = scenario === "successful retry";
+    try {
+      const session = await f.open({
+        task: { ...f.task, budget: { ...f.task.budget, max_tokens: 100_000 } },
+        fetch: async () => {
+          requests++;
+          if (warmup && requests === 1)
+            return sse({ content: "Earlier response" });
+          if (succeeds && requests === 2)
+            return sse({ content: "Recovered response." });
+          return sse({});
+        },
+      });
+      if (warmup)
+        expect(await session.run("Warm up")).toMatchObject({
+          status: "completed",
+          content: "Earlier response",
+        });
+      expect(await session.run(f.task.request)).toMatchObject(
+        succeeds
+          ? { status: "completed", content: "Recovered response." }
+          : { status: "failed", failure_code: "no_response", content: "" },
+      );
+      expect(requests).toBe(succeeds ? 2 : warmup ? 5 : 4);
+    } finally {
+      await f.cleanup();
+    }
+  });
+}
+
 for (const content of ["Checking the file.", ""]) {
   test(`a capped DeepSeek turn returns ${content ? "only finalized prose" : "empty content, not earlier text"}`, async () => {
     const modelId = "deepseek-v4-pro";

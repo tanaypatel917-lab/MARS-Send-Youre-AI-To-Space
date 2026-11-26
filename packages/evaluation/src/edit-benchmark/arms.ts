@@ -728,10 +728,20 @@ async function runOmpStock(
   };
   let editCalls = 0;
   let editFailures = 0;
-  let stopReason: AssistantMessage["stopReason"] | undefined;
+  let lastAssistant: AssistantMessage | undefined;
+  let capped = false;
   const unsubscribe = session.subscribe((event) => {
-    if (event.type === "turn_end" && event.message.role === "assistant")
-      stopReason = event.message.stopReason;
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      // Use the stored message identity, not the SDK's event snapshot.
+      lastAssistant = session.getLastAssistantMessage();
+      capped = false;
+    }
+    if (
+      event.type === "turn_end" &&
+      event.message.role === "assistant" &&
+      event.message.stopReason === "length"
+    )
+      capped = true;
     if (event.type === "tool_execution_end" && event.toolName === "edit") {
       editCalls += 1;
       if (event.isError) editFailures += 1;
@@ -749,6 +759,12 @@ async function runOmpStock(
       );
     await session.prompt(input.task.instruction);
     await session.flushToDisk();
+    const settled = session.getLastAssistantMessage();
+    const stopReason = capped
+      ? "length"
+      : settled === lastAssistant
+        ? settled?.stopReason
+        : undefined;
     const status: TrialResult["status"] =
       controller.signal.aborted ||
       !stopReason ||

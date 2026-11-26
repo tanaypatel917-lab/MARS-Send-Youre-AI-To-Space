@@ -605,6 +605,47 @@ test("omp-stock classifies a tool-only capped turn as paused without executing t
   });
 });
 
+for (const succeeds of [false, true]) {
+  test(`omp-stock ${succeeds ? "completes after a successful retry" : "fails after exhausting empty-stop recovery"}`, async () => {
+    const root = await scratch();
+    const { registry, env, modelId } = await scriptedModelRegistry(root);
+    let requests = 0;
+    const trial = await runEditTrial({
+      arm: "omp-stock",
+      task: suite.tasks[2] as (typeof suite.tasks)[number],
+      repeat: 0,
+      registry,
+      env,
+      modelId,
+      seed: 1,
+      budget,
+      fetch: async () => {
+        requests++;
+        const frame = JSON.stringify({
+          choices: [
+            {
+              delta: succeeds && requests === 2 ? { content: "Done." } : {},
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        });
+        return new Response(`data: ${frame}\n\ndata: [DONE]\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+      workRoot: join(root, "work"),
+      transcriptRoot: join(root, "tx"),
+    });
+    expect(trial).toMatchObject(
+      succeeds
+        ? { status: "completed", failure: null, turns: 2 }
+        : { status: "failed", failure: "provider_error", turns: 4 },
+    );
+    expect(requests).toBe(succeeds ? 2 : 4);
+  });
+}
+
 test("omp-stock resolves its edit mode from the upstream model name, not the MARS alias", async () => {
   const root = await scratch();
   const { registry, env, modelId } = await scriptedModelRegistry(
