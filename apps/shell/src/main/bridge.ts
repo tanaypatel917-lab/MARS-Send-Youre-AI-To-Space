@@ -201,14 +201,28 @@ export function createBridge(options: BridgeOptions): Bridge {
         }
         return success(result);
       } catch (error) {
-        return { ok: false, error: mapError(error) };
+        return { ok: false, error: mapError(error, method) };
       }
     },
   };
 }
 
-function mapError(error: unknown): BridgeError {
-  return bridgeError(
+function mapError(error: unknown, method?: string): BridgeError {
+  const detail = bridgeError(
     error instanceof TransportError ? error.kind : "unavailable",
   );
+  if (detail.kind !== "too_large") return detail;
+  if (method === "tasks.export")
+    return {
+      ...detail,
+      message:
+        "The patch is too large to export. Split the change into smaller tasks.",
+    };
+  if (method === "tasks.start")
+    return {
+      ...detail,
+      message:
+        "The task instructions are too large to start. Shorten the prompt or expanded instructions and try a shorter task.",
+    };
+  return detail;
 }

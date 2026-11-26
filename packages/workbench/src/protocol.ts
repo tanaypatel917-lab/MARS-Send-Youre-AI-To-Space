@@ -162,6 +162,8 @@ export const ExportParamsSchema = z
     task_id: id,
     expected_revision: id,
     expected_patch_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    review_handoff: z.literal(true).optional(),
+    review_destination: z.string().min(1).max(4096).optional(),
   })
   .strict();
 export type ExportParams = z.infer<typeof ExportParamsSchema>;
@@ -439,7 +441,10 @@ export const RpcRequestSchema = z.discriminatedUnion("method", [
       .strict(),
   ),
   method("tasks.checkpoint", taskId),
-  method("tasks.verification", taskId),
+  method(
+    "tasks.verification",
+    taskId.extend({ include_check_logs: z.literal(true).optional() }),
+  ),
   method("tasks.export", ExportParamsSchema),
   method(
     "tasks.restore",

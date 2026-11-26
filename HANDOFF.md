@@ -42,6 +42,12 @@ State: **scripted real-Docker service path verified; model-backed export in the 
 - Unsafe Docker mount paths (including macOS `Application Support`) use a private `0700`, mount-safe state root at `~/.mars/desktop-workbench`. If no safe root exists, verification reports unavailable without enabling a sandbox. Main resolves the Docker executable and local endpoint (`DOCKER_HOST`, else the active context) and propagates them through runtime/service; sandbox Docker invocations receive only a validated local Unix socket (Windows named pipe only on Windows), not the ambient credential environment.
 - The example always enables explicit verified-only export, including degraded/no-image startup; other projects retain their existing policy. The gated service test proves baseline failure/export refusal, a fixed candidate's passing verdict and exact exported patch SHA-256, and stale-candidate export refusal. This is scripted-model evidence, not a model-backed UI acceptance claim.
 
+## Desktop: reviewer diff, checks and patch handoff (PR #266)
+
+- Desktop shows per-check outcomes and redacted sandbox excerpts beside the diff. VS Code can also request logs without adding output to standard verdict records.
+- Native Save checks the exact verified patch, successful round trip and matching source snapshot, then saves the patch and receipt outside the source. Host-side preparation is not a training export. MARS never applies or pushes the patch.
+- PR CI packages all preview installers and smoke-tests the installed Linux app; only main and manual runs publish downloads. Native save-dialog acceptance is separate from those checks.
+
 ## Milestone 2: shared research allowance (first offline slice)
 
 - Research admission (`packages/research/src/service.ts`, `taskResearchCommitment`) now checks the sum across a task's jobs, not each job alone: queued/running jobs hold their whole `max_tokens`/`max_usd`, finished jobs count reported usage (or their whole budget when usage was never reported), never-started jobs count nothing. The check runs inside the same immediate SQLite transaction as the insert, so concurrent submits cannot both fit, and it is derived from durable rows, so retries, lease handovers and restarts neither double-count nor refill. A job that would exceed the task allowance is refused with `budget_exceeded`.

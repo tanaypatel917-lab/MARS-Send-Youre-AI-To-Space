@@ -175,6 +175,7 @@ export interface VerificationBadge {
   verdict: VerificationVerdict | null;
   reasons: string[];
   diagnostics: string[];
+  checkLogs?: { label: string; output: string; captureTruncated?: true }[];
   recorded_at: string | null;
   /** Raw SHA-256 of the candidate patch bytes the badge speaks about. */
   patch_sha256: string | null;

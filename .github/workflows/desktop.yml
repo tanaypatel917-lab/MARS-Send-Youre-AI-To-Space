@@ -55,11 +55,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb "$PWD"/apps/shell/dist/installers/*.deb
           MARS_PACKAGED_ELECTRON=/opt/mars/mars bun test apps/shell/test/electron-xvfb.test.ts -t 'installed MARS'
-      # Each run's three installers are about 1 GB; uploading them for every PR
-      # push exhausts the account's artifact storage, so only main publishes
-      # them (pushes and manual runs from main).
-      - if: github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        # PRs verify the installers without publishing preview downloads.
+        if: github.event_name != 'pull_request'
         with:
           name: ${{ matrix.artifact }}
           path: apps/shell/dist/installers/*

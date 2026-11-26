@@ -719,6 +719,85 @@ describe("verification badge", () => {
     ctx.controller.dispose();
   });
 
+  test("failed host checks show opted-in excerpts only for the matching candidate", async () => {
+    const ctx = setup();
+    ctx.server.tasks.set("task-1", makeTask({ status: "completed" }));
+    const reason = "Host check sum exited 1";
+    const failed = {
+      ...verdict(workspace.revision),
+      verdict: "failed",
+      verified: false,
+      reasons: [reason],
+      checks: [
+        {
+          ...verdict(workspace.revision).checks[0],
+          kind: "host_test",
+          check_id: "sum",
+          status: "failed",
+          reason,
+          exit_code: 1,
+        },
+      ],
+    };
+    let logPatch = digest;
+    let rejectOptIn = false;
+    ctx.server.on("tasks.verification", (params) => {
+      if (params.include_check_logs && rejectOptIn)
+        throw new RpcError("protocol", "unknown parameter", "invalid_params");
+      return {
+        candidate: workspace,
+        state: "failed",
+        record: failed,
+        records: [failed],
+        reasons: [reason],
+        patch_sha256: params.include_check_logs ? logPatch : digest,
+        ...(params.include_check_logs
+          ? {
+              check_logs: [
+                {
+                  run_id: failed.run_id,
+                  checks: [
+                    {
+                      check_index: 0,
+                      output_tail: "1 fail",
+                      capture_truncated: true,
+                    },
+                  ],
+                },
+              ],
+            }
+          : {}),
+      };
+    });
+    await ctx.controller.handleMessage({ type: "ready" });
+    await ctx.controller.handleMessage({
+      type: "selectTask",
+      taskId: "task-1",
+    });
+    const refresh = async () => {
+      await ctx.controller.handleMessage({ type: "refresh" });
+      await flush();
+    };
+    expect(ctx.last().selected?.verification).toMatchObject({
+      state: "failed",
+      checkLogs: [{ label: "sum", output: "1 fail", captureTruncated: true }],
+    });
+    logPatch = "c".repeat(64);
+    await refresh();
+    expect(ctx.last().selected?.verification).toMatchObject({
+      state: "failed",
+    });
+    expect(ctx.last().selected?.verification?.checkLogs).toBeUndefined();
+    logPatch = digest;
+    rejectOptIn = true;
+    await refresh();
+    expect(ctx.last().selected?.verification).toMatchObject({
+      state: "failed",
+    });
+    expect(ctx.last().selected?.verification?.checkLogs).toBeUndefined();
+    ctx.controller.dispose();
+  });
+
   test("Verified only for the exact candidate; a moved candidate shows stale with the bound revision", async () => {
     const ctx = setup();
     ctx.server.tasks.set("task-1", makeTask({ status: "completed" }));

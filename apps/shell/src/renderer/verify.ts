@@ -1,6 +1,16 @@
 import type { ArtifactRef } from "@mars/contracts";
 import type { ArtifactData } from "../shared/methods";
 
+export async function sha256Hex(
+  bytes: Uint8Array<ArrayBuffer>,
+  subtle: SubtleCrypto,
+): Promise<string> {
+  const digest = new Uint8Array(await subtle.digest("SHA-256", bytes));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+}
+
 export async function verifyArtifact(
   ref: ArtifactRef,
   data: ArtifactData,
@@ -23,11 +33,5 @@ export async function verifyArtifact(
   if (bytes.byteLength !== ref.byte_length) return false;
   const digestInput = new Uint8Array(bytes.byteLength);
   digestInput.set(bytes);
-  const digest = new Uint8Array(
-    await subtle.digest("SHA-256", digestInput.buffer),
-  );
-  const hex = [...digest]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-  return hex === ref.sha256;
+  return (await sha256Hex(digestInput, subtle)) === ref.sha256;
 }
