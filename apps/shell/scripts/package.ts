@@ -204,17 +204,25 @@ async function packageMac(stage: string) {
   run("codesign", ["--verify", "--deep", "--strict", bundle]);
   await symlink("/Applications", join(volume, "Applications"));
   const file = join(output, `MARS-${version}-macOS-${process.arch}.dmg`);
-  await rm(file, { force: true });
-  run("hdiutil", [
-    "create",
-    "-volname",
-    "MARS",
-    "-srcfolder",
-    volume,
-    "-format",
-    "UDZO",
-    file,
-  ]);
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    await rm(file, { force: true });
+    try {
+      run("hdiutil", [
+        "create",
+        "-volname",
+        "MARS",
+        "-srcfolder",
+        volume,
+        "-format",
+        "UDZO",
+        file,
+      ]);
+      break;
+    } catch (error) {
+      if (attempt === 5) throw error;
+      await Bun.sleep(2000 * attempt);
+    }
+  }
 }
 
 async function packageLinux(stage: string) {

@@ -270,11 +270,15 @@ test("mars_grep checkTool blocks searching outside an active run", async () => {
   }
 });
 
-function sse(delta: Record<string, unknown>, reason = "stop") {
+function sse(
+  delta: Record<string, unknown>,
+  reason = "stop",
+  completionTokens = 12,
+) {
   return new Response(
     [
       `data: ${JSON.stringify({ choices: [{ delta, finish_reason: null }] })}\n\n`,
-      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: reason }], usage: { prompt_tokens: 50, completion_tokens: 12 } })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: reason }], usage: { prompt_tokens: 50, completion_tokens: completionTokens } })}\n\n`,
       "data: [DONE]\n\n",
     ].join(""),
     { headers: { "content-type": "text/event-stream" } },
@@ -3146,6 +3150,54 @@ test("a failed run reports a distinct failure_code", async () => {
   }
 }, 30000);
 
+test("an SDK error before streaming fails separately from an empty reply", async () => {
+  const f = await fixture(200_000);
+  const originalPrompt = AgentSession.prototype.prompt;
+  const sdkError = "SDK stream setup failed";
+  const prompt = spyOn(AgentSession.prototype, "prompt").mockImplementation(
+    async function (this: AgentSession, ...args) {
+      if (args[0] !== "Fail before streaming")
+        return originalPrompt.apply(this, args);
+      const stream = this.agent.streamFn;
+      this.agent.streamFn = () => {
+        throw new Error(sdkError);
+      };
+      try {
+        return await originalPrompt.apply(this, args);
+      } finally {
+        this.agent.streamFn = stream;
+      }
+    },
+  );
+  let requests = 0;
+  try {
+    const session = await f.open({
+      task: { ...f.task, budget: { ...f.task.budget, max_tokens: 100_000 } },
+      fetch: async () =>
+        ++requests === 1 ? sse({ content: "Earlier response." }) : sse({}),
+    });
+    expect(await session.run("Warm up")).toMatchObject({
+      status: "completed",
+      content: "Earlier response.",
+    });
+    expect(await session.run("Fail before streaming")).toMatchObject({
+      status: "failed",
+      failure_code: "sdk_error",
+      content: "",
+    });
+    expect(requests).toBe(1);
+    expect(await session.run("Follow up")).toMatchObject({
+      status: "failed",
+      failure_code: "no_response",
+      content: "",
+    });
+    expect(requests).toBe(5);
+  } finally {
+    prompt.mockRestore();
+    await f.cleanup();
+  }
+});
+
 test("bridge sends later developer reminders as user turns and hides workspace roots", () => {
   const root = "/host/private/work/abc/workspace";
   const request = toChatRequest(
@@ -3259,6 +3311,234 @@ for (const [label, contextWindow, config, check] of [
       await f.cleanup();
     }
   });
+
+for (const [reason, content, warmup] of [
+  ["length", "Checking the file.", false],
+  ["max_tokens", "Checking the file.", false],
+  ["length", "", false],
+  ["max_tokens", "", false],
+  ["length", "", true],
+] as const) {
+  test(`a ${reason} response with ${content ? "text and tools" : "only tools"} pauses without running tools or retrying${warmup ? " after an earlier turn" : ""}`, async () => {
+    const f = await fixture(200_000, { maxOutputTokens: 32_000 });
+    let requests = 0;
+    let reads = 0;
+    try {
+      const session = await f.open({
+        tools: {
+          ...f.tools,
+          read: async () => {
+            reads++;
+            return Buffer.from("Hello");
+          },
+        },
+        fetch: async (_url, init) => {
+          requests++;
+          if (warmup && requests === 1)
+            return sse({ content: "Earlier response" });
+          const request = JSON.parse(String(init?.body));
+          return sse(
+            {
+              ...(content ? { content } : {}),
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "capped_read",
+                  type: "function",
+                  function: {
+                    name: "mars_read",
+                    arguments: JSON.stringify({ path: "greeting.txt" }),
+                  },
+                },
+              ],
+            },
+            reason,
+            request.max_tokens,
+          );
+        },
+      });
+      if (warmup) {
+        expect(await session.run("Warm up")).toMatchObject({
+          status: "completed",
+          content: "Earlier response",
+        });
+      }
+      const outcome = await session.run(f.task.request);
+      expect(outcome).toMatchObject({
+        status: "paused",
+        content,
+        usage: { reserved_tokens: f.task.budget.max_tokens },
+      });
+      expect(requests).toBe(warmup ? 2 : 1);
+      expect(reads).toBe(0);
+      expect(JSON.stringify(session.journalSnapshot())).not.toContain(
+        "capped_read",
+      );
+    } finally {
+      await f.cleanup();
+    }
+  });
+}
+
+for (const scenario of [
+  "fresh",
+  "after an earlier run",
+  "successful retry",
+] as const) {
+  test(`runtime handles an empty normal stop: ${scenario}`, async () => {
+    const f = await fixture(200_000);
+    let requests = 0;
+    const warmup = scenario === "after an earlier run";
+    const succeeds = scenario === "successful retry";
+    try {
+      const session = await f.open({
+        task: { ...f.task, budget: { ...f.task.budget, max_tokens: 100_000 } },
+        fetch: async () => {
+          requests++;
+          if (warmup && requests === 1)
+            return sse({ content: "Earlier response" });
+          if (succeeds && requests === 2)
+            return sse({ content: "Recovered response." });
+          return sse({});
+        },
+      });
+      if (warmup)
+        expect(await session.run("Warm up")).toMatchObject({
+          status: "completed",
+          content: "Earlier response",
+        });
+      expect(await session.run(f.task.request)).toMatchObject(
+        succeeds
+          ? { status: "completed", content: "Recovered response." }
+          : { status: "failed", failure_code: "no_response", content: "" },
+      );
+      expect(requests).toBe(succeeds ? 2 : warmup ? 5 : 4);
+    } finally {
+      await f.cleanup();
+    }
+  });
+}
+
+test("runtime returns the current final reply after SDK tool-result pruning", async () => {
+  const f = await fixture(200_000);
+  const appendMessage = SessionManager.prototype.appendMessage;
+  const append = spyOn(
+    SessionManager.prototype,
+    "appendMessage",
+  ).mockImplementation(function (
+    this: SessionManager,
+    message: Parameters<typeof appendMessage>[0],
+  ) {
+    if (message.role === "toolResult" && message.toolCallId === "pruned_read")
+      message.useless = true;
+    return appendMessage.call(this, message);
+  });
+  const replaceMessages =
+    AgentSession.prototype.replaceMessagesFromSessionContext;
+  const replace = spyOn(
+    AgentSession.prototype,
+    "replaceMessagesFromSessionContext",
+  ).mockImplementation(function (
+    this: AgentSession,
+    messages: Parameters<typeof replaceMessages>[0],
+  ) {
+    // A history rebuild can return equivalent messages as new objects.
+    replaceMessages.call(this, structuredClone(messages));
+  });
+  let requests = 0;
+  try {
+    const session = await f.open({
+      task: { ...f.task, budget: { ...f.task.budget, max_tokens: 100_000 } },
+      tools: {
+        ...f.tools,
+        read: async () => Buffer.from("Discardable result\n".repeat(50)),
+      },
+      fetch: async () => {
+        requests++;
+        if (requests === 1) return sse({ content: "Earlier response." });
+        if (requests === 2)
+          return sse(
+            {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "pruned_read",
+                  type: "function",
+                  function: {
+                    name: "mars_read",
+                    arguments: JSON.stringify({ path: "greeting.txt" }),
+                  },
+                },
+              ],
+            },
+            "tool_calls",
+          );
+        if (requests === 3) return sse({ content: "Current response." });
+        return sse({});
+      },
+    });
+    expect(await session.run("Warm up")).toMatchObject({
+      status: "completed",
+      content: "Earlier response.",
+    });
+    const outcome = await session.run(f.task.request);
+    expect(await readFile(session.journalPath, "utf8")).toContain('"prunedAt"');
+    expect(replace).toHaveBeenCalled();
+    expect(outcome).toMatchObject({
+      status: "completed",
+      content: "Current response.",
+    });
+    expect(await session.run("Follow up")).toMatchObject({
+      status: "failed",
+      failure_code: "no_response",
+      content: "",
+    });
+    expect(requests).toBe(7);
+  } finally {
+    replace.mockRestore();
+    append.mockRestore();
+    await f.cleanup();
+  }
+});
+
+for (const content of ["Checking the file.", ""]) {
+  test(`a capped DeepSeek turn returns ${content ? "only finalized prose" : "empty content, not earlier text"}`, async () => {
+    const modelId = "deepseek-v4-pro";
+    const f = await fixture(200_000, { id: modelId, model: modelId });
+    let requests = 0;
+    try {
+      const session = await f.open({
+        modelId,
+        fetch: async () => {
+          requests++;
+          if (requests === 1) return sse({ content: "Earlier response" });
+          return sse(
+            {
+              content: [content, '<｜DSML｜invoke name="mars_read">'].join(
+                "\n",
+              ),
+            },
+            "length",
+          );
+        },
+      });
+      expect(await session.run("Warm up")).toMatchObject({
+        status: "completed",
+        content: "Earlier response",
+      });
+      expect(await session.run(f.task.request)).toMatchObject({
+        status: "paused",
+        content,
+      });
+      expect(requests).toBe(2);
+      expect(JSON.stringify(session.journalSnapshot())).not.toContain(
+        "｜DSML｜",
+      );
+    } finally {
+      await f.cleanup();
+    }
+  });
+}
 
 test("a file that names the workspace root can be read and exactly edited through the placeholder", async () => {
   const f = await fixture(200_000);

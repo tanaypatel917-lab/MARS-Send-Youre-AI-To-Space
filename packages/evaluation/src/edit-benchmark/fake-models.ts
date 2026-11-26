@@ -121,6 +121,7 @@ interface WireTool {
 }
 
 const decoder = new TextDecoder();
+const writeDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
 const text = (bytes: Uint8Array | undefined) =>
   bytes === undefined ? "" : decoder.decode(bytes);
 
@@ -533,7 +534,7 @@ export function createScriptedEditModel(options: {
             const path =
               typeof args.path === "string"
                 ? args.path.replace(/:[\d,+-]+$/, "")
-                : (/^(?:\*\*\* Update(?: File)?: |\[)([^\]#\n]+)/m.exec(
+                : (/^(?:\*\*\* (?:(?:Add|Delete|Update) File|Update): |\[)([^\]#\n]+)/m.exec(
                     input,
                   )?.[1] ?? "");
             return {
@@ -550,8 +551,14 @@ export function createScriptedEditModel(options: {
         : [],
     );
     const targets = [...task.after.keys()].filter(
-      (path) => text(task.after.get(path)) !== text(task.before.get(path)),
+      (path) =>
+        (editTool === "mars_apply_patch" && !task.before.has(path)) ||
+        text(task.after.get(path)) !== text(task.before.get(path)),
     );
+    if (editTool === "mars_apply_patch") {
+      for (const path of task.before.keys())
+        if (!task.after.has(path)) targets.push(path);
+    }
     for (const path of targets) {
       const events = history.filter((event) => event.path === path);
       const edits = events.filter((event) => event.kind === "edit").length;
@@ -588,6 +595,24 @@ export function createScriptedEditModel(options: {
         if (previous === "wrong_whitespace") continue;
         if (previous !== null && edits >= options.profile.max_attempts)
           return say(`I could not apply the edit to ${path}.`);
+      }
+      if (
+        editTool === "mars_apply_patch" &&
+        (!task.before.has(path) || !task.after.has(path))
+      ) {
+        if (edits > 0 && fault(edits - 1) === null) continue;
+        if (fault(edits) !== null)
+          return call(editTool, {
+            patch: `*** Begin Patch\n*** Update: ${path}\n*** End Patch`,
+          });
+        if (!task.after.has(path))
+          return call(editTool, {
+            patch: `*** Begin Patch\n*** Delete File: ${path}\n*** End Patch`,
+          });
+        return call("mars_write", {
+          path,
+          content: writeDecoder.decode(task.after.get(path)),
+        });
       }
       // Re-read after a failed edit; after a successful one, continue from
       // what the edit applied until the file matches.

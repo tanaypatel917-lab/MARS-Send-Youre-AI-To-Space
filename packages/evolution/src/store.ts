@@ -321,6 +321,19 @@ export class EvolutionStore {
     });
   }
 
+  renewLease(runId: string, token: number, nowMs: number, ttlMs: number): void {
+    const updated = this.db
+      .query(
+        "UPDATE runs SET lease_expires_ms = ?, revision = revision + 1 WHERE run_id = ? AND lease_token = ? AND lease_expires_ms > ?",
+      )
+      .run(nowMs + ttlMs, runId, token, nowMs);
+    if (updated.changes === 0)
+      fail(
+        "stale_lease",
+        `lease token ${token} for run ${runId} is no longer valid`,
+      );
+  }
+
   /** Fencing check: called inside every write transaction made under a lease. */
   assertLease(runId: string, token: number, nowMs: number): void {
     const run = this.getRun(runId);

@@ -13,7 +13,15 @@ Status: **Desktop preview.** `apps/shell` is an Electron window (`electron@44.10
 
 You can browse the workbench and use the **Team chat** demo without a provider key. Team chat contains local sample conversations, not a live team connection; demo messages are not durable.
 
-For a verified patch, choose **Project → Open Verification Example**. Its README describes a small shell-script bug. The composer reports sandbox readiness before you start. If unavailable, use **Project → Set Up Verification Sandbox…**: install/start Docker if needed, then confirm the exact pinned BusyBox image download. This explicit setup is the only image pull; checks run without network access. Start a task with Read, Write and Execute approved and **Amount totals** selected, inspect the fail/pass verdict and diff, then export the verified patch. Protected tests live outside the project; later candidate edits invalidate the verdict and block export. Other projects keep execution disabled unless connected to a separately configured host.
+For a verified patch, choose **Project → Open Verification Example**. Its README describes a small shell-script bug. The composer reports sandbox readiness before you start. If unavailable, use **Project → Set Up Verification Sandbox…**: install/start Docker if needed, then confirm the exact pinned BusyBox image download. This explicit setup is the only image pull; checks run without network access. Start a task with Read, Write and Execute approved and **Amount totals** selected, inspect the fail/pass verdict and diff, then export the verified patch. Protected tests live outside the project; later candidate edits invalidate the verdict and block export.
+
+## Set up verification for your project
+
+When you open a project folder with a `test`, `lint`, or `typecheck` script in its root `package.json`, MARS offers to set up those checks. Review each command and approve only scripts from a project you trust; you can skip individual checks or cancel the setup. Nothing from the project runs during setup. If Docker is ready, MARS checks for the pinned Bun image and asks before downloading it. You can come back to **Project → Set Up Verification Sandbox…** to review updated scripts, check the sandbox, or remove the project's checks. Unconfigured projects keep Execute disabled in the managed workbench.
+
+If Docker was previously unavailable or you switched Docker contexts, **Check Sandbox** refreshes the composer without clearing drafts. If a task is running, repeat the check after it finishes; MARS does not pause it just to refresh sandbox status.
+
+After setup, approve Execute and select the saved checks when starting a task. MARS saves the approved manifest outside the project and uses it when checking the candidate; a candidate change to `package.json` fails that check. Unlike the example's independent tests, project test code can still be changed by a candidate. These scripts must work with the Bun image and the files in the isolated project copy: MARS does not copy `node_modules`, install dependencies, or give checks network access.
 
 ## Add a verified extension
 

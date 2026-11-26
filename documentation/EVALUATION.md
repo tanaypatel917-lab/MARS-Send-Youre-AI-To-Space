@@ -165,8 +165,8 @@ plus an accepted prompt proposal or a different model; all remain unverified.
 The per-request timeout is now configurable per model with `requestTimeoutMs`
 in `models.json` (1 000 ms to 1 h; default 60 000 ms, always bounded by the
 task deadline), and a failed run reports a `failure_code` (`provider_timeout`,
-`deadline_exceeded`, `budget_exhausted`, `provider_error`, `no_response`) in its
-error and in the workbench `runtime.result` event.
+`deadline_exceeded`, `budget_exhausted`, `provider_error`, `sdk_error`,
+`no_response`) in its error and in the workbench `runtime.result` event.
 The per-request output cap is configurable per model with `maxOutputTokens`
 (256 to 1 000 000; default 4 096, always bounded by the task token budget and
 the context window) and applies identically to MARS arms and `omp-stock`. The
@@ -594,6 +594,92 @@ edit attempt per file and retries cleanly (stale-anchor recovery for
 `mars_edit`); these reports are `simulated: true`. CI runs the scripted
 profiles on v1 and one full v2 run (`patch-fluent`, `mars:apply_patch` vs
 `omp-stock`, 288 trials) to exercise the powered verdict path.
+
+### Baseline vs. specialist learning benchmark
+
+Run a no-network smoke from a checkout containing the fixture's pinned history:
+
+```sh
+bun apps/cli/src/main.ts bench learning --offline --seed p2 --out "$HOME/mars-learning-dry-run"
+```
+
+The bundled manifest projects the affected source files from three historical
+MARS fixes and their exact Git parents. The relevant Git objects must already
+be available locally; the suite loader never fetches missing objects. Both
+arms use the same MARS agent, file-only tools with the apply-patch format,
+and execution disabled. A
+host-side check compares the entire projected tree to the fix byte for byte;
+it does not run the historical test suite and can reject equivalent patches.
+The scripted adapters see the answer by design. This smoke tests the pipeline,
+not either model; the dollar amounts and latencies are synthetic.
+
+For a live run, curate a private, representative suite of independent real
+fixes excluded from training and validation before registering the specialist.
+Use the [committed suite](../packages/evaluation/fixtures/learning-benchmark.json)
+as the format example: supply a single-parent fix and its exact parent, a
+clear request, a routing domain/complexity, and the relevant regular text
+files (including any necessary context). Review the projection and make sure
+the named fixes and their variants were not used for training. The loader
+refuses duplicate fix commits, request digests, and changed-content pairs.
+The suite guard checks train/validation IDs, normalized request digests and
+dataset digests against the supplied lineage. It cannot detect paraphrased
+overlaps or contamination in an upstream base model.
+
+```sh
+bun apps/cli/src/main.ts bench learning --print-suite-pin --repo /trusted/repo --suite held-out.json
+sha256sum specialist-lineage.json
+```
+
+Create a plan with those two digests and the exact model IDs from your trusted
+MARS model registry (use immutable served names for the base and specialist;
+the harness does not attest remote server weights). The provider must support
+tool calling and both configurations must match on provider, context/capability,
+request timeout and output cap. Pin the harness revision, provider settings and
+checkpoint version when sharing results. The operator is responsible for matching
+the lineage to the served specialist. Only send approved projections to your provider.
+
+```json
+{
+  "schema": "mars.learning-plan/v1",
+  "suite_sha256": "REPLACE_WITH_SUITE_SHA256",
+  "seed": "pre-registered-seed-1",
+  "budget_per_task": { "max_tokens": 100000, "max_usd": 0.5, "max_duration_ms": 180000 },
+  "max_total_usd": 160,
+  "arms": {
+    "baseline": { "model": "local/base-pinned" },
+    "specialist": { "model": "local/specialist-pinned", "lineage_sha256": "REPLACE_WITH_LINEAGE_SHA256" }
+  }
+}
+```
+
+```sh
+bun apps/cli/src/main.ts bench learning --live --repo /trusted/repo --suite held-out.json \
+  --plan learning-plan.json --training-lineage specialist-lineage.json --out "$HOME/mars-learning-live"
+```
+
+Per-arm overrides are refused. Each pair shares a sampling seed (best effort
+at the serving endpoint); task order and within-pair arm order are seeded.
+The worst-case committed per-task dollar caps must fit under the plan's
+total cap. The reports record Wilson 95% intervals, a paired lift interval,
+provider exclusions, failures, metered cost per verified solve, and time to
+verified patch. Private transcripts are under `transcripts/`; use a fresh
+output directory for each run so its journals cannot be overwritten. SDK
+failures and exhausted empty replies remain eligible, and an exact patch still
+counts as a solve if the runtime fails or pauses afterward. The report keeps
+the runtime outcome separate from patch verification. Provider exclusions can
+bias the comparison; review their counts before interpreting conditional solve rates.
+
+The pre-registered power design uses the exact paired sign test at
+two-sided alpha .05: 40% discordant pairs and 70% of discordances favoring
+the specialist imply a 16-point lift and require at least 129 complete pairs
+for 80% power. Plan more tasks if provider failures are expected. A small or
+underpowered run is exploratory. Routing recommendations keep the base
+model when evidence is inadequate, simulated, or not covered. With full
+coverage and at least 129 complete pairs for a route, more specialist wins
+than losses and a two-sided sign-test p-value below .05 mean review, not
+promotion. The Markdown routing table shows each route's exact two-sided
+sign-test p-value alongside the paired lift interval, which is reported for
+context rather than used as a second gate. No production routing is changed.
 
 ### Evidence-based per-model edit-format selection
 

@@ -1,5 +1,5 @@
 export const DESKTOP_MODEL_CHANNEL = "mars-shell:desktop-model";
-export const MODEL_CHANGED = "mars-shell:model-changed";
+export const WORKBENCH_CHANGED = "mars-shell:workbench-changed";
 
 export type ModelSettingsResult =
   | "refused"

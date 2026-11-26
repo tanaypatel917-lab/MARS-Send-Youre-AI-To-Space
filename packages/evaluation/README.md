@@ -9,6 +9,10 @@ holdout tasks or accounting; every verdict is derived from Harbor's on-disk
 
 ## Architecture
 
+The separate [learning-loop benchmark](../../documentation/EVALUATION.md#baseline-vs-specialist-learning-benchmark)
+compares two served checkpoints with the same MARS tools, checker and budget on
+pinned real-fix snapshots.
+
 ```
 ComparisonManifest (mars.evaluation-comparison/v1, zod, immutable artifact)
         │ submitComparison(context, manifestRef, budget)

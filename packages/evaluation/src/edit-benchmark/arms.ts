@@ -725,7 +725,19 @@ async function runOmpStock(
   };
   let editCalls = 0;
   let editFailures = 0;
+  let replyId: string | undefined;
+  let capped = false;
   const unsubscribe = session.subscribe((event) => {
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      replyId = event.message.responseId;
+      capped = false;
+    }
+    if (
+      event.type === "turn_end" &&
+      event.message.role === "assistant" &&
+      event.message.stopReason === "length"
+    )
+      capped = true;
     if (event.type === "tool_execution_end" && event.toolName === "edit") {
       editCalls += 1;
       if (event.isError) editFailures += 1;
@@ -743,16 +755,19 @@ async function runOmpStock(
       );
     await session.prompt(input.task.instruction);
     await session.flushToDisk();
-    const last = [...session.messages]
-      .reverse()
-      .find((message) => message.role === "assistant");
+    const settled = session.getLastAssistantMessage();
+    const stopReason = capped
+      ? "length"
+      : replyId !== undefined && settled?.responseId === replyId
+        ? settled.stopReason
+        : undefined;
     const status: TrialResult["status"] =
       controller.signal.aborted ||
-      last?.role !== "assistant" ||
-      last.stopReason === "error" ||
-      last.stopReason === "aborted"
+      !stopReason ||
+      stopReason === "error" ||
+      stopReason === "aborted"
         ? "failed"
-        : last.stopReason === "length"
+        : stopReason === "length"
           ? "paused"
           : "completed";
     return {

@@ -49,6 +49,6 @@ export type AssistantResult =
       setup?: SetupSummary;
     };
 export type AssistantApi = {
-  onModelChanged?(refresh: () => void): void;
+  onWorkbenchChanged?(refresh: () => void): void;
   request(payload: AssistantRequest): Promise<AssistantResult>;
 };
