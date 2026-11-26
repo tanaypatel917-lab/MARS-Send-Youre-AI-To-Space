@@ -3,6 +3,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  BUILTIN_MODELS,
+  BUILTIN_PROVIDERS,
+  createOpenAICompatibleAdapter,
+} from "@mars/providers";
 import { ProviderError } from "../../../packages/providers/src/models/errors";
 import {
   classifyProviderFailure,
@@ -31,7 +36,10 @@ test("provider failures map to actionable model health", () => {
   expect(classifyProviderFailure(fail(401)).issue).toBe("auth_failed");
   expect(classifyProviderFailure(fail(403)).issue).toBe("auth_failed");
   expect(classifyProviderFailure(fail(402)).issue).toBe("credits");
-  expect(classifyProviderFailure(fail(undefined)).issue).toBe("network");
+  expect(
+    classifyProviderFailure(fail(undefined, { retryable: true })).issue,
+  ).toBe("network");
+  expect(classifyProviderFailure(fail(undefined)).issue).toBe("unavailable");
   expect(classifyProviderFailure(fail(504, { timedOut: true })).issue).toBe(
     "network",
   );
@@ -315,17 +323,28 @@ test("a Chat handoff that replaces an unsaved task request can restore it", asyn
   expect(restore()).toBeUndefined();
 });
 
-test("a provider reply that is not JSON keeps its status and is not reported as unreachable", async () => {
-  const { readJson } = await import(
-    "../../../packages/providers/src/models/http"
-  );
-  const error = await readJson(
-    "openrouter",
-    new Response("<html>", { status: 200 }),
-    new AbortController().signal,
-  ).catch((caught: unknown) => caught);
-  expect(classifyProviderFailure(error).issue).toBe("unavailable");
-});
+test.each(["<html>", '{"choices":[{}]}', '{"error":{"message":"failed"}}'])(
+  "a malformed or unclassified provider reply is not reported as unreachable: %s",
+  async (body) => {
+    const provider = BUILTIN_PROVIDERS.find(
+      (entry) => entry.id === "openrouter",
+    );
+    const model = BUILTIN_MODELS.find(
+      (entry) => entry.id === "openrouter/free",
+    );
+    if (!provider || !model) throw new Error("Missing OpenRouter free model");
+    const adapter = createOpenAICompatibleAdapter(provider, {
+      env: { OPENROUTER_API_KEY: "fixture" },
+      fetch: async () => new Response(body, { status: 200 }),
+    });
+    const error = await adapter
+      .complete({ messages: [{ role: "user", content: "Hi" }] }, model)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ProviderError);
+    if (body === "<html>") expect(error).toHaveProperty("status", 200);
+    expect(classifyProviderFailure(error).issue).toBe("unavailable");
+  },
+);
 
 test("a rejected key in attach mode points to the launch environment", async () => {
   const directory = await mkdtemp(join(tmpdir(), "mars-attach-"));

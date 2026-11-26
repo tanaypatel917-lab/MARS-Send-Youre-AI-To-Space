@@ -43,6 +43,7 @@ export function classifyProviderFailure(error: unknown): {
     name?: unknown;
     status?: unknown;
     timedOut?: unknown;
+    retryable?: unknown;
     retryAfterMs?: unknown;
   };
   if (failure.name !== "ProviderError") return { issue: "unavailable" };
@@ -58,7 +59,8 @@ export function classifyProviderFailure(error: unknown): {
   }
   if (status === 401 || status === 403) return { issue: "auth_failed" };
   if (status === 402) return { issue: "credits" };
-  if (status === 0 || failure.timedOut === true) return { issue: "network" };
+  if (failure.timedOut === true || (status === 0 && failure.retryable === true))
+    return { issue: "network" };
   return { issue: "unavailable" };
 }
 
@@ -75,8 +77,9 @@ const FAILURE_MESSAGE: Record<ChatIssue, string> = {
     "The free model did not return a reply. Your draft is kept. Retry, or check Settings → Setup diagnostics if this keeps happening.",
 };
 
-const ATTACHED_AUTH_FAILED =
-  "OpenRouter rejected this API key. Your draft is kept. Set a valid OPENROUTER_API_KEY in the environment that launches MARS, then restart the app.";
+const ATTACHED_KEY_SETUP =
+  "Set a valid OPENROUTER_API_KEY in the environment that launches MARS, then restart the app.";
+const ATTACHED_AUTH_FAILED = `OpenRouter rejected this API key. Your draft is kept. ${ATTACHED_KEY_SETUP}`;
 
 async function complete(
   messages: AssistantSession["messages"],
@@ -146,8 +149,7 @@ export function createAssistant(options: Options) {
       ) {
         return {
           ok: false,
-          error:
-            "That looks like an OpenRouter API key. Remove it from your message and add it under Settings → Model connection instead. Nothing was sent.",
+          error: `That looks like an OpenRouter API key. Remove it from your message. In installed MARS, add it under Settings → Model connection. In attach mode: ${ATTACHED_KEY_SETUP} Nothing was sent.`,
         };
       }
       let context: Context;
