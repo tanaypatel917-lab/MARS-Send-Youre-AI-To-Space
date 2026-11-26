@@ -678,17 +678,17 @@ export class EvolutionService {
         Math.min(deadline_ms, now + budget.max_duration_ms) - now,
       );
       // Keep the run lease alive while a long evaluation runs; losing it aborts.
+      this.store.assertLease(runId, lease, this.now());
       const lost = new AbortController();
       const heartbeat = setInterval(
         () => {
           try {
-            const token = this.store.acquireLease(
+            this.store.renewLease(
               runId,
-              this.options.holder,
+              lease,
               this.now(),
               this.options.leaseTtlMs,
             );
-            if (token !== lease) lost.abort();
           } catch {
             lost.abort();
           }
@@ -706,6 +706,7 @@ export class EvolutionService {
         await verifyControlDigests(control.control_digests, "after evaluation");
       } finally {
         clearInterval(heartbeat);
+        this.store.assertLease(runId, lease, this.now());
       }
       if (
         outcome.evaluator_digest !== control.evaluator_digest ||
