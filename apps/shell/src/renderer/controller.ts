@@ -560,16 +560,11 @@ export function createController(
   };
 
   const refreshSetup = async () => {
-    if (!assistant || !assistantLoaded) return;
+    if (!assistant?.setup) return;
     try {
-      const result = await assistant.request({ action: "load" });
-      if (
-        !result.ok ||
-        !result.setup ||
-        result.workspace !== assistantWorkspace
-      )
-        return;
-      assistantState = { ...assistantState, setup: result.setup };
+      const setup = await assistant.setup();
+      if (!setup) return;
+      assistantState = { ...assistantState, setup };
       if (page === "settings") render();
     } catch {}
   };

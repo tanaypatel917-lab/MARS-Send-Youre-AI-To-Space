@@ -1,5 +1,8 @@
 import { fail } from "@mars/team-chat";
-import { ASSISTANT_CHANNEL } from "../shared/assistant";
+import {
+  ASSISTANT_CHANNEL,
+  ASSISTANT_SETUP_CHANNEL,
+} from "../shared/assistant";
 import { BRIDGE_CHANNEL, bridgeFailure } from "../shared/methods";
 import {
   PATCH_HANDOFF_CHANNEL,
@@ -53,7 +56,8 @@ function trustedSender(event: IpcEventLike, policy: SenderPolicy): boolean {
 
 export function registerAssistantBridge(
   ipcMain: IpcMainLike,
-  assistant: ReturnType<typeof createAssistant>,
+  assistant: Pick<ReturnType<typeof createAssistant>, "call"> &
+    Partial<Pick<ReturnType<typeof createAssistant>, "setup">>,
   options: SenderPolicy,
 ): void {
   ipcMain.handle(ASSISTANT_CHANNEL, async (event, payload) => {
@@ -63,6 +67,14 @@ export function registerAssistantBridge(
       return await assistant.call(payload);
     } catch {
       return { ok: false, error: "Chat is unavailable. Please try again." };
+    }
+  });
+  ipcMain.handle(ASSISTANT_SETUP_CHANNEL, async (event) => {
+    if (!trustedSender(event, options)) return undefined;
+    try {
+      return await assistant.setup?.();
+    } catch {
+      return undefined;
     }
   });
 }

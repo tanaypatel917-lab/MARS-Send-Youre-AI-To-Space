@@ -10,7 +10,7 @@ import {
   type AssistantResult,
   type AssistantSession,
 } from "../shared/assistant";
-import type { ModelHealth, ProviderIssue } from "../shared/setup";
+import type { ModelHealth, ProviderIssue, SetupSummary } from "../shared/setup";
 import { readHistory, saveTurn } from "./assistant-history";
 import type { SetupJournal } from "./setup-journal";
 
@@ -133,6 +133,9 @@ export function createAssistant(options: Options) {
     health = { state: "unchecked" };
   };
   return {
+    async setup(): Promise<SetupSummary | undefined> {
+      return options.journal?.snapshot();
+    },
     async call(payload: unknown): Promise<AssistantResult> {
       const parsed = AssistantRequestSchema.safeParse(payload);
       if (!parsed.success) return { ok: false, error: "Invalid chat request." };

@@ -372,8 +372,8 @@ test("opening Settings refreshes pilot progress from the journal", async () => {
         configured: true,
         workspace: "scope",
         canConfigure: true,
-        setup,
       }),
+      setup: async () => setup,
     },
   );
   await ctl.load();

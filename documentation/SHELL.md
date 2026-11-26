@@ -4,7 +4,7 @@ Status: **Desktop preview.** `apps/shell` is an Electron window (`electron@44.10
 
 ## Install and open
 
-1. Sign in to GitHub, open a successful run of [Desktop installers](https://github.com/tanaypatel917-lab/MARS-Send-Youre-AI-To-Space/actions/workflows/desktop.yml) from a push to main or a manual run (pull requests build but do not upload installers), and download and unzip the artifact for your computer. Downloads are kept for 30 days; if no run still has them, use **Run workflow** to publish a fresh set:
+1. Sign in to GitHub, open a successful run of [Desktop installers](https://github.com/tanaypatel917-lab/MARS-Send-Youre-AI-To-Space/actions/workflows/desktop.yml) from a push to main or a manual run (pull requests build but do not upload installers), and download and unzip the artifact for your computer. Downloads are kept for 14 days. If no run still has them, ask a maintainer (anyone with write access to the repository) to use **Run workflow** to publish a fresh set:
    - **Mac:** `MARS-macOS-Apple-Silicon` (M-series) or `MARS-macOS-Intel`. Open the disk image, drag MARS to Applications, then open MARS. These preview builds are ad-hoc signed, not Apple-notarized. If Gatekeeper blocks a trusted build, use **System Settings → Privacy & Security → Open Anyway** after trying to launch it. Managed Macs may prohibit this.
    - **Ubuntu/Debian (x64):** `MARS-Ubuntu-Debian-x64`. Open the `.deb` in your package installer and launch MARS from the applications menu. If your distribution has no graphical package installer, use `sudo apt install ./MARS-0.0.1-linux-amd64.deb`.
    - There is no Windows installer.

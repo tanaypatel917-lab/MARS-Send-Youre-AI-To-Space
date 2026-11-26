@@ -313,7 +313,7 @@ test.each([false, true])(
     );
     expect(button("Tasks")?.getAttribute("aria-pressed")).toBe("false");
     button(configured ? "Manage API key" : "Add API key")?.click();
-    expect(calls).toEqual(["load", "load", "settings"]);
+    expect(calls).toEqual(["load", "settings"]);
     expect(
       findAll(doc.root, (el) => el.getAttribute("type") === "password"),
     ).toHaveLength(0);
