@@ -184,8 +184,9 @@ function pairedInterval(wins: number, losses: number, n: number) {
 }
 
 type Pair = Record<Arm, Outcome>;
+type PairedResult = Record<Arm, Pick<Outcome, "solved" | "provider_failure">>;
 
-function paired(pairs: Pair[]) {
+function paired(pairs: PairedResult[]) {
   const complete = pairs.filter(
     ({ baseline, specialist }) =>
       !baseline.provider_failure && !specialist.provider_failure,
@@ -207,6 +208,32 @@ function paired(pairs: Pair[]) {
     ci_95: n ? pairedInterval(wins, losses, n) : null,
     sign_test_p_two_sided: n ? exactSignTest(wins, losses).p_two_sided : null,
     underpowered: n < MIN_POWERED_TASKS,
+  };
+}
+
+export function learningRouteEvidence(
+  mode: "live" | "offline",
+  group: PairedResult[],
+) {
+  const evidence = paired(group);
+  const reason =
+    mode === "offline"
+      ? "simulated"
+      : evidence.underpowered
+        ? "insufficient_complete_pairs"
+        : evidence.excluded_provider_pairs
+          ? "incomplete_provider_coverage"
+          : evidence.wins <= evidence.losses ||
+              (evidence.sign_test_p_two_sided ?? 1) >= POWER_DESIGN.alpha
+            ? "positive_lift_not_established"
+            : "positive_lift_candidate_for_review";
+  return {
+    recommendation:
+      reason === "positive_lift_candidate_for_review"
+        ? ("review_specialist" as const)
+        : ("stay_on_base" as const),
+    reason,
+    ...evidence,
   };
 }
 
@@ -382,29 +409,10 @@ export async function runLearningBenchmark(
     paired: paired(rows.map(({ outcomes }) => outcomes)),
     routing: [...routes]
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([route, group]) => {
-        const evidence = paired(group);
-        const reason =
-          options.mode === "offline"
-            ? "simulated"
-            : evidence.underpowered
-              ? "insufficient_complete_pairs"
-              : evidence.excluded_provider_pairs
-                ? "incomplete_provider_coverage"
-                : (evidence.ci_95?.lower ?? 0) <= 0 ||
-                    (evidence.sign_test_p_two_sided ?? 1) >= POWER_DESIGN.alpha
-                  ? "positive_lift_not_established"
-                  : "positive_lift_candidate_for_review";
-        return {
-          route,
-          recommendation:
-            reason === "positive_lift_candidate_for_review"
-              ? "review_specialist"
-              : "stay_on_base",
-          reason,
-          ...evidence,
-        };
-      }),
+      .map(([route, group]) => ({
+        route,
+        ...learningRouteEvidence(options.mode, group),
+      })),
     tasks: rows,
   };
 }

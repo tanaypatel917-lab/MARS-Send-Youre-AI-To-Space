@@ -672,8 +672,11 @@ two-sided alpha .05: 40% discordant pairs and 70% of discordances favoring
 the specialist imply a 16-point lift and require at least 129 complete pairs
 for 80% power. Plan more tasks if provider failures are expected. A small or
 underpowered run is exploratory. Routing recommendations keep the base
-model when evidence is inadequate, simulated, or not covered; a positive
-signal means review, not promotion. No production routing is changed.
+model when evidence is inadequate, simulated, or not covered. With full
+coverage and at least 129 complete pairs for a route, more specialist wins
+than losses and a two-sided sign-test p-value below .05 mean review, not
+promotion. The paired lift interval is reported for context, not used as a
+second gate. No production routing is changed.
 
 ### Evidence-based per-model edit-format selection
 
