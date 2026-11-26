@@ -1,5 +1,5 @@
 import { accessSync, constants, statSync } from "node:fs";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 
 const fallbackPaths = [
   "/usr/local/bin/docker",
@@ -7,6 +7,16 @@ const fallbackPaths = [
   "/Applications/Docker.app/Contents/Resources/bin/docker",
   "/usr/bin/docker",
 ];
+
+export function dockerHelperPath(executable: string, path: string | undefined) {
+  return [
+    ...new Set([
+      ...(path ?? "").split(delimiter).filter(Boolean),
+      dirname(executable),
+      ...fallbackPaths.map(dirname),
+    ]),
+  ].join(delimiter);
+}
 
 function isExecutable(path: string): boolean {
   try {

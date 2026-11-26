@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { isAbsolute } from "node:path";
-import { isLocalDockerHost } from "./docker-host";
+import { isLocalDockerHost, isSafeDockerWorkspacePath } from "./docker-host";
 import {
   DockerSandboxPrerequisiteError,
   DockerSandboxRootUserError,
@@ -79,11 +79,7 @@ export function buildDockerRunArgs(
     throw new TypeError("Invalid Docker container name");
   if (containerName !== `mars-ws-${request.runId}`)
     throw new TypeError("Container name must match the run id");
-  if (
-    !isAbsolute(request.workspaceDir) ||
-    !/^[A-Za-z0-9._/-]+$/.test(request.workspaceDir) ||
-    request.workspaceDir.split("/").includes("..")
-  ) {
+  if (!isSafeDockerWorkspacePath(request.workspaceDir)) {
     throw new TypeError("Unsafe Docker workspace mount path");
   }
   if (!SAFE_LABEL_PATTERN.test(request.runId))

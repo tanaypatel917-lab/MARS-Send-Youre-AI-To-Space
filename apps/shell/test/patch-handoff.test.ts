@@ -3,6 +3,7 @@ import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  type PatchExport,
   ReviewVerificationViewSchema,
   VerificationViewSchema,
 } from "@mars/contracts";
@@ -19,9 +20,14 @@ import {
   registerPatchHandoff,
 } from "../src/main/ipc";
 import { createPatchHandoff } from "../src/main/patch-handoff";
+import { createManagedWorkbenchBridge } from "../src/main/session";
 import { createLoopbackTransport } from "../src/main/transport";
 import { createController } from "../src/renderer/controller";
-import { BRIDGE_CHANNEL, bridgeFailure } from "../src/shared/methods";
+import {
+  type ArtifactData,
+  BRIDGE_CHANNEL,
+  bridgeFailure,
+} from "../src/shared/methods";
 import {
   PATCH_HANDOFF_CHANNEL,
   type PatchHandoffResult,
@@ -71,6 +77,135 @@ test("renderer export cannot forward a destination to the workbench", async () =
   expect(await ipc(fixture.owner, request)).toEqual(response);
   expect(calls).toEqual([request]);
 });
+
+test.each(["project", "sandbox"] as const)(
+  "a %s change while choosing a destination cancels the patch handoff",
+  async (kind) => {
+    const calls: unknown[] = [];
+    const bridge = createManagedWorkbenchBridge({
+      connect: () => ({
+        async call(method) {
+          calls.push(method);
+          return bridgeFailure("not_connected");
+        },
+      }),
+      isChanging: () => false,
+      webContents: { reload() {}, send() {} },
+    });
+    const parent = await mkdtemp(join(tmpdir(), "mars-handoff-reconnect-"));
+    try {
+      const selected = Promise.withResolvers<string>();
+      const handoff = createPatchHandoff(
+        bridge.currentBridge,
+        () => selected.promise,
+      );
+      const saving = handoff({
+        task_id: "task",
+        expected_revision: "revision",
+        expected_patch_sha256: "a".repeat(64),
+      });
+      bridge.reconnect(kind);
+      selected.resolve(parent);
+      expect(await saving).toMatchObject({
+        status: "blocked",
+        reason: expect.stringContaining("The source project changed"),
+      });
+      expect(calls).toEqual([]);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  },
+);
+
+test.each(["project", "sandbox"] as const)(
+  "a %s change during patch retrieval blocks saving a verified handoff",
+  async (kind) => {
+    const data = await loadFixtureData();
+    const taskId = "fixture-completed-verified";
+    const detail = data.details[taskId];
+    const record = detail?.verification.record;
+    if (!detail?.diff || !record?.candidate)
+      throw new Error("Missing fixture review");
+    const patch = canonicalPatchBytes(detail.diff);
+    const patchSha = sha256Hex(patch);
+    const exported: PatchExport = {
+      candidate: record.candidate,
+      patch_sha256: patchSha,
+      artifact: {
+        artifact_id: "verified-patch",
+        media_type: "text/x-diff",
+        byte_length: patch.byteLength,
+        sha256: patchSha,
+      },
+      files: detail.diff.files.length,
+      verification: "verified",
+      verified: true,
+      verdict_run_id: record.run_id,
+      handoff: {
+        source_baseline: "matches",
+        destination: "outside_source",
+        verdict: { ...record, patch_sha256: patchSha },
+      },
+      round_trip: { status: "passed", reason: null },
+      unsupported: [],
+    };
+    const artifactData: ArtifactData = {
+      media_type: exported.artifact.media_type,
+      data_base64: patch.toString("base64"),
+    };
+    const artifactRequested = Promise.withResolvers<unknown>();
+    const artifact = Promise.withResolvers<ArtifactData>();
+    const bridge = createManagedWorkbenchBridge({
+      connect: () => ({
+        async call(method, params) {
+          if (method === "tasks.export") return { ok: true, result: exported };
+          if (method === "tasks.artifact") {
+            artifactRequested.resolve(params);
+            return { ok: true, result: await artifact.promise };
+          }
+          return bridgeFailure("not_connected");
+        },
+      }),
+      isChanging: () => false,
+      webContents: { reload() {}, send() {} },
+    });
+    const parent = await mkdtemp(join(tmpdir(), "mars-handoff-reconnect-"));
+    const handoff = createPatchHandoff(
+      bridge.currentBridge,
+      async () => parent,
+    );
+    const saving = handoff({
+      task_id: taskId,
+      expected_revision: exported.candidate.revision,
+      expected_patch_sha256: patchSha,
+    });
+    try {
+      const requested = await Promise.race([
+        artifactRequested.promise,
+        saving.then((result) => {
+          throw new Error(
+            `Handoff finished before fetching the patch: ${JSON.stringify(result)}`,
+          );
+        }),
+      ]);
+      expect(requested).toEqual({
+        task_id: taskId,
+        artifact: exported.artifact,
+      });
+      bridge.reconnect(kind);
+      artifact.resolve(artifactData);
+      expect(await saving).toMatchObject({
+        status: "blocked",
+        reason: expect.stringContaining("The source project changed"),
+      });
+      expect(await readdir(parent)).toEqual([]);
+    } finally {
+      artifact.resolve(artifactData);
+      await saving;
+      await rm(parent, { recursive: true, force: true });
+    }
+  },
+);
 
 test("desktop reviewer sees check logs and saves the same reviewed patch with its check receipt only on a matching source", async () => {
   const data = await loadFixtureData();

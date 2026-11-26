@@ -40,6 +40,6 @@ export type AssistantResult =
     }
   | { ok: false; error: string; reloadHistory?: boolean };
 export type AssistantApi = {
-  onModelChanged?(refresh: () => void): void;
+  onWorkbenchChanged?(refresh: () => void): void;
   request(payload: AssistantRequest): Promise<AssistantResult>;
 };

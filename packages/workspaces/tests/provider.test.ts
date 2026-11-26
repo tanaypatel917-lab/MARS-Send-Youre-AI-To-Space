@@ -2185,11 +2185,19 @@ test("Docker args are constrained and include the fixed hardening flags [stub ru
     "echo safe",
   ]);
   expect(() => createDockerSandbox({ image: "busybox:latest" })).toThrow();
+  const spaced = buildDockerRunArgs(
+    resolved,
+    { ...request, workspaceDir: "/tmp/Application Support/workspace" },
+    "mars-ws-run-123",
+  );
+  expect(spaced[spaced.indexOf("--mount") + 1]).toBe(
+    "type=bind,src=/tmp/Application Support/workspace,dst=/workspace",
+  );
   expect(() =>
     buildDockerRunArgs(
       resolved,
       { ...request, workspaceDir: "/tmp/a,b" },
-      "name",
+      "mars-ws-run-123",
     ),
   ).toThrow();
 });

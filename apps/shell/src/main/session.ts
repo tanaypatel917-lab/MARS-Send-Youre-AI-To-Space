@@ -2,6 +2,7 @@ import type {
   ConnectionResult,
   LocalConnection,
 } from "@mars/contracts/connection-file";
+import { WORKBENCH_CHANGED } from "../shared/desktop-model";
 import {
   type BridgeErrorKind,
   bridgeError,
@@ -63,6 +64,40 @@ export function createReconnectingBridge(options: {
         activeBridge = undefined;
         return bridgeFailure("unavailable");
       }
+    },
+  };
+}
+
+export type DesktopChange = "project" | "model" | "sandbox";
+
+export function createManagedWorkbenchBridge(options: {
+  connect(): Bridge;
+  isChanging(): boolean;
+  webContents: {
+    reload(): void;
+    send(channel: string): void;
+  };
+}) {
+  let bridge = options.connect();
+  let pendingLaunches = 0;
+  return {
+    async call(method: unknown, params: unknown) {
+      if (method !== "tasks.start" && method !== "tasks.resume")
+        return bridge.call(method, params);
+      if (options.isChanging()) return bridgeFailure("unavailable");
+      pendingLaunches++;
+      try {
+        return await bridge.call(method, params);
+      } finally {
+        pendingLaunches--;
+      }
+    },
+    hasPendingLaunch: () => pendingLaunches > 0,
+    currentBridge: () => bridge,
+    reconnect(kind: DesktopChange) {
+      bridge = options.connect();
+      if (kind === "project") options.webContents.reload();
+      else options.webContents.send(WORKBENCH_CHANGED);
     },
   };
 }

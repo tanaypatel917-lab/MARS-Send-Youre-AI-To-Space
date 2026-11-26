@@ -7,9 +7,10 @@ import {
   ipcMain,
   Menu,
   protocol,
+  safeStorage,
   session,
+  shell,
 } from "electron";
-import { MODEL_CHANGED } from "../shared/desktop-model";
 import { createAssistant } from "./assistant";
 import { explicitConnection, resolveConnection } from "./connection";
 import { createDesktop } from "./desktop";
@@ -25,7 +26,10 @@ import {
   resolveAppAsset,
   SHELL_WEB_PREFERENCES,
 } from "./security";
-import { createReconnectingBridge } from "./session";
+import {
+  createManagedWorkbenchBridge,
+  createReconnectingBridge,
+} from "./session";
 import { layoutPath, loadWindowLayout, saveWindowLayout } from "./settings";
 import { createTeamChatBridge } from "./team-chat-bridge";
 import { createLoopbackTransport } from "./transport";
@@ -130,25 +134,22 @@ app.on("ready", async () => {
       resolve: () => (desktop ? desktop.resolve() : resolveConnection()),
       makeTransport: (connection) => createLoopbackTransport(connection),
     });
-  let bridge = newBridge();
-  registerBridge(
-    ipcMain,
-    { call: (method, params) => bridge.call(method, params) },
-    senderPolicy,
-  );
+  const bridge = createManagedWorkbenchBridge({
+    connect: newBridge,
+    isChanging: () => desktop?.isChanging() ?? false,
+    webContents: window.webContents,
+  });
+  registerBridge(ipcMain, bridge, senderPolicy);
   registerPatchHandoff(
     ipcMain,
-    createPatchHandoff(
-      () => bridge,
-      async () => {
-        const result = await dialog.showOpenDialog(window, {
-          title: "Save verified patch and check receipt",
-          buttonLabel: "Save handoff here",
-          properties: ["openDirectory"],
-        });
-        return result.canceled ? undefined : result.filePaths[0];
-      },
-    ),
+    createPatchHandoff(bridge.currentBridge, async () => {
+      const result = await dialog.showOpenDialog(window, {
+        title: "Save verified patch and check receipt",
+        buttonLabel: "Save handoff here",
+        properties: ["openDirectory"],
+      });
+      return result.canceled ? undefined : result.filePaths[0];
+    }),
     senderPolicy,
   );
   registerTeamChatBridge(ipcMain, createTeamChatBridge(), senderPolicy);
@@ -170,11 +171,22 @@ app.on("ready", async () => {
   );
   if (managed) {
     try {
-      desktop = await createDesktop(window, (kind) => {
-        bridge = newBridge();
-        if (kind === "project") window.webContents.reload();
-        else window.webContents.send(MODEL_CHANGED);
-      });
+      desktop = await createDesktop(
+        window,
+        bridge.reconnect,
+        bridge.hasPendingLaunch,
+        {
+          electron: {
+            app,
+            BrowserWindow,
+            dialog,
+            ipcMain,
+            Menu,
+            safeStorage,
+            shell,
+          },
+        },
+      );
     } catch {
       showDesktopStartupError();
       return;
