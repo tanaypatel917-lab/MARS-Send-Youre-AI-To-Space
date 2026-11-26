@@ -305,21 +305,27 @@ export function createOpenAICompatibleAdapter(
         throw streamFailure(provider.id, cause, emittedContent, signal.aborted);
       }
 
-      const toolCalls =
-        finishReason === "length" || finishReason === "max_tokens"
-          ? []
-          : [...partialTools.entries()]
-              .sort(([left], [right]) => left - right)
-              .map(([, partial]) =>
-                requireToolCall(
-                  {
-                    id: partial.id,
-                    name: partial.name,
-                    arguments: parseToolArguments(partial.args, provider.id),
-                  },
-                  provider.id,
-                ),
-              );
+      const capped = finishReason === "length" || finishReason === "max_tokens";
+      const toolCalls: ChatToolCall[] = [];
+      for (const [, partial] of [...partialTools.entries()].sort(
+        ([left], [right]) => left - right,
+      )) {
+        if (capped && !partial.args) continue;
+        try {
+          toolCalls.push(
+            requireToolCall(
+              {
+                id: partial.id,
+                name: partial.name,
+                arguments: parseToolArguments(partial.args, provider.id),
+              },
+              provider.id,
+            ),
+          );
+        } catch (cause) {
+          if (!capped || !(cause instanceof ProviderError)) throw cause;
+        }
+      }
       for (const toolCall of toolCalls) yield { type: "tool-call", toolCall };
       yield {
         type: "done",

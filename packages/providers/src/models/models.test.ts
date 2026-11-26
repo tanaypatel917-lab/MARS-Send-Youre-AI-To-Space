@@ -1682,6 +1682,58 @@ interface ToolCallFixture {
   args: string;
 }
 
+test.each(["length", "max_tokens"])(
+  "OpenAI stream preserves complete tool calls at a %s stop",
+  async (finishReason) => {
+    const tool = (index: number, id: string, name: string, args: string) => ({
+      index,
+      id,
+      type: "function",
+      function: { name, arguments: args },
+    });
+    const frame = (choice: unknown) =>
+      `data: ${JSON.stringify({ choices: [choice] })}\n\n`;
+    const adapter = createOpenAICompatibleAdapter(
+      provider("stub", "https://models.example/v1"),
+      {
+        fetch: async () =>
+          sseResponse([
+            frame({
+              delta: {
+                tool_calls: [
+                  tool(2, "empty", "read", ""),
+                  tool(1, "partial", "read", '{"path":'),
+                  tool(0, "complete", "read", '{"path":'),
+                ],
+              },
+            }),
+            frame({
+              delta: {
+                tool_calls: [{ index: 0, function: { arguments: '"a.ts"}' } }],
+              },
+              finish_reason: finishReason,
+            }),
+            "data: [DONE]\n\n",
+          ]),
+      },
+    );
+    const calls = [];
+    for await (const event of adapter.stream(
+      request,
+      model("upstream", "stub"),
+    )) {
+      if (event.type === "tool-call") calls.push(event.toolCall);
+      if (event.type === "done") {
+        expect(event.response.finishReason).toBe(finishReason);
+        expect(event.response.toolCalls).toEqual(calls);
+      }
+    }
+    expect(calls).toEqual([
+      { id: "complete", name: "read", arguments: { path: "a.ts" } },
+    ]);
+  },
+);
+
 /** Runs one tool call through all four adapter paths (complete and stream). */
 function toolCallPaths(call: ToolCallFixture) {
   const openaiTool = {
