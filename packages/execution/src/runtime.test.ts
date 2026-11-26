@@ -3150,6 +3150,54 @@ test("a failed run reports a distinct failure_code", async () => {
   }
 }, 30000);
 
+test("an SDK error before streaming fails as provider_error, not no_response", async () => {
+  const f = await fixture(200_000);
+  const originalPrompt = AgentSession.prototype.prompt;
+  const sdkError = "SDK stream setup failed";
+  const prompt = spyOn(AgentSession.prototype, "prompt").mockImplementation(
+    async function (this: AgentSession, ...args) {
+      if (args[0] !== "Fail before streaming")
+        return originalPrompt.apply(this, args);
+      const stream = this.agent.streamFn;
+      this.agent.streamFn = () => {
+        throw new Error(sdkError);
+      };
+      try {
+        return await originalPrompt.apply(this, args);
+      } finally {
+        this.agent.streamFn = stream;
+      }
+    },
+  );
+  let requests = 0;
+  try {
+    const session = await f.open({
+      task: { ...f.task, budget: { ...f.task.budget, max_tokens: 100_000 } },
+      fetch: async () =>
+        ++requests === 1 ? sse({ content: "Earlier response." }) : sse({}),
+    });
+    expect(await session.run("Warm up")).toMatchObject({
+      status: "completed",
+      content: "Earlier response.",
+    });
+    expect(await session.run("Fail before streaming")).toMatchObject({
+      status: "failed",
+      failure_code: "provider_error",
+      content: "",
+    });
+    expect(requests).toBe(1);
+    expect(await session.run("Follow up")).toMatchObject({
+      status: "failed",
+      failure_code: "no_response",
+      content: "",
+    });
+    expect(requests).toBe(5);
+  } finally {
+    prompt.mockRestore();
+    await f.cleanup();
+  }
+});
+
 test("bridge sends later developer reminders as user turns and hides workspace roots", () => {
   const root = "/host/private/work/abc/workspace";
   const request = toChatRequest(

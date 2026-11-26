@@ -1213,6 +1213,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
   interface RunTurns {
     replyId: string | undefined;
     capped: AssistantMessage | undefined;
+    sdkFailed: boolean;
   }
   let activeRun: RunTurns | undefined;
   const unsubscribe = session.subscribe((event) => {
@@ -1223,6 +1224,11 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
     ) {
       activeRun.replyId = event.message.responseId;
       activeRun.capped = undefined;
+      // A failure synthesized before the bridge starts has no response ID.
+      activeRun.sdkFailed =
+        activeRun.replyId === undefined &&
+        (event.message.stopReason === "error" ||
+          event.message.stopReason === "aborted");
     }
     // Preserve sanitized length stops even if settling removes them from history.
     if (
@@ -1296,7 +1302,11 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
         throw new Error("Invalid task instruction.");
       running = true;
       modelFailure = undefined;
-      const run: RunTurns = { replyId: undefined, capped: undefined };
+      const run: RunTurns = {
+        replyId: undefined,
+        capped: undefined,
+        sdkFailed: false,
+      };
       activeRun = run;
       try {
         await session.prompt(instruction);
@@ -1333,7 +1343,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
           (controller.signal.reason instanceof ExecutionLimitError ||
           Date.now() >= ledger.deadline
             ? "deadline_exceeded"
-            : last
+            : last || run.sdkFailed
               ? "provider_error"
               : "no_response");
         return {
