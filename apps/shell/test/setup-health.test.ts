@@ -357,22 +357,23 @@ test("a rejected key in attach mode points to the launch environment", async () 
   }
 });
 
-test("opening Settings refreshes pilot progress from the journal", async () => {
+test("Settings refreshes pilot progress even when Chat history cannot load", async () => {
   const doc = new MiniDocument();
+  const data = await loadFixtureData();
+  delete data.describe.checks;
+  delete data.describe.verification_readiness;
   let setup: SetupSummary = { milestones: {}, issues: {} };
+  let historyRequests = 0;
   const ctl = createController(
-    fakeBridge(await loadFixtureData()),
+    fakeBridge({ ...data, tasks: [] }),
     doc,
     doc.root,
     undefined,
     {
-      request: async () => ({
-        ok: true,
-        sessions: [],
-        configured: true,
-        workspace: "scope",
-        canConfigure: true,
-      }),
+      request: async () => {
+        historyRequests++;
+        return { ok: false, error: "Chat history could not be read." };
+      },
       setup: async () => setup,
     },
   );
@@ -386,7 +387,13 @@ test("opening Settings refreshes pilot progress from the journal", async () => {
     (el) => el.getAttribute("data-page") === "settings",
   )[0]?.click();
   await ctl.settled();
-  await Bun.sleep(0);
+  expect(historyRequests).toBe(1);
   expect(doc.root.textContent).toContain("First verified patch exported");
   expect(doc.root.textContent).toMatch(/Chat could not reach provider\D*2/);
+  expect(doc.root.textContent).toContain("Workbench online");
+  const verification = findAll(
+    doc.root,
+    (el) => el.getAttribute("data-diagnostic") === "verification",
+  )[0];
+  expect(verification?.textContent).toContain("No host checks configured");
 });

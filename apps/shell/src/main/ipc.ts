@@ -56,8 +56,7 @@ function trustedSender(event: IpcEventLike, policy: SenderPolicy): boolean {
 
 export function registerAssistantBridge(
   ipcMain: IpcMainLike,
-  assistant: Pick<ReturnType<typeof createAssistant>, "call"> &
-    Partial<Pick<ReturnType<typeof createAssistant>, "setup">>,
+  assistant: ReturnType<typeof createAssistant>,
   options: SenderPolicy,
 ): void {
   ipcMain.handle(ASSISTANT_CHANNEL, async (event, payload) => {
@@ -72,7 +71,7 @@ export function registerAssistantBridge(
   ipcMain.handle(ASSISTANT_SETUP_CHANNEL, async (event) => {
     if (!trustedSender(event, options)) return undefined;
     try {
-      return await assistant.setup?.();
+      return await assistant.setup();
     } catch {
       return undefined;
     }

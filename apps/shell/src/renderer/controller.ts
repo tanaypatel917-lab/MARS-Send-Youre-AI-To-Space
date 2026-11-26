@@ -563,7 +563,7 @@ export function createController(
     if (!assistant?.setup) return;
     try {
       const setup = await assistant.setup();
-      if (!setup) return;
+      if (!setup || disposed) return;
       assistantState = { ...assistantState, setup };
       if (page === "settings") render();
     } catch {}
@@ -582,7 +582,7 @@ export function createController(
         scopeGeneration++;
         if (result.workspace !== draftWorkspace) assistantDrafts.clear();
         draftWorkspace = result.workspace;
-        assistantState = emptyAssistant();
+        assistantState = { ...emptyAssistant(), setup: assistantState.setup };
         if (suspendedDraft?.workspace === result.workspace)
           assistantState = {
             ...assistantState,
@@ -637,6 +637,7 @@ export function createController(
       scopeGeneration++;
       assistantState = {
         ...emptyAssistant(),
+        setup: assistantState.setup,
         loading: false,
         error:
           error instanceof Error
