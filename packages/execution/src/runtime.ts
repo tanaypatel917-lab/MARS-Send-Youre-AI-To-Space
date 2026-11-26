@@ -21,7 +21,7 @@ import {
   type WorkspaceSearchRequest,
   type WorkspaceSearchResult,
 } from "@mars/workspaces";
-import { type as defineSchema } from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, type as defineSchema } from "@oh-my-pi/pi-ai";
 import {
   AuthStorage,
   type CustomTool,
@@ -855,7 +855,7 @@ export function resolveSystemPrompt(override: string | undefined): string {
   return trimmed;
 }
 
-export type RuntimeFailureCode = ModelFailureCode | "no_response";
+export type RuntimeFailureCode = ModelFailureCode | "sdk_error" | "no_response";
 
 export interface RuntimeOutcome {
   status: "completed" | "paused" | "cancelled" | "failed";
@@ -1210,7 +1210,34 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
     await authStorage.close();
     throw new Error("Missing execution journal.");
   }
+  interface RunTurns {
+    replyId: string | undefined;
+    capped: AssistantMessage | undefined;
+    sdkFailed: boolean;
+  }
+  let activeRun: RunTurns | undefined;
   const unsubscribe = session.subscribe((event) => {
+    if (
+      activeRun &&
+      event.type === "message_end" &&
+      event.message.role === "assistant"
+    ) {
+      activeRun.replyId = event.message.responseId;
+      activeRun.capped = undefined;
+      // A failure synthesized before the bridge starts has no response ID.
+      activeRun.sdkFailed =
+        activeRun.replyId === undefined &&
+        (event.message.stopReason === "error" ||
+          event.message.stopReason === "aborted");
+    }
+    // Preserve sanitized length stops even if settling removes them from history.
+    if (
+      activeRun &&
+      event.type === "turn_end" &&
+      event.message.role === "assistant" &&
+      event.message.stopReason === "length"
+    )
+      activeRun.capped = event.message;
     const observation: RuntimeObservation = {
       type: event.type,
       session_id: manager.getSessionId(),
@@ -1275,30 +1302,38 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
         throw new Error("Invalid task instruction.");
       running = true;
       modelFailure = undefined;
+      const run: RunTurns = {
+        replyId: undefined,
+        capped: undefined,
+        sdkFailed: false,
+      };
+      activeRun = run;
       try {
         await session.prompt(instruction);
         await observations;
         await session.flushToDisk();
         if (observationFailure)
           throw new Error("Runtime event persistence failed.");
-        const last = [...session.messages]
-          .reverse()
-          .find((message) => message.role === "assistant");
+        const settled = session.getLastAssistantMessage();
+        const last =
+          run.capped ??
+          (run.replyId !== undefined && settled?.responseId === run.replyId
+            ? settled
+            : undefined);
         const content =
-          last?.role === "assistant"
-            ? last.content
-                .filter((part) => part.type === "text")
-                .map((part) => part.text)
-                .join("")
-            : "";
+          last?.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("") ?? "";
+        const stopReason = last?.stopReason;
         const status = userCancelled
           ? "cancelled"
           : controller.signal.aborted ||
-              last?.role !== "assistant" ||
-              last.stopReason === "error" ||
-              last.stopReason === "aborted"
+              !stopReason ||
+              stopReason === "error" ||
+              stopReason === "aborted"
             ? "failed"
-            : last.stopReason === "length"
+            : stopReason === "length"
               ? "paused"
               : "completed";
         // The bridge's own classification wins; the runtime deadline abort only surfaces
@@ -1308,8 +1343,8 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
           (controller.signal.reason instanceof ExecutionLimitError ||
           Date.now() >= ledger.deadline
             ? "deadline_exceeded"
-            : last?.role === "assistant"
-              ? "provider_error"
+            : run.sdkFailed || last
+              ? "sdk_error"
               : "no_response");
         return {
           status,
@@ -1323,6 +1358,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
             : {}),
         };
       } finally {
+        activeRun = undefined;
         running = false;
       }
     },

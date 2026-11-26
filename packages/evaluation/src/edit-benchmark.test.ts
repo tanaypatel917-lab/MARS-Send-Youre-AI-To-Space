@@ -338,6 +338,51 @@ test("mars:hashline and mars:replace drive the real mars_edit / mars_replace too
   }
 }, 180_000);
 
+test("replace oracle preserves a UTF-8 BOM when editing a later line", async () => {
+  const root = await scratch();
+  const starter = suite.tasks[0];
+  if (!starter) throw new Error("Missing starter task");
+  const encoder = new TextEncoder();
+  const path = "bom.ts";
+  const task = {
+    ...starter,
+    instruction: "In bom.ts, change the count to 2.",
+    before: new Map([
+      [
+        path,
+        encoder.encode(
+          "\uFEFF// Keep this header\nconst other = 0;\nconst count = 1;\n",
+        ),
+      ],
+    ]),
+    after: new Map([
+      [
+        path,
+        encoder.encode(
+          "\uFEFF// Keep this header\nconst other = 0;\nconst count = 2;\n",
+        ),
+      ],
+    ]),
+  };
+  const binding = await scriptedModelRegistry(root);
+  const model = createScriptedEditModel({
+    tasks: [task],
+    profile: SCRIPTED_PROFILES.oracle as ScriptedModelProfile,
+  });
+  const trial = await runEditTrial({
+    ...binding,
+    arm: "mars:replace",
+    task,
+    repeat: 0,
+    seed: 1,
+    budget,
+    fetch: model.fetch,
+    workRoot: join(root, "work"),
+    transcriptRoot: join(root, "tx"),
+  });
+  expect(trial.verification).toMatchObject({ solved: true, mismatched: [] });
+});
+
 test("hashline oracle pages for anchors even when outline preview text includes the edit", async () => {
   const root = await scratch();
   const task = suiteV2.tasks.find((task) => task.task_id === "sds-rename-2");
@@ -508,6 +553,98 @@ test("omp-stock tool calls naming paths outside the throwaway workspace are refu
   expect(result.path_refusals).toBe(1);
   expect(result.solved).toBe(false);
 }, 60_000);
+
+test("omp-stock classifies a tool-only capped turn as paused without executing the tool", async () => {
+  const root = await scratch();
+  const { registry, env, modelId } = await scriptedModelRegistry(root);
+  const trial = await runEditTrial({
+    arm: "omp-stock",
+    task: suite.tasks[2] as (typeof suite.tasks)[number],
+    repeat: 0,
+    registry,
+    env,
+    modelId,
+    seed: 1,
+    budget,
+    fetch: async () => {
+      const frame = JSON.stringify({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "capped_read",
+                  type: "function",
+                  function: {
+                    name: "read",
+                    arguments: JSON.stringify({
+                      path: join(root, "outside-workspace.txt"),
+                    }),
+                  },
+                },
+              ],
+            },
+            finish_reason: "length",
+          },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      });
+      return new Response(`data: ${frame}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    },
+    workRoot: join(root, "work"),
+    transcriptRoot: join(root, "tx"),
+  });
+  expect(trial).toMatchObject({
+    status: "paused",
+    failure: null,
+    turns: 1,
+    path_refusals: 0,
+  });
+});
+
+for (const succeeds of [false, true]) {
+  test(`omp-stock ${succeeds ? "completes after a successful retry" : "fails after exhausting empty-stop recovery"}`, async () => {
+    const root = await scratch();
+    const { registry, env, modelId } = await scriptedModelRegistry(root);
+    let requests = 0;
+    const trial = await runEditTrial({
+      arm: "omp-stock",
+      task: suite.tasks[2] as (typeof suite.tasks)[number],
+      repeat: 0,
+      registry,
+      env,
+      modelId,
+      seed: 1,
+      budget,
+      fetch: async () => {
+        requests++;
+        const frame = JSON.stringify({
+          choices: [
+            {
+              delta: succeeds && requests === 2 ? { content: "Done." } : {},
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        });
+        return new Response(`data: ${frame}\n\ndata: [DONE]\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+      workRoot: join(root, "work"),
+      transcriptRoot: join(root, "tx"),
+    });
+    expect(trial).toMatchObject(
+      succeeds
+        ? { status: "completed", failure: null, turns: 2 }
+        : { status: "failed", failure: "provider_error", turns: 4 },
+    );
+    expect(requests).toBe(succeeds ? 2 : 4);
+  });
+}
 
 test("omp-stock resolves its edit mode from the upstream model name, not the MARS alias", async () => {
   const root = await scratch();

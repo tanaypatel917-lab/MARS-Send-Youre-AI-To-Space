@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { EvolutionError } from "./errors";
 import {
@@ -6,6 +6,7 @@ import {
   createFixtureEvaluator,
   type EvaluationRequest,
 } from "./evaluators";
+import * as guard from "./guard";
 import type { EvaluationOutcome, MutationProposal } from "./schemas";
 import type { EvolutionService } from "./service";
 import {
@@ -560,6 +561,48 @@ describe("review regressions", () => {
       service.lineage("run-1").every((node) => node.state === "evaluated"),
     ).toBe(true);
   }, 30_000);
+
+  test("losing the lease during the post-evaluation digest check leaves the result and budget unsettled", async () => {
+    const aborted = Promise.withResolvers<void>();
+    const service = await withEvaluator(
+      {
+        ...base,
+        async evaluate(request, signal) {
+          signal?.addEventListener("abort", () => aborted.resolve(), {
+            once: true,
+          });
+          return base.evaluate(request, signal);
+        },
+      },
+      runConfig(),
+      300,
+    );
+    const verify = guard.verifyControlDigests;
+    const check = spyOn(guard, "verifyControlDigests").mockImplementation(
+      async (digests, phase) => {
+        if (phase === "after evaluation") {
+          const run = service.store.getRun("run-1");
+          if (!run) throw new Error("missing fixture run");
+          service.store.releaseLease("run-1", run.lease_token);
+          await aborted.promise;
+        }
+        return verify(digests, phase);
+      },
+    );
+    try {
+      expect(await codeOf(service.run("run-1"))).toBe("stale_lease");
+      expect(check).toHaveBeenCalledWith(expect.anything(), "after evaluation");
+      expect(
+        service.store.listSelectionEvaluations("run-1", "initial"),
+      ).toEqual([]);
+      expect(service.store.ledger("run-1").map(({ kind }) => kind)).toEqual([
+        "reserve",
+      ]);
+      expect(service.store.getRun("run-1")?.lease_holder).toBeNull();
+    } finally {
+      check.mockRestore();
+    }
+  });
 
   test("a resumed promotion re-checks the matched budget on cached final outcomes", async () => {
     const service = await withEvaluator(
