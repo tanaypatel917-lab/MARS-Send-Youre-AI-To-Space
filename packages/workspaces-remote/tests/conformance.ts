@@ -378,6 +378,7 @@ export function defineProviderConformance(
         expect(new TextDecoder().decode(result.stdout)).toBe(
           "export const a = 42;\nprotected\nexcluded\n",
         );
+        expect(result.output_truncated).toBe(false);
         expect(result.workspace).toEqual(candidate);
         expect(await fx.provider.inspect(context, ws.workspace_id)).toEqual(
           candidate,
@@ -395,6 +396,25 @@ export function defineProviderConformance(
           ),
         ).toBe("revision_conflict");
       }),
+      T,
+    );
+
+    test(
+      "runCheck marks bounded stderr as truncated",
+      withFixture(
+        async (fx) => {
+          const ws = await fx.provider.prepare(context, "task-bound-check");
+          const result = await fx.provider.runCheck(context, ws, {
+            argv: ["sh", "-c", "head -c 5000 /dev/zero | tr '\\0' a >&2"],
+            overlay: [],
+            timeoutMs: 10_000,
+          });
+          expect(result.exit_code).toBe(0);
+          expect(result.stderr.byteLength).toBe(1024);
+          expect(result.output_truncated).toBe(true);
+        },
+        { maxOutputBytes: 1024 },
+      ),
       T,
     );
 

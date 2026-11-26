@@ -9,11 +9,12 @@ import {
   type PatchExport,
   PatchExportSchema,
   type RequestContext,
+  type ReviewVerificationView,
+  ReviewVerificationViewSchema,
   type Scope,
   ScopeSchema,
   type Task,
   TaskSchema,
-  type VerificationView,
   VerificationViewSchema,
   type WorkspaceRef,
 } from "@mars/contracts";
@@ -103,7 +104,8 @@ export interface WorkbenchOperations {
   verification(
     context: RequestContext,
     taskId: string,
-  ): Promise<VerificationView>;
+    includeCheckLogs?: boolean,
+  ): Promise<ReviewVerificationView>;
   /** The exact candidate patch, bound to the expected revision and patch bytes. */
   export(context: RequestContext, params: ExportParams): Promise<PatchExport>;
   restore(
@@ -167,6 +169,7 @@ export type RpcErrorCode =
   | "forbidden"
   | "not_found"
   | "conflict"
+  | "patch_round_trip_failed"
   | "unavailable"
   | "model_unavailable"
   | "too_large"
@@ -185,6 +188,10 @@ const errors: Record<RpcErrorCode, { status: number; message: string }> = {
   conflict: {
     status: 409,
     message: "Workbench revision or execution conflict.",
+  },
+  patch_round_trip_failed: {
+    status: 409,
+    message: "The patch could not be reconstructed from the task baseline.",
   },
   unavailable: { status: 503, message: "Workbench execution is unavailable." },
   model_unavailable: {
@@ -361,10 +368,17 @@ async function dispatch(
       return CheckpointRefSchema.parse(
         await api.checkpoint(context, request.params.task_id),
       );
-    case "tasks.verification":
-      return VerificationViewSchema.parse(
-        await api.verification(context, request.params.task_id),
+    case "tasks.verification": {
+      const includeCheckLogs = request.params.include_check_logs === true;
+      const view = await api.verification(
+        context,
+        request.params.task_id,
+        includeCheckLogs,
       );
+      return includeCheckLogs
+        ? ReviewVerificationViewSchema.parse(view)
+        : VerificationViewSchema.parse(view);
+    }
     case "tasks.export":
       return PatchExportSchema.parse(await api.export(context, request.params));
     case "tasks.restore":

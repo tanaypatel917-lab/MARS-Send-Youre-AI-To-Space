@@ -1,5 +1,9 @@
 import type { z } from "zod";
-import type { ParamsSchema, ResultSchema } from "../main/protocol";
+import type {
+  ParamsSchema,
+  RendererExportParamsSchema,
+  ResultSchema,
+} from "../main/protocol";
 
 export const READ_METHODS = [
   "workbench.describe",
@@ -48,7 +52,9 @@ export const BRIDGE_CHANNEL = "mars-shell:rpc";
 export const BRIDGE_GLOBAL = "marsWorkbench";
 
 export type ParamsFor<M extends BridgeMethod> = z.infer<
-  (typeof ParamsSchema)[M]
+  M extends "tasks.export"
+    ? typeof RendererExportParamsSchema
+    : (typeof ParamsSchema)[M]
 >;
 export type ResultFor<M extends BridgeMethod> = z.infer<
   (typeof ResultSchema)[M]
@@ -69,6 +75,8 @@ export type BridgeErrorKind =
   | "forbidden"
   | "not_found"
   | "conflict"
+  | "patch_round_trip_failed"
+  | "too_large"
   | "timeout"
   | "unavailable"
   | "model_unavailable"
@@ -90,6 +98,9 @@ export const BRIDGE_ERROR_MESSAGES: Readonly<Record<BridgeErrorKind, string>> =
     forbidden: "Workbench request is not permitted.",
     not_found: "Workbench resource was not found.",
     conflict: "Workbench request conflicts with the current state.",
+    patch_round_trip_failed:
+      "The patch cannot be reconstructed from the task baseline. Review unsupported changes and run a new task with text-only changes.",
+    too_large: "The workbench request or response exceeds the size limit.",
     timeout: "Workbench did not respond in time.",
     unavailable: "Workbench is unavailable.",
     model_unavailable:

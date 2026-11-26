@@ -1256,6 +1256,7 @@ export async function createRemoteWorkspaceProvider(
               exit_code: run.exitCode,
               stdout: run.stdout,
               stderr: run.stderr,
+              output_truncated: run.stdoutTruncated || run.stderrTruncated,
               timed_out: run.timedOut,
               cancelled: run.cancelled,
             };

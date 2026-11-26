@@ -107,9 +107,10 @@ test("collects only completed tasks whose newest verdict passed on the exported 
     id: string,
     patch: string,
     round_trip = "passed",
+    operation = "patch.exported",
   ) =>
     emit(id, {
-      operation: "patch.exported",
+      operation,
       round_trip,
       artifact: await store.artifacts.put(
         context,
@@ -123,6 +124,7 @@ test("collects only completed tasks whose newest verdict passed on the exported 
     "regressed",
     "other-patch",
     "no-round-trip",
+    "handoff-only",
     "pending",
   ]) {
     await store.create(context, task(id));
@@ -139,6 +141,13 @@ test("collects only completed tasks whose newest verdict passed on the exported 
   await exportPatch("other-patch", `${patch}+extra\n`);
   await emit("no-round-trip", verdict("no-round-trip", patch, true));
   await exportPatch("no-round-trip", patch, "failed");
+  await emit("handoff-only", verdict("handoff-only", patch, true));
+  await exportPatch(
+    "handoff-only",
+    patch,
+    "passed",
+    "patch.prepared_for_handoff",
+  );
   // An agent-produced record never counts as host evidence.
   await store.appendEvent(context, "pending", {
     event_type: "tool.completed",
@@ -159,6 +168,7 @@ test("collects only completed tasks whose newest verdict passed on the exported 
     regressed: "latest-verdict-not-verified",
     "other-patch": "no-exported-tested-patch",
     "no-round-trip": "export-round-trip-failed",
+    "handoff-only": "no-exported-tested-patch",
     pending: "not-completed",
   });
   await store.close();
