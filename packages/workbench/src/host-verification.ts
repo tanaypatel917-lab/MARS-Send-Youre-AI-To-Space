@@ -290,8 +290,7 @@ export async function verifyCandidate(
             check,
             patch,
             task.task_id,
-            (tail) =>
-              checkLogs.push({ check_index: checkIndex, output_tail: tail }),
+            (log) => checkLogs.push({ check_index: checkIndex, ...log }),
           );
     if (result.reason) reasons.push(result.reason);
     checks.push(result);
@@ -407,7 +406,9 @@ async function runHostTestCheck(
   check: HostTestCheck,
   patch: { paths: string[] } | null,
   taskId: string,
-  captureTail: (tail: string) => void,
+  captureTail: (
+    log: Omit<VerificationCheckLogs["checks"][number], "check_index">,
+  ) => void,
 ): Promise<VerificationCheckResult> {
   const began = Date.now();
   const result = (
@@ -485,7 +486,11 @@ async function runHostTestCheck(
     const tail = (
       await host.scrubOutput?.(context, taskId, output).catch(() => "")
     )?.slice(-OUTPUT_TAIL);
-    if (tail) captureTail(tail);
+    if (tail)
+      captureTail({
+        output_tail: tail,
+        ...(run.output_truncated ? { capture_truncated: true } : {}),
+      });
     const extra = {
       exit_code: run.exit_code,
       output_sha256: digest,

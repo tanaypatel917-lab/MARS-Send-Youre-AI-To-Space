@@ -100,8 +100,7 @@ export const BRIDGE_ERROR_MESSAGES: Readonly<Record<BridgeErrorKind, string>> =
     conflict: "Workbench request conflicts with the current state.",
     patch_round_trip_failed:
       "The patch cannot be reconstructed from the task baseline. Review unsupported changes and run a new task with text-only changes.",
-    too_large:
-      "The patch is too large to export. Split the change into smaller tasks.",
+    too_large: "The workbench request or response exceeds the size limit.",
     timeout: "Workbench did not respond in time.",
     unavailable: "Workbench is unavailable.",
     model_unavailable:

@@ -7,6 +7,8 @@ import {
   PatchExportSchema,
   type RequiredCheck,
   RequiredCheckSchema,
+  type ReviewVerificationView,
+  ReviewVerificationViewSchema,
   type Scope,
   type Task,
   TaskSchema,
@@ -304,10 +306,27 @@ export class MarsClient {
   async verification(
     taskId: string,
     signal?: AbortSignal,
-  ): Promise<VerificationView> {
+  ): Promise<VerificationView>;
+  async verification(
+    taskId: string,
+    signal: AbortSignal | undefined,
+    includeCheckLogs: true,
+  ): Promise<ReviewVerificationView>;
+  async verification(
+    taskId: string,
+    signal?: AbortSignal,
+    includeCheckLogs?: true,
+  ): Promise<ReviewVerificationView> {
     const view = validate(
-      VerificationViewSchema,
-      await this.call(RPC_METHODS.verification, { task_id: taskId }, signal),
+      includeCheckLogs ? ReviewVerificationViewSchema : VerificationViewSchema,
+      await this.call(
+        RPC_METHODS.verification,
+        {
+          task_id: taskId,
+          ...(includeCheckLogs ? { include_check_logs: true } : {}),
+        },
+        signal,
+      ),
       "verification",
     );
     if (view.candidate) this.checkWorkspace(view.candidate);

@@ -976,9 +976,7 @@ function checkResults(
   logs: VerificationCheckLogs | undefined,
 ): ShellElement[] {
   return record.checks.map((check, index) => {
-    const tail = logs?.checks.find(
-      (entry) => entry.check_index === index,
-    )?.output_tail;
+    const log = logs?.checks.find((entry) => entry.check_index === index);
     return h(
       doc,
       "article",
@@ -991,13 +989,15 @@ function checkResults(
         `${check.status} · ${check.duration_ms} ms${check.exit_code === undefined ? "" : ` · exit ${check.exit_code}`}`,
       ),
       check.reason ? untrusted(doc, check.reason, "check reason") : null,
-      tail
+      log
         ? disclosure(
             doc,
             "patch-details",
             `check:${record.run_id}:${index}`,
-            "Check log (output tail)",
-            untrusted(doc, tail, "sandbox check output"),
+            log.capture_truncated
+              ? "Check log (excerpt; later output was discarded)"
+              : "Check log (output tail)",
+            untrusted(doc, log.output_tail, "sandbox check output"),
           )
         : check.kind === "host_test"
           ? h(doc, "p", { class: "muted" }, "No check log available.")
@@ -1219,6 +1219,12 @@ function changesSection(doc: ShellDocument, state: ShellState): ShellElement {
               "p",
               {},
               `Saved candidate.patch and check-receipt.json in ${handoff.folder}. No changes were applied.`,
+            ),
+            h(
+              doc,
+              "p",
+              {},
+              "If the source is a standalone example folder without Git, first run git init there and commit the original files as a baseline.",
             ),
             h(
               doc,

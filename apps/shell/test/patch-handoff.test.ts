@@ -110,6 +110,7 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
                   {
                     check_index: 0,
                     output_tail: "1 passed <script>not markup</script>",
+                    capture_truncated: true,
                   },
                 ],
               },
@@ -231,6 +232,7 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
     const html = serialize(changes);
     expect(html).toContain("passed · 4 ms · exit 0");
     expect(html).toContain("1 passed &lt;script&gt;not markup&lt;/script&gt;");
+    expect(html).toContain("excerpt; later output was discarded");
     expect(html).toContain("workspace diff");
     const save = () => {
       const button = findAll(
@@ -283,6 +285,7 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
       },
     });
     expect(receipt).not.toContain("not markup");
+    expect(root.textContent).toContain("first run git init");
     expect(root.textContent).toContain("git apply --check");
 
     supportsLogs = false;

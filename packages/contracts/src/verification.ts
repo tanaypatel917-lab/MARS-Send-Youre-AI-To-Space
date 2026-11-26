@@ -301,6 +301,7 @@ export const VerificationCheckLogsSchema = z
           .object({
             check_index: z.number().int().min(0).max(63),
             output_tail: z.string().min(1).max(600),
+            capture_truncated: z.literal(true).optional(),
           })
           .strict(),
       )

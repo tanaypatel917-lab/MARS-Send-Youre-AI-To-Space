@@ -761,7 +761,7 @@ export async function createWorkbenchHost(
           return true;
         const exported = z
           .object({
-            operation: z.literal("patch.exported"),
+            operation: z.enum(["patch.exported", "patch.prepared_for_handoff"]),
             artifact: ArtifactRefSchema,
             round_trip: z.enum(["passed", "failed", "unavailable"]).optional(),
           })
@@ -3659,12 +3659,14 @@ export async function createWorkbenchHost(
           exported.patch,
           "text/x-diff",
         );
-        // An event, not a task update: owning the export must not move the task revision.
+        // Handoff preparation makes the artifact readable but does not prove that desktop saved it.
         await options.store.appendEvent(
           context,
           params.task_id,
           workbenchEvent({
-            operation: "patch.exported",
+            operation: params.review_handoff
+              ? "patch.prepared_for_handoff"
+              : "patch.exported",
             artifact,
             round_trip: exported.round_trip.status,
           }),

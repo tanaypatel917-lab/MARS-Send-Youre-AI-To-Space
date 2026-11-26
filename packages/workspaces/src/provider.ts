@@ -1068,6 +1068,11 @@ export async function createLocalWorkspaceProvider(
                   : result.exitCode,
               stdout: result.stdout.subarray(0, limits.maxOutputBytes),
               stderr: result.stderr.subarray(0, limits.maxOutputBytes),
+              output_truncated:
+                result.stdoutTruncated ||
+                result.stderrTruncated ||
+                result.stdout.byteLength > limits.maxOutputBytes ||
+                result.stderr.byteLength > limits.maxOutputBytes,
               timed_out: result.timedOut,
               cancelled: result.cancelled,
             };

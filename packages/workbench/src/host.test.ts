@@ -6442,6 +6442,7 @@ async function hostCheckFixture() {
       stderr: exitCode
         ? new TextEncoder().encode(`Diagnostic path: ${f.root}/test`)
         : new Uint8Array(),
+      output_truncated: exitCode !== 0,
       timed_out: false,
       cancelled: false,
     };
@@ -6567,6 +6568,7 @@ test("a protected host check binds its verdict to the exact patch bytes; a faili
         {
           check_index: 0,
           output_tail: "1 fail\nDiagnostic path: [redacted]/test",
+          capture_truncated: true,
         },
       ],
     },
@@ -6614,6 +6616,7 @@ test("export returns the exact verified patch bytes and refuses a moved revision
         ...(options?.compareSourceBaseline
           ? { source_baseline: "mismatch" }
           : {}),
+        ...(options?.destination ? { destination: "inside_source" } : {}),
       };
     },
   });
@@ -6647,6 +6650,7 @@ test("export returns the exact verified patch bytes and refuses a moved revision
     expected_revision: "r1",
     expected_patch_sha256: sha,
     review_handoff: true,
+    review_destination: "/fixture/source",
   });
   expect((await f.store.inspect(context(), "task")).revision).toBe(before);
   expect(exported).toMatchObject({
@@ -6657,6 +6661,7 @@ test("export returns the exact verified patch bytes and refuses a moved revision
     round_trip: { status: "passed", reason: null },
     handoff: {
       source_baseline: "mismatch",
+      destination: "inside_source",
       verdict: {
         run_id: view.record?.run_id,
         patch_sha256: sha,
@@ -6666,6 +6671,16 @@ test("export returns the exact verified patch bytes and refuses a moved revision
   });
   expect(JSON.stringify(exported)).not.toContain("output_tail");
   expect(exported.artifact.sha256).toBe(sha);
+  const operations: string[] = [];
+  for await (const event of f.store.events(context(), "task")) {
+    if (event.event_type !== "tool.completed") continue;
+    const bytes = await f.store.artifacts.get(context(), event.payload);
+    const payload = JSON.parse(new TextDecoder().decode(bytes));
+    if (typeof payload?.operation === "string")
+      operations.push(payload.operation);
+  }
+  expect(operations).toContain("patch.prepared_for_handoff");
+  expect(operations).not.toContain("patch.exported");
   // `ignoreBOM` so the leading U+FEFF is compared rather than stripped.
   expect(
     new TextDecoder("utf-8", { ignoreBOM: true }).decode(

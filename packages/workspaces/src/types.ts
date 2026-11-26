@@ -133,6 +133,8 @@ export interface CheckRunResult {
   exit_code: number;
   stdout: Uint8Array;
   stderr: Uint8Array;
+  /** At least one captured stream was capped before its end. */
+  output_truncated?: boolean;
   timed_out: boolean;
   cancelled: boolean;
 }
