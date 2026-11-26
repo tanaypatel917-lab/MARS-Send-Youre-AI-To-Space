@@ -3150,7 +3150,7 @@ test("a failed run reports a distinct failure_code", async () => {
   }
 }, 30000);
 
-test("an SDK error before streaming fails as provider_error, not no_response", async () => {
+test("an SDK error before streaming fails separately from an empty reply", async () => {
   const f = await fixture(200_000);
   const originalPrompt = AgentSession.prototype.prompt;
   const sdkError = "SDK stream setup failed";
@@ -3182,7 +3182,7 @@ test("an SDK error before streaming fails as provider_error, not no_response", a
     });
     expect(await session.run("Fail before streaming")).toMatchObject({
       status: "failed",
-      failure_code: "provider_error",
+      failure_code: "sdk_error",
       content: "",
     });
     expect(requests).toBe(1);

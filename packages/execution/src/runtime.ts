@@ -855,7 +855,7 @@ export function resolveSystemPrompt(override: string | undefined): string {
   return trimmed;
 }
 
-export type RuntimeFailureCode = ModelFailureCode | "no_response";
+export type RuntimeFailureCode = ModelFailureCode | "sdk_error" | "no_response";
 
 export interface RuntimeOutcome {
   status: "completed" | "paused" | "cancelled" | "failed";
@@ -1343,8 +1343,8 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
           (controller.signal.reason instanceof ExecutionLimitError ||
           Date.now() >= ledger.deadline
             ? "deadline_exceeded"
-            : last || run.sdkFailed
-              ? "provider_error"
+            : run.sdkFailed || last
+              ? "sdk_error"
               : "no_response");
         return {
           status,

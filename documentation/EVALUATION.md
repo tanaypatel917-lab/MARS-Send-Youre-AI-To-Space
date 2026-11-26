@@ -165,8 +165,8 @@ plus an accepted prompt proposal or a different model; all remain unverified.
 The per-request timeout is now configurable per model with `requestTimeoutMs`
 in `models.json` (1 000 ms to 1 h; default 60 000 ms, always bounded by the
 task deadline), and a failed run reports a `failure_code` (`provider_timeout`,
-`deadline_exceeded`, `budget_exhausted`, `provider_error`, `no_response`) in its
-error and in the workbench `runtime.result` event.
+`deadline_exceeded`, `budget_exhausted`, `provider_error`, `sdk_error`,
+`no_response`) in its error and in the workbench `runtime.result` event.
 The per-request output cap is configurable per model with `maxOutputTokens`
 (256 to 1 000 000; default 4 096, always bounded by the task token budget and
 the context window) and applies identically to MARS arms and `omp-stock`. The
@@ -663,9 +663,10 @@ The worst-case committed per-task dollar caps must fit under the plan's
 total cap. The reports record Wilson 95% intervals, a paired lift interval,
 provider exclusions, failures, metered cost per verified solve, and time to
 verified patch. Private transcripts are under `transcripts/`; use a fresh
-output directory for each run so its journals cannot be overwritten. Provider
-exclusions can bias the comparison; review their counts before interpreting
-conditional solve rates.
+output directory for each run so its journals cannot be overwritten. SDK
+failures and exhausted empty replies count as failed attempts, not provider
+exclusions. Provider exclusions can bias the comparison; review their counts
+before interpreting conditional solve rates.
 
 The pre-registered power design uses the exact paired sign test at
 two-sided alpha .05: 40% discordant pairs and 70% of discordances favoring
