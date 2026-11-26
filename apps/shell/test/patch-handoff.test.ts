@@ -19,6 +19,7 @@ import {
   registerPatchHandoff,
 } from "../src/main/ipc";
 import { createPatchHandoff } from "../src/main/patch-handoff";
+import { createManagedWorkbenchBridge } from "../src/main/session";
 import { createLoopbackTransport } from "../src/main/transport";
 import { createController } from "../src/renderer/controller";
 import { BRIDGE_CHANNEL, bridgeFailure } from "../src/shared/methods";
@@ -71,6 +72,46 @@ test("renderer export cannot forward a destination to the workbench", async () =
   expect(await ipc(fixture.owner, request)).toEqual(response);
   expect(calls).toEqual([request]);
 });
+
+test.each(["project", "sandbox"] as const)(
+  "a %s change while choosing a destination cancels the patch handoff",
+  async (kind) => {
+    const calls: unknown[] = [];
+    const bridge = createManagedWorkbenchBridge({
+      connect: () => ({
+        async call(method) {
+          calls.push(method);
+          return bridgeFailure("not_connected");
+        },
+      }),
+      isChanging: () => false,
+      reloadWindow() {},
+      refreshRenderer() {},
+    });
+    const parent = await mkdtemp(join(tmpdir(), "mars-handoff-reconnect-"));
+    try {
+      const selected = Promise.withResolvers<string>();
+      const handoff = createPatchHandoff(
+        bridge.currentBridge,
+        () => selected.promise,
+      );
+      const saving = handoff({
+        task_id: "task",
+        expected_revision: "revision",
+        expected_patch_sha256: "a".repeat(64),
+      });
+      bridge.reconnect(kind);
+      selected.resolve(parent);
+      expect(await saving).toMatchObject({
+        status: "blocked",
+        reason: expect.stringContaining("The source project changed"),
+      });
+      expect(calls).toEqual([]);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  },
+);
 
 test("desktop reviewer sees check logs and saves the same reviewed patch with its check receipt only on a matching source", async () => {
   const data = await loadFixtureData();

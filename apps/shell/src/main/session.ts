@@ -90,6 +90,7 @@ export function createManagedWorkbenchBridge(options: {
       }
     },
     hasPendingLaunch: () => pendingLaunches > 0,
+    currentBridge: () => bridge,
     reconnect(kind: DesktopChange) {
       bridge = options.connect();
       if (kind === "project") options.reloadWindow();
