@@ -10,15 +10,10 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
-import {
-  app,
+import type {
   BrowserWindow,
-  dialog,
-  ipcMain,
-  Menu,
-  type MenuItemConstructorOptions,
+  MenuItemConstructorOptions,
   safeStorage,
-  shell,
 } from "electron";
 import { DESKTOP_MODEL_CHANNEL } from "../shared/desktop-model";
 import { resolveDockerHost } from "./docker-host";
@@ -40,6 +35,7 @@ import {
   suggestProjectChecks,
 } from "./project-verification";
 import { SHELL_WEB_PREFERENCES } from "./security";
+import type { DesktopChange } from "./session";
 import {
   seedVerificationExample,
   VERIFICATION_IMAGE,
@@ -47,8 +43,6 @@ import {
 import { verificationStateRoot } from "./verification-state";
 
 const settingsPage = "mars-shell://app/settings.html";
-
-type DesktopChange = "project" | "model" | "sandbox";
 
 async function locateDocker() {
   const path = resolveDockerPath();
@@ -65,11 +59,11 @@ async function replacePrivate(path: string, contents: string | Buffer) {
   }
 }
 
-function canStoreKey(): boolean {
+function canStoreKey(storage: typeof safeStorage): boolean {
   return (
-    safeStorage.isEncryptionAvailable() &&
+    storage.isEncryptionAvailable() &&
     (process.platform !== "linux" ||
-      safeStorage.getSelectedStorageBackend() !== "basic_text")
+      storage.getSelectedStorageBackend() !== "basic_text")
   );
 }
 
@@ -77,7 +71,24 @@ export async function createDesktop(
   window: BrowserWindow,
   reload: (change: DesktopChange) => void,
   hasPendingTaskLaunch: () => boolean,
+  runtime: {
+    electron: Pick<
+      typeof import("electron"),
+      | "app"
+      | "BrowserWindow"
+      | "dialog"
+      | "ipcMain"
+      | "Menu"
+      | "safeStorage"
+      | "shell"
+    >;
+    resources?: string;
+    locateDocker?: typeof locateDocker;
+  },
 ) {
+  const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } =
+    runtime.electron;
+  const locate = runtime.locateDocker ?? locateDocker;
   const root = join(app.getPath("userData"), "local-workbench");
   const demo = join(root, "demo-project");
   const projectFile = join(root, "project.txt");
@@ -90,7 +101,7 @@ export async function createDesktop(
     join(root, "projects"),
     app.getPath("home"),
   );
-  let docker = await locateDocker();
+  let docker = await locate();
   await writeFile(
     join(demo, "README.md"),
     "# MARS demo project\n\nThis is a sample project you can give to the MARS agent. Try: summarize the README and suggest a next step.\n",
@@ -101,7 +112,7 @@ export async function createDesktop(
   const storedProject = await readFile(projectFile, "utf8").catch(() => "");
   let source = isAbsolute(storedProject) ? storedProject : demo;
   let openRouterKey: string | undefined;
-  if (canStoreKey()) {
+  if (canStoreKey(safeStorage)) {
     try {
       openRouterKey = safeStorage.decryptString(await readFile(keyFile));
     } catch {
@@ -129,8 +140,6 @@ export async function createDesktop(
       if (options.stopFirst) await workbench?.stop();
       await save();
       if (!options.stopFirst) await workbench?.stop();
-      if (!closing && !window.isDestroyed()) reload(kind);
-      return true;
     } catch {
       return false;
     } finally {
@@ -138,10 +147,12 @@ export async function createDesktop(
         chatLifetime = new AbortController();
       changing = false;
     }
+    if (!closing && !window.isDestroyed()) reload(kind);
+    return true;
   };
 
   const downloadSandbox = async (project: string, image: string) => {
-    docker = await locateDocker();
+    docker = await locate();
     const { path: executable, host: dockerHost } = docker;
     const probeEnv = {
       PATH: process.env.PATH,
@@ -426,7 +437,7 @@ export async function createDesktop(
         !/^sk-or-v1-[A-Za-z0-9_-]+$/.test(key))
     )
       return "invalid";
-    const persist = key !== null && canStoreKey();
+    const persist = key !== null && canStoreKey(safeStorage);
     if (key === null && !openRouterKey) {
       // An unreadable credential from an earlier login may still exist.
       try {
@@ -456,7 +467,8 @@ export async function createDesktop(
     if (changing || closing) return undefined;
     if (!workbench) {
       const running = startLocalWorkbench({
-        resources: join(process.resourcesPath, "workbench"),
+        resources:
+          runtime.resources ?? join(process.resourcesPath, "workbench"),
         onExpired(name) {
           if (
             workbench !== running ||

@@ -7,10 +7,11 @@ import {
   ipcMain,
   Menu,
   protocol,
+  safeStorage,
   session,
+  shell,
 } from "electron";
 import { WORKBENCH_CHANGED } from "../shared/desktop-model";
-import { bridgeFailure } from "../shared/methods";
 import { createAssistant } from "./assistant";
 import { explicitConnection, resolveConnection } from "./connection";
 import { createDesktop } from "./desktop";
@@ -24,7 +25,10 @@ import {
   resolveAppAsset,
   SHELL_WEB_PREFERENCES,
 } from "./security";
-import { createReconnectingBridge } from "./session";
+import {
+  createManagedWorkbenchBridge,
+  createReconnectingBridge,
+} from "./session";
 import { layoutPath, loadWindowLayout, saveWindowLayout } from "./settings";
 import { createTeamChatBridge } from "./team-chat-bridge";
 import { createLoopbackTransport } from "./transport";
@@ -129,25 +133,13 @@ app.on("ready", async () => {
       resolve: () => (desktop ? desktop.resolve() : resolveConnection()),
       makeTransport: (connection) => createLoopbackTransport(connection),
     });
-  let bridge = newBridge();
-  let pendingTaskLaunches = 0;
-  registerBridge(
-    ipcMain,
-    {
-      async call(method, params) {
-        if (method !== "tasks.start" && method !== "tasks.resume")
-          return bridge.call(method, params);
-        if (desktop?.isChanging()) return bridgeFailure("unavailable");
-        pendingTaskLaunches++;
-        try {
-          return await bridge.call(method, params);
-        } finally {
-          pendingTaskLaunches--;
-        }
-      },
-    },
-    senderPolicy,
-  );
+  const bridge = createManagedWorkbenchBridge({
+    connect: newBridge,
+    isChanging: () => desktop?.isChanging() ?? false,
+    reloadWindow: () => window.webContents.reload(),
+    refreshRenderer: () => window.webContents.send(WORKBENCH_CHANGED),
+  });
+  registerBridge(ipcMain, bridge, senderPolicy);
   registerTeamChatBridge(ipcMain, createTeamChatBridge(), senderPolicy);
   registerAssistantBridge(
     ipcMain,
@@ -169,12 +161,19 @@ app.on("ready", async () => {
     try {
       desktop = await createDesktop(
         window,
-        (kind) => {
-          bridge = newBridge();
-          if (kind === "project") window.webContents.reload();
-          else window.webContents.send(WORKBENCH_CHANGED);
+        bridge.reconnect,
+        bridge.hasPendingLaunch,
+        {
+          electron: {
+            app,
+            BrowserWindow,
+            dialog,
+            ipcMain,
+            Menu,
+            safeStorage,
+            shell,
+          },
         },
-        () => pendingTaskLaunches > 0,
       );
     } catch {
       showDesktopStartupError();

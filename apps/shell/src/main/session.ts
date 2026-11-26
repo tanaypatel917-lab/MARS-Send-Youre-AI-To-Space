@@ -66,3 +66,34 @@ export function createReconnectingBridge(options: {
     },
   };
 }
+
+export type DesktopChange = "project" | "model" | "sandbox";
+
+export function createManagedWorkbenchBridge(options: {
+  connect(): Bridge;
+  isChanging(): boolean;
+  reloadWindow(): void;
+  refreshRenderer(): void;
+}) {
+  let bridge = options.connect();
+  let pendingLaunches = 0;
+  return {
+    async call(method: unknown, params: unknown) {
+      if (method !== "tasks.start" && method !== "tasks.resume")
+        return bridge.call(method, params);
+      if (options.isChanging()) return bridgeFailure("unavailable");
+      pendingLaunches++;
+      try {
+        return await bridge.call(method, params);
+      } finally {
+        pendingLaunches--;
+      }
+    },
+    hasPendingLaunch: () => pendingLaunches > 0,
+    reconnect(kind: DesktopChange) {
+      bridge = options.connect();
+      if (kind === "project") options.reloadWindow();
+      else options.refreshRenderer();
+    },
+  };
+}
