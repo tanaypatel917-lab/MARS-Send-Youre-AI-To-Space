@@ -3371,6 +3371,88 @@ for (const scenario of [
   });
 }
 
+test("runtime returns the current final reply after SDK tool-result pruning", async () => {
+  const f = await fixture(200_000);
+  const appendMessage = SessionManager.prototype.appendMessage;
+  const append = spyOn(
+    SessionManager.prototype,
+    "appendMessage",
+  ).mockImplementation(function (
+    this: SessionManager,
+    message: Parameters<typeof appendMessage>[0],
+  ) {
+    if (message.role === "toolResult" && message.toolCallId === "pruned_read")
+      message.useless = true;
+    return appendMessage.call(this, message);
+  });
+  const replaceMessages =
+    AgentSession.prototype.replaceMessagesFromSessionContext;
+  const replace = spyOn(
+    AgentSession.prototype,
+    "replaceMessagesFromSessionContext",
+  ).mockImplementation(function (
+    this: AgentSession,
+    messages: Parameters<typeof replaceMessages>[0],
+  ) {
+    // A history rebuild can return equivalent messages as new objects.
+    replaceMessages.call(this, structuredClone(messages));
+  });
+  let requests = 0;
+  try {
+    const session = await f.open({
+      task: { ...f.task, budget: { ...f.task.budget, max_tokens: 100_000 } },
+      tools: {
+        ...f.tools,
+        read: async () => Buffer.from("Discardable result\n".repeat(50)),
+      },
+      fetch: async () => {
+        requests++;
+        if (requests === 1) return sse({ content: "Earlier response." });
+        if (requests === 2)
+          return sse(
+            {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "pruned_read",
+                  type: "function",
+                  function: {
+                    name: "mars_read",
+                    arguments: JSON.stringify({ path: "greeting.txt" }),
+                  },
+                },
+              ],
+            },
+            "tool_calls",
+          );
+        if (requests === 3) return sse({ content: "Current response." });
+        return sse({});
+      },
+    });
+    expect(await session.run("Warm up")).toMatchObject({
+      status: "completed",
+      content: "Earlier response.",
+    });
+    const outcome = await session.run(f.task.request);
+    expect(await readFile(session.journalPath, "utf8")).toContain('"prunedAt"');
+    expect(replace).toHaveBeenCalled();
+    expect(outcome).toMatchObject({
+      status: "completed",
+      content: "Current response.",
+    });
+    expect(await session.run("Follow up")).toMatchObject({
+      status: "failed",
+      failure_code: "no_response",
+      content: "",
+    });
+    expect(requests).toBe(7);
+  } finally {
+    replace.mockRestore();
+    append.mockRestore();
+    await f.cleanup();
+  }
+});
+
 for (const content of ["Checking the file.", ""]) {
   test(`a capped DeepSeek turn returns ${content ? "only finalized prose" : "empty content, not earlier text"}`, async () => {
     const modelId = "deepseek-v4-pro";

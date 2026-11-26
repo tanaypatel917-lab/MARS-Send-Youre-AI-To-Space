@@ -24,10 +24,7 @@ import {
   selectExecutionModel,
 } from "@mars/execution";
 import type { ModelProviderRegistry } from "@mars/providers";
-import {
-  type AssistantMessage,
-  createAssistantMessageEventStream,
-} from "@oh-my-pi/pi-ai";
+import { createAssistantMessageEventStream } from "@oh-my-pi/pi-ai";
 import {
   AuthStorage,
   createAgentSession,
@@ -728,12 +725,11 @@ async function runOmpStock(
   };
   let editCalls = 0;
   let editFailures = 0;
-  let lastAssistant: AssistantMessage | undefined;
+  let replyId: string | undefined;
   let capped = false;
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "message_end" && event.message.role === "assistant") {
-      // Use the stored message identity, not the SDK's event snapshot.
-      lastAssistant = session.getLastAssistantMessage();
+      replyId = event.message.responseId;
       capped = false;
     }
     if (
@@ -762,8 +758,8 @@ async function runOmpStock(
     const settled = session.getLastAssistantMessage();
     const stopReason = capped
       ? "length"
-      : settled === lastAssistant
-        ? settled?.stopReason
+      : replyId !== undefined && settled?.responseId === replyId
+        ? settled.stopReason
         : undefined;
     const status: TrialResult["status"] =
       controller.signal.aborted ||

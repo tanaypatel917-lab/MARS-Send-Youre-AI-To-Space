@@ -1211,7 +1211,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
     throw new Error("Missing execution journal.");
   }
   interface RunTurns {
-    lastAssistant: AssistantMessage | undefined;
+    replyId: string | undefined;
     capped: AssistantMessage | undefined;
   }
   let activeRun: RunTurns | undefined;
@@ -1221,8 +1221,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
       event.type === "message_end" &&
       event.message.role === "assistant"
     ) {
-      // Use the stored message identity, not the SDK's event snapshot.
-      activeRun.lastAssistant = session.getLastAssistantMessage();
+      activeRun.replyId = event.message.responseId;
       activeRun.capped = undefined;
     }
     // Preserve sanitized length stops even if settling removes them from history.
@@ -1297,7 +1296,7 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
         throw new Error("Invalid task instruction.");
       running = true;
       modelFailure = undefined;
-      const run: RunTurns = { lastAssistant: undefined, capped: undefined };
+      const run: RunTurns = { replyId: undefined, capped: undefined };
       activeRun = run;
       try {
         await session.prompt(instruction);
@@ -1307,7 +1306,10 @@ export async function openRuntimeSession(options: RuntimeSessionOptions) {
           throw new Error("Runtime event persistence failed.");
         const settled = session.getLastAssistantMessage();
         const last =
-          run.capped ?? (settled === run.lastAssistant ? settled : undefined);
+          run.capped ??
+          (run.replyId !== undefined && settled?.responseId === run.replyId
+            ? settled
+            : undefined);
         const content =
           last?.content
             .filter((part) => part.type === "text")

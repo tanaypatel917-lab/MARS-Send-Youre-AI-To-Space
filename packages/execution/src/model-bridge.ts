@@ -247,6 +247,8 @@ export function createModelBridge(options: ModelBridgeOptions) {
       api: model.api,
       model: model.id,
       provider: model.provider,
+      // The bridge is the SDK provider; keep its reply ID across history rebuilds.
+      responseId: crypto.randomUUID(),
       timestamp: Date.now(),
       stopReason: "stop",
       usage: {
