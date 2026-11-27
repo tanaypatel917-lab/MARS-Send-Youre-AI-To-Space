@@ -243,6 +243,7 @@ export async function readJson(
       });
     }
     throw new ProviderError(providerId, "Provider returned invalid JSON.", {
+      status: response.status,
       retryable: false,
     });
   }

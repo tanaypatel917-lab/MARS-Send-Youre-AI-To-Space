@@ -21,6 +21,7 @@ import {
 } from "../src/main/ipc";
 import { createPatchHandoff } from "../src/main/patch-handoff";
 import { createManagedWorkbenchBridge } from "../src/main/session";
+import { createSetupJournal } from "../src/main/setup-journal";
 import { createLoopbackTransport } from "../src/main/transport";
 import { createController } from "../src/renderer/controller";
 import {
@@ -259,6 +260,9 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
   let destinationStatus: "inside_source" | "outside_source" = "outside_source";
   let refuseRoundTrip = false;
   const parent = await mkdtemp(join(tmpdir(), "mars-handoff-test-"));
+  const milestoneAt = "2026-11-26T00:00:00.000Z";
+  const journalPath = join(parent, "user-data", "setup-journal.json");
+  const journal = createSetupJournal(journalPath, () => new Date(milestoneAt));
   api.export = async (context, params) => {
     if (refuseRoundTrip) throw new WorkbenchError("patch_round_trip_failed");
     const result = await fixtureExport(context, params);
@@ -286,6 +290,9 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
     const fixture = ipcFixture();
     let ipc: ((event: IpcEventLike, payload: unknown) => unknown) | undefined;
     let chosen = 0;
+    const choosing = Promise.withResolvers<void>();
+    const selection = Promise.withResolvers<string>();
+    let pauseSelection = false;
     registerPatchHandoff(
       {
         handle(channel, listener) {
@@ -297,8 +304,13 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
         () => bridge,
         async () => {
           chosen++;
+          if (pauseSelection) {
+            choosing.resolve();
+            return selection.promise;
+          }
           return parent;
         },
+        journal,
       ),
       fixture.options,
     );
@@ -342,7 +354,16 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
       document,
       document.root,
       undefined,
-      undefined,
+      {
+        request: async () => ({
+          ok: true,
+          workspace: "scope",
+          sessions: [],
+          configured: false,
+          canConfigure: true,
+        }),
+        setup: journal.snapshot,
+      },
       undefined,
       undefined,
       {
@@ -352,6 +373,15 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
     );
     await controller.load();
     const root = document.root;
+    const navigate = (page: string) => {
+      const button = findAll(
+        root,
+        (element) => element.getAttribute("data-page") === page,
+      )[0];
+      if (!button) throw new Error(`Missing ${page} page button`);
+      button.click();
+    };
+    navigate("tasks");
     findAll(
       root,
       (element) => element.getAttribute("data-task-id") === taskId,
@@ -398,11 +428,24 @@ test("desktop reviewer sees check logs and saves the same reviewed patch with it
     save();
     await waitForText(root, "patch cannot be reconstructed");
     expect(await readdir(parent)).toEqual([]);
+    expect((await journal.snapshot()).milestones).toEqual({});
 
     refuseRoundTrip = false;
+    pauseSelection = true;
     save();
+    await choosing.promise;
+    navigate("settings");
+    expect(root.textContent).toContain("First verified patch exportedNot yet");
+    selection.resolve(parent);
+    await waitForText(root, "First verified patch exported2026-11-26");
+    expect(
+      (await createSetupJournal(journalPath).snapshot()).milestones,
+    ).toEqual({ first_verified_export: milestoneAt });
+    navigate("tasks");
     await waitForText(root, "No changes were applied");
-    const folders = await readdir(parent);
+    const folders = (await readdir(parent)).filter((entry) =>
+      entry.startsWith("mars-review-"),
+    );
     expect(folders).toHaveLength(1);
     const folder = join(parent, folders[0] ?? "");
     expect(

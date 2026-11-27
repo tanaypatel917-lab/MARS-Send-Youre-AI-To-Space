@@ -1,6 +1,8 @@
 import { z } from "zod";
+import type { ModelHealth, SetupSummary } from "./setup";
 
 export const ASSISTANT_CHANNEL = "mars-shell:assistant";
+export const ASSISTANT_SETUP_CHANNEL = "mars-shell:assistant-setup";
 export const AssistantMessageSchema = z
   .object({
     role: z.enum(["user", "assistant"]),
@@ -37,9 +39,19 @@ export type AssistantResult =
       sessions: AssistantSession[];
       configured: boolean;
       canConfigure: boolean;
+      health?: ModelHealth;
+      setup?: SetupSummary;
     }
-  | { ok: false; error: string; reloadHistory?: boolean };
+  | {
+      ok: false;
+      error: string;
+      reloadHistory?: boolean;
+      health?: ModelHealth;
+      setup?: SetupSummary;
+    };
 export type AssistantApi = {
   onWorkbenchChanged?(refresh: () => void): void;
   request(payload: AssistantRequest): Promise<AssistantResult>;
+  /** The local setup journal summary, read without Chat history. */
+  setup?(): Promise<SetupSummary | undefined>;
 };

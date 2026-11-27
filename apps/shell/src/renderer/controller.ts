@@ -306,6 +306,7 @@ export function createController(
         page = next;
         closeTeamChat();
         if (next === "extensions") void refreshExtensions();
+        if (next === "settings") void refreshSetup();
         render();
         if (next === "extensions") libraryScroller()?.focus();
       },
@@ -365,7 +366,14 @@ export function createController(
               onNew: () => selectChat(globalThis.crypto.randomUUID()),
               onSelect: selectChat,
               onTask: (text) => {
-                composer = { ...composer, request: text };
+                if (text && text !== composer.request.trim())
+                  composer = {
+                    ...composer,
+                    request: text,
+                    replacedRequest: composer.request.trim()
+                      ? composer.request
+                      : composer.replacedRequest,
+                  };
                 page = "tasks";
                 render();
               },
@@ -422,7 +430,8 @@ export function createController(
           "modelChoice" in patch ||
           "paidModelConsent" in patch ||
           "error" in patch ||
-          "submitting" in patch
+          "submitting" in patch ||
+          "replacedRequest" in patch
         ) {
           render();
           if (keepSubmitVisible)
@@ -550,6 +559,16 @@ export function createController(
     }
   };
 
+  const refreshSetup = async () => {
+    if (!assistant?.setup) return;
+    try {
+      const setup = await assistant.setup();
+      if (!setup || disposed) return;
+      assistantState = { ...assistantState, setup };
+      if (page === "settings") render();
+    } catch {}
+  };
+
   const loadAssistant = async () => {
     if (!assistant) return;
     const version = historyVersion;
@@ -563,7 +582,7 @@ export function createController(
         scopeGeneration++;
         if (result.workspace !== draftWorkspace) assistantDrafts.clear();
         draftWorkspace = result.workspace;
-        assistantState = emptyAssistant();
+        assistantState = { ...emptyAssistant(), setup: assistantState.setup };
         if (suspendedDraft?.workspace === result.workspace)
           assistantState = {
             ...assistantState,
@@ -592,6 +611,8 @@ export function createController(
           : {}),
         configured: result.configured,
         canConfigure: result.canConfigure,
+        health: result.health,
+        setup: result.setup ?? assistantState.setup,
         loading: false,
         ...(changed
           ? {
@@ -616,6 +637,7 @@ export function createController(
       scopeGeneration++;
       assistantState = {
         ...emptyAssistant(),
+        setup: assistantState.setup,
         loading: false,
         error:
           error instanceof Error
@@ -769,11 +791,19 @@ export function createController(
             ...assistantState,
             sessions: result.sessions,
             configured: result.configured,
+            health: result.health,
+            setup: result.setup ?? assistantState.setup,
             draft:
               assistantState.activeId === activeId ? "" : assistantState.draft,
             busy: false,
           }
-        : { ...assistantState, busy: false, error: result.error };
+        : {
+            ...assistantState,
+            busy: false,
+            error: result.error,
+            health: result.health ?? assistantState.health,
+            setup: result.setup ?? assistantState.setup,
+          };
     } catch {
       if (scopeGeneration !== generation) return;
       assistantState = {
@@ -1641,6 +1671,7 @@ export function createController(
         patchText,
       };
       patchExport = nextExport;
+      if (page === "settings") void refreshSetup();
       render();
     } catch (error) {
       if (patchExport !== pending) return;
@@ -1694,6 +1725,8 @@ export function createController(
             };
       if (patchExport !== pending) return;
       patchExport = { ...pending, busy: false, handoff };
+      if (handoff.status === "saved" && page === "settings")
+        void refreshSetup();
     } catch {
       if (patchExport !== pending) return;
       patchExport = {

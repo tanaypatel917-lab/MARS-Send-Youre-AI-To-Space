@@ -6,7 +6,10 @@ import { join } from "node:path";
 import { createAssistant } from "../src/main/assistant";
 import { type IpcEventLike, registerAssistantBridge } from "../src/main/ipc";
 import { renderAssistant } from "../src/renderer/assistant-view";
-import { ASSISTANT_CHANNEL } from "../src/shared/assistant";
+import {
+  ASSISTANT_CHANNEL,
+  ASSISTANT_SETUP_CHANNEL,
+} from "../src/shared/assistant";
 import { ipcFixture } from "./ipc-fixture";
 import { findAll, MiniDocument } from "./mini-dom";
 
@@ -280,6 +283,8 @@ test("only one model request can be in flight", async () => {
 
 test("assistant IPC denies foreign senders before invoking the service", async () => {
   let calls = 0;
+  let setupCalls = 0;
+  const summary = { milestones: {}, issues: { rate_limited: 1 } };
   const { options, owner, otherWindow, childFrame } = ipcFixture();
   const handlers = new Map<
     string,
@@ -292,6 +297,10 @@ test("assistant IPC denies foreign senders before invoking the service", async (
       },
     },
     {
+      setup: async () => {
+        setupCalls++;
+        return summary;
+      },
       call: async () => {
         calls++;
         return {
@@ -307,6 +316,8 @@ test("assistant IPC denies foreign senders before invoking the service", async (
   );
   const load = (event: IpcEventLike) =>
     handlers.get(ASSISTANT_CHANNEL)?.(event, { action: "load" });
+  const setup = (event: IpcEventLike) =>
+    handlers.get(ASSISTANT_SETUP_CHANNEL)?.(event, undefined);
   for (const event of [
     otherWindow,
     childFrame,
@@ -316,6 +327,7 @@ test("assistant IPC denies foreign senders before invoking the service", async (
       ok: false,
       error: "Chat request refused.",
     });
+    expect(await setup(event)).toBeUndefined();
   }
   for (const url of [
     "https://evil.example",
@@ -326,6 +338,7 @@ test("assistant IPC denies foreign senders before invoking the service", async (
     owner.senderFrame.url = url;
     const result = await load(owner);
     expect(result).toEqual({ ok: false, error: "Chat request refused." });
+    expect(await setup(owner)).toBeUndefined();
   }
   expect(calls).toBe(0);
   const newMainFrame = { url: "mars-shell://app/index.html" };
@@ -333,6 +346,8 @@ test("assistant IPC denies foreign senders before invoking the service", async (
   expect(await load({ ...owner, senderFrame: newMainFrame })).toMatchObject({
     ok: true,
   });
+  expect(await setup({ ...owner, senderFrame: newMainFrame })).toEqual(summary);
+  expect(setupCalls).toBe(1);
 });
 
 test("assistant output is inert text and task handoff is always explicit", () => {

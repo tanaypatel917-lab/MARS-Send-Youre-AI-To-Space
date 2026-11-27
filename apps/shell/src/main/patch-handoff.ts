@@ -6,6 +6,7 @@ import type { ArtifactData } from "../shared/methods";
 import type { PatchHandoffResult } from "../shared/patch-handoff";
 import type { Bridge } from "./bridge";
 import { RendererExportParamsSchema } from "./protocol";
+import type { SetupJournal } from "./setup-journal";
 
 const blocked = (reason: string): PatchHandoffResult => ({
   status: "blocked",
@@ -15,6 +16,7 @@ const blocked = (reason: string): PatchHandoffResult => ({
 export function createPatchHandoff(
   currentBridge: () => Bridge,
   chooseFolder: () => Promise<string | undefined>,
+  journal?: Pick<SetupJournal, "mark">,
 ) {
   let busy = false;
   return async (payload: unknown): Promise<PatchHandoffResult> => {
@@ -116,6 +118,7 @@ export function createPatchHandoff(
           mode: 0o600,
         },
       );
+      void journal?.mark("first_verified_export");
       return { status: "saved", folder: basename(folder) };
     } catch {
       if (folder)

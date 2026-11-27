@@ -31,6 +31,7 @@ import {
   createReconnectingBridge,
 } from "./session";
 import { layoutPath, loadWindowLayout, saveWindowLayout } from "./settings";
+import { createSetupJournal, observeBridge } from "./setup-journal";
 import { createTeamChatBridge } from "./team-chat-bridge";
 import { createLoopbackTransport } from "./transport";
 
@@ -115,6 +116,10 @@ app.on("ready", async () => {
   });
 
   const filePath = layoutPath(app.getPath("home"));
+  const journal = createSetupJournal(
+    join(app.getPath("userData"), "setup-journal.json"),
+  );
+  void journal.mark("opened");
   const saved = await loadWindowLayout(filePath);
   const window = new BrowserWindow({
     title: managed ? "MARS" : "MARS Shell",
@@ -139,17 +144,31 @@ app.on("ready", async () => {
     isChanging: () => desktop?.isChanging() ?? false,
     webContents: window.webContents,
   });
-  registerBridge(ipcMain, bridge, senderPolicy);
+  registerBridge(
+    ipcMain,
+    {
+      call: async (method, params) => {
+        const result = await bridge.call(method, params);
+        observeBridge(journal, method, result);
+        return result;
+      },
+    },
+    senderPolicy,
+  );
   registerPatchHandoff(
     ipcMain,
-    createPatchHandoff(bridge.currentBridge, async () => {
-      const result = await dialog.showOpenDialog(window, {
-        title: "Save verified patch and check receipt",
-        buttonLabel: "Save handoff here",
-        properties: ["openDirectory"],
-      });
-      return result.canceled ? undefined : result.filePaths[0];
-    }),
+    createPatchHandoff(
+      bridge.currentBridge,
+      async () => {
+        const result = await dialog.showOpenDialog(window, {
+          title: "Save verified patch and check receipt",
+          buttonLabel: "Save handoff here",
+          properties: ["openDirectory"],
+        });
+        return result.canceled ? undefined : result.filePaths[0];
+      },
+      journal,
+    ),
     senderPolicy,
   );
   registerTeamChatBridge(ipcMain, createTeamChatBridge(), senderPolicy);
@@ -157,6 +176,7 @@ app.on("ready", async () => {
     ipcMain,
     createAssistant({
       directory: join(app.getPath("userData"), "assistant-history"),
+      journal,
       context: async () => {
         if (desktop) return desktop.chatContext();
         const connection = await resolveConnection();

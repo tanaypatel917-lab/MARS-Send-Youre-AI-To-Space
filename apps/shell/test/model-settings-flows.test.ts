@@ -46,6 +46,7 @@ test("a key pasted in chat never reaches the provider or history", async () => {
       consent: true,
     });
     expect(!result.ok && result.error).toContain("Settings");
+    expect(!result.ok && result.error).toContain("OPENROUTER_API_KEY");
     expect(requests).toBe(0);
     expect(await assistant.call({ action: "load" })).toMatchObject({
       ok: true,

@@ -50,6 +50,8 @@ export type ComposerState = {
   checkIds: string[];
   submitting: boolean;
   error?: string;
+  /** The request a Chat handoff replaced, kept so it can be restored. */
+  replacedRequest?: string | undefined;
 };
 
 export type LaunchCardState = {
@@ -867,6 +869,34 @@ function promptComposer(
   submitBtn.disabled = submitDisabled;
   submitBtn.addEventListener("click", () => state.onCreateTask?.());
 
+  const { replacedRequest } = composer;
+  let restoreRow: ShellElement | null = null;
+  if (replacedRequest) {
+    const restore = h(
+      doc,
+      "button",
+      {
+        type: "button",
+        class: "secondary-btn",
+        "data-action": "restore-task-request",
+      },
+      "Restore earlier request",
+    );
+    restore.addEventListener("click", () =>
+      state.onComposerChange?.({
+        request: replacedRequest,
+        replacedRequest: undefined,
+      }),
+    );
+    restoreRow = h(
+      doc,
+      "p",
+      { class: "action-notice", "data-panel": "replaced-request" },
+      "Chat text replaced your earlier task request. ",
+      restore,
+    );
+  }
+
   return h(
     doc,
     "section",
@@ -874,6 +904,7 @@ function promptComposer(
     h(doc, "p", { class: "eyebrow" }, "NEW TASK"),
     heading(doc, "Give your agent a task"),
     requestInput,
+    restoreRow,
     criteriaInput,
     h(
       doc,
@@ -1578,6 +1609,12 @@ export function renderShell(
             state.settingsError,
             () => state.onPage?.("extensions"),
             () => state.onRefresh?.(),
+            state.describe
+              ? {
+                  checks: state.describe.checks?.length ?? 0,
+                  readiness: state.describe.verification_readiness,
+                }
+              : undefined,
           )
         : state.page === "extensions"
           ? renderExtensions(doc, state.extensions)
