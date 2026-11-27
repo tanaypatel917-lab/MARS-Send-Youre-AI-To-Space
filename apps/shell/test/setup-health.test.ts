@@ -36,9 +36,6 @@ test("provider failures map to actionable model health", () => {
   expect(classifyProviderFailure(fail(401)).issue).toBe("auth_failed");
   expect(classifyProviderFailure(fail(403)).issue).toBe("auth_failed");
   expect(classifyProviderFailure(fail(402)).issue).toBe("credits");
-  expect(
-    classifyProviderFailure(fail(undefined, { retryable: true })).issue,
-  ).toBe("network");
   expect(classifyProviderFailure(fail(undefined)).issue).toBe("unavailable");
   expect(classifyProviderFailure(fail(504, { timedOut: true })).issue).toBe(
     "network",
@@ -323,16 +320,17 @@ test("a Chat handoff that replaces an unsaved task request can restore it", asyn
   expect(restore()).toBeUndefined();
 });
 
+function openRouterFixture() {
+  const provider = BUILTIN_PROVIDERS.find((entry) => entry.id === "openrouter");
+  const model = BUILTIN_MODELS.find((entry) => entry.id === "openrouter/free");
+  if (!provider || !model) throw new Error("Missing OpenRouter free model");
+  return { provider, model };
+}
+
 test.each(["<html>", '{"choices":[{}]}', '{"error":{"message":"failed"}}'])(
   "a malformed or unclassified provider reply is not reported as unreachable: %s",
   async (body) => {
-    const provider = BUILTIN_PROVIDERS.find(
-      (entry) => entry.id === "openrouter",
-    );
-    const model = BUILTIN_MODELS.find(
-      (entry) => entry.id === "openrouter/free",
-    );
-    if (!provider || !model) throw new Error("Missing OpenRouter free model");
+    const { provider, model } = openRouterFixture();
     const adapter = createOpenAICompatibleAdapter(provider, {
       env: { OPENROUTER_API_KEY: "fixture" },
       fetch: async () => new Response(body, { status: 200 }),
@@ -345,6 +343,43 @@ test.each(["<html>", '{"choices":[{}]}', '{"error":{"message":"failed"}}'])(
     expect(classifyProviderFailure(error).issue).toBe("unavailable");
   },
 );
+
+test("a connection failure from the OpenRouter adapter gives Chat connection advice", async () => {
+  const { provider, model } = openRouterFixture();
+  let fetches = 0;
+  const adapter = createOpenAICompatibleAdapter(provider, {
+    env: { OPENROUTER_API_KEY: "fixture" },
+    fetch: async () => {
+      fetches++;
+      throw new TypeError("fetch failed");
+    },
+  });
+  const directory = await mkdtemp(join(tmpdir(), "mars-chat-network-"));
+  try {
+    const chat = createAssistant({
+      directory,
+      context: () => ({ workspace: "a", key: "fixture" }),
+      complete: async (messages) =>
+        (await adapter.complete({ messages }, model)).content,
+    });
+    const result = await chat.call({
+      action: "send",
+      workspace: createHash("sha256").update("a").digest("hex"),
+      seenMessages: 0,
+      id: randomUUID(),
+      text: "Hi",
+      consent: true,
+    });
+    expect(fetches).toBe(1);
+    expect(result).toMatchObject({
+      ok: false,
+      health: { state: "network" },
+      error: expect.stringContaining("Check your connection, then retry."),
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("a rejected key in attach mode points to the launch environment", async () => {
   const directory = await mkdtemp(join(tmpdir(), "mars-attach-"));
